@@ -102,6 +102,8 @@ For each step N:
 
 Group steps into waves based on dependencies (independent steps = same wave).
 
+**Max concurrency: 4 agents per wave.** If a wave has more than 4 independent tasks, split it into sub-waves of at most 4. This prevents CPU/memory exhaustion from too many parallel worktrees.
+
 For each wave:
 
 #### 2a. Launch Worktree Agents (parallel within wave)
@@ -200,7 +202,13 @@ After ALL tasks in the wave are reviewed and approved:
    bash scripts/update-progress.sh <progress-path> merge <task-id> "clean"
    ```
 
-2. If merge conflict:
+2. After merging, clean up the worktree and its branch:
+   ```bash
+   git worktree remove <worktree-path> --force
+   git branch -D <worktree-branch>
+   ```
+
+3. If merge conflict:
    - Log: `update-progress.sh <path> merge <task-id> "conflict"`
    - Attempt auto-resolution for trivial conflicts
    - For non-trivial: ask user

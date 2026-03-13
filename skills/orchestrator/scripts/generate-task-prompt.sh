@@ -145,6 +145,10 @@ fi)
 - [ ] No code duplication — reuse existing utilities
 - [ ] Tests cover happy path AND at least one error case
 
+## Resource Constraints
+- **DO NOT** spawn agents with \`isolation: "worktree"\`. You are already in a worktree — nested worktrees cause exponential resource growth.
+- **DO NOT** use the Agent tool with \`run_in_background: true\` for heavy workloads. You are a leaf worker, not an orchestrator.
+
 ## When Done
 Commit your work. The worktree branch will be reviewed by a principal-architect agent before merge.
 Do NOT merge — just commit.
