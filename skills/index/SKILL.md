@@ -35,7 +35,12 @@ The CAFI CLI uses **subcommands**, not flags. The base invocation is `python3 to
   ```bash
   python3 tools/cafi/__main__.py clear
   ```
-- **`context`** — Output the formatted file index (used by the SessionStart hook).
+- **`lookup <keyword>`** — Search the index by keyword (case-insensitive, matches paths and descriptions).
+  ```bash
+  python3 tools/cafi/__main__.py lookup orchestrator
+  python3 tools/cafi/__main__.py lookup validation
+  ```
+- **`context`** — Output the formatted file index.
   ```bash
   python3 tools/cafi/__main__.py context
   ```

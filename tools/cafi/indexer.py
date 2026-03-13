@@ -221,6 +221,35 @@ def clear_cache(project_root: str) -> bool:
     return False
 
 
+def lookup(project_root: str, keyword: str) -> list[dict]:
+    """Search the file index by keyword, matching against paths and descriptions.
+
+    Args:
+        project_root: The project root directory.
+        keyword: Search term (case-insensitive). Matches against file paths
+                 and routing-hint descriptions.
+
+    Returns:
+        List of dicts with ``path`` and ``description`` for matching files,
+        sorted by path.
+    """
+    cache = load_cache(_cache_path(project_root))
+    files = cache.get("files", {})
+    if not files:
+        return []
+
+    keyword_lower = keyword.lower()
+    results: list[dict] = []
+
+    for path in sorted(files.keys()):
+        entry = files[path]
+        desc = entry.get("description", "")
+        if keyword_lower in path.lower() or keyword_lower in desc.lower():
+            results.append({"path": path, "description": desc})
+
+    return results
+
+
 def format_index_for_context(project_root: str) -> str:
     """Format all cached descriptions as a compact Markdown block.
 

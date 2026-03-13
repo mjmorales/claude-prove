@@ -57,6 +57,17 @@ def cmd_clear(args: argparse.Namespace) -> None:
         print("No cache file found.")
 
 
+def cmd_lookup(args: argparse.Namespace) -> None:
+    """Search index by keyword."""
+    results = indexer.lookup(args.project_root, args.keyword)
+    if not results:
+        print(f"No files matching: {args.keyword}", file=sys.stderr)
+        sys.exit(1)
+    for r in results:
+        desc = r["description"] or "(no description)"
+        print(f"- `{r['path']}`: {desc}")
+
+
 def cmd_context(args: argparse.Namespace) -> None:
     """Output formatted context block."""
     output = indexer.format_index_for_context(args.project_root)
@@ -94,6 +105,11 @@ def main(argv: list[str] | None = None) -> None:
     p_get = subparsers.add_parser("get", help="Get description for a file.")
     p_get.add_argument("path", help="Relative file path.")
     p_get.set_defaults(func=cmd_get)
+
+    # lookup
+    p_lookup = subparsers.add_parser("lookup", help="Search index by keyword.")
+    p_lookup.add_argument("keyword", help="Search term (case-insensitive).")
+    p_lookup.set_defaults(func=cmd_lookup)
 
     # clear
     p_clear = subparsers.add_parser("clear", help="Remove cache file.")
