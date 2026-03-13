@@ -147,9 +147,8 @@ Use this template:
 Through iterative discussion:
 
 1. **Clarify ambiguities**
-   - "When you say X, do you mean..."
-   - "Should this also handle..."
-   - "What about the case where..."
+   - When there are 2-3 discrete interpretations: use AskUserQuestion with those options (e.g., "When you say X, do you mean [A] or [B]?")
+   - When truly open-ended: free-form ("Should this also handle...", "What about the case where...")
 
 2. **Uncover hidden requirements**
    - "Will this need to scale?"
@@ -362,8 +361,8 @@ Use these to drive the discovery:
 
 **Validating Understanding**
 - "Let me summarize what I've learned..."
-- "So the current flow is: [A] -> [B] -> [C], correct?"
-- "The main risk seems to be [X]. Am I missing anything?"
+- "So the current flow is: [A] -> [B] -> [C]" — validate with AskUserQuestion ("Correct / Not quite")
+- "The main risk seems to be [X]. Am I missing anything?" — open-ended, keep free-form
 
 ## Validation Awareness
 
@@ -425,6 +424,9 @@ Remember: **Discovery drives planning**. The more we understand about the existi
 
 ### References
 - `references/edge-cases-checklist.md` - Systematic checklist for discovering edge cases across different domains (web, database, files, distributed systems, etc.) with discovery techniques and priority matrix
+- `references/interaction-patterns.md` - When to use `AskUserQuestion` vs free-form discussion
+
+**Interaction patterns**: See `references/interaction-patterns.md` for when to use `AskUserQuestion` vs free-form discussion.
 
 ## Using the Code Explorer
 

@@ -117,7 +117,7 @@ Show the user what you plan to configure, organized by category:
 - Network requests
 ```
 
-**Ask the user to confirm** before writing. Accept modifications (add/remove rules).
+Use AskUserQuestion with header "Permissions" and options: "Approve" (write the configuration as shown) / "Modify" (I want to add or remove rules before writing).
 
 ## Phase 4: Write Configuration
 
@@ -158,5 +158,7 @@ After writing, tell the user:
 - **Never add overly broad rules** — prefer `Bash(go test *)` over `Bash(*)`
 - **Never add deny-worthy tools to allow** — push, delete, sudo, network always prompt
 - **Preserve existing settings** — merge, don't overwrite
-- **Always confirm with user** before writing
+- **Always confirm with user** before writing — use AskUserQuestion with "Approve" / "Modify" options
 - **settings.local.json only** — never modify `.claude/settings.json` (shared team settings)
+
+**Interaction patterns**: See `references/interaction-patterns.md` for when to use `AskUserQuestion` vs free-form discussion.

@@ -92,6 +92,8 @@ After all commits are created, show:
 
 - Keep commits atomic — each should represent one logical change
 - If a single file belongs to multiple logical changes, prioritize the primary purpose
-- Ask for clarification if grouping is ambiguous
+- When grouping is ambiguous and there are 2-4 discrete options, use AskUserQuestion to present the grouping choices; use free-form if the ambiguity needs open-ended explanation
 - Never force push or amend existing commits without explicit permission
 - Always read MANIFEST before committing — do not hardcode scopes
+
+**Interaction patterns**: See `references/interaction-patterns.md` for when to use `AskUserQuestion` vs free-form discussion.

@@ -46,7 +46,7 @@ If neither exists, inform the user and suggest running `/plan-task` first.
    git checkout -b orchestrator/<task-slug>
    ```
    - Slugify the task name (lowercase, hyphens, no special chars, max 50 chars)
-   - If branch already exists, ask user: resume from last commit or start fresh
+   - If branch already exists, use AskUserQuestion with header "Branch" and options: "Resume" (continue from last commit) / "Start Fresh" (delete and recreate)
 
 4. **Initialize report directory**
    ```bash
@@ -184,7 +184,7 @@ REVIEW LOOP (max 3 iterations per task):
 
 If 3 iterations pass without APPROVED:
   - Log failure in .prove/PROGRESS.md
-  - Ask user: force-approve, fix manually, or abort
+  - Use AskUserQuestion with header "Resolution" and options: "Force Approve" (merge as-is) / "Fix Manually" (I'll address the findings) / "Abort" (stop the run)
 ```
 
 #### 2d. Sequential Merge-Back
@@ -432,9 +432,9 @@ When triggered with "full auto" and no existing plan, run requirements gathering
    - Technical constraints
    - How to verify it works
 3. **Write the PRD** using the template in `references/prd-template.md`
-4. **User approval gate** — Wait for explicit PRD approval before planning
+4. **User approval gate** — Use AskUserQuestion with header "PRD" and options: "Approve" (proceed to planning) / "Request Changes" (I have feedback before proceeding)
 5. **Generate `.prove/TASK_PLAN.md`** with wave-based task graph
-6. **User approval gate** — Wait for explicit plan approval before executing
+6. **User approval gate** — Use AskUserQuestion with header "Plan" and options: "Approve" (begin execution) / "Request Changes" (I have feedback before proceeding)
 
 ---
 
@@ -489,6 +489,9 @@ Helper scripts live in `scripts/`:
 | `references/handoff-protocol.md` | Protocol for handing off between orchestrator phases |
 | `references/reporter-protocol.md` | Protocol for generating reports |
 | `references/validation-config.md` (top-level) | Canonical validation spec — schema, auto-detection, execution order |
+| `references/interaction-patterns.md` | When to use `AskUserQuestion` vs free-form discussion |
+
+**Interaction patterns**: See `references/interaction-patterns.md` for when to use `AskUserQuestion` vs free-form discussion.
 
 ## Committing
 
