@@ -10,7 +10,7 @@
 # {
 #   "name": "cafi",
 #   "description": "Content-addressable file index",
-#   "hooks": {"SessionStart": "bash ${PLUGIN_DIR}/tools/cafi/hook.sh"},
+#   "hooks": {"SessionStart": "bash ${PLUGIN_DIR}/tools/cafi/hook.sh"},  // generates matcher+hooks format
 #   "config_key": "index",
 #   "config_defaults": {"excludes": [], "max_file_size": 102400, "concurrency": 3},
 #   "requires": ["python3"]
@@ -63,10 +63,11 @@ import json, sys
 with open('$SETTINGS_JSON') as f:
     settings = json.load(f)
 hooks = settings.get('hooks', {})
-for event, entries in hooks.items():
-    for entry in entries:
-        if entry.get('command', '') == sys.argv[1]:
-            sys.exit(0)
+for event, matchers in hooks.items():
+    for matcher in matchers:
+        for hook in matcher.get('hooks', []):
+            if hook.get('command', '') == sys.argv[1]:
+                sys.exit(0)
 sys.exit(1)
 " "$hook_cmd" 2>/dev/null
 }
@@ -217,7 +218,7 @@ else:
 
 hooks = settings.setdefault('hooks', {})
 entries = hooks.setdefault(event, [])
-entries.append({'type': 'command', 'command': cmd})
+entries.append({'matcher': '', 'hooks': [{'type': 'command', 'command': cmd}]})
 
 with open(settings_path, 'w') as f:
     json.dump(settings, f, indent=2)
