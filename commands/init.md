@@ -37,7 +37,18 @@ Detect the current project's tech stack and generate a `.prove.json` configurati
    - Commit `.prove.json` and `.gitignore` to version control
    - Run `/prove:task-planner` or `/prove:orchestrator` to use it
 
-7. Offer to install recommended community skills:
+7. Set up plugin tools (e.g., CAFI file index). List available tools:
+   ```bash
+   bash "$PLUGIN_DIR/scripts/setup-tools.sh" --list --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"
+   ```
+   If any tools are "not configured", use `AskUserQuestion` with header "Tools" and options: "Setup" (configure hooks and .prove.json for detected tools) / "Skip" (skip for now).
+   On "Setup", run:
+   ```bash
+   bash "$PLUGIN_DIR/scripts/setup-tools.sh" --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"
+   ```
+   This registers SessionStart hooks in `.claude/settings.json` and adds tool config sections to `.prove.json`.
+
+8. Offer to install recommended community skills:
    ```bash
    bash "$PLUGIN_DIR/scripts/install-skills.sh" --list
    ```

@@ -82,7 +82,16 @@ skills/
 │   └── scripts/
 └── cleanup/                 # Archive & remove artifacts
 scripts/
-└── init-config.sh              # Tech stack detection → .prove.json
+├── init-config.sh              # Tech stack detection → .prove.json
+└── setup-tools.sh              # Auto-configure tools (hooks, config)
+tools/
+└── cafi/                       # Content-addressable file index
+    ├── tool.json               # Tool manifest (hooks, config, requirements)
+    ├── hook.sh                 # SessionStart hook for context injection
+    ├── hasher.py               # SHA256 hashing + cache diffing
+    ├── describer.py            # Claude CLI routing-hint generation
+    ├── indexer.py              # Orchestrates hash→diff→describe→save
+    └── __main__.py             # CLI: index, status, get, clear, context
 agents/
 ├── principal-architect.md   # Code review for orchestrator's full mode
 └── validation-agent.md      # LLM-based validation for prompt validators
@@ -135,6 +144,51 @@ Configure them in `.prove.json`:
 - **Agent**: Uses the `validation-agent` (haiku model) for fast, cost-efficient evaluation. Read-only — it can inspect code but never modifies it.
 - **Verdict**: Returns PASS or FAIL with specific findings referencing files and lines.
 - **Retry**: Same semantics as command validators — one auto-fix attempt on failure, then halt.
+
+## Tools
+
+Tools are standalone utilities that live in `tools/` and are auto-configured by `/prove:init`. Each tool has a `tool.json` manifest declaring its hooks, config, and requirements.
+
+### CAFI — Content-Addressable File Index
+
+Hashes all project files, generates routing-hint descriptions via Claude CLI ("Read this file when doing X"), and injects them as context at session start via a SessionStart hook.
+
+```bash
+# Manual usage
+/prove:index              # Build/update index (incremental)
+/prove:index --force      # Re-describe all files
+/prove:index status       # Check what's changed
+```
+
+Setup happens automatically during `/prove:init`, or manually:
+```bash
+bash scripts/setup-tools.sh --project-root . --plugin-dir /path/to/claude-prove
+```
+
+### Creating New Tools
+
+1. Create a directory under `tools/<name>/`
+2. Add a `tool.json` manifest:
+   ```json
+   {
+     "name": "my-tool",
+     "description": "What this tool does",
+     "hooks": {
+       "SessionStart": "bash ${PLUGIN_DIR}/tools/my-tool/hook.sh"
+     },
+     "config_key": "my_tool",
+     "config_defaults": {"option": "default_value"},
+     "requires": ["python3"]
+   }
+   ```
+3. Add the tool to `MANIFEST` as `tool | my-tool | tools/my-tool/ | Description`
+4. `setup-tools.sh` will auto-detect it and configure hooks + `.prove.json` during init
+
+**Manifest fields:**
+- `hooks` — Map of Claude Code hook events to commands. `${PLUGIN_DIR}` is replaced with the plugin path at setup time.
+- `config_key` — Key added to `.prove.json` for tool-specific settings.
+- `config_defaults` — Default values for the config section.
+- `requires` — List of CLI commands that must be available (checked before setup).
 
 ## Protocols
 

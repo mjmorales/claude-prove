@@ -3,7 +3,7 @@
 # Used by the commit skill to derive valid scopes.
 #
 # Format: type | name | path | description
-# Types: skill, agent, command
+# Types: skill, agent, command, tool
 
 skill   | brainstorm         | skills/brainstorm/         | Interactive brainstorming and decision recording
 skill   | task-planner       | skills/task-planner/       | Iterative discovery and planning for tasks
@@ -15,6 +15,8 @@ skill   | prep-permissions   | skills/prep-permissions/   | Analyze task and con
 skill   | slash-command-creator | skills/slash-command-creator/ | Guide for creating Claude Code slash commands
 skill   | subagent-creator   | skills/subagent-creator/   | Guide for creating specialized Claude Code subagents
 skill   | agentic-doc-writer | skills/agentic-doc-writer/ | Generate LLM-optimized documentation for agents and APIs
+skill   | index              | skills/index/              | Content-addressable file index with routing-hint descriptions
+tool    | cafi               | tools/cafi/                | Content-addressable file index with routing-hint descriptions
 agent   | principal-architect | agents/                   | Architectural review for orchestrator full mode
 agent   | validation-agent    | agents/                   | Lightweight LLM validator for prompt-based validation checks
 command | plan-task          | commands/plan-task.md      | Start task planning session
@@ -29,3 +31,5 @@ command | install-skills     | commands/install-skills.md | Install recommended 
 command | create-command     | commands/create-command.md | Create a new Claude Code slash command
 command | create-agent       | commands/create-agent.md   | Create a new Claude Code subagent
 command | agentic-docs       | commands/agentic-docs.md   | Generate LLM-optimized documentation
+command | index              | commands/index.md          | Build or update the file index
+command | progress           | commands/progress.md       | Show orchestrator execution status
