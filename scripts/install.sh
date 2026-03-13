@@ -50,6 +50,20 @@ if [[ -z "$INSTALL_DIR" ]]; then
 fi
 
 # === Clone or update ===
+# Use sparse-checkout so only plugin-runtime files are on disk.
+# This prevents files like CLAUDE.md, .prove.json, and MANIFEST (which
+# belong to the plugin's own development) from appearing in the install
+# directory where they could confuse the LLM.
+
+SPARSE_PATHS=(
+  .claude-plugin
+  agents
+  commands
+  references
+  scripts
+  skills
+  tools
+)
 
 if [[ -d "$INSTALL_DIR/.git" ]]; then
   echo "Updating existing installation at $INSTALL_DIR..."
@@ -57,7 +71,15 @@ if [[ -d "$INSTALL_DIR/.git" ]]; then
 else
   echo "Cloning prove to $INSTALL_DIR..."
   mkdir -p "$(dirname "$INSTALL_DIR")"
-  git clone --quiet "$REPO_URL" "$INSTALL_DIR"
+  git clone --quiet --no-checkout "$REPO_URL" "$INSTALL_DIR"
+  git -C "$INSTALL_DIR" sparse-checkout init --no-cone
+  # Prefix each path with / and suffix with / for directory matching
+  sparse_patterns=()
+  for p in "${SPARSE_PATHS[@]}"; do
+    sparse_patterns+=("/$p/")
+  done
+  git -C "$INSTALL_DIR" sparse-checkout set "${sparse_patterns[@]}"
+  git -C "$INSTALL_DIR" checkout --quiet
 fi
 
 # === Check for claude CLI ===
