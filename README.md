@@ -83,11 +83,10 @@ skills/
 └── cleanup/                 # Archive & remove artifacts
 scripts/
 ├── init-config.sh              # Tech stack detection → .prove.json
-└── setup-tools.sh              # Auto-configure tools (hooks, config)
+└── setup-tools.sh              # Auto-configure tools (config)
 tools/
 └── cafi/                       # Content-addressable file index
-    ├── tool.json               # Tool manifest (hooks, config, requirements)
-    ├── hook.sh                 # SessionStart hook for context injection
+    ├── tool.json               # Tool manifest (config, requirements)
     ├── hasher.py               # SHA256 hashing + cache diffing
     ├── describer.py            # Claude CLI routing-hint generation
     ├── indexer.py              # Orchestrates hash→diff→describe→save
@@ -151,7 +150,7 @@ Tools are standalone utilities that live in `tools/` and are auto-configured by 
 
 ### CAFI — Content-Addressable File Index
 
-Hashes all project files, generates routing-hint descriptions via Claude CLI ("Read this file when doing X"), and injects them as context at session start via a SessionStart hook.
+Hashes all project files, generates routing-hint descriptions via Claude CLI ("Read this file when doing X"). Run `/prove:index` to build or update the index.
 
 ```bash
 # Manual usage
@@ -173,19 +172,15 @@ bash scripts/setup-tools.sh --project-root . --plugin-dir /path/to/claude-prove
    {
      "name": "my-tool",
      "description": "What this tool does",
-     "hooks": {
-       "SessionStart": "bash ${PLUGIN_DIR}/tools/my-tool/hook.sh"
-     },
      "config_key": "my_tool",
      "config_defaults": {"option": "default_value"},
      "requires": ["python3"]
    }
    ```
 3. Add the tool to `MANIFEST` as `tool | my-tool | tools/my-tool/ | Description`
-4. `setup-tools.sh` will auto-detect it and configure hooks + `.prove.json` during init
+4. `setup-tools.sh` will auto-detect it and configure `.prove.json` during init
 
 **Manifest fields:**
-- `hooks` — Map of Claude Code hook events to commands. `${PLUGIN_DIR}` is replaced with the plugin path at setup time.
 - `config_key` — Key added to `.prove.json` for tool-specific settings.
 - `config_defaults` — Default values for the config section.
 - `requires` — List of CLI commands that must be available (checked before setup).

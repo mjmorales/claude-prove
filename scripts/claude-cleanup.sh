@@ -98,9 +98,6 @@ else
     echo "No worktree directory found."
 fi
 
-# Also remove stale CAFI lockfile
-rm -rf .prove/cafi-hook.lock 2>/dev/null || true
-
 # --- 3. Clean session and cache data ---
 echo ""
 echo "=== Session & Cache Cleanup ==="

@@ -1,15 +1,3 @@
 {
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash /Users/manuelmorales/dev/claude-prove/tools/cafi/hook.sh"
-          }
-        ]
-      }
-    ]
-  }
+
 }

@@ -1,27 +1,12 @@
 # CAFI — Content-Addressable File Index
 
-A content-addressable file index that maps SHA256 hashes of project files to agent-optimized routing-hint descriptions. Checks hashes at session start, re-describes only stale/new files, and injects the index as context.
+A content-addressable file index that maps SHA256 hashes of project files to agent-optimized routing-hint descriptions. Re-describes only stale/new files via incremental indexing.
 
 ## Setup
 
 The recommended way is via `/prove:init`, which auto-configures CAFI using `tool.json`.
 
-Manual setup — add the SessionStart hook to your project's `.claude/settings.json`:
-
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      {
-        "type": "command",
-        "command": "bash /path/to/claude-prove/tools/cafi/hook.sh"
-      }
-    ]
-  }
-}
-```
-
-Optionally add index config to `.prove.json`:
+Add index config to `.prove.json`:
 
 ```json
 {
@@ -44,17 +29,16 @@ Optionally add index config to `.prove.json`:
 
 ## How It Works
 
-1. At session start, the hook checks SHA256 hashes of all project files
+1. Run `/prove:index` to build or update the file index
 2. Only new or changed files are sent to Claude for description
 3. Descriptions are formatted as routing hints: "Read this file when [doing X]"
-4. The full index is injected as context so Claude knows your codebase immediately
+4. Use `/prove:index context` to view the full index
 
 ## Architecture
 
 ```
 tools/cafi/
-├── tool.json         # Tool manifest (hooks, config, requirements)
-├── hook.sh           # SessionStart hook — checks cache, runs incremental, injects context
+├── tool.json         # Tool manifest (config, requirements)
 ├── hasher.py         # SHA256 hashing, .gitignore-aware file walking, cache diff
 ├── describer.py      # Claude CLI integration, routing-hint prompt, batch processing
 ├── indexer.py        # Orchestrates: hash → diff → describe → save
@@ -64,7 +48,6 @@ tools/cafi/
 
 **Runtime artifacts** (written to `.prove/`, gitignored):
 - `.prove/file-index.json` — The cache file mapping paths to hashes + descriptions
-- `.prove/cafi-hook.log` — Debug log from the SessionStart hook
 
 ## CLI Reference
 
@@ -73,7 +56,7 @@ python3 tools/cafi/__main__.py index [--force]   # Build/update index
 python3 tools/cafi/__main__.py status             # Show change counts
 python3 tools/cafi/__main__.py get <path>         # Get description for a file
 python3 tools/cafi/__main__.py clear              # Delete cache
-python3 tools/cafi/__main__.py context            # Output formatted index (for hooks)
+python3 tools/cafi/__main__.py context            # Output formatted index
 ```
 
 ## Description Format
