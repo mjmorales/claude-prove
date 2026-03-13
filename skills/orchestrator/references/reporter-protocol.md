@@ -6,13 +6,13 @@ Defines the progress tracking and reporting format used by the orchestrator.
 
 The orchestrator maintains two files during execution:
 
-1. **Run Log** (`workflow-reports/<task-slug>/run-log.md`) — detailed, append-only audit trail
-2. **Report** (`workflow-reports/<task-slug>/report.md`) — generated at completion, human-readable summary
+1. **Run Log** (`.prove/reports/<task-slug>/run-log.md`) — detailed, append-only audit trail
+2. **Report** (`.prove/reports/<task-slug>/report.md`) — generated at completion, human-readable summary
 
 ## Directory Structure
 
 ```
-workflow-reports/<task-slug>/
+.prove/reports/<task-slug>/
 ├── run-log.md          # live during execution
 └── report.md           # generated at completion
 ```
@@ -96,9 +96,9 @@ workflow-reports/<task-slug>/
 <output of: git diff --stat main...HEAD>
 
 ## Handoff Context Generated
-- `.task-context/<slug>/handoff-log.md` — N entries
-- `.task-context/<slug>/api-contracts.md` — created
-- `.task-context/<slug>/discoveries.md` — created
+- `.prove/context/<slug>/handoff-log.md` — N entries
+- `.prove/context/<slug>/api-contracts.md` — created
+- `.prove/context/<slug>/discoveries.md` — created
 
 ## How to Review
 \`\`\`bash

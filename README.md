@@ -9,7 +9,7 @@ Takes you from idea to merged code through a structured pipeline:
 ```
 /prove:brainstorm  →  /prove:task-planner  →  /prove:plan-step  →  /prove:orchestrator  →  /prove:cleanup
       │                        │                         │                        │                        │
-  decisions/              TASK_PLAN.md             plans/plan_X/          workflow-reports/          docs/archive/
+.prove/decisions/       .prove/TASK_PLAN.md     .prove/plans/plan_X/    .prove/reports/         .prove/archive/
 ```
 
 1. **Brainstorm** — Explore options, weigh trade-offs, record decisions
@@ -21,7 +21,7 @@ Takes you from idea to merged code through a structured pipeline:
 ## Key Features
 
 - **Auto-scaling orchestrator**: Small tasks (≤3 steps) run sequentially. Larger tasks use parallel git worktrees with mandatory architect review.
-- **Inter-agent handoff**: Agents pass context between steps via a task-scoped directory (`.task-context/`). Simple log by default, structured files (API contracts, discoveries, gotchas) when needed.
+- **Inter-agent handoff**: Agents pass context between steps via a task-scoped directory (`.prove/context/`). Simple log by default, structured files (API contracts, discoveries, gotchas) when needed.
 - **Stack-agnostic validation**: Auto-detects your project type (Go, Rust, Python, Node, Godot, Makefile) and runs appropriate build/lint/test checks. Configure with `.prove.json` or let auto-detection handle it. Bootstrap with `/prove:init`.
 - **Extensible reporting**: Progress tracked in markdown. Add custom reporters (Slack, metrics) via the `reporters` key in `.prove.json`.
 - **Git-based rollback**: Every step is committed individually. Revert any step, reset to any point.

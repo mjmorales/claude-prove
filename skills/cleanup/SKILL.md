@@ -1,6 +1,6 @@
 ---
 name: cleanup
-description: Clean up all task artifacts (plans, reports, branches, handoff context) with optional archiving to docs/archive/. Use after a task lifecycle is complete to archive key documents and remove working artifacts.
+description: Clean up all task artifacts (plans, reports, branches, handoff context) with optional archiving to .prove/archive/. Use after a task lifecycle is complete to archive key documents and remove working artifacts.
 argument-hint: "[task-slug or plan-number]"
 ---
 
@@ -11,34 +11,34 @@ Clean up all artifacts from a completed task lifecycle, archiving key documents 
 ## Phase 1: Identify Task
 
 1. If `$ARGUMENTS` is provided, locate matching artifacts:
-   - `workflow-reports/<argument>/`
-   - `plans/plan_<argument>/`
-   - `.task-context/<argument>/`
+   - `.prove/reports/<argument>/`
+   - `.prove/plans/plan_<argument>/`
+   - `.prove/context/<argument>/`
    - Branch `workflow/<argument>`
 2. If no argument, scan for all task artifacts:
-   - List all `workflow-reports/*/`
-   - List all `plans/plan_*/`
-   - List all `.task-context/*/`
+   - List all `.prove/reports/*/`
+   - List all `.prove/plans/plan_*/`
+   - List all `.prove/context/*/`
    - List all `workflow/*` branches (local)
-   - List `TASK_PLAN.md` if present
+   - List `.prove/TASK_PLAN.md` if present
 3. Present what was found and confirm with the user before proceeding
 
 ## Phase 2: Archive
 
-Create archive at `docs/archive/<YYYY-MM-DD>_<task-slug>/`:
+Create archive at `.prove/archive/<YYYY-MM-DD>_<task-slug>/`:
 
 ```bash
-mkdir -p docs/archive/<date>_<task-slug>/
+mkdir -p .prove/archive/<date>_<task-slug>/
 ```
 
 Archive these files (if they exist):
-- `workflow-reports/<task-slug>/report.md` -> archive as `workflow-report.md`
-- `plans/plan_*/02_design_decisions.md` -> archive as `design-decisions.md`
-- `plans/plan_*/01_requirements.md` -> archive as `requirements.md`
-- `TASK_PLAN.md` -> archive as `TASK_PLAN.md`
-- `.task-context/<task-slug>/handoff-log.md` -> archive as `handoff-log.md`
+- `.prove/reports/<task-slug>/report.md` -> archive as `workflow-report.md`
+- `.prove/plans/plan_*/02_design_decisions.md` -> archive as `design-decisions.md`
+- `.prove/plans/plan_*/01_requirements.md` -> archive as `requirements.md`
+- `.prove/TASK_PLAN.md` -> archive as `TASK_PLAN.md`
+- `.prove/context/<task-slug>/handoff-log.md` -> archive as `handoff-log.md`
 
-Generate `docs/archive/<date>_<task-slug>/SUMMARY.md`:
+Generate `.prove/archive/<date>_<task-slug>/SUMMARY.md`:
 
 ```markdown
 # Task Summary: <Task Name>
@@ -61,13 +61,13 @@ Generate `docs/archive/<date>_<task-slug>/SUMMARY.md`:
 
 After archiving, remove in order:
 
-1. **Reports**: `rm -rf workflow-reports/<task-slug>/`
-   - Remove parent `workflow-reports/` if now empty
-2. **Plans**: `rm -rf plans/plan_*/` (matching task)
-   - Remove parent `plans/` if now empty
-3. **Handoff context**: `rm -rf .task-context/<task-slug>/`
-   - Remove parent `.task-context/` if now empty
-4. **TASK_PLAN.md**: `rm TASK_PLAN.md` (if it belongs to this task)
+1. **Reports**: `rm -rf .prove/reports/<task-slug>/`
+   - Remove parent `.prove/reports/` if now empty
+2. **Plans**: `rm -rf .prove/plans/plan_*/` (matching task)
+   - Remove parent `.prove/plans/` if now empty
+3. **Handoff context**: `rm -rf .prove/context/<task-slug>/`
+   - Remove parent `.prove/context/` if now empty
+4. **TASK_PLAN.md**: `rm .prove/TASK_PLAN.md` (if it belongs to this task)
 5. **Branch**: Delete local branch
    ```bash
    # Use -D because squash-merged branches aren't seen as "fully merged" by git.
@@ -82,7 +82,7 @@ Output:
 - What was archived and where
 - What was deleted
 - Any items skipped (unmerged branches, missing files)
-- Path to archive: `docs/archive/<date>_<task-slug>/`
+- Path to archive: `.prove/archive/<date>_<task-slug>/`
 
 ## Committing
 
