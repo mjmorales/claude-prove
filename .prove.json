@@ -1,4 +1,13 @@
 {
+  "scopes": {
+    "skills": "skills/",
+    "commands": "commands/",
+    "agents": "agents/",
+    "scripts": "scripts/",
+    "tools": "tools/",
+    "plugin": ".",
+    "cafi": "tools/cafi/"
+  },
   "validators": [
     {
       "name": "python-lint",
