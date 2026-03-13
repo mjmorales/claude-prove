@@ -1,12 +1,24 @@
 #!/usr/bin/env bash
 # init-config.sh — Detect project tech stack and output .prove.json
 #
-# Usage: init-config.sh [project-root]
-# Outputs JSON to stdout. Redirect to .prove.json as needed.
+# Usage: init-config.sh [--merge] [project-root]
+#
+# Outputs JSON to stdout.
+#   --merge: If .prove.json exists in project-root, replace only the
+#            validators section and preserve all other sections (scopes,
+#            reporters, index, etc.)
 
 set -euo pipefail
 
-PROJECT_ROOT="${1:-.}"
+MERGE=false
+PROJECT_ROOT="."
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --merge) MERGE=true; shift ;;
+    *)       PROJECT_ROOT="$1"; shift ;;
+  esac
+done
 
 validators="[]"
 
@@ -78,9 +90,24 @@ if [[ -f "$PROJECT_ROOT/Makefile" ]]; then
 fi
 
 # Output final JSON
-python3 -c "
+PROVE_JSON="$PROJECT_ROOT/.prove.json"
+
+if $MERGE && [[ -f "$PROVE_JSON" ]]; then
+  # Merge: replace validators in existing config, preserve everything else
+  python3 -c "
+import json, sys
+
+with open(sys.argv[1]) as f:
+    config = json.load(f)
+
+config['validators'] = json.loads(sys.argv[2])
+print(json.dumps(config, indent=2))
+" "$PROVE_JSON" "$validators"
+else
+  python3 -c "
 import json, sys
 validators = json.loads(sys.argv[1])
 config = {'validators': validators}
 print(json.dumps(config, indent=2))
 " "$validators"
+fi
