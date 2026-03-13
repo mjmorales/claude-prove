@@ -252,7 +252,7 @@ How should we handle this in our solution?
 
 ### Ready to Finalize
 ```
-Let's create the final TASK_PLAN.md. Based on our discussion:
+Let's create the final .prove/TASK_PLAN.md. Based on our discussion:
 - Requirements: [summarize]
 - Approach: [summarize]
 - Edge cases to handle: [list]
@@ -272,7 +272,7 @@ Please create a detailed plan where each step is:
 End your planning session by requesting:
 
 ```
-Now please create a comprehensive TASK_PLAN.md that captures everything we've discussed:
+Now please create a comprehensive .prove/TASK_PLAN.md that captures everything we've discussed:
 - Include all edge cases we discovered
 - Break down into incremental, testable steps
 - Each step should be independently verifiable

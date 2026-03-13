@@ -18,5 +18,5 @@ Load and follow the orchestrator skill (`skills/orchestrator/SKILL.md` from the 
 2. Execute all phases sequentially: Discover -> Plan -> Execute -> Track
 3. Gate on user approval between phases
 4. Use `isolation: "worktree"` for parallel task execution
-5. Maintain PROGRESS.md throughout execution
+5. Maintain .prove/PROGRESS.md throughout execution
 6. On completion, present a summary and offer to create a PR

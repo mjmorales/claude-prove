@@ -11,7 +11,7 @@ Load and follow the orchestrator skill (`skills/orchestrator/SKILL.md` from the 
 
 ## Quick Start
 
-1. **Locate the plan**: Find `TASK_PLAN.md` and/or `plans/` directory in the current project
+1. **Locate the plan**: Find `.prove/TASK_PLAN.md` and/or `.prove/plans/` directory in the current project
 2. **If $ARGUMENTS is provided**: Look for a specific plan matching the argument
 3. **Follow the orchestrator skill phases in order**: Initialization -> Plan Review -> Execution Loop -> Completion
 
@@ -21,7 +21,7 @@ Load and follow the orchestrator skill (`skills/orchestrator/SKILL.md` from the 
 - Auto-validate after EVERY step (build, tests, lint)
 - Commit after each successful step
 - On validation failure: one retry, then HALT
-- Generate reports in `orchestrator-reports/<task-slug>/`
+- Generate reports in `.prove/reports/<task-slug>/`
 - Present the final report and review instructions to the user
 
 ## Do NOT

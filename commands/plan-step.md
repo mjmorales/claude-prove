@@ -1,6 +1,6 @@
 # Plan Step
 
-Create detailed planning workspace for a specific step from TASK_PLAN.md.
+Create detailed planning workspace for a specific step from .prove/TASK_PLAN.md.
 
 ## Instructions
 
@@ -13,17 +13,17 @@ You are initiating a **plan-step** workflow for detailed planning of a specific 
 Load and follow the plan-step skill (`skills/plan-step/SKILL.md` from the workflow plugin).
 
 ### 1. Parse the Step Reference
-Extract the step number (e.g., "1", "2.1", "Step 3") from the arguments and locate it in `TASK_PLAN.md`.
+Extract the step number (e.g., "1", "2.1", "Step 3") from the arguments and locate it in `.prove/TASK_PLAN.md`.
 
 ### 2. Create Planning Workspace
-Create a directory: `plans/plan_[step_number]/`
+Create a directory: `.prove/plans/plan_[step_number]/`
 
 Initialize all planning documents (task overview, requirements, design decisions, open questions, potential issues, implementation plan, test strategy, progress tracker).
 
 ### 3. Interactive Planning Process
 
 After creating the workspace:
-1. Present the task overview from TASK_PLAN.md
+1. Present the task overview from .prove/TASK_PLAN.md
 2. Ask clarifying questions about requirements
 3. Discuss design approaches with tradeoffs
 4. Identify risks proactively

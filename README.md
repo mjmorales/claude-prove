@@ -72,9 +72,9 @@ git clone https://github.com/your-user/claude-prove ~/dev/claude-prove
 references/
 └── validation-config.md        # Canonical validation spec (.prove.json schema, auto-detection)
 skills/
-├── brainstorm/              # Interactive brainstorming → decisions/
-├── task-planner/            # Discovery & planning → TASK_PLAN.md
-├── plan-step/               # Step-level requirements → plans/
+├── brainstorm/              # Interactive brainstorming → .prove/decisions/
+├── task-planner/            # Discovery & planning → .prove/TASK_PLAN.md
+├── plan-step/               # Step-level requirements → .prove/plans/
 ├── orchestrator/            # Autonomous execution
 │   ├── references/
 │   │   ├── handoff-protocol.md    # Inter-agent context passing
@@ -86,6 +86,33 @@ scripts/
 agents/
 └── principal-architect.md   # Code review for orchestrator's full mode
 ```
+
+## Working Directory
+
+All prove artifacts are stored under `.prove/` in your project:
+
+```
+.prove/
+├── decisions/          # Brainstorm decision records
+├── plans/              # Step-level planning docs
+│   └── plan_X.Y.Z/
+├── reports/            # Orchestrator run logs and reports
+│   └── <task-slug>/
+├── context/            # Inter-agent handoff context
+│   └── <task-slug>/
+├── archive/            # Archived completed tasks
+├── TASK_PLAN.md        # Active task plan
+├── PROGRESS.md         # Live progress (full mode)
+└── PRD.md              # Product requirements (full-auto)
+```
+
+Add `.prove/` to your `.gitignore` to keep artifacts out of version control:
+
+```bash
+echo '.prove/' >> .gitignore
+```
+
+The `.prove.json` config file stays at the repo root — it's project configuration, not a working artifact.
 
 ## Protocols
 
