@@ -47,16 +47,48 @@ ACCEPTANCE=$(awk '/^## Acceptance Criteria/,/^## [^A]/' "$PRD" | head -30)
 # Extract test strategy from PRD
 TEST_STRATEGY=$(awk '/^## Test Strategy/,/^## /' "$PRD" | head -20)
 
-# Detect test command from CLAUDE.md if present
-TEST_CMD=""
-if [[ -f "$PROJECT_ROOT/CLAUDE.md" ]]; then
-  # Look for test commands in CLAUDE.md
-  TEST_CMD=$(grep -A2 -i '# .*test\|## .*test\|running tests' "$PROJECT_ROOT/CLAUDE.md" | grep -E '^\s*(godot|npm|pytest|go test|cargo test|make test)' | head -1 | xargs 2>/dev/null || true)
-fi
-
-# Detect lint command
+# Load validator commands from .prove.json, fall back to CLAUDE.md
+BUILD_CMD=""
 LINT_CMD=""
-if [[ -f "$PROJECT_ROOT/CLAUDE.md" ]]; then
+TEST_CMD=""
+CUSTOM_CMDS=""
+
+if [[ -f "$PROJECT_ROOT/.prove.json" ]]; then
+  PROVE_CONFIG="$PROJECT_ROOT/.prove.json"
+  BUILD_CMD=$(python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    cfg = json.load(f)
+cmds = [v['command'] for v in cfg.get('validators', []) if v.get('phase') == 'build']
+print('; '.join(cmds))
+" "$PROVE_CONFIG" 2>/dev/null || true)
+
+  LINT_CMD=$(python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    cfg = json.load(f)
+cmds = [v['command'] for v in cfg.get('validators', []) if v.get('phase') == 'lint']
+print('; '.join(cmds))
+" "$PROVE_CONFIG" 2>/dev/null || true)
+
+  TEST_CMD=$(python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    cfg = json.load(f)
+cmds = [v['command'] for v in cfg.get('validators', []) if v.get('phase') == 'test']
+print('; '.join(cmds))
+" "$PROVE_CONFIG" 2>/dev/null || true)
+
+  CUSTOM_CMDS=$(python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    cfg = json.load(f)
+cmds = [v['command'] for v in cfg.get('validators', []) if v.get('phase') == 'custom']
+print('; '.join(cmds))
+" "$PROVE_CONFIG" 2>/dev/null || true)
+elif [[ -f "$PROJECT_ROOT/CLAUDE.md" ]]; then
+  # Fall back to CLAUDE.md scraping
+  TEST_CMD=$(grep -A2 -i '# .*test\|## .*test\|running tests' "$PROJECT_ROOT/CLAUDE.md" | grep -E '^\s*(godot|npm|pytest|go test|cargo test|make test)' | head -1 | xargs 2>/dev/null || true)
   LINT_CMD=$(grep -A2 -i 'lint\|format' "$PROJECT_ROOT/CLAUDE.md" | grep -E '^\s*(npm|npx|go |cargo |make )' | head -1 | xargs 2>/dev/null || true)
 fi
 
@@ -79,8 +111,10 @@ $TEST_STRATEGY
 2. **Scope discipline** — Only modify files listed in the task. If you discover you need to touch an unlisted file, document why in your commit message.
 3. **Tests alongside code** — Write tests as specified in the task. Do not skip tests.
 4. **Verify before committing**:
-$(if [[ -n "$TEST_CMD" ]]; then echo "   - Run tests: \`$TEST_CMD\`"; else echo "   - Run the project's test suite (check CLAUDE.md for the command)"; fi)
-$(if [[ -n "$LINT_CMD" ]]; then echo "   - Run lint: \`$LINT_CMD\`"; fi)
+$(if [[ -n "$BUILD_CMD" ]]; then echo "   - Build: \`$BUILD_CMD\`"; fi)
+$(if [[ -n "$LINT_CMD" ]]; then echo "   - Lint: \`$LINT_CMD\`"; fi)
+$(if [[ -n "$TEST_CMD" ]]; then echo "   - Tests: \`$TEST_CMD\`"; else echo "   - Run the project's test suite (check CLAUDE.md or .prove.json for the command)"; fi)
+$(if [[ -n "$CUSTOM_CMDS" ]]; then echo "   - Custom: \`$CUSTOM_CMDS\`"; fi)
 5. **Commit format**: \`feat({scope}): {task description}\`
 6. **Max 3 retry attempts** if tests fail — fix the issue, don't just retry.
 

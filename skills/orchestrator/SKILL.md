@@ -62,7 +62,7 @@ If neither exists, inform the user and suggest running `/plan-task` first.
 
    ## Configuration
    - Mode: <Simple|Full>
-   - Validators: <detected list>
+   - Validators: <loaded from .prove.json or auto-detected>
    - Steps: <total count>
 
    ## Step Log
@@ -70,13 +70,7 @@ If neither exists, inform the user and suggest running `/plan-task` first.
    |---|------|--------|--------|-------|
    ```
 
-5. **Detect validators** based on project type:
-   - GDScript/Godot: GUT tests via `godot --headless -s addons/gut/gut_cmdln.gd`
-   - Go: `go build ./...`, `go test ./...`, `go vet ./...`
-   - Python: `pytest`, `mypy`, `ruff`
-   - Node/TS: `npm test`, `tsc --noEmit`, `eslint`
-   - Rust: `cargo check`, `cargo test`, `cargo clippy`
-   - Generic: check for `Makefile` targets (`make test`, `make lint`)
+5. **Load validators** from `.prove.json` or auto-detect per `references/validation-config.md`
 
 ---
 
@@ -219,12 +213,15 @@ Repeat 2a-2d for each subsequent wave.
 
 ### Validation Gate (both modes)
 
-Run ALL applicable validators in sequence:
+Validators loaded per `references/validation-config.md` — from `.prove.json` if present, otherwise auto-detected.
+
+Run ALL applicable validators in phase order (build → lint → test → custom):
 
 1. **Build/Parse check** — does the project still compile?
 2. **Lint check** — no new warnings/errors introduced?
 3. **Test suite** — do ALL existing + new tests pass?
-4. **Step verification** — are expected files created/modified?
+4. **Custom checks** — any user-defined validators
+5. **Step verification** — are expected files created/modified?
 
 Record all results (pass/fail + output) in run-log.
 
@@ -448,7 +445,7 @@ Helper scripts live in `scripts/`:
 | `references/prd-template.md` | PRD template for full-auto requirements gathering |
 | `references/handoff-protocol.md` | Protocol for handing off between orchestrator phases |
 | `references/reporter-protocol.md` | Protocol for generating reports |
-| `references/validator-protocol.md` | Protocol for validation gates |
+| `references/validation-config.md` (top-level) | Canonical validation spec — schema, auto-detection, execution order |
 
 ## Committing
 

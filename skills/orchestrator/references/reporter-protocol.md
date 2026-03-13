@@ -147,11 +147,12 @@ The run-log is updated at these points:
 
 To add custom reporting (e.g., Slack notifications, metrics):
 
-1. The orchestrator checks for `.workflow-reporters.json` in the project root
-2. If present, it runs listed commands at specified events
+1. Add a `reporters` key to `.prove.json` in the project root (see `references/validation-config.md` for schema)
+2. The orchestrator runs listed commands at specified events
 
 ```json
 {
+  "validators": [ ... ],
   "reporters": [
     {
       "name": "slack-notify",
@@ -168,8 +169,8 @@ To add custom reporting (e.g., Slack notifications, metrics):
 ```
 
 Reporter commands receive event data via environment variables:
-- `WORKFLOW_EVENT`: event name
-- `WORKFLOW_TASK`: task slug
-- `WORKFLOW_STEP`: step number (if applicable)
-- `WORKFLOW_STATUS`: current status
-- `WORKFLOW_BRANCH`: branch name
+- `PROVE_EVENT`: event name
+- `PROVE_TASK`: task slug
+- `PROVE_STEP`: step number (if applicable)
+- `PROVE_STATUS`: current status
+- `PROVE_BRANCH`: branch name
