@@ -29,18 +29,14 @@ Takes you from idea to merged code through a structured pipeline:
 ## Installation
 
 ```bash
-# Clone the plugin
-git clone https://github.com/your-user/claude-prove ~/dev/claude-prove
-
-# Run claude with plugin
-./run-claude.sh
-
-# Tell Claude Code about it (add to your project or global settings)
-# In .claude/settings.json or ~/.claude/settings.json:
-{
-  "plugins": ["~/dev/claude-prove"]
-}
+curl -fsSL https://raw.githubusercontent.com/mjmorales/claude-prove/main/scripts/install.sh | bash
 ```
+
+The installer will ask whether to install as a **user-level** plugin (available in all projects) or **project-level** (current directory only), register the plugin in the appropriate `settings.json`, and clone the repo to `~/.claude/plugins/prove`.
+
+If Claude Code is already running, restart it for the plugin to take effect.
+
+For manual installation or custom paths, see `scripts/install.sh --help`.
 
 ## Usage
 
