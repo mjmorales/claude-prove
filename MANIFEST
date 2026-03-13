@@ -12,6 +12,9 @@ skill   | orchestrator       | skills/orchestrator/       | Autonomous execution
 skill   | cleanup            | skills/cleanup/            | Archive artifacts and remove working files
 skill   | commit             | skills/commit/             | Semantic commits scoped to plugin items
 skill   | prep-permissions   | skills/prep-permissions/   | Analyze task and configure Claude Code permissions
+skill   | slash-command-creator | skills/slash-command-creator/ | Guide for creating Claude Code slash commands
+skill   | subagent-creator   | skills/subagent-creator/   | Guide for creating specialized Claude Code subagents
+skill   | agentic-doc-writer | skills/agentic-doc-writer/ | Generate LLM-optimized documentation for agents and APIs
 agent   | principal-architect | agents/                   | Architectural review for orchestrator full mode
 agent   | validation-agent    | agents/                   | Lightweight LLM validator for prompt-based validation checks
 command | plan-task          | commands/plan-task.md      | Start task planning session
@@ -23,3 +26,6 @@ command | commit             | commands/commit.md         | Semantic commit assi
 command | prep-permissions   | commands/prep-permissions.md | Configure permissions for task execution
 command | init               | commands/init.md           | Initialize .prove.json for this project
 command | install-skills     | commands/install-skills.md | Install recommended community skills
+command | create-command     | commands/create-command.md | Create a new Claude Code slash command
+command | create-agent       | commands/create-agent.md   | Create a new Claude Code subagent
+command | agentic-docs       | commands/agentic-docs.md   | Generate LLM-optimized documentation

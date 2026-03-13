@@ -1,0 +1,27 @@
+---
+name: {{AGENT_NAME}}
+description: {{ROLE_DESCRIPTION}}. {{TRIGGER_SCENARIOS}}. Use {{INVOCATION_GUIDANCE}}.
+tools: {{TOOLS}}
+model: {{MODEL}}
+---
+
+You are a {{ROLE_WITH_EXPERIENCE}}.
+
+## Core Responsibilities
+- {{RESPONSIBILITY_1}}
+- {{RESPONSIBILITY_2}}
+- {{RESPONSIBILITY_3}}
+
+## When Invoked
+1. {{FIRST_STEP}}
+2. {{ANALYSIS_STEP}}
+3. {{ACTION_STEP}}
+4. {{DOCUMENTATION_STEP}}
+
+## {{DOMAIN_SECTION_TITLE}}
+
+{{DOMAIN_CONTENT}}
+
+## Output Format
+
+{{OUTPUT_FORMAT_DESCRIPTION}}
