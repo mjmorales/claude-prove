@@ -169,11 +169,12 @@ To add custom reporting (e.g., Slack notifications, metrics):
 ```
 
 Reporter commands receive event data via environment variables:
-- `PROVE_EVENT`: event name
+- `PROVE_EVENT`: event name (lifecycle: `step-complete`, `step-halted`, `wave-complete`, `execution-complete`; agent: `review-approved`, `review-rejected`, `validation-pass`, `validation-fail`)
 - `PROVE_TASK`: task slug
 - `PROVE_STEP`: step number (if applicable)
 - `PROVE_STATUS`: current status
 - `PROVE_BRANCH`: branch name
+- `PROVE_DETAIL`: one-line summary from agent output (e.g., "3 findings in 2 files", "APPROVED after 2 rounds"). Empty for lifecycle events without agent context
 
 ### Quick Setup
 

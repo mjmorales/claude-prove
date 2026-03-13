@@ -72,6 +72,50 @@ If neither exists, inform the user and suggest running `/plan-task` first.
 
 5. **Load validators** from `.prove.json` or auto-detect per `references/validation-config.md`
 
+6. **Load reporters** from `.prove.json`
+   - Read the `reporters` array (may be empty or absent)
+   - Store the list for dispatch during execution
+   - If no reporters are configured, skip all dispatch calls silently
+   - Log loaded reporters to run-log: `Reporters: <name1>, <name2>` (or `Reporters: none`)
+
+---
+
+## Reporter Dispatch
+
+When reporters are configured, the orchestrator fires them at lifecycle and agent events. This is the single dispatch mechanism — agents do not invoke reporters themselves.
+
+### Dispatch Logic
+
+For each event, iterate over all reporters whose `events` array includes the current event type:
+
+```bash
+# For each matching reporter:
+PROVE_EVENT="<event>" \
+PROVE_TASK="<task-slug>" \
+PROVE_STEP="<step-number>" \
+PROVE_STATUS="<status>" \
+PROVE_BRANCH="<branch>" \
+PROVE_DETAIL="<detail>" \
+<reporter-command>
+```
+
+- Run reporters in sequence (not parallel) to avoid output interleaving
+- If a reporter command fails (non-zero exit), log a warning but **do not halt execution** — reporters are best-effort
+- If no reporters match the event, skip silently
+
+### When to Dispatch
+
+| Event | Dispatch Point | PROVE_DETAIL Source |
+|-------|---------------|-------------------|
+| `step-complete` | After git snapshot (both modes) | Comma-separated validator names that passed |
+| `step-halted` | After retry failure, before halting | Error output from failing validator |
+| `wave-complete` | After all tasks in wave merged (full mode) | "N tasks merged" |
+| `execution-complete` | At Phase 3 completion | "Completed all N steps" or "Halted at step N" |
+| `review-approved` | After parsing APPROVED from principal-architect output | "APPROVED after N round(s)" |
+| `review-rejected` | After parsing CHANGES_REQUIRED from principal-architect output | Finding count extracted from review (e.g., "5 findings") |
+| `validation-pass` | After parsing PASS from validation-agent output | Validator name |
+| `validation-fail` | After parsing FAIL from validation-agent output | Finding count and validator name (e.g., "3 findings in doc-quality") |
+
 ---
 
 ## Phase 1: Plan Review
@@ -159,8 +203,12 @@ REVIEW LOOP (max 3 iterations per task):
    )
 
 3. Parse the verdict from the review output:
-   - If APPROVED -> exit loop, proceed to merge
-   - If CHANGES_REQUIRED -> continue to step 4
+   - If APPROVED:
+     - Dispatch `review-approved` (detail: "APPROVED after N round(s)")
+     - Exit loop, proceed to merge
+   - If CHANGES_REQUIRED:
+     - Dispatch `review-rejected` (detail: extract finding count from review output)
+     - Continue to step 4
 
 4. Update progress:
    bash scripts/update-progress.sh <progress-path> task-review <task-id> "CHANGES_REQUIRED"
@@ -215,6 +263,8 @@ After ALL tasks in the wave are reviewed and approved:
 
 3. Run the full test suite after merging the wave
 
+4. Dispatch `wave-complete` (detail: "N tasks merged")
+
 #### 2e. Advance to Next Wave
 
 Repeat 2a-2d for each subsequent wave.
@@ -259,8 +309,8 @@ For each prompt validator configured in `.prove.json`:
    )
    ```
 4. Parse the verdict from the agent output
-5. PASS: log result and continue
-6. FAIL: same retry cycle as command validators (one auto-fix, then halt)
+5. PASS: log result, dispatch `validation-pass` (detail: validator name), and continue
+6. FAIL: dispatch `validation-fail` (detail: finding count + validator name), then same retry cycle as command validators (one auto-fix, then halt)
 
 LLM validators follow the same output format logged to the run-log:
 
@@ -286,6 +336,7 @@ Record all results (pass/fail + output) in run-log.
 3. If STILL failing:
    - Commit WIP: `git commit -m "orchestrator: [WIP] step N - <desc> (validation failed)"`
    - Update run-log with blocker details and full error output
+   - Dispatch `step-halted` (detail: failing validator name + error summary)
    - **HALT** — stop execution, proceed to Phase 3
    - Do NOT continue to the next step
 
@@ -305,7 +356,7 @@ EOF
 )"
 ```
 
-Record commit SHA in run-log.
+Record commit SHA in run-log. Dispatch `step-complete` (detail: comma-separated validator names that passed).
 
 ---
 
@@ -377,6 +428,8 @@ git checkout main
 git merge --no-ff orchestrator/<task-slug>
 ```
 ```
+
+Dispatch `execution-complete` (detail: "Completed all N steps" or "Halted at step N").
 
 Present to the user:
 - Completion status (all done vs halted at step N)

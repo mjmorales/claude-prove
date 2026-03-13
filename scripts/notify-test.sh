@@ -65,6 +65,7 @@ export PROVE_TASK="test-notification"
 export PROVE_STEP="0"
 export PROVE_STATUS="test"
 export PROVE_BRANCH="test/notify-test"
+export PROVE_DETAIL="Test notification from notify-test.sh"
 
 echo "=== Notify Test ==="
 echo "Event: $EVENT_TYPE"

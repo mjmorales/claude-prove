@@ -39,7 +39,7 @@ Each validator must have exactly one of `command` or `prompt`. Command validator
 |-------|------|----------|-------------|
 | `name` | string | yes | Human-readable name |
 | `command` | string | yes | Shell command to execute |
-| `events` | string[] | yes | Events that trigger the reporter: `step-complete`, `step-halted`, `execution-complete`, `wave-complete` |
+| `events` | string[] | yes | Events that trigger the reporter (see Event Types below) |
 
 The `reporters` key is optional. If omitted, no custom reporters run.
 
@@ -120,14 +120,33 @@ Each validator reports results in this format, appended to the run-log:
 \`\`\`
 ```
 
+## Reporter Event Types
+
+### Lifecycle Events (orchestrator)
+| Event | Fires When |
+|-------|-----------|
+| `step-complete` | A step passes all validators and is committed |
+| `step-halted` | A step fails validation after retry and execution stops |
+| `wave-complete` | All tasks in a parallel wave are merged (full mode) |
+| `execution-complete` | Orchestrator run finishes (success or halted) |
+
+### Agent Events (orchestrator dispatches on behalf of agents)
+| Event | Fires When |
+|-------|-----------|
+| `review-approved` | Principal architect approves a task |
+| `review-rejected` | Principal architect requests changes |
+| `validation-pass` | LLM validation agent returns PASS |
+| `validation-fail` | LLM validation agent returns FAIL |
+
 ## Reporter Environment Variables
 
 Reporter commands receive event data via environment variables:
-- `PROVE_EVENT`: event name
+- `PROVE_EVENT`: event name (one of the event types above)
 - `PROVE_TASK`: task slug
 - `PROVE_STEP`: step number (if applicable)
 - `PROVE_STATUS`: current status
 - `PROVE_BRANCH`: branch name
+- `PROVE_DETAIL`: one-line summary extracted from agent output (e.g., "3 findings in 2 files", "APPROVED after 2 rounds"). Empty for lifecycle events without agent context
 
 ## Bootstrapping
 
