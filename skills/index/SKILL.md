@@ -14,35 +14,36 @@ Manages the content-addressable file index stored at `.prove/file-index.json`.
 ## Behavior
 
 1. Parse the user's argument to determine which subcommand to run
-2. Run the appropriate CLI subcommand (see below)
-3. Display the output in a human-friendly format
-4. If errors > 0 during indexing, warn that some descriptions may be empty
+2. Determine the absolute path to this plugin's `tools/cafi/__main__.py` — use the directory this SKILL.md was loaded from to resolve it (e.g., if this skill is at `/path/to/prove/skills/index/SKILL.md`, the CLI is at `/path/to/prove/tools/cafi/__main__.py`)
+3. Run the command from the **user's current working directory** (the project being indexed, NOT the plugin directory)
+4. Display the output in a human-friendly format
+5. If errors > 0 during indexing, warn that some descriptions may be empty
 
 ## Subcommands
 
-The CAFI CLI uses **subcommands**, not flags. The base invocation is `python3 tools/cafi/__main__.py`.
+The CAFI CLI uses **subcommands**, not flags. Replace `$PLUGIN` below with the absolute path to this plugin's root directory.
 
 - **`index [--force]`** — Build or update the file index. `--force` re-describes ALL files.
   ```bash
-  python3 tools/cafi/__main__.py index          # incremental
-  python3 tools/cafi/__main__.py index --force   # full rebuild
+  python3 $PLUGIN/tools/cafi/__main__.py index          # incremental
+  python3 $PLUGIN/tools/cafi/__main__.py index --force   # full rebuild
   ```
 - **`status`** — Show counts of new/stale/deleted/unchanged files (no indexing).
   ```bash
-  python3 tools/cafi/__main__.py status
+  python3 $PLUGIN/tools/cafi/__main__.py status
   ```
 - **`clear`** — Remove the cache file.
   ```bash
-  python3 tools/cafi/__main__.py clear
+  python3 $PLUGIN/tools/cafi/__main__.py clear
   ```
 - **`lookup <keyword>`** — Search the index by keyword (case-insensitive, matches paths and descriptions).
   ```bash
-  python3 tools/cafi/__main__.py lookup orchestrator
-  python3 tools/cafi/__main__.py lookup validation
+  python3 $PLUGIN/tools/cafi/__main__.py lookup orchestrator
+  python3 $PLUGIN/tools/cafi/__main__.py lookup validation
   ```
 - **`context`** — Output the formatted file index.
   ```bash
-  python3 tools/cafi/__main__.py context
+  python3 $PLUGIN/tools/cafi/__main__.py context
   ```
 
 Default (no argument): run `index` (incremental).

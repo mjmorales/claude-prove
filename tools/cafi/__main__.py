@@ -14,8 +14,8 @@ _tools_dir = os.path.dirname(_cafi_dir)
 if _tools_dir not in sys.path:
     sys.path.insert(0, _tools_dir)
 
-# Derive project root (two levels up from tools/cafi/)
-_project_root = os.path.dirname(_tools_dir)
+# Default project root is the caller's working directory, not the plugin's location.
+_project_root = os.getcwd()
 
 from cafi import indexer  # noqa: E402
 
