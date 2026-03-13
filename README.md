@@ -84,7 +84,8 @@ skills/
 scripts/
 └── init-config.sh              # Tech stack detection → .prove.json
 agents/
-└── principal-architect.md   # Code review for orchestrator's full mode
+├── principal-architect.md   # Code review for orchestrator's full mode
+└── validation-agent.md      # LLM-based validation for prompt validators
 ```
 
 ## Working Directory
@@ -113,6 +114,27 @@ echo '.prove/' >> .gitignore
 ```
 
 The `.prove.json` config file stays at the repo root — it's project configuration, not a working artifact.
+
+## LLM Validators
+
+In addition to shell-command validators (build, lint, test), prove supports **prompt-based LLM validators** for higher-level checks that can't be captured in a script — such as documentation quality, naming conventions, or domain-specific patterns.
+
+Configure them in `.prove.json`:
+
+```json
+{
+  "validators": [
+    { "name": "build", "command": "go build ./...", "phase": "build" },
+    { "name": "doc-quality", "prompt": ".prove/prompts/doc-quality.md", "phase": "llm" }
+  ]
+}
+```
+
+- **Prompt file**: A standard markdown file describing what to check. No special DSL — just write what you'd tell a reviewer.
+- **Phase**: LLM validators run in the `llm` phase, after all command-based validators (build → lint → test → custom → llm).
+- **Agent**: Uses the `validation-agent` (haiku model) for fast, cost-efficient evaluation. Read-only — it can inspect code but never modifies it.
+- **Verdict**: Returns PASS or FAIL with specific findings referencing files and lines.
+- **Retry**: Same semantics as command validators — one auto-fix attempt on failure, then halt.
 
 ## Protocols
 

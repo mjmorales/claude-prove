@@ -52,6 +52,7 @@ BUILD_CMD=""
 LINT_CMD=""
 TEST_CMD=""
 CUSTOM_CMDS=""
+LLM_VALIDATORS=""
 
 if [[ -f "$PROJECT_ROOT/.prove.json" ]]; then
   PROVE_CONFIG="$PROJECT_ROOT/.prove.json"
@@ -86,6 +87,20 @@ with open(sys.argv[1]) as f:
 cmds = [v['command'] for v in cfg.get('validators', []) if v.get('phase') == 'custom']
 print('; '.join(cmds))
 " "$PROVE_CONFIG" 2>/dev/null || true)
+
+  # Extract LLM prompt validators
+  LLM_VALIDATORS=$(python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    cfg = json.load(f)
+validators = [v for v in cfg.get('validators', []) if v.get('prompt')]
+if validators:
+    lines = []
+    for v in validators:
+        lines.append(f\"   - **{v['name']}**: \`{v['prompt']}\`\")
+    print('\n'.join(lines))
+" "$PROVE_CONFIG" 2>/dev/null || true)
+
 elif [[ -f "$PROJECT_ROOT/CLAUDE.md" ]]; then
   # Fall back to CLAUDE.md scraping
   TEST_CMD=$(grep -A2 -i '# .*test\|## .*test\|running tests' "$PROJECT_ROOT/CLAUDE.md" | grep -E '^\s*(godot|npm|pytest|go test|cargo test|make test)' | head -1 | xargs 2>/dev/null || true)
@@ -115,6 +130,10 @@ $(if [[ -n "$BUILD_CMD" ]]; then echo "   - Build: \`$BUILD_CMD\`"; fi)
 $(if [[ -n "$LINT_CMD" ]]; then echo "   - Lint: \`$LINT_CMD\`"; fi)
 $(if [[ -n "$TEST_CMD" ]]; then echo "   - Tests: \`$TEST_CMD\`"; else echo "   - Run the project's test suite (check CLAUDE.md or .prove.json for the command)"; fi)
 $(if [[ -n "$CUSTOM_CMDS" ]]; then echo "   - Custom: \`$CUSTOM_CMDS\`"; fi)
+$(if [[ -n "$LLM_VALIDATORS" ]]; then
+  echo "   - LLM validators (your code will be evaluated against these prompt criteria):"
+  echo "$LLM_VALIDATORS"
+fi)
 5. **Commit format**: \`feat({scope}): {task description}\`
 6. **Max 3 retry attempts** if tests fail — fix the issue, don't just retry.
 
