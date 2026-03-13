@@ -342,7 +342,14 @@ Generate `.prove/reports/<task-slug>/report.md`:
 <output of: git diff --stat main...HEAD>
 
 ## How to Review
+
+Run `/prove:review` for a structured review manifest grouped by semantic concern
+with VS Code-friendly file links. Or use git commands:
+
 ```bash
+# Structured review (recommended)
+# /prove:review
+
 # View all changes
 git diff main...orchestrator/<task-slug>
 
