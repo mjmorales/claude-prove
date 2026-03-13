@@ -18,3 +18,4 @@ command | autopilot          | commands/autopilot.md      | Run orchestrator in 
 command | full-auto          | commands/full-auto.md      | Run orchestrator end-to-end from idea to code
 command | task-cleanup       | commands/task-cleanup.md   | Clean up task artifacts with archiving
 command | commit             | commands/commit.md         | Semantic commit assistant
+command | init               | commands/init.md           | Initialize .prove.json for this project
