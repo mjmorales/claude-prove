@@ -215,13 +215,56 @@ Repeat 2a-2d for each subsequent wave.
 
 Validators loaded per `references/validation-config.md` — from `.prove.json` if present, otherwise auto-detected.
 
-Run ALL applicable validators in phase order (build → lint → test → custom):
+Run ALL applicable validators in phase order (build → lint → test → custom → llm):
 
 1. **Build/Parse check** — does the project still compile?
 2. **Lint check** — no new warnings/errors introduced?
 3. **Test suite** — do ALL existing + new tests pass?
 4. **Custom checks** — any user-defined validators
-5. **Step verification** — are expected files created/modified?
+5. **LLM checks** — prompt-based validation using the `validation-agent` (haiku model)
+6. **Step verification** — are expected files created/modified?
+
+#### LLM Validator Execution
+
+For each prompt validator configured in `.prove.json`:
+
+1. Read the prompt file specified in the validator's `prompt` field
+2. Generate the diff for the current step: `git diff HEAD~1`
+3. Launch the `validation-agent` (haiku model, read-only tools):
+   ```
+   Agent(
+     subagent_type: "validation-agent",
+     model: "haiku",
+     prompt: """
+       ## Validation Prompt
+       {contents of the prompt markdown file}
+
+       ## Changes to Validate
+       ```diff
+       {git diff output}
+       ```
+
+       ## Instructions
+       Evaluate the changes against the validation prompt criteria.
+       Return your verdict in the required format (PASS/FAIL with findings).
+     """
+   )
+   ```
+4. Parse the verdict from the agent output
+5. PASS: log result and continue
+6. FAIL: same retry cycle as command validators (one auto-fix, then halt)
+
+LLM validators follow the same output format logged to the run-log:
+
+```markdown
+### <Validator Name>
+**Status**: PASS | FAIL
+**Duration**: Xs
+**Output** (on failure):
+```
+(findings from the validation-agent)
+```
+```
 
 Record all results (pass/fail + output) in run-log.
 
