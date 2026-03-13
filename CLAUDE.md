@@ -27,8 +27,8 @@ Run before committing:
 Before using Glob or Grep for broad codebase exploration:
 
 1. Check the file index first — it has routing hints for every file
-2. Run `python3 /Users/manuelmorales/dev/claude-prove/tools/cafi/__main__.py context` for the full index
-3. Run `python3 /Users/manuelmorales/dev/claude-prove/tools/cafi/__main__.py lookup <keyword>` to search by keyword
+2. Run `python3 tools/cafi/__main__.py context` for the full index
+3. Run `python3 tools/cafi/__main__.py lookup <keyword>` to search by keyword
 4. Only fall back to Glob/Grep when the index doesn't cover what you need
 
 The index describes *when* to read each file, not just what it contains.
