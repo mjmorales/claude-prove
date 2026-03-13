@@ -1,5 +1,6 @@
 """Tests for the CAFI description generator."""
 
+import json
 import subprocess
 import sys
 import unittest
@@ -13,7 +14,11 @@ if str(_cafi_dir.parent) not in sys.path:
 
 from cafi.describer import (  # noqa: E402
     MAX_CONTENT_LENGTH,
+    _build_batch_prompt,
     _call_claude_cli,
+    _chunk_list,
+    _describe_batch,
+    _strip_json_fences,
     describe_file,
     describe_files,
     generate_prompt,
@@ -64,6 +69,15 @@ class TestCallClaudeCli(unittest.TestCase):
             check=True,
         )
 
+    @patch("cafi.describer.subprocess.run")
+    def test_call_claude_cli_custom_timeout(self, mock_run):
+        """Verify custom timeout is passed through."""
+        mock_run.return_value = MagicMock(stdout="desc")
+        _call_claude_cli("prompt", timeout=120)
+        mock_run.assert_called_once()
+        call_kwargs = mock_run.call_args
+        self.assertEqual(call_kwargs.kwargs.get("timeout") or call_kwargs[1].get("timeout"), 120)
+
     @patch(
         "cafi.describer.subprocess.run",
         side_effect=FileNotFoundError("claude not found"),
@@ -92,6 +106,125 @@ class TestCallClaudeCli(unittest.TestCase):
             _call_claude_cli("prompt")
 
 
+class TestStripJsonFences(unittest.TestCase):
+    """Tests for _strip_json_fences."""
+
+    def test_no_fences(self):
+        self.assertEqual(_strip_json_fences('{"a": "b"}'), '{"a": "b"}')
+
+    def test_json_fences(self):
+        self.assertEqual(_strip_json_fences('```json\n{"a": "b"}\n```'), '{"a": "b"}')
+
+    def test_plain_fences(self):
+        self.assertEqual(_strip_json_fences('```\n{"a": "b"}\n```'), '{"a": "b"}')
+
+
+class TestChunkList(unittest.TestCase):
+    """Tests for _chunk_list."""
+
+    def test_even_split(self):
+        self.assertEqual(_chunk_list([1, 2, 3, 4], 2), [[1, 2], [3, 4]])
+
+    def test_uneven_split(self):
+        self.assertEqual(_chunk_list([1, 2, 3], 2), [[1, 2], [3]])
+
+    def test_single_chunk(self):
+        self.assertEqual(_chunk_list([1, 2], 5), [[1, 2]])
+
+    def test_empty(self):
+        self.assertEqual(_chunk_list([], 3), [])
+
+
+class TestBuildBatchPrompt(unittest.TestCase):
+    """Tests for _build_batch_prompt."""
+
+    def test_includes_all_files(self):
+        entries = [("a.py", "code a"), ("b.py", "code b")]
+        prompt = _build_batch_prompt(entries)
+        self.assertIn("--- FILE: a.py ---", prompt)
+        self.assertIn("--- FILE: b.py ---", prompt)
+        self.assertIn("code a", prompt)
+        self.assertIn("code b", prompt)
+        self.assertIn("JSON object", prompt)
+
+    def test_truncates_long_content(self):
+        long = "x" * (MAX_CONTENT_LENGTH + 100)
+        prompt = _build_batch_prompt([("big.py", long)])
+        self.assertIn("[... truncated at 8000 characters ...]", prompt)
+
+
+class TestDescribeBatch(unittest.TestCase):
+    """Tests for _describe_batch."""
+
+    @patch("cafi.describer._call_claude_cli")
+    @patch("cafi.describer.Path.read_text", return_value="some content")
+    def test_batch_success(self, _mock_read, mock_cli):
+        """Verify batch returns parsed JSON descriptions."""
+        response = json.dumps({
+            "a.py": "Read this file when doing A.",
+            "b.py": "Read this file when doing B.",
+        })
+        mock_cli.return_value = response
+        result = _describe_batch(["a.py", "b.py"], ".")
+        self.assertEqual(result["a.py"], "Read this file when doing A.")
+        self.assertEqual(result["b.py"], "Read this file when doing B.")
+
+    @patch("cafi.describer._call_claude_cli")
+    @patch("cafi.describer.Path.read_text", return_value="some content")
+    def test_batch_single_file_uses_simple_prompt(self, _mock_read, mock_cli):
+        """Single-file batch should use per-file prompt, not batch prompt."""
+        mock_cli.return_value = "Read this file when testing."
+        result = _describe_batch(["a.py"], ".")
+        self.assertEqual(result["a.py"], "Read this file when testing.")
+        # Verify the prompt sent was the single-file format (contains "routing hint")
+        prompt_sent = mock_cli.call_args[0][0]
+        self.assertIn("routing hint", prompt_sent)
+        self.assertNotIn("JSON object", prompt_sent)
+
+    @patch("cafi.describer._call_claude_cli")
+    @patch("cafi.describer.Path.read_text", return_value="some content")
+    def test_batch_cli_failure(self, _mock_read, mock_cli):
+        """Verify all files get empty descriptions on CLI failure."""
+        mock_cli.side_effect = subprocess.CalledProcessError(returncode=1, cmd="claude")
+        result = _describe_batch(["a.py", "b.py"], ".")
+        self.assertEqual(result, {"a.py": "", "b.py": ""})
+
+    @patch("cafi.describer._call_claude_cli")
+    @patch("cafi.describer.Path.read_text", return_value="some content")
+    def test_batch_invalid_json(self, _mock_read, mock_cli):
+        """Verify graceful handling of non-JSON response."""
+        mock_cli.return_value = "not valid json"
+        result = _describe_batch(["a.py", "b.py"], ".")
+        self.assertEqual(result, {"a.py": "", "b.py": ""})
+
+    @patch("cafi.describer._call_claude_cli")
+    @patch("cafi.describer.Path.read_text", return_value="some content")
+    def test_batch_non_dict_json(self, _mock_read, mock_cli):
+        """Verify graceful handling when response is JSON but not a dict."""
+        mock_cli.return_value = '["a.py", "b.py"]'
+        result = _describe_batch(["a.py", "b.py"], ".")
+        self.assertEqual(result, {"a.py": "", "b.py": ""})
+
+    @patch("cafi.describer.Path.read_text", side_effect=OSError("Permission denied"))
+    def test_batch_unreadable_files(self, _mock_read):
+        """Verify unreadable files get empty descriptions without CLI call."""
+        result = _describe_batch(["secret.py"], ".")
+        self.assertEqual(result, {"secret.py": ""})
+
+    @patch("cafi.describer._call_claude_cli")
+    @patch("cafi.describer.Path.read_text", return_value="content")
+    def test_batch_strips_markdown_fences(self, _mock_read, mock_cli):
+        """Verify markdown fences are stripped from batch response."""
+        response = '```json\n{"a.py": "desc a"}\n```'
+        mock_cli.return_value = response
+        result = _describe_batch(["a.py"], ".")
+        # Single file uses simple prompt, so let's test with 2 files
+        result = _describe_batch(["a.py", "b.py"], ".")
+        # The fenced response only has a.py, b.py should be empty
+        self.assertEqual(result["a.py"], "desc a")
+        self.assertEqual(result["b.py"], "")
+
+
 class TestDescribeFiles(unittest.TestCase):
     """Tests for describe_file and describe_files."""
 
@@ -108,18 +241,58 @@ class TestDescribeFiles(unittest.TestCase):
         mock_cli.side_effect = subprocess.CalledProcessError(
             returncode=1, cmd="claude"
         )
-        # describe_file catches the error and returns ""
-        result = describe_files(["a.py", "b.py"], project_root=".", concurrency=2)
+        result = describe_files(["a.py", "b.py"], project_root=".", concurrency=2, batch_size=5)
         # Both files should get empty descriptions, not raise
         self.assertEqual(result, {"a.py": "", "b.py": ""})
 
     @patch("cafi.describer._call_claude_cli")
     @patch("cafi.describer.Path.read_text", return_value="some content")
-    def test_describe_files_success(self, _mock_read, mock_cli):
-        """Verify successful describe_files returns descriptions."""
+    def test_describe_files_success_batched(self, _mock_read, mock_cli):
+        """Verify successful batched describe_files returns descriptions."""
+        response = json.dumps({
+            "a.py": "Read this file when testing.",
+            "b.py": "Read this file when building.",
+        })
+        mock_cli.return_value = response
+        result = describe_files(
+            ["a.py", "b.py"], project_root=".", concurrency=1, batch_size=5
+        )
+        self.assertEqual(result["a.py"], "Read this file when testing.")
+        self.assertEqual(result["b.py"], "Read this file when building.")
+
+    @patch("cafi.describer._call_claude_cli")
+    @patch("cafi.describer.Path.read_text", return_value="some content")
+    def test_describe_files_multiple_batches(self, _mock_read, mock_cli):
+        """Verify files are split across batches correctly."""
+        # batch_size=1 means each file is its own batch (single-file path)
         mock_cli.return_value = "Read this file when testing."
-        result = describe_files(["a.py"], project_root=".", concurrency=1)
-        self.assertEqual(result, {"a.py": "Read this file when testing."})
+        result = describe_files(
+            ["a.py", "b.py", "c.py"],
+            project_root=".",
+            concurrency=2,
+            batch_size=1,
+        )
+        self.assertEqual(len(result), 3)
+        # With batch_size=1, _call_claude_cli should be called 3 times (once per file)
+        self.assertEqual(mock_cli.call_count, 3)
+
+    @patch("cafi.describer._call_claude_cli")
+    @patch("cafi.describer.Path.read_text", return_value="some content")
+    def test_describe_files_progress_callback(self, _mock_read, mock_cli):
+        """Verify progress callback is called after each batch."""
+        mock_cli.return_value = "desc"
+        calls = []
+        result = describe_files(
+            ["a.py", "b.py", "c.py"],
+            project_root=".",
+            concurrency=1,
+            batch_size=2,
+            on_progress=lambda done, total, path: calls.append((done, total)),
+        )
+        # 2 batches: [a.py, b.py] and [c.py]
+        self.assertEqual(len(calls), 2)
+        # Final call should report all done
+        self.assertTrue(any(done == 3 for done, total in calls))
 
 
 class TestTriageFiles(unittest.TestCase):
