@@ -365,6 +365,14 @@ Use these to drive the discovery:
 - "So the current flow is: [A] -> [B] -> [C], correct?"
 - "The main risk seems to be [X]. Am I missing anything?"
 
+## Validation Awareness
+
+When building verification criteria for each step, check for `.prove.json` in the project root. If present, use its validators to define concrete verification commands in the plan. If absent, note that the orchestrator will auto-detect validators at runtime.
+
+Reference: `references/validation-config.md` for the full validation spec (phases, auto-detection, output format).
+
+This ensures the planned verification steps match what the orchestrator will actually enforce during execution.
+
 ## Output Integration
 
 The `TASK_PLAN.md` output integrates with the plan-step skill:

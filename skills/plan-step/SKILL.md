@@ -195,6 +195,16 @@ Initialize these planning documents in the directory:
 ```markdown
 # Test Strategy for Task [X.Y.Z]
 
+## Project Validators
+<!-- Check .prove.json for configured validators. If absent, the orchestrator auto-detects. -->
+<!-- See references/validation-config.md for the full spec. -->
+- **Build**: [command from .prove.json or auto-detected, e.g. `go build ./...`]
+- **Lint**: [command, e.g. `go vet ./...`]
+- **Test**: [command, e.g. `go test ./...`]
+- **Custom**: [if any]
+
+These validators will be enforced by the orchestrator after this step is implemented.
+
 ## Unit Tests
 - **Test**: [What to test]
   **Expected**: [Expected behavior]
