@@ -50,7 +50,8 @@ Gather platform-specific details through a series of questions.
 **Events** — use `AskUserQuestion` with header "Events" (multiSelect: true):
 - "Step Complete" — when an orchestrator step finishes
 - "Step Halted" — when something fails or gets stuck
-- "Needs Input" — when user approval or permissions are needed
+- "Needs Input" — when user approval/permissions are needed (planned — requires orchestrator update)
+- "Wave Complete" — when a parallel wave of tasks finishes (full mode only)
 - "Execution Complete" — when the full run finishes
 
 **Platform-specific details** (free-form questions):
@@ -81,7 +82,7 @@ After generation:
 1. Write the script to the appropriate location (`./scripts/notify-<platform>.sh` or `~/.claude/scripts/notify-<platform>.sh`)
 2. Run `chmod +x` on the script
 
-### Phase 5: Configuration Update
+### Phase 5: .prove.json Update
 
 Update `.prove.json` with the new reporter entry.
 
@@ -98,7 +99,8 @@ Update `.prove.json` with the new reporter entry.
 4. Map the user's event selections to the event slugs:
    - "Step Complete" -> `step-complete`
    - "Step Halted" -> `step-halted`
-   - "Needs Input" -> `needs-input`
+   - "Needs Input" -> `needs-input` (planned — not yet supported by orchestrator)
+   - "Wave Complete" -> `wave-complete`
    - "Execution Complete" -> `execution-complete`
 
 ### Phase 6: Verification

@@ -140,7 +140,8 @@ For user-provided commands, wrap them with env var passthrough and error handlin
 **Pattern**:
 ```bash
 #!/usr/bin/env bash
-set -euo pipefail
+set -uo pipefail
+# Note: no set -e — reporter scripts must not crash the orchestrator
 
 # Format message from orchestrator env vars
 message="[${PROVE_EVENT:-unknown}] Task: ${PROVE_TASK:-unknown} | Step: ${PROVE_STEP:-?} | Status: ${PROVE_STATUS:-unknown} | Branch: ${PROVE_BRANCH:-unknown}"
