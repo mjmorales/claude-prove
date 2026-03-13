@@ -17,7 +17,7 @@ A single JSON file in the project root that defines validators and reporters. If
     { "name": "doc-quality", "prompt": ".prove/prompts/doc-quality.md", "phase": "llm" }
   ],
   "reporters": [
-    { "name": "slack", "command": "./scripts/notify.sh", "events": ["step-complete", "step-halted"] }
+    { "name": "slack", "command": "./.prove/notify.sh", "events": ["step-complete", "step-halted"] }
   ]
 }
 ```

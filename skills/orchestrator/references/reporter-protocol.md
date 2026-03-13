@@ -156,12 +156,12 @@ To add custom reporting (e.g., Slack notifications, metrics):
   "reporters": [
     {
       "name": "slack-notify",
-      "command": "./scripts/notify-slack.sh",
+      "command": "./.prove/notify-slack.sh",
       "events": ["step-complete", "execution-complete", "step-halted"]
     },
     {
       "name": "metrics",
-      "command": "./scripts/record-metrics.sh",
+      "command": "./.prove/record-metrics.sh",
       "events": ["execution-complete"]
     }
   ]

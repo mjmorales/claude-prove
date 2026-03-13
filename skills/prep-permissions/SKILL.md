@@ -51,7 +51,7 @@ Generate `permissions.allow` rules based on what the task requires. Use the **mo
 - e.g., `"command": "cargo clippy"` → `Bash(cargo clippy *)`
 
 **From .prove.json reporters** — add each reporter command:
-- e.g., `"command": "./scripts/notify.sh"` → `Bash(./scripts/notify.sh *)`
+- e.g., `"command": "./.prove/notify.sh"` → `Bash(./.prove/notify.sh *)`
 
 **From auto-detected toolchain** (when no .prove.json):
 

@@ -44,7 +44,7 @@ If discovery found specific integrations, note them in the option descriptions (
 Gather platform-specific details through a series of questions.
 
 **Scope** — use `AskUserQuestion` with header "Scope":
-- "Project" — scripts in `./scripts/`, config in `.prove.json`
+- "Project" — scripts in `./.prove/`, config in `.prove.json`
 - "Global" — scripts in `~/.claude/scripts/`, mentioned in output for manual wiring
 
 **Events** — use `AskUserQuestion` with header "Events" (multiSelect: true):
@@ -79,7 +79,7 @@ Platform-specific generation guidance:
 - **Custom Command**: Wrap the user's command with env var formatting and error handling.
 
 After generation:
-1. Write the script to the appropriate location (`./scripts/notify-<platform>.sh` or `~/.claude/scripts/notify-<platform>.sh`)
+1. Write the script to the appropriate location (`./.prove/notify-<platform>.sh` or `~/.claude/scripts/notify-<platform>.sh`)
 2. Run `chmod +x` on the script
 
 ### Phase 5: .prove.json Update
@@ -91,7 +91,7 @@ Update `.prove.json` with the new reporter entry.
    ```json
    {
      "name": "<platform>-notify",
-     "command": "./scripts/notify-<platform>.sh",
+     "command": "./.prove/notify-<platform>.sh",
      "events": ["step-complete", "step-halted", "execution-complete"]
    }
    ```
