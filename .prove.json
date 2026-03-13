@@ -1,5 +1,21 @@
 {
-  "validators": [],
+  "validators": [
+    {
+      "name": "python-lint",
+      "command": "docker run --rm -v \"$PWD\":/project prove-validators ruff check .",
+      "phase": "lint"
+    },
+    {
+      "name": "python-typecheck",
+      "command": "docker run --rm -v \"$PWD\":/project prove-validators mypy --ignore-missing-imports tools/",
+      "phase": "lint"
+    },
+    {
+      "name": "python-tests",
+      "command": "docker run --rm -v \"$PWD\":/project prove-validators python -m pytest tools/cafi/ -v",
+      "phase": "test"
+    }
+  ],
   "index": {
     "excludes": [],
     "max_file_size": 102400,
