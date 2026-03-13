@@ -13,6 +13,7 @@ skill   | cleanup            | skills/cleanup/            | Archive artifacts an
 skill   | commit             | skills/commit/             | Semantic commits scoped to plugin items
 skill   | prep-permissions   | skills/prep-permissions/   | Analyze task and configure Claude Code permissions
 agent   | principal-architect | agents/                   | Architectural review for orchestrator full mode
+agent   | validation-agent    | agents/                   | Lightweight LLM validator for prompt-based validation checks
 command | plan-task          | commands/plan-task.md      | Start task planning session
 command | plan-step          | commands/plan-step.md      | Plan a specific step from TASK_PLAN.md
 command | autopilot          | commands/autopilot.md      | Run orchestrator in autopilot mode
