@@ -111,6 +111,9 @@ def build_index(project_root: str, force: bool = False) -> dict:
     else:
         descriptions = {}
 
+    # Count files that received empty descriptions (CLI failures)
+    error_count = sum(1 for fp in to_describe if not descriptions.get(fp))
+
     # Merge into cache
     cached_files = cache.get("files", {})
 
@@ -139,6 +142,7 @@ def build_index(project_root: str, force: bool = False) -> dict:
         "deleted": len(deleted),
         "unchanged": len(unchanged),
         "total": len(current_hashes),
+        "errors": error_count,
     }
 
 

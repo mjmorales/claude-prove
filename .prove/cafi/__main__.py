@@ -24,6 +24,13 @@ def cmd_index(args: argparse.Namespace) -> None:
     """Run full or incremental index."""
     summary = indexer.build_index(args.project_root, force=args.force)
     print(json.dumps(summary, indent=2))
+    errors = summary.get("errors", 0)
+    if errors > 0:
+        print(
+            f"Warning: {errors} files received empty descriptions "
+            "(Claude CLI may be unavailable)",
+            file=sys.stderr,
+        )
 
 
 def cmd_status(args: argparse.Namespace) -> None:

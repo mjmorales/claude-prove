@@ -4,6 +4,8 @@ Walks the project tree, computes SHA256 hashes, and diffs against
 a cached file index to identify new, stale, deleted, and unchanged files.
 """
 
+from __future__ import annotations
+
 import hashlib
 import json
 import os
