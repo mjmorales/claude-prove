@@ -1,0 +1,14 @@
+{
+  "name": "cafi",
+  "description": "Content-addressable file index with routing-hint descriptions",
+  "hooks": {
+    "SessionStart": "bash ${PLUGIN_DIR}/tools/cafi/hook.sh"
+  },
+  "config_key": "index",
+  "config_defaults": {
+    "excludes": [],
+    "max_file_size": 102400,
+    "concurrency": 3
+  },
+  "requires": ["python3"]
+}
