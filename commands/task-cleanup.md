@@ -1,0 +1,34 @@
+---
+description: Clean up all task artifacts (plans, reports, branches) with optional archiving
+argument-hint: "[task-slug or plan-number]"
+---
+
+# Task Cleanup: $ARGUMENTS
+
+Clean up all artifacts from a completed task lifecycle, archiving key documents before removal.
+
+Load and follow the cleanup skill (`skills/cleanup/SKILL.md` from the workflow plugin).
+
+## Phase 1: Identify Task
+
+1. If `$ARGUMENTS` is provided, locate matching artifacts:
+   - `orchestrator-reports/<argument>/`
+   - `plans/plan_<argument>/`
+   - Branch `orchestrator/<argument>`
+2. If no argument, scan for all task artifacts
+3. Present what was found and confirm with the user before proceeding
+
+## Phase 2: Archive
+
+Create archive at `docs/archive/<YYYY-MM-DD>_<task-slug>/` with key documents.
+
+## Phase 3: Remove Artifacts
+
+After archiving, remove reports, plans, TASK_PLAN.md, and local branches.
+
+## Safety Rules
+
+- **Always archive before deleting**
+- **Verify changes landed on main** before deleting branches
+- **Confirm with user** before starting cleanup
+- **Show dry-run first**
