@@ -460,6 +460,6 @@ python scripts/code_explorer.py analyze src/auth.py
 
 ## Committing
 
-When the user asks to commit planning artifacts (.prove/TASK_PLAN.md, etc.), delegate to the `commit` skill. Do not create ad-hoc commits. The commit skill reads `MANIFEST` for valid scopes and uses conventional commit format.
+When the user asks to commit planning artifacts (.prove/TASK_PLAN.md, etc.), delegate to the `commit` skill. Do not create ad-hoc commits. The commit skill reads `.prove.json` scopes for valid commit scopes and uses conventional commit format.
 
 Example: `feat(task-planner): create task plan for api-refactor`

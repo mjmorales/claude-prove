@@ -162,7 +162,7 @@ Usage: `/review-pr 456 high alice`
 
 ## Committing
 
-When the user asks to commit new commands, delegate to the `commit` skill. The commit skill reads `MANIFEST` for valid scopes.
+When the user asks to commit new commands, delegate to the `commit` skill. The commit skill reads `.prove.json` scopes for valid commit scopes.
 
 Example: `feat(slash-command-creator): add review command`
 

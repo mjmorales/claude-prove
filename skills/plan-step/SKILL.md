@@ -355,6 +355,6 @@ Remember: **Thorough planning prevents rework.** Take time to understand require
 
 ## Committing
 
-When the user asks to commit plan step artifacts (requirements, design decisions, etc.), delegate to the `commit` skill. Do not create ad-hoc commits. The commit skill reads `MANIFEST` for valid scopes and uses conventional commit format.
+When the user asks to commit plan step artifacts (requirements, design decisions, etc.), delegate to the `commit` skill. Do not create ad-hoc commits. The commit skill reads `.prove.json` scopes for valid commit scopes and uses conventional commit format.
 
 Example: `feat(plan-step): define requirements for step 1.2.3`

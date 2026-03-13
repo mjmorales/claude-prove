@@ -132,6 +132,6 @@ Avoid these context-wasting patterns:
 
 ## Committing
 
-When the user asks to commit documentation, delegate to the `commit` skill. The commit skill reads `MANIFEST` for valid scopes.
+When the user asks to commit documentation, delegate to the `commit` skill. The commit skill reads `.prove.json` scopes for valid commit scopes.
 
 Example: `docs(agentic-doc-writer): document validation-agent interface`

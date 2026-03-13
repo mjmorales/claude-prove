@@ -73,7 +73,7 @@ Output:
 
 ## Committing
 
-When archiving or removing artifacts results in changes that should be committed, delegate to the `commit` skill. Do not create ad-hoc commits. The commit skill reads `MANIFEST` for valid scopes and uses conventional commit format.
+When archiving or removing artifacts results in changes that should be committed, delegate to the `commit` skill. Do not create ad-hoc commits. The commit skill reads `.prove.json` scopes for valid commit scopes and uses conventional commit format.
 
 Example: `chore(cleanup): archive and remove api-refactor artifacts`
 

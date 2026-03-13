@@ -124,7 +124,7 @@ These demonstrate the two common patterns: heavyweight (opus, write access) for 
 
 ## Committing
 
-When the user asks to commit new agents, delegate to the `commit` skill. The commit skill reads `MANIFEST` for valid scopes.
+When the user asks to commit new agents, delegate to the `commit` skill. The commit skill reads `.prove.json` scopes for valid commit scopes.
 
 Example: `feat(subagent-creator): add security-auditor agent`
 

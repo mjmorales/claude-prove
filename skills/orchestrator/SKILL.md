@@ -505,9 +505,7 @@ Helper scripts live in `scripts/`:
 
 All commits created during orchestrated execution MUST follow the `commit` skill conventions:
 
-1. Read `MANIFEST` from the project root to derive valid scopes
+1. Read `scopes` from `.prove.json` to derive valid scopes (fall back to directory-based scoping if not configured)
 2. Use conventional commit format: `<type>(<scope>): <description>`
-3. If the target project has its own MANIFEST, use its scopes for implementation commits
-4. If not, derive scope from the area of the codebase being changed
 
 The orchestrator creates commits after each successful step. Each commit must be atomic and scoped — never bundle multiple steps into one commit.
