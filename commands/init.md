@@ -46,9 +46,16 @@ Detect the current project's tech stack and generate a `.prove.json` configurati
    ```bash
    bash "$PLUGIN_DIR/scripts/setup-tools.sh" --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"
    ```
-   This registers SessionStart hooks in `.claude/settings.json` and adds tool config sections to `.prove.json`.
+   This adds tool config sections to `.prove.json`.
 
-8. Offer to install recommended community skills:
+8. Generate CLAUDE.md for the project:
+   ```bash
+   python3 "$PLUGIN_DIR/skills/claude-md/__main__.py" generate --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"
+   ```
+   Show the user a summary of what was generated (section count, file path).
+   If `CLAUDE.md` already exists, use `AskUserQuestion` with header "CLAUDE.md" and options: "Regenerate" (overwrite with freshly scanned content) / "Keep Existing" (skip CLAUDE.md generation).
+
+9. Offer to install recommended community skills:
    ```bash
    bash "$PLUGIN_DIR/scripts/install-skills.sh" --list
    ```

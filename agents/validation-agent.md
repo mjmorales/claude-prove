@@ -64,9 +64,15 @@ When there are no findings, use:
 {One sentence confirming the changes satisfy the criteria}
 ```
 
+## Discovery Protocol
+
+Before broad Glob/Grep searches, check the project's file index if available:
+- Run `python3 <plugin-dir>/tools/cafi/__main__.py lookup <keyword>` to find relevant files by keyword
+- Only fall back to Glob/Grep when the index doesn't cover what you need
+
 ## Notes
 
 - Use `Read` to inspect full file contents when the diff alone lacks sufficient context
-- Use `Glob` to locate files referenced in the criteria but not present in the diff
+- Use the CAFI lookup or `Glob` to locate files referenced in the criteria but not present in the diff
 - Use `Grep` to search for patterns across the codebase when the criteria requires it
 - The validator name in the output header comes from the name of the validation prompt file
