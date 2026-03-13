@@ -1,5 +1,4 @@
 ---
-name: progress
 description: Show orchestrator execution status — current wave, task statuses, review verdicts, and blockers
 ---
 
