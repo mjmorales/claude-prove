@@ -18,7 +18,7 @@ set -euo pipefail
 
 PLUGIN_DIR="$(cd "$(dirname "$0")" && pwd)"
 CLAUDE_DIR="$HOME/.claude"
-BACKUP_DIR="$CLAUDE_DIR/backups/workflow-plugin-$(date +%Y%m%d-%H%M%S)"
+BACKUP_DIR="$CLAUDE_DIR/backups/prove-plugin-$(date +%Y%m%d-%H%M%S)"
 
 # Items to sync: source_relative -> target_dir, target_name
 # Skills: directory symlinks
@@ -60,7 +60,7 @@ backup_if_exists() {
 }
 
 install() {
-    log "Installing workflow plugin symlinks..."
+    log "Installing prove plugin symlinks..."
     log "Plugin: $PLUGIN_DIR"
     log "Target: $CLAUDE_DIR"
     echo
@@ -129,7 +129,7 @@ install() {
 }
 
 uninstall() {
-    log "Removing workflow plugin symlinks..."
+    log "Removing prove plugin symlinks..."
 
     for skill in "${SKILL_NAMES[@]}"; do
         local dst="$CLAUDE_DIR/skills/$skill"
@@ -161,7 +161,7 @@ uninstall() {
 }
 
 status() {
-    info "Workflow plugin sync status"
+    info "Prove plugin sync status"
     info "Plugin: $PLUGIN_DIR"
     echo
 

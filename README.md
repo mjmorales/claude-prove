@@ -1,13 +1,13 @@
-# workflow
+# prove
 
-A Claude Code plugin that provides a complete plan-to-implementation lifecycle for any tech stack.
+**P**lan, **R**esearch, **O**rchestrate, **V**alidate, **E**xecute — a Claude Code plugin that provides a complete plan-to-implementation lifecycle for any tech stack.
 
 ## What It Does
 
 Takes you from idea to merged code through a structured pipeline:
 
 ```
-/workflow:brainstorm  →  /workflow:task-planner  →  /workflow:plan-step  →  /workflow:orchestrator  →  /workflow:cleanup
+/prove:brainstorm  →  /prove:task-planner  →  /prove:plan-step  →  /prove:orchestrator  →  /prove:cleanup
       │                        │                         │                        │                        │
   decisions/              TASK_PLAN.md             plans/plan_X/          workflow-reports/          docs/archive/
 ```
@@ -30,12 +30,15 @@ Takes you from idea to merged code through a structured pipeline:
 
 ```bash
 # Clone the plugin
-git clone https://github.com/your-user/manny-claude-helpers ~/dev/manny-claude-helpers
+git clone https://github.com/your-user/claude-prove ~/dev/claude-prove
+
+# Install symlinks into ~/.claude/
+cd ~/dev/claude-prove && ./sync.sh install
 
 # Tell Claude Code about it (add to your project or global settings)
 # In .claude/settings.json or ~/.claude/settings.json:
 {
-  "plugins": ["~/dev/manny-claude-helpers"]
+  "plugins": ["~/dev/claude-prove"]
 }
 ```
 
@@ -43,19 +46,19 @@ git clone https://github.com/your-user/manny-claude-helpers ~/dev/manny-claude-h
 
 ```
 # Start brainstorming a feature
-/workflow:brainstorm
+/prove:brainstorm
 
 # Plan the implementation
-/workflow:task-planner
+/prove:task-planner
 
 # Deep-dive into a specific step
-/workflow:plan-step 1.2.3
+/prove:plan-step 1.2.3
 
 # Execute autonomously
-/workflow:orchestrator
+/prove:orchestrator
 
 # Clean up when done
-/workflow:cleanup my-feature
+/prove:cleanup my-feature
 ```
 
 ## Project Structure

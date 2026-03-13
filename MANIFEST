@@ -1,4 +1,4 @@
-# plugin: workflow
+# plugin: prove
 # Registry of all skills, agents, and commands in this plugin.
 # Used by the commit skill to derive valid scopes.
 #
