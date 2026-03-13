@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "prove",
+  "description": "Plan, Research, Orchestrate, Validate, Execute — a complete lifecycle plugin for Claude Code",
+  "owner": {
+    "name": "Manuel Morales"
+  },
+  "plugins": [
+    {
+      "name": "prove",
+      "description": "Plan, Research, Orchestrate, Validate, Execute — a complete lifecycle plugin for Claude Code, for any tech stack.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Manuel Morales"
+      },
+      "source": "./",
+      "category": "development",
+      "homepage": "https://github.com/mjmorales/claude-prove"
+    }
+  ]
+}

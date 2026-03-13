@@ -32,8 +32,8 @@ if [[ -t 0 && -t 1 && -z "$INSTALL_DIR" ]]; then
   echo "prove — Plan, Research, Orchestrate, Validate, Execute"
   echo ""
   echo "Install scope:"
-  echo "  1) User   — available in all projects (~/.claude/settings.json)"
-  echo "  2) Project — available only in this project (.claude/settings.json)"
+  echo "  1) User   — available in all projects"
+  echo "  2) Project — available only in this project"
   echo ""
   printf "Choose [1]: "
   read -r choice
@@ -60,58 +60,53 @@ else
   git clone --quiet "$REPO_URL" "$INSTALL_DIR"
 fi
 
-# === Register plugin in settings ===
+# === Check for claude CLI ===
 
-if [[ "$SCOPE" == "project" ]]; then
-  SETTINGS_DIR=".claude"
-  SETTINGS_FILE=".claude/settings.json"
-else
-  SETTINGS_DIR="${HOME}/.claude"
-  SETTINGS_FILE="${HOME}/.claude/settings.json"
+if ! command -v claude &>/dev/null; then
+  echo ""
+  echo "WARNING: 'claude' CLI not found in PATH."
+  echo "Install Claude Code first, then run:"
+  echo "  claude plugin marketplace add $INSTALL_DIR --scope $SCOPE"
+  echo "  claude plugin install prove@prove --scope $SCOPE"
+  exit 0
 fi
 
-mkdir -p "$SETTINGS_DIR"
+# === Register as marketplace and install plugin ===
 
-register_plugin() {
-  local file="$1"
-  local plugin_path="$INSTALL_DIR"
+SCOPE_FLAG="--scope $SCOPE"
 
-  if [[ ! -f "$file" ]]; then
-    echo '{}' > "$file"
-  fi
-
-  # Check if already registered
-  if grep -q "$plugin_path" "$file" 2>/dev/null; then
-    echo "Plugin already registered in $file"
-    return
-  fi
-
-  # Use python3 for reliable JSON manipulation (available on macOS and most Linux)
-  if command -v python3 &>/dev/null; then
-    python3 -c "
-import json, sys
-path = sys.argv[1]
-plugin = sys.argv[2]
-with open(path) as f:
-    data = json.load(f)
-plugins = data.get('plugins', [])
-if plugin not in plugins:
-    plugins.append(plugin)
-data['plugins'] = plugins
-with open(path, 'w') as f:
-    json.dump(data, f, indent=2)
-    f.write('\n')
-" "$file" "$plugin_path"
-    echo "Registered plugin in $file"
+# Add as a local marketplace (idempotent — fails gracefully if already added)
+if claude plugin marketplace list 2>/dev/null | grep -q "prove"; then
+  echo "Marketplace 'prove' already registered."
+else
+  echo "Registering prove marketplace..."
+  if claude plugin marketplace add "$INSTALL_DIR" $SCOPE_FLAG 2>/dev/null; then
+    echo "Marketplace registered."
   else
     echo ""
-    echo "Could not auto-register. Add this to $file manually:"
-    echo ""
-    echo "  \"plugins\": [\"$plugin_path\"]"
+    echo "WARNING: Could not register marketplace automatically."
+    echo "Run manually:"
+    echo "  claude plugin marketplace add $INSTALL_DIR $SCOPE_FLAG"
+    echo "  claude plugin install prove@prove $SCOPE_FLAG"
+    exit 0
   fi
-}
+fi
 
-register_plugin "$SETTINGS_FILE"
+# Install the plugin from the marketplace
+if claude plugin list 2>/dev/null | grep -q "prove@prove"; then
+  echo "Plugin 'prove' already installed."
+else
+  echo "Installing prove plugin..."
+  if claude plugin install prove@prove $SCOPE_FLAG 2>/dev/null; then
+    echo "Plugin installed."
+  else
+    echo ""
+    echo "WARNING: Could not install plugin automatically."
+    echo "Run manually:"
+    echo "  claude plugin install prove@prove $SCOPE_FLAG"
+    exit 0
+  fi
+fi
 
 # === Done ===
 
