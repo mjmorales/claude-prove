@@ -16,6 +16,13 @@
       "phase": "test"
     }
   ],
+  "reporters": [
+    {
+      "name": "discord-notify",
+      "command": "./.prove/notify-discord.sh",
+      "events": ["step-halted", "wave-complete", "execution-complete"]
+    }
+  ],
   "index": {
     "excludes": [],
     "max_file_size": 102400,
