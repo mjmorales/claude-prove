@@ -31,3 +31,4 @@ command | create-command     | commands/create-command.md | Create a new Claude 
 command | create-agent       | commands/create-agent.md   | Create a new Claude Code subagent
 command | agentic-docs       | commands/agentic-docs.md   | Generate LLM-optimized documentation
 command | index              | commands/index.md          | Build or update the file index
+command | progress           | commands/progress.md       | Show orchestrator execution status
