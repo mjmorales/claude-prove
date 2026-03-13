@@ -11,6 +11,7 @@ skill   | plan-step          | skills/plan-step/          | Deep-dive requiremen
 skill   | orchestrator       | skills/orchestrator/       | Autonomous execution with validation gates
 skill   | cleanup            | skills/cleanup/            | Archive artifacts and remove working files
 skill   | commit             | skills/commit/             | Semantic commits scoped to plugin items
+skill   | prep-permissions   | skills/prep-permissions/   | Analyze task and configure Claude Code permissions
 agent   | principal-architect | agents/                   | Architectural review for orchestrator full mode
 command | plan-task          | commands/plan-task.md      | Start task planning session
 command | plan-step          | commands/plan-step.md      | Plan a specific step from TASK_PLAN.md
@@ -18,4 +19,5 @@ command | autopilot          | commands/autopilot.md      | Run orchestrator in 
 command | full-auto          | commands/full-auto.md      | Run orchestrator end-to-end from idea to code
 command | task-cleanup       | commands/task-cleanup.md   | Clean up task artifacts with archiving
 command | commit             | commands/commit.md         | Semantic commit assistant
+command | prep-permissions   | commands/prep-permissions.md | Configure permissions for task execution
 command | init               | commands/init.md           | Initialize .prove.json for this project
