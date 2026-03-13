@@ -36,3 +36,13 @@ Detect the current project's tech stack and generate a `.prove.json` configurati
    - Review and customize the generated validators
    - Commit `.prove.json` and `.gitignore` to version control
    - Run `/prove:task-planner` or `/prove:orchestrator` to use it
+
+7. Offer to install recommended community skills:
+   ```bash
+   bash "$PLUGIN_DIR/scripts/install-skills.sh" --list
+   ```
+   Use `AskUserQuestion` with header "Skills" and options: "Install" (install recommended skills to ~/.claude/skills/) / "Skip" (skip for now, can run `/prove:install-skills` later).
+   On "Install", run:
+   ```bash
+   bash "$PLUGIN_DIR/scripts/install-skills.sh"
+   ```

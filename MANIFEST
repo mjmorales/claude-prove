@@ -22,3 +22,4 @@ command | task-cleanup       | commands/task-cleanup.md   | Clean up task artifa
 command | commit             | commands/commit.md         | Semantic commit assistant
 command | prep-permissions   | commands/prep-permissions.md | Configure permissions for task execution
 command | init               | commands/init.md           | Initialize .prove.json for this project
+command | install-skills     | commands/install-skills.md | Install recommended community skills
