@@ -13,7 +13,8 @@ A single JSON file in the project root that defines validators and reporters. If
   "validators": [
     { "name": "build", "command": "go build ./...", "phase": "build" },
     { "name": "lint",  "command": "go vet ./...",   "phase": "lint" },
-    { "name": "tests", "command": "go test ./...",  "phase": "test" }
+    { "name": "tests", "command": "go test ./...",  "phase": "test" },
+    { "name": "doc-quality", "prompt": ".prove/prompts/doc-quality.md", "phase": "llm" }
   ],
   "reporters": [
     { "name": "slack", "command": "./scripts/notify.sh", "events": ["step-complete", "step-halted"] }
@@ -26,8 +27,11 @@ A single JSON file in the project root that defines validators and reporters. If
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | Human-readable name (appears in run-log) |
-| `command` | string | yes | Shell command to execute |
-| `phase` | string | yes | `build`, `lint`, `test`, or `custom` — determines execution order |
+| `command` | string | conditional | Shell command to execute. Required if `prompt` is not set |
+| `prompt` | string | conditional | Path to markdown file containing the validation prompt (relative to project root). Required if `command` is not set |
+| `phase` | string | yes | `build`, `lint`, `test`, `custom`, or `llm` — determines execution order |
+
+Each validator must have exactly one of `command` or `prompt`. Command validators run shell commands; prompt validators run LLM-based evaluation using the `validation-agent`.
 
 ### Reporter Fields
 
@@ -47,10 +51,40 @@ Validators run in phase order after each implementation step:
 2. **lint** — No new warnings/errors introduced?
 3. **test** — All existing + new tests pass?
 4. **custom** — Any user-defined checks
+5. **llm** — LLM-based validation against user-supplied prompts
 
 Within the same phase, validators run in array order.
 
 If ANY validator fails, the step enters the retry cycle (one auto-fix attempt, then halt).
+
+## Prompt Validators
+
+Prompt validators delegate evaluation to the `validation-agent`, which runs on the haiku model.
+
+**What the agent receives:**
+- The full content of the referenced prompt file
+- The diff of all file changes made in the current step
+- Read-file access to retrieve additional context from the project
+
+**What the agent returns:**
+- A structured PASS or FAIL verdict
+- Findings that reference specific files and line numbers
+
+**Behaviour:**
+- Same retry semantics as command validators: one auto-fix attempt on failure, then halt
+- Prompt files are standard markdown — no special DSL or syntax is required
+
+**Example prompt file** (`.prove/prompts/doc-quality.md`):
+
+```markdown
+# Documentation Quality Check
+
+Verify that all new or modified public functions have doc comments that:
+1. Explain the purpose (the "why", not just the "what")
+2. Document all parameters
+3. Document return values
+4. Include at least one usage example for non-trivial functions
+```
 
 ## Resolution Order
 
@@ -69,6 +103,8 @@ When no `.prove.json` exists, the orchestrator scans the project root:
 | Python | `pyproject.toml`, `setup.py`, `requirements.txt` | `pytest` (test), `mypy` (lint, if installed), `ruff` (lint, if installed) |
 | Node/TypeScript | `package.json` | `npm test` (test), `tsc --noEmit` (build, if tsconfig exists), `eslint` (lint, if config exists) |
 | Makefile | `Makefile` | `make test` (test), `make lint` (lint) — if targets exist |
+
+LLM validators (`phase: "llm"`) are never auto-detected. They must be explicitly configured in `.prove.json`.
 
 ## Validator Output Format
 
