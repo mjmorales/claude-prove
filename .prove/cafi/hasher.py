@@ -20,11 +20,7 @@ DEFAULT_MAX_FILE_SIZE = 102400  # 100KB
 
 
 def compute_hash(file_path: str) -> str:
-    """Compute SHA256 hex digest of a file.
-
-    Callers should handle ``OSError`` for TOCTOU races (file may be deleted or
-    become unreadable between discovery and hashing).
-    """
+    """Compute SHA256 hex digest of a file."""
     h = hashlib.sha256()
     with open(file_path, "rb") as f:
         while True:
@@ -46,11 +42,7 @@ def is_binary(file_path: str) -> bool:
 
 
 def _git_ls_files(root: str) -> set[str] | None:
-    """Return the set of tracked and untracked-but-not-ignored files via git ls-files.
-
-    Uses --cached (tracked) and --others --exclude-standard (untracked but not
-    gitignored) to cover all project files.  Returns None if not a git repo.
-    """
+    """Return the set of tracked files via git ls-files, or None if not a git repo."""
     try:
         result = subprocess.run(
             ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
@@ -118,7 +110,7 @@ def walk_project(
 
     for rel_path in candidates:
         # Skip .prove directory
-        if rel_path.startswith(".prove"):
+        if rel_path.startswith(".prove") or rel_path.startswith(os.sep + ".prove"):
             continue
 
         # Skip if matches exclude patterns
