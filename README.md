@@ -9,7 +9,7 @@ Takes you from idea to merged code through a structured pipeline:
 ```
 /prove:brainstorm  →  /prove:task-planner  →  /prove:plan-step  →  /prove:orchestrator  →  /prove:cleanup
       │                        │                         │                        │                        │
-  decisions/              TASK_PLAN.md             plans/plan_X/          workflow-reports/          docs/archive/
+.prove/decisions/       .prove/TASK_PLAN.md     .prove/plans/plan_X/    .prove/reports/         .prove/archive/
 ```
 
 1. **Brainstorm** — Explore options, weigh trade-offs, record decisions
@@ -21,7 +21,7 @@ Takes you from idea to merged code through a structured pipeline:
 ## Key Features
 
 - **Auto-scaling orchestrator**: Small tasks (≤3 steps) run sequentially. Larger tasks use parallel git worktrees with mandatory architect review.
-- **Inter-agent handoff**: Agents pass context between steps via a task-scoped directory (`.task-context/`). Simple log by default, structured files (API contracts, discoveries, gotchas) when needed.
+- **Inter-agent handoff**: Agents pass context between steps via a task-scoped directory (`.prove/context/`). Simple log by default, structured files (API contracts, discoveries, gotchas) when needed.
 - **Stack-agnostic validation**: Auto-detects your project type (Go, Rust, Python, Node, Godot, Makefile) and runs appropriate build/lint/test checks. Configure with `.prove.json` or let auto-detection handle it. Bootstrap with `/prove:init`.
 - **Extensible reporting**: Progress tracked in markdown. Add custom reporters (Slack, metrics) via the `reporters` key in `.prove.json`.
 - **Git-based rollback**: Every step is committed individually. Revert any step, reset to any point.
@@ -72,9 +72,9 @@ git clone https://github.com/your-user/claude-prove ~/dev/claude-prove
 references/
 └── validation-config.md        # Canonical validation spec (.prove.json schema, auto-detection)
 skills/
-├── brainstorm/              # Interactive brainstorming → decisions/
-├── task-planner/            # Discovery & planning → TASK_PLAN.md
-├── plan-step/               # Step-level requirements → plans/
+├── brainstorm/              # Interactive brainstorming → .prove/decisions/
+├── task-planner/            # Discovery & planning → .prove/TASK_PLAN.md
+├── plan-step/               # Step-level requirements → .prove/plans/
 ├── orchestrator/            # Autonomous execution
 │   ├── references/
 │   │   ├── handoff-protocol.md    # Inter-agent context passing
@@ -86,6 +86,33 @@ scripts/
 agents/
 └── principal-architect.md   # Code review for orchestrator's full mode
 ```
+
+## Working Directory
+
+All prove artifacts are stored under `.prove/` in your project:
+
+```
+.prove/
+├── decisions/          # Brainstorm decision records
+├── plans/              # Step-level planning docs
+│   └── plan_X.Y.Z/
+├── reports/            # Orchestrator run logs and reports
+│   └── <task-slug>/
+├── context/            # Inter-agent handoff context
+│   └── <task-slug>/
+├── archive/            # Archived completed tasks
+├── TASK_PLAN.md        # Active task plan
+├── PROGRESS.md         # Live progress (full mode)
+└── PRD.md              # Product requirements (full-auto)
+```
+
+Add `.prove/` to your `.gitignore` to keep artifacts out of version control:
+
+```bash
+echo '.prove/' >> .gitignore
+```
+
+The `.prove.json` config file stays at the repo root — it's project configuration, not a working artifact.
 
 ## Protocols
 

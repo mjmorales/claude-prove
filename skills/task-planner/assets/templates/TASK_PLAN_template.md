@@ -1,4 +1,4 @@
-# TASK_PLAN.md Template
+# .prove/TASK_PLAN.md Template
 
 This template shows the standard format for task plans generated during discovery.
 
@@ -273,7 +273,7 @@ This task is complete when:
 
 ## Usage with plan-step Skill
 
-This TASK_PLAN.md integrates with the plan-step skill:
+This .prove/TASK_PLAN.md integrates with the plan-step skill:
 
 1. Each step becomes a planning item in plan-step
 2. The plan-step skill creates detailed requirements for each step
@@ -282,9 +282,9 @@ This TASK_PLAN.md integrates with the plan-step skill:
 
 Example workflow:
 ```
-1. Use task-planner to create TASK_PLAN.md
+1. Use task-planner to create .prove/TASK_PLAN.md
 2. "Let's work on Step 2 from the task plan"
-3. plan-step creates plans/plan_step_2/ with detailed requirements
+3. plan-step creates .prove/plans/plan_step_2/ with detailed requirements
 4. Implement step by step with verification
 ```
 

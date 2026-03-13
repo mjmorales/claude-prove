@@ -45,7 +45,7 @@ Use the edge cases checklist from the task-planner skill references.
 - Risk mitigation
 
 ## Output
-After discovery, create a `TASK_PLAN.md` using the template from the task-planner skill assets.
+After discovery, create a `.prove/TASK_PLAN.md` using the template from the task-planner skill assets.
 
 Each step should be:
 - Independently testable

@@ -23,7 +23,12 @@ Detect the current project's tech stack and generate a `.prove.json` configurati
 
 4. Write the approved configuration to `.prove.json` in the project root.
 
-5. Confirm creation and suggest next steps:
+5. If `.prove/` is not already in `.gitignore`, add it:
+   ```bash
+   grep -qxF '.prove/' .gitignore 2>/dev/null || echo '.prove/' >> .gitignore
+   ```
+
+6. Confirm creation and suggest next steps:
    - Review and customize the generated validators
-   - Commit `.prove.json` to version control
+   - Commit `.prove.json` and `.gitignore` to version control
    - Run `/prove:task-planner` or `/prove:orchestrator` to use it

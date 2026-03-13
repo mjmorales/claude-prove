@@ -5,7 +5,7 @@ description: >
   sequential, no worktrees) and full mode (4+ steps, parallel worktrees with
   mandatory principal-architect review). Creates feature branches, runs validation
   gates (build, test, lint), commits after each successful step, generates progress
-  reports, and supports rollback via git. Use when a TASK_PLAN.md or plans/ directory
+  reports, and supports rollback via git. Use when a .prove/TASK_PLAN.md or .prove/plans/ directory
   exists and the user wants hands-off execution. Triggers on "orchestrate", "autopilot",
   "full auto", "run autonomously", "implement without me", "hands-off mode".
 ---
@@ -20,8 +20,8 @@ Autonomous orchestration skill that executes planned tasks end-to-end. Auto-scal
 ## Prerequisites
 
 Before invoking, one of the following must exist:
-- A `TASK_PLAN.md` with implementation steps (created via `/plan-task`)
-- A `plans/plan_X/` directory with planning docs (created via `/plan-step`)
+- A `.prove/TASK_PLAN.md` with implementation steps (created via `/plan-task`)
+- A `.prove/plans/plan_X/` directory with planning docs (created via `/plan-step`)
 - Both (ideal)
 
 If neither exists, inform the user and suggest running `/plan-task` first.
@@ -31,7 +31,7 @@ If neither exists, inform the user and suggest running `/plan-task` first.
 ## Phase 0: Initialization
 
 1. **Validate inputs**
-   - Check for `TASK_PLAN.md` and/or `plans/` directory
+   - Check for `.prove/TASK_PLAN.md` and/or `.prove/plans/` directory
    - Read all available planning documents to understand full scope
    - Extract task name and ordered implementation steps
 
@@ -50,9 +50,9 @@ If neither exists, inform the user and suggest running `/plan-task` first.
 
 4. **Initialize report directory**
    ```bash
-   mkdir -p orchestrator-reports/<task-slug>/
+   mkdir -p .prove/reports/<task-slug>/
    ```
-   Create `orchestrator-reports/<task-slug>/run-log.md`:
+   Create `.prove/reports/<task-slug>/run-log.md`:
    ```markdown
    # Orchestrator Run Log: <Task Name>
    **Branch**: orchestrator/<task-slug>
@@ -77,8 +77,8 @@ If neither exists, inform the user and suggest running `/plan-task` first.
 ## Phase 1: Plan Review
 
 1. **Extract ordered steps** from:
-   - `TASK_PLAN.md` > "Implementation Steps" section, OR
-   - `plans/plan_X/05_implementation_plan.md`
+   - `.prove/TASK_PLAN.md` > "Implementation Steps" section, OR
+   - `.prove/plans/plan_X/05_implementation_plan.md`
 2. **Resolve dependencies** — topological sort if needed
 3. **Map validation criteria** per step from `06_test_strategy.md` and step-level verification items
 4. **Log the execution plan** to run-log.md
@@ -183,7 +183,7 @@ REVIEW LOOP (max 3 iterations per task):
 6. Go to step 1 (re-review)
 
 If 3 iterations pass without APPROVED:
-  - Log failure in PROGRESS.md
+  - Log failure in .prove/PROGRESS.md
   - Ask user: force-approve, fix manually, or abort
 ```
 
@@ -260,7 +260,7 @@ Record commit SHA in run-log.
 
 ## Phase 3: Completion
 
-Generate `orchestrator-reports/<task-slug>/report.md`:
+Generate `.prove/reports/<task-slug>/report.md`:
 
 ```markdown
 # Orchestrator Report: <Task Name>
@@ -330,7 +330,7 @@ Present to the user:
 
 ## Full Mode: Progress Tracking
 
-Maintain a live `PROGRESS.md` using `scripts/update-progress.sh`:
+Maintain a live `.prove/PROGRESS.md` using `scripts/update-progress.sh`:
 
 ```markdown
 # Progress: <Feature Name>
@@ -390,7 +390,7 @@ When triggered with "full auto" and no existing plan, run requirements gathering
    - How to verify it works
 3. **Write the PRD** using the template in `references/prd-template.md`
 4. **User approval gate** — Wait for explicit PRD approval before planning
-5. **Generate TASK_PLAN.md** with wave-based task graph
+5. **Generate `.prove/TASK_PLAN.md`** with wave-based task graph
 6. **User approval gate** — Wait for explicit plan approval before executing
 
 ---
@@ -399,7 +399,7 @@ When triggered with "full auto" and no existing plan, run requirements gathering
 
 | Scenario | Action |
 |----------|--------|
-| No TASK_PLAN.md or plans/ | Stop. Suggest `/plan-task` |
+| No .prove/TASK_PLAN.md or .prove/plans/ | Stop. Suggest `/plan-task` |
 | Branch already exists | Ask: resume or fresh start |
 | Build fails after step | One retry, then halt with report |
 | Tests fail after step | One retry, then halt with report |
@@ -436,7 +436,7 @@ Helper scripts live in `scripts/`:
 |--------|---------|
 | `generate-task-prompt.sh` | Generates a focused, self-contained prompt for worktree implementation agents |
 | `generate-review-prompt.sh` | Generates a structured review prompt for the principal-architect agent |
-| `update-progress.sh` | Updates PROGRESS.md with task/wave status changes |
+| `update-progress.sh` | Updates .prove/PROGRESS.md with task/wave status changes |
 
 ## References
 

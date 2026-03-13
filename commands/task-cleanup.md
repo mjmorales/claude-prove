@@ -12,19 +12,19 @@ Load and follow the cleanup skill (`skills/cleanup/SKILL.md` from the workflow p
 ## Phase 1: Identify Task
 
 1. If `$ARGUMENTS` is provided, locate matching artifacts:
-   - `orchestrator-reports/<argument>/`
-   - `plans/plan_<argument>/`
+   - `.prove/reports/<argument>/`
+   - `.prove/plans/plan_<argument>/`
    - Branch `orchestrator/<argument>`
 2. If no argument, scan for all task artifacts
 3. Present what was found and confirm with the user before proceeding
 
 ## Phase 2: Archive
 
-Create archive at `docs/archive/<YYYY-MM-DD>_<task-slug>/` with key documents.
+Create archive at `.prove/archive/<YYYY-MM-DD>_<task-slug>/` with key documents.
 
 ## Phase 3: Remove Artifacts
 
-After archiving, remove reports, plans, TASK_PLAN.md, and local branches.
+After archiving, remove reports, plans, .prove/TASK_PLAN.md, and local branches.
 
 ## Safety Rules
 

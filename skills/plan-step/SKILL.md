@@ -1,22 +1,22 @@
 ---
 name: plan-step
-description: Interactive planning and requirement gathering for specific tasks from TASK_PLAN.md. Use when the user wants to work on a numbered step from their plan (e.g., "Let's work on step 1.2.3") to create detailed requirements, make design decisions, identify edge cases, and define test strategies BEFORE implementation.
+description: Interactive planning and requirement gathering for specific tasks from .prove/TASK_PLAN.md. Use when the user wants to work on a numbered step from their plan (e.g., "Let's work on step 1.2.3") to create detailed requirements, make design decisions, identify edge cases, and define test strategies BEFORE implementation.
 ---
 
 # Plan Step Workflow Skill
 
-Interactive planning and requirement gathering process for specific steps from TASK_PLAN.md that happens **BEFORE implementation**.
+Interactive planning and requirement gathering process for specific steps from .prove/TASK_PLAN.md that happens **BEFORE implementation**.
 
 ## Workflow Overview
 
-When the user references a specific step number from TASK_PLAN.md, follow this structured planning process to ensure thorough requirement gathering and design clarity before any code is written.
+When the user references a specific step number from .prove/TASK_PLAN.md, follow this structured planning process to ensure thorough requirement gathering and design clarity before any code is written.
 
 ## Instructions
 
 ### 1. Parse the Step Reference
 
-Extract the step number from the user's request (e.g., "1.2.3", "2.4.1") and locate the task in TASK_PLAN.md:
-- Read TASK_PLAN.md and find the specific task details
+Extract the step number from the user's request (e.g., "1.2.3", "2.4.1") and locate the task in .prove/TASK_PLAN.md:
+- Read .prove/TASK_PLAN.md and find the specific task details
 - Extract: task description, size estimate, dependencies, and notes
 - Identify the phase and verification criteria if available
 
@@ -31,11 +31,11 @@ python3 scripts/init_planning_workspace.py 1.2.3 "Task Title Here"
 
 **Option B: Manual creation**
 ```bash
-mkdir -p plans/plan_[step_number]/  # e.g., plans/plan_1.2.3/
+mkdir -p .prove/plans/plan_[step_number]/  # e.g., .prove/plans/plan_1.2.3/
 ```
 
 Initialize these planning documents in the directory:
-- `00_task_overview.md` - Summary from TASK_PLAN.md with context
+- `00_task_overview.md` - Summary from .prove/TASK_PLAN.md with context
 - `01_requirements.md` - Detailed requirements and acceptance criteria
 - `02_design_decisions.md` - Architecture choices with tradeoff analysis
 - `03_open_questions.md` - Questions needing answers before implementation
@@ -252,7 +252,7 @@ These validators will be enforced by the orchestrator after this step is impleme
 
 After creating the workspace:
 
-1. **Present the task overview** - Share what you found in TASK_PLAN.md
+1. **Present the task overview** - Share what you found in .prove/TASK_PLAN.md
 2. **Ask clarifying questions** - Probe for missing requirements
 3. **Discuss design approaches** - Present options with tradeoffs
 4. **Identify risks proactively** - Think about what could go wrong
@@ -316,7 +316,7 @@ Ask: "We've completed the planning for task [X.Y.Z]. The plan includes [brief su
 ## File Organization Example
 
 ```
-plans/
+.prove/plans/
 ├── plan_1.2.1/
 │   ├── 00_task_overview.md
 │   ├── 01_requirements.md
@@ -326,9 +326,9 @@ plans/
 │   ├── 05_implementation_plan.md
 │   ├── 06_test_strategy.md
 │   └── progress.md
-├── plan_1.2.2/
-│   └── [same structure]
-└── plan_1.2.3/
+│   ├── plan_1.2.2/
+│   │   └── [same structure]
+│   └── plan_1.2.3/
     └── [same structure]
 ```
 

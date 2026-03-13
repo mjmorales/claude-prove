@@ -4,7 +4,7 @@ Defines how agents pass context between execution steps during orchestrated runs
 
 ## Overview
 
-The handoff system provides a task-scoped context directory (`.task-context/<task-slug>/`)
+The handoff system provides a task-scoped context directory (`.prove/context/<task-slug>/`)
 where agents read prior context and write discoveries for downstream steps.
 
 ## Default: Simple Handoff Log
@@ -12,7 +12,7 @@ where agents read prior context and write discoveries for downstream steps.
 Every agent appends to a single chronological log:
 
 ```
-.task-context/<task-slug>/handoff-log.md
+.prove/context/<task-slug>/handoff-log.md
 ```
 
 ### Format
@@ -51,7 +51,7 @@ Every agent appends to a single chronological log:
 For complex tasks, agents can write structured context files alongside the log:
 
 ```
-.task-context/<task-slug>/
+.prove/context/<task-slug>/
 ├── handoff-log.md              # always present (simple log)
 ├── api-contracts.md            # opt-in: interfaces established
 ├── discoveries.md              # opt-in: unexpected findings
@@ -73,10 +73,10 @@ For complex tasks, agents can write structured context files alongside the log:
 
 ## Lifecycle
 
-1. **Orchestrator creates** `.task-context/<task-slug>/handoff-log.md` during initialization
-2. **Each step agent reads** all files in `.task-context/<task-slug>/`
+1. **Orchestrator creates** `.prove/context/<task-slug>/handoff-log.md` during initialization
+2. **Each step agent reads** all files in `.prove/context/<task-slug>/`
 3. **Each step agent appends** to handoff-log.md and optionally creates/updates structured files
-4. **Cleanup skill removes** `.task-context/<task-slug>/` during task cleanup (after archiving)
+4. **Cleanup skill removes** `.prove/context/<task-slug>/` during task cleanup (after archiving)
 
 ## Templates
 

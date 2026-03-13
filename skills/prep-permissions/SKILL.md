@@ -17,8 +17,8 @@ Analyze the active task and configure `.claude/settings.local.json` with the rig
 
 Read the following (skip any that don't exist):
 
-1. **Task plan**: `TASK_PLAN.md` — extract implementation steps, languages, tools mentioned
-2. **Detailed plans**: `plans/plan_*/05_implementation_plan.md` — file paths, commands referenced
+1. **Task plan**: `.prove/TASK_PLAN.md` — extract implementation steps, languages, tools mentioned
+2. **Detailed plans**: `.prove/plans/plan_*/05_implementation_plan.md` — file paths, commands referenced
 3. **Validation config**: `.prove.json` — extract all validator and reporter commands
 4. **Existing settings**: `.claude/settings.local.json` — preserve any existing rules
 5. **Project indicators**: Check for `go.mod`, `package.json`, `Cargo.toml`, `pyproject.toml`, `Makefile`, `project.godot` to infer toolchain commands

@@ -1,6 +1,6 @@
 ---
 name: brainstorm
-description: Interactive brainstorming sessions for software architecture, product scoping, and general engineering. Use when the user wants to explore ideas, gather requirements, narrow down solutions, weigh trade-offs, or make technical decisions. Triggers on "brainstorm", "let's think through", "help me decide", "what approach should", "pros and cons", or any open-ended design/architecture discussion. Saves decisions to decisions/ directory.
+description: Interactive brainstorming sessions for software architecture, product scoping, and general engineering. Use when the user wants to explore ideas, gather requirements, narrow down solutions, weigh trade-offs, or make technical decisions. Triggers on "brainstorm", "let's think through", "help me decide", "what approach should", "pros and cons", or any open-ended design/architecture discussion. Saves decisions to .prove/decisions/ directory.
 ---
 
 # Brainstorm
@@ -28,7 +28,7 @@ Start every session by understanding what the user is trying to solve.
    - What constraints exist? (time, tech stack, team size, existing code)
    - What does success look like?
 3. Restate the problem in your own words to confirm alignment
-4. If the project has a `decisions/` directory, check for prior decisions that might be relevant
+4. If the project has a `.prove/decisions/` directory, check for prior decisions that might be relevant
 
 Do NOT skip framing. A well-framed problem is half-solved.
 
@@ -62,9 +62,9 @@ Converge on a solution through back-and-forth discussion.
 
 ### Phase 4: Record the Decision
 
-Save the decision to `decisions/` in the project root.
+Save the decision to `.prove/decisions/` in the project.
 
-1. Create the `decisions/` directory if it doesn't exist
+1. Create the `.prove/decisions/` directory if it doesn't exist
 2. Name the file: `YYYY-MM-DD-<slug>.md` (e.g., `2026-03-05-auth-strategy.md`)
 3. Use the decision record format below
 4. Tell the user where the file was saved

@@ -182,7 +182,7 @@ Design the approach:
 
 ## Creating the Task Plan
 
-After discovery, create `TASK_PLAN.md`:
+After discovery, create `.prove/TASK_PLAN.md`:
 
 ```markdown
 # Task Plan: [Task Name]
@@ -375,7 +375,7 @@ This ensures the planned verification steps match what the orchestrator will act
 
 ## Output Integration
 
-The `TASK_PLAN.md` output integrates with the plan-step skill:
+The `.prove/TASK_PLAN.md` output integrates with the plan-step skill:
 1. Each step becomes a planning item
 2. Steps are numbered for reference
 3. Verification criteria enable testing
@@ -383,7 +383,7 @@ The `TASK_PLAN.md` output integrates with the plan-step skill:
 
 To use with plan-step:
 ```
-"Let's work on Step 2 from the TASK_PLAN.md we created"
+"Let's work on Step 2 from the .prove/TASK_PLAN.md we created"
 ```
 
 ## Quality Checklist
@@ -458,6 +458,6 @@ python scripts/code_explorer.py analyze src/auth.py
 
 ## Committing
 
-When the user asks to commit planning artifacts (TASK_PLAN.md, etc.), delegate to the `commit` skill. Do not create ad-hoc commits. The commit skill reads `MANIFEST` for valid scopes and uses conventional commit format.
+When the user asks to commit planning artifacts (.prove/TASK_PLAN.md, etc.), delegate to the `commit` skill. Do not create ad-hoc commits. The commit skill reads `MANIFEST` for valid scopes and uses conventional commit format.
 
 Example: `feat(task-planner): create task plan for api-refactor`
