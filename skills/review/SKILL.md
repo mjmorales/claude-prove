@@ -95,8 +95,8 @@ Create `.prove/reviews/review-manifest.md` (overwrite if exists):
 
 | File | Change | Lines | Key Changes |
 |------|--------|-------|-------------|
-| [`path/to/file.ext:42`](path/to/file.ext) | M | +15 / -3 | `functionName`, `ClassName` |
-| [`path/to/new_file.ext:1`](path/to/new_file.ext) | A | +80 | New: `MainHandler` |
+| `path/to/file.ext:42` | M | +15 / -3 | `functionName`, `ClassName` |
+| `path/to/new_file.ext:1` | A | +80 | New: `MainHandler` |
 
 <Review notes if any — security concerns, breaking changes, complex logic>
 
