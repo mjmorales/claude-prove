@@ -16,6 +16,7 @@ skill   | slash-command-creator | skills/slash-command-creator/ | Guide for crea
 skill   | subagent-creator   | skills/subagent-creator/   | Guide for creating specialized Claude Code subagents
 skill   | agentic-doc-writer | skills/agentic-doc-writer/ | Generate LLM-optimized documentation for agents and APIs
 skill   | index              | skills/index/              | Content-addressable file index with routing-hint descriptions
+skill   | claude-md          | skills/claude-md/          | Generate LLM-optimized CLAUDE.md for target projects
 skill   | notify-setup       | skills/notify-setup/       | Set up notification integrations for orchestrator events
 tool    | cafi               | tools/cafi/                | Content-addressable file index with routing-hint descriptions
 agent   | principal-architect | agents/                   | Architectural review for orchestrator full mode
@@ -33,6 +34,7 @@ command | create-command     | commands/create-command.md | Create a new Claude 
 command | create-agent       | commands/create-agent.md   | Create a new Claude Code subagent
 command | agentic-docs       | commands/agentic-docs.md   | Generate LLM-optimized documentation
 command | index              | commands/index.md          | Build or update the file index
+command | claude-md          | commands/claude-md.md      | Generate LLM-optimized CLAUDE.md
 command | notify-setup       | commands/notify-setup.md   | Set up notification integrations (Slack, Discord, custom)
 command | notify-test        | commands/notify-test.md    | Send a test notification through configured reporters
 command | progress           | commands/progress.md       | Show orchestrator execution status
