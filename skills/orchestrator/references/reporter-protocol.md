@@ -174,3 +174,13 @@ Reporter commands receive event data via environment variables:
 - `PROVE_STEP`: step number (if applicable)
 - `PROVE_STATUS`: current status
 - `PROVE_BRANCH`: branch name
+
+### Quick Setup
+
+Use the notify-setup skill to configure reporters interactively:
+
+```
+/prove:notify-setup
+```
+
+This guides you through platform selection (Slack, Discord, custom), generates notification scripts, and configures the reporters section automatically.
