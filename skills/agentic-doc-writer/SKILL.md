@@ -7,6 +7,8 @@ description: Generate machine-parseable, LLM-optimized documentation for Claude 
 
 Generate structured documentation optimized for LLM consumption and agent recollection efficiency.
 
+**Interaction patterns**: See `references/interaction-patterns.md` for when to use `AskUserQuestion` vs free-form discussion.
+
 ## Workflow
 
 1. **Identify subject type** (agent, API, module, code)
@@ -16,12 +18,16 @@ Generate structured documentation optimized for LLM consumption and agent recoll
 
 ## Subject Identification
 
-Determine the documentation target:
+Use `AskUserQuestion` with header "Subject" if the type isn't obvious from context:
+- "Agent" (`.md` agent definition with frontmatter)
+- "API" (HTTP handlers, REST endpoints, GraphQL resolvers)
+- "Module" (package exports, public interfaces)
+- "Code" (functions, classes, complex logic)
 
 | Subject | Indicators | Key Contracts |
 |---------|------------|---------------|
-| **Agent** | `.md` in `.claude/agents/`, frontmatter with `tools:` | Triggers, inputs, outputs, workflow |
-| **API** | HTTP handlers, REST endpoints, GraphQL resolvers | Request/response schemas, errors |
+| **Agent** | `.md` in agents dir, frontmatter with `tools:` | Triggers, inputs, outputs, workflow |
+| **API** | HTTP handlers, REST endpoints | Request/response schemas, errors |
 | **Module** | Package exports, public interfaces | Parameters, return types, side effects |
 | **Code** | Functions, classes, complex logic | Types, behavior, edge cases |
 
@@ -52,7 +58,7 @@ Document [SUBJECT_TYPE]: [SUBJECT_NAME]
 Source: [FILE_PATH]:[LINE_RANGE]
 
 Context:
-[PASTE RELEVANT CODE/CONFIG - MINIMAL]
+[PASTE RELEVANT CODE/CONFIG — MINIMAL]
 
 Requirements:
 - Output: [agent-doc | api-doc | module-doc]
@@ -88,6 +94,17 @@ For modules, ensure the prompt requests:
 - Return types and structures
 - Side effects (I/O, state changes)
 
+## Prove Plugin Documentation
+
+When documenting prove plugin components, follow these conventions:
+
+- **Skills**: Document the workflow phases, interaction points (AskUserQuestion vs free-form), and references
+- **Agents**: Document triggers, tool permissions, model, and output format
+- **Commands**: Document frontmatter fields, argument handling, and which skill they delegate to
+- **Scripts**: Document usage, flags, and output format
+
+Reference the MANIFEST for the canonical list of plugin components.
+
 ## Output Validation Checklist
 
 Before accepting documentation:
@@ -98,6 +115,8 @@ Before accepting documentation:
 - [ ] Examples are concrete (no `...` placeholders)
 - [ ] No ambiguous language ("may", "might", "sometimes")
 - [ ] Error conditions documented
+
+Use `AskUserQuestion` with header "Quality" to confirm: "Approve" (documentation meets standards) / "Revise" (needs improvements).
 
 ## Anti-Patterns
 
@@ -111,26 +130,8 @@ Avoid these context-wasting patterns:
 | Redundant explanations | Duplication | Assume LLM baseline knowledge |
 | Nested exploration | Exponential reads | Stop at interface boundary |
 
-## Example Invocation
+## Committing
 
-User: "Document the go-linter agent"
+When the user asks to commit documentation, delegate to the `commit` skill. The commit skill reads `MANIFEST` for valid scopes.
 
-1. Read `.claude/agents/go-linter.md` (single file)
-2. Extract: name, description, tools, workflow
-3. Delegate:
-
-   ```
-   Document agent: go-linter
-
-   Source: .claude/agents/go-linter.md
-
-   Context:
-   [paste frontmatter + body]
-
-   Requirements:
-   - Output: agent-doc
-   - Include: triggers, inputs, outputs, workflow
-   - Format: YAML frontmatter + structured markdown
-   ```
-
-4. Validate output against checklist
+Example: `docs(agentic-doc-writer): document validation-agent interface`
