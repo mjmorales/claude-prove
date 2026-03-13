@@ -11,8 +11,9 @@
 # Exit codes:
 #   0 — all tested reporters succeeded
 #   1 — one or more reporters failed (or configuration missing)
+#   2 — no reporters matched the event (nothing was tested)
 
-set -euo pipefail
+set -uo pipefail
 
 EVENT_TYPE="${1:-step-complete}"
 CONFIG_FILE=".prove.json"
@@ -32,7 +33,7 @@ fi
 REPORTERS_JSON=$(python3 -c "
 import json, sys
 
-with open('$CONFIG_FILE') as f:
+with open(sys.argv[1]) as f:
     config = json.load(f)
 
 reporters = config.get('reporters', [])
@@ -45,7 +46,7 @@ for r in reporters:
     command = r.get('command', '')
     events = ','.join(r.get('events', []))
     print(f'{name}\t{command}\t{events}')
-" 2>&1) || {
+" "$CONFIG_FILE" 2>&1) || {
   echo "ERROR: Failed to parse $CONFIG_FILE."
   echo "Ensure it contains valid JSON with a 'reporters' array."
   exit 1
@@ -83,24 +84,14 @@ while IFS=$'\t' read -r name command events; do
     fi
   fi
 
-  # Check if command exists
-  cmd_path="${command%% *}"
-  if [[ ! -x "$cmd_path" && ! -f "$cmd_path" ]]; then
-    # Try resolving as a relative path
-    if ! command -v "$cmd_path" &>/dev/null; then
-      echo "  FAIL: $name — command not found: $cmd_path"
-      ((FAILED++)) || true
-      ((TESTED++)) || true
-      continue
-    fi
-  fi
-
-  # Execute the reporter command
+  # Execute the reporter command (failures are caught below)
   echo "  TEST: $name → $command"
-  if eval "$command" 2>&1 | sed 's/^/       /'; then
+  bash -c "$command" 2>&1 | sed 's/^/       /'
+  exit_code=${PIPESTATUS[0]}
+  if [ "$exit_code" -eq 0 ]; then
     echo "  PASS: $name"
   else
-    echo "  FAIL: $name (exit code: $?)"
+    echo "  FAIL: $name (exit code: $exit_code)"
     ((FAILED++)) || true
   fi
   ((TESTED++)) || true
@@ -118,7 +109,8 @@ if [[ $FAILED -gt 0 ]]; then
 fi
 
 if [[ $TESTED -eq 0 ]]; then
-  echo "No reporters were tested for event '$EVENT_TYPE'."
+  echo "No reporters matched event '$EVENT_TYPE' — nothing was actually tested."
+  exit 2
 fi
 
 exit 0
