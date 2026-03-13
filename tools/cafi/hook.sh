@@ -4,16 +4,18 @@
 # and outputs additionalContext for Claude Code.
 set -eo pipefail
 
-# --- Locate project root (directory containing .prove/) ---
+# --- Locate project root (directory containing tools/) ---
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# .prove/cafi/hook.sh → project root is two levels up
+# tools/cafi/hook.sh → project root is two levels up
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
-CAFI_DIR="$PROJECT_ROOT/.prove/cafi"
+CAFI_DIR="$PROJECT_ROOT/tools/cafi"
 CACHE_FILE="$PROJECT_ROOT/.prove/file-index.json"
-LOG_FILE="$CAFI_DIR/hook.log"
+LOG_DIR="$PROJECT_ROOT/.prove"
+LOG_FILE="$LOG_DIR/cafi-hook.log"
 
 # --- Guard: exit silently if prerequisites are missing ---
 [ -d "$CAFI_DIR" ] || exit 0
+mkdir -p "$LOG_DIR"
 command -v python3 >/dev/null 2>&1 || exit 0
 
 # Redirect stderr to log file for debugging (truncate if > 500 lines)

@@ -8,14 +8,14 @@ import json
 import os
 import sys
 
-# Add the .prove directory to sys.path so we can import cafi as a package.
+# Add the tools directory to sys.path so we can import cafi as a package.
 _cafi_dir = os.path.dirname(os.path.abspath(__file__))
-_prove_dir = os.path.dirname(_cafi_dir)
-if _prove_dir not in sys.path:
-    sys.path.insert(0, _prove_dir)
+_tools_dir = os.path.dirname(_cafi_dir)
+if _tools_dir not in sys.path:
+    sys.path.insert(0, _tools_dir)
 
-# Derive project root (two levels up from .prove/cafi/)
-_project_root = os.path.dirname(_prove_dir)
+# Derive project root (two levels up from tools/cafi/)
+_project_root = os.path.dirname(_tools_dir)
 
 from cafi import indexer  # noqa: E402
 

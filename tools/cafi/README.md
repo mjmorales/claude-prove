@@ -10,7 +10,7 @@ Add the SessionStart hook to your project's `.claude/settings.json`:
     "SessionStart": [
       {
         "type": "command",
-        "command": "bash .prove/cafi/hook.sh"
+        "command": "bash tools/cafi/hook.sh"
       }
     ]
   }

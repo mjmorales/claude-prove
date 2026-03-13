@@ -20,24 +20,24 @@ Manages the content-addressable file index stored at `.prove/file-index.json`.
 
 ## Subcommands
 
-The CAFI CLI uses **subcommands**, not flags. The base invocation is `python3 .prove/cafi/__main__.py`.
+The CAFI CLI uses **subcommands**, not flags. The base invocation is `python3 tools/cafi/__main__.py`.
 
 - **`index [--force]`** — Build or update the file index. `--force` re-describes ALL files.
   ```bash
-  python3 .prove/cafi/__main__.py index          # incremental
-  python3 .prove/cafi/__main__.py index --force   # full rebuild
+  python3 tools/cafi/__main__.py index          # incremental
+  python3 tools/cafi/__main__.py index --force   # full rebuild
   ```
 - **`status`** — Show counts of new/stale/deleted/unchanged files (no indexing).
   ```bash
-  python3 .prove/cafi/__main__.py status
+  python3 tools/cafi/__main__.py status
   ```
 - **`clear`** — Remove the cache file.
   ```bash
-  python3 .prove/cafi/__main__.py clear
+  python3 tools/cafi/__main__.py clear
   ```
 - **`context`** — Output the formatted file index (used by the SessionStart hook).
   ```bash
-  python3 .prove/cafi/__main__.py context
+  python3 tools/cafi/__main__.py context
   ```
 
 Default (no argument): run `index` (incremental).
