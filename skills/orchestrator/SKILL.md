@@ -439,6 +439,65 @@ Present to the user:
 
 ---
 
+## Phase 4: Merge & Cleanup
+
+**This phase runs after the user has reviewed and approved the changes.** It is triggered when:
+- All steps completed successfully (status: Completed)
+- The user confirms they want to merge
+
+If execution halted, skip this phase — the user needs to fix blockers first.
+
+### Step 1: Merge Gate
+
+Use `AskUserQuestion` with:
+- Header: "Merge & Cleanup"
+- Options:
+  - "Merge & Clean" (merge to main, archive artifacts, delete branch)
+  - "Merge Only" (merge to main, keep artifacts for reference)
+  - "Skip" (I'll handle merge manually — remind me to run `/task-cleanup` later)
+
+### Step 2: Merge to Main
+
+If the user chose "Merge & Clean" or "Merge Only":
+
+```bash
+git checkout main
+git merge --no-ff orchestrator/<task-slug> -m "merge: <task-name>"
+```
+
+If merge conflicts occur, halt and inform the user. Do NOT force-merge.
+
+### Step 3: Cleanup (if "Merge & Clean")
+
+Run cleanup automatically — no confirmation needed since the user already approved:
+
+```bash
+PROJECT_ROOT="." bash scripts/cleanup.sh --auto <task-slug>
+```
+
+This will:
+1. Archive key documents to `.prove/archive/<date>_<task-slug>/`
+2. Remove `.prove/reports/<task-slug>/`, `.prove/plans/plan_*/`, `.prove/context/<task-slug>/`
+3. Remove `.prove/PRD.md`, `.prove/TASK_PLAN.md`, `.prove/PROGRESS.md`
+4. Delete the merged `orchestrator/<task-slug>` branch
+
+Generate a `SUMMARY.md` in the archive directory (same as cleanup skill Phase 3).
+
+Dispatch `cleanup-complete` (detail: "Archived to .prove/archive/<date>_<task-slug>/").
+
+### Step 4: Confirm
+
+Present to the user:
+- Merge status (commit SHA on main)
+- What was archived and where
+- Any skipped items (unmerged branches, missing files)
+- Reminder: archived docs available at `.prove/archive/<date>_<task-slug>/`
+
+If the user chose "Skip", remind them:
+> Run `/task-cleanup <task-slug>` after you merge to clean up artifacts.
+
+---
+
 ## Full Mode: Progress Tracking
 
 Maintain a live `.prove/PROGRESS.md` using `scripts/update-progress.sh`:
@@ -548,6 +607,7 @@ Helper scripts live in `scripts/`:
 | `generate-task-prompt.sh` | Generates a focused, self-contained prompt for worktree implementation agents |
 | `generate-review-prompt.sh` | Generates a structured review prompt for the principal-architect agent |
 | `update-progress.sh` | Updates .prove/PROGRESS.md with task/wave status changes |
+| `cleanup.sh` | Archives and removes .prove task artifacts (used by Phase 4 and `/task-cleanup`) |
 
 ## References
 

@@ -142,6 +142,7 @@ The run-log is updated at these points:
 | Review verdict (full) | Review results in detailed log |
 | Wave complete (full) | Wave summary row |
 | Execution complete | Final status, report generated |
+| Cleanup complete | Archive location, deleted branches, removed artifacts |
 
 ## Extending the Reporter
 
@@ -169,7 +170,7 @@ To add custom reporting (e.g., Slack notifications, metrics):
 ```
 
 Reporter commands receive event data via environment variables:
-- `PROVE_EVENT`: event name (lifecycle: `step-complete`, `step-halted`, `wave-complete`, `execution-complete`; agent: `review-approved`, `review-rejected`, `validation-pass`, `validation-fail`)
+- `PROVE_EVENT`: event name (lifecycle: `step-complete`, `step-halted`, `wave-complete`, `execution-complete`, `cleanup-complete`; agent: `review-approved`, `review-rejected`, `validation-pass`, `validation-fail`)
 - `PROVE_TASK`: task slug
 - `PROVE_STEP`: step number (if applicable)
 - `PROVE_STATUS`: current status

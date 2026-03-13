@@ -5,6 +5,7 @@
 #   cleanup.sh --dry-run [task-slug]   List what would be cleaned (no changes)
 #   cleanup.sh [task-slug]             Archive and remove artifacts for a task
 #   cleanup.sh --all                   Archive and remove ALL task artifacts
+#   cleanup.sh --auto [task-slug]      Non-interactive mode (for orchestrator post-merge)
 #
 # When no task-slug is given (without --all), scans and lists all artifacts.
 #
@@ -20,6 +21,7 @@ TODAY=$(date +%Y-%m-%d)
 
 DRY_RUN=false
 ALL=false
+AUTO=false
 TASK_SLUG=""
 
 # Parse args
@@ -27,6 +29,7 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=true; shift ;;
     --all)     ALL=true; shift ;;
+    --auto)    AUTO=true; shift ;;
     *)         TASK_SLUG="$1"; shift ;;
   esac
 done
