@@ -58,7 +58,7 @@ Converge on a solution through back-and-forth discussion.
    - "What's the migration path if we need to change later?"
 2. Help refine the chosen approach — discuss implementation details
 3. Identify any open questions that need answering before implementation
-4. Confirm the decision: "So we're going with [X] because [Y]. Sound right?"
+4. Confirm the decision using AskUserQuestion with "Confirm Decision" header and options like "Yes, go with [X]" / "Not yet, keep exploring"
 
 ### Phase 4: Record the Decision
 
@@ -109,13 +109,15 @@ When the user asks to commit decision records or other brainstorm artifacts, del
 
 Example: `docs(brainstorm): record auth strategy decision`
 
+**Interaction patterns**: See `references/interaction-patterns.md` for when to use `AskUserQuestion` vs free-form discussion.
+
 ## Rules
 
 - ALWAYS go through all four phases. Don't skip to recording without proper exploration.
 - ALWAYS state your own opinion. The user wants an experienced engineer's perspective, not a neutral facilitator.
 - ALWAYS push back at least once on the user's initial framing. Fresh eyes catch blind spots.
 - NEVER present more than 4 options at once. Decision fatigue is real.
-- NEVER write the decision record until the user explicitly confirms the decision.
+- NEVER write the decision record until the user explicitly confirms the decision via AskUserQuestion.
 - NEVER over-engineer the discussion. If the answer is obvious, say so and move on.
 - PREFER simple solutions over clever ones. Complexity is a cost.
 - PREFER concrete examples over abstract descriptions. "Like how Redis does X" beats "a pub-sub pattern."

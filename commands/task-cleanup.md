@@ -16,7 +16,9 @@ Load and follow the cleanup skill (`skills/cleanup/SKILL.md` from the workflow p
    - `.prove/plans/plan_<argument>/`
    - Branch `orchestrator/<argument>`
 2. If no argument, scan for all task artifacts
-3. Present what was found and confirm with the user before proceeding
+3. Present what was found, then use `AskUserQuestion` to confirm:
+   - Header: "Cleanup"
+   - Options: "Proceed" (archive and clean up listed artifacts) / "Cancel" (abort cleanup)
 
 ## Phase 2: Archive
 
@@ -30,5 +32,5 @@ After archiving, remove reports, plans, .prove/TASK_PLAN.md, and local branches.
 
 - **Always archive before deleting**
 - **Verify changes landed on main** before deleting branches
-- **Confirm with user** before starting cleanup
+- **Confirm with user** before starting cleanup (use `AskUserQuestion`)
 - **Show dry-run first**

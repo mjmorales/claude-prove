@@ -39,4 +39,6 @@ Before transitioning to implementation, verify:
 - [ ] Design decisions documented
 - [ ] User confirms understanding
 
-Ask: "Planning complete for step [X]. Ready to implement, or review anything?"
+Use `AskUserQuestion` to check readiness:
+   - Header: "Ready"
+   - Options: "Ready to Implement" (planning is complete, start coding) / "Review Plan" (review or adjust planning docs first)

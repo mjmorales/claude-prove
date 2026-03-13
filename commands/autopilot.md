@@ -30,4 +30,4 @@ Load and follow the orchestrator skill (`skills/orchestrator/SKILL.md` from the 
 - Continue past a failed step (after retry)
 - Force-push or amend commits
 - Make changes on the main branch
-- Proceed if requirements are ambiguous — halt and ask
+- Proceed if requirements are ambiguous — halt and use `AskUserQuestion` to clarify (when discrete options exist) or ask free-form (when open-ended)

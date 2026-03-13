@@ -264,13 +264,12 @@ After creating the workspace:
 Use these question patterns to gather requirements:
 
 **For unclear requirements:**
-- "When you say [X], do you mean [interpretation A] or [interpretation B]?"
-- "What should happen when [edge case]?"
-- "Are there any constraints on [aspect]?"
+- When there are discrete interpretations: use AskUserQuestion with the interpretations as options (e.g., "When you say [X], do you mean [interpretation A] or [interpretation B]?")
+- When open-ended: free-form ("What should happen when [edge case]?", "Are there any constraints on [aspect]?")
 
 **For design decisions:**
-- "I see two approaches here: [Option A] which is [simpler but limited], or [Option B] which is [complex but flexible]. Which aligns better with your needs?"
-- "Would you prefer to optimize for [quality A] or [quality B]?"
+- Use AskUserQuestion to present approaches: "I see two approaches here — [Option A] (simpler but limited) or [Option B] (complex but flexible). Which aligns better with your needs?"
+- "Would you prefer to optimize for [quality A] or [quality B]?" — use AskUserQuestion with the two qualities as options
 
 **For validation:**
 - "How will we know this is working correctly?"
@@ -293,7 +292,7 @@ Before transitioning to implementation, verify:
 - Design decisions are documented with rationale
 - User confirms understanding and agreement
 
-Ask: "We've completed the planning for task [X.Y.Z]. The plan includes [brief summary]. Are you ready to begin implementation, or would you like to review any aspects of the plan?"
+Use AskUserQuestion with header "Ready" and options: "Begin Implementation" / "Review Plan First" — e.g., "We've completed the planning for task [X.Y.Z]. The plan includes [brief summary]. Ready to proceed?"
 
 ## Important Guidelines
 
@@ -350,6 +349,9 @@ Remember: **Thorough planning prevents rework.** Take time to understand require
 
 ### References
 - `references/planning-patterns.md` - Advanced planning techniques including risk assessment matrices, requirement gathering patterns, design decision frameworks, edge case discovery techniques, and complexity estimation methods. Consult when dealing with complex planning scenarios.
+- `references/interaction-patterns.md` - When to use `AskUserQuestion` vs free-form discussion
+
+**Interaction patterns**: See `references/interaction-patterns.md` for when to use `AskUserQuestion` vs free-form discussion.
 
 ## Committing
 

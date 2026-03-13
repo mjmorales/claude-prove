@@ -16,7 +16,7 @@ Load and follow the orchestrator skill (`skills/orchestrator/SKILL.md` from the 
 
 1. Run the full-auto requirements gathering flow (PRD generation)
 2. Execute all phases sequentially: Discover -> Plan -> Execute -> Track
-3. Gate on user approval between phases
+3. Gate on user approval between phases using `AskUserQuestion` (Approve / Request Changes)
 4. Use `isolation: "worktree"` for parallel task execution
 5. Maintain .prove/PROGRESS.md throughout execution
 6. On completion, present a summary and offer to create a PR

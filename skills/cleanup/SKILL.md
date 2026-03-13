@@ -21,7 +21,7 @@ Clean up all artifacts from a completed task lifecycle, archiving key documents 
    - List all `.prove/context/*/`
    - List all `workflow/*` branches (local)
    - List `.prove/TASK_PLAN.md` if present
-3. Present what was found and confirm with the user before proceeding
+3. Present what was found, then use AskUserQuestion with header "Cleanup" and options: "Proceed" (archive and delete listed artifacts) / "Cancel" (abort cleanup)
 
 ## Phase 2: Archive
 
@@ -94,6 +94,8 @@ Example: `chore(cleanup): archive and remove api-refactor artifacts`
 
 - **Always archive before deleting** — never delete without archiving first
 - **Verify changes landed on main** before deleting branches (squash-merged branches need `-D` since git doesn't track them as merged)
-- **Confirm with user** before starting cleanup
-- **Show dry-run first** — list everything that will be archived/deleted before doing it
+- **Confirm with user** before starting cleanup — use AskUserQuestion with "Proceed" / "Cancel" options
+- **Show dry-run first** — list everything that will be archived/deleted, then use AskUserQuestion to confirm before doing it
 - **Idempotent** — safe to run multiple times; skips already-cleaned items
+
+**Interaction patterns**: See `references/interaction-patterns.md` for when to use `AskUserQuestion` vs free-form discussion.

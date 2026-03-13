@@ -17,9 +17,13 @@ Detect the current project's tech stack and generate a `.prove.json` configurati
    ```
    where `$PLUGIN_DIR` is the directory containing this plugin (the parent of `commands/`).
 
-2. If `.prove.json` already exists, show its contents and ask the user if they want to overwrite.
+2. If `.prove.json` already exists, show its contents and use `AskUserQuestion` to ask:
+   - Header: "Overwrite"
+   - Options: "Overwrite" (replace with new detected config) / "Keep Existing" (abort and keep current config)
 
-3. Present the detected configuration to the user for review before writing.
+3. Present the detected configuration to the user, then use `AskUserQuestion` to confirm:
+   - Header: "Config"
+   - Options: "Approve" (write to .prove.json) / "Modify" (let user request changes first)
 
 4. Write the approved configuration to `.prove.json` in the project root.
 
