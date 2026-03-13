@@ -11,9 +11,7 @@ import json
 import os
 import subprocess
 import tempfile
-from datetime import datetime, timezone
 from fnmatch import fnmatch
-from pathlib import Path
 
 CACHE_VERSION = 1
 DEFAULT_MAX_FILE_SIZE = 102400  # 100KB

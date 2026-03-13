@@ -5,7 +5,6 @@ Usage: python3 init_planning_workspace.py <step_number> [task_title]
 """
 
 import sys
-import os
 from datetime import datetime
 from pathlib import Path
 

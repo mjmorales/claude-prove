@@ -4,13 +4,10 @@ Code exploration helper for task planning discovery phase.
 Provides utilities to understand codebases quickly.
 """
 
-import os
 import subprocess
-import sys
 from pathlib import Path
-from typing import List, Dict, Set
+from typing import List, Dict
 import argparse
-import json
 
 class CodeExplorer:
     """Utilities for exploring and understanding codebases."""
@@ -146,8 +143,8 @@ class CodeExplorer:
         
         stats = {
             'total_lines': len(lines),
-            'code_lines': len([l for l in lines if l.strip() and not l.strip().startswith('#')]),
-            'comment_lines': len([l for l in lines if l.strip().startswith('#')]),
+            'code_lines': len([line for line in lines if line.strip() and not line.strip().startswith('#')]),
+            'comment_lines': len([line for line in lines if line.strip().startswith('#')]),
             'functions': [],
             'classes': [],
             'complexity_warnings': []
