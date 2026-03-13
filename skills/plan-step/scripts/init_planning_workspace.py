@@ -13,7 +13,7 @@ def create_planning_workspace(step_number, task_title="[Task Title]"):
     """Create the planning workspace directory and all template files."""
     
     # Create the directory
-    workspace_dir = Path(f"plans/plan_{step_number}")
+    workspace_dir = Path(f".prove/plans/plan_{step_number}")
     workspace_dir.mkdir(parents=True, exist_ok=True)
     
     # Get current timestamp
