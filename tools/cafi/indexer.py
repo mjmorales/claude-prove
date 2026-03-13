@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 
 from cafi.describer import describe_files
 from cafi.hasher import (
@@ -102,11 +103,17 @@ def build_index(project_root: str, force: bool = False) -> dict:
         to_describe = new + stale
 
     # Generate descriptions for new/stale files
+    def _progress(done: int, total: int, path: str) -> None:
+        print(f"\r  [{done}/{total}] {path}", end="", file=sys.stderr, flush=True)
+        if done == total:
+            print(file=sys.stderr)
+
     if to_describe:
         descriptions = describe_files(
             to_describe,
             project_root,
             concurrency=config["concurrency"],
+            on_progress=_progress,
         )
     else:
         descriptions = {}

@@ -18,6 +18,32 @@ LOG_FILE="$LOG_DIR/cafi-hook.log"
 mkdir -p "$LOG_DIR"
 command -v python3 >/dev/null 2>&1 || exit 0
 
+# --- Lockfile guard: prevent concurrent hook executions ---
+LOCKFILE="$LOG_DIR/cafi-hook.lock"
+cleanup_lock() { rm -rf "$LOCKFILE"; }
+
+# Use mkdir as an atomic lock (succeeds only if dir doesn't exist)
+if ! mkdir "$LOCKFILE" 2>/dev/null; then
+    # Check if the lock is stale (older than 120 seconds)
+    if [ -f "$LOCKFILE/pid" ]; then
+        LOCK_PID=$(cat "$LOCKFILE/pid" 2>/dev/null)
+        LOCK_AGE=$(( $(date +%s) - $(stat -f %m "$LOCKFILE/pid" 2>/dev/null || echo 0) ))
+        if [ "$LOCK_AGE" -gt 120 ]; then
+            echo "Stale lock detected (age=${LOCK_AGE}s, pid=${LOCK_PID}); breaking." >&2
+            rm -rf "$LOCKFILE"
+            mkdir "$LOCKFILE" 2>/dev/null || { echo "Could not acquire lock after break; exiting." >&2; exit 0; }
+        else
+            echo "Another hook instance running (pid=${LOCK_PID}, age=${LOCK_AGE}s); skipping." >&2
+            exit 0
+        fi
+    else
+        echo "Lock exists but no pid file; skipping." >&2
+        exit 0
+    fi
+fi
+echo $$ > "$LOCKFILE/pid"
+trap cleanup_lock EXIT
+
 # Redirect stderr to log file for debugging (truncate if > 500 lines)
 if [ -f "$LOG_FILE" ] && [ "$(wc -l < "$LOG_FILE")" -gt 500 ]; then
     tail -100 "$LOG_FILE" > "$LOG_FILE.tmp" && mv "$LOG_FILE.tmp" "$LOG_FILE"
@@ -34,6 +60,11 @@ cafi_cmd() {
 json_encode() {
     python3 -c "import sys, json; print(json.dumps(sys.stdin.read()), end='')"
 }
+
+# --- Overall timeout: kill self after 60 seconds ---
+( sleep 60 && kill -TERM $$ 2>/dev/null ) &
+WATCHDOG_PID=$!
+trap 'kill $WATCHDOG_PID 2>/dev/null; cleanup_lock' EXIT
 
 # --- First run: no cache exists yet ---
 if [ ! -f "$CACHE_FILE" ]; then
@@ -54,10 +85,13 @@ STATUS_JSON=$(cafi_cmd status) || {
 NEW_COUNT=$(echo "$STATUS_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('new',0))" 2>/dev/null || echo 0)
 STALE_COUNT=$(echo "$STATUS_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('stale',0))" 2>/dev/null || echo 0)
 
-# --- Incremental update if needed ---
-if [ "$NEW_COUNT" -gt 0 ] || [ "$STALE_COUNT" -gt 0 ]; then
+# --- Incremental update if needed (skip if too many files to avoid CPU spike) ---
+TOTAL_PENDING=$((NEW_COUNT + STALE_COUNT))
+if [ "$TOTAL_PENDING" -gt 0 ] && [ "$TOTAL_PENDING" -le 20 ]; then
     echo "Found $NEW_COUNT new, $STALE_COUNT stale files; running incremental index..." >&2
     cafi_cmd index >&2 || echo "Incremental index failed; continuing with stale cache." >&2
+elif [ "$TOTAL_PENDING" -gt 20 ]; then
+    echo "Too many pending files ($TOTAL_PENDING); skipping auto-index. Run /prove:index manually." >&2
 fi
 
 # --- Output context ---

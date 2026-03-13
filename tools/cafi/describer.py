@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import subprocess
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -65,7 +66,7 @@ def _call_claude_cli(prompt: str) -> str:
         subprocess.CalledProcessError: If the CLI exits with a non-zero code.
     """
     result = subprocess.run(
-        ["claude", "-p", "-", "--output-format", "text"],
+        ["claude", "-p", "-", "--output-format", "text", "--model", "haiku"],
         input=prompt,
         capture_output=True,
         text=True,
@@ -104,6 +105,7 @@ def describe_files(
     file_paths: list[str],
     project_root: str,
     concurrency: int = 3,
+    on_progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, str]:
     """Batch-describe multiple files using parallel Claude CLI calls.
 
@@ -111,12 +113,16 @@ def describe_files(
         file_paths: List of file paths to describe.
         project_root: The root directory of the project.
         concurrency: Maximum number of concurrent CLI calls.
+        on_progress: Optional callback invoked after each file completes.
+            Called with (completed_count, total_count, file_path).
 
     Returns:
         Dict mapping each file path to its generated description.
         Files that fail get an empty-string description.
     """
     results: dict[str, str] = {}
+    total = len(file_paths)
+    completed = 0
 
     with ThreadPoolExecutor(max_workers=concurrency) as executor:
         future_to_path = {
@@ -130,5 +136,8 @@ def describe_files(
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Unexpected error describing %s: %s", fp, exc)
                 results[fp] = ""
+            completed += 1
+            if on_progress:
+                on_progress(completed, total, fp)
 
     return results

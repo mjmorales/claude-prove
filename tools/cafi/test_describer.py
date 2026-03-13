@@ -55,7 +55,7 @@ class TestCallClaudeCli(unittest.TestCase):
         result = _call_claude_cli("some prompt")
         self.assertEqual(result, "A description.")
         mock_run.assert_called_once_with(
-            ["claude", "-p", "-", "--output-format", "text"],
+            ["claude", "-p", "-", "--output-format", "text", "--model", "haiku"],
             input="some prompt",
             capture_output=True,
             text=True,
