@@ -7,7 +7,7 @@ import logging
 import os
 import sys
 
-from cafi.describer import describe_files
+from cafi.describer import describe_files, triage_files
 from cafi.hasher import (
     compute_hash,
     diff_cache,
@@ -24,6 +24,7 @@ DEFAULT_CONFIG = {
     "excludes": [],
     "max_file_size": 102400,
     "concurrency": 3,
+    "triage": True,
 }
 
 
@@ -85,6 +86,10 @@ def build_index(project_root: str, force: bool = False) -> dict:
         excludes=config["excludes"],
         max_file_size=config["max_file_size"],
     )
+
+    # Triage: let Claude filter the file list to only index-worthy files
+    if config.get("triage", True):
+        files = triage_files(files)
 
     current_hashes: dict[str, str] = {}
     for fp in files:

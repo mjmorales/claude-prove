@@ -17,6 +17,7 @@ from cafi.describer import (  # noqa: E402
     describe_file,
     describe_files,
     generate_prompt,
+    triage_files,
 )
 
 
@@ -119,6 +120,81 @@ class TestDescribeFiles(unittest.TestCase):
         mock_cli.return_value = "Read this file when testing."
         result = describe_files(["a.py"], project_root=".", concurrency=1)
         self.assertEqual(result, {"a.py": "Read this file when testing."})
+
+
+class TestTriageFiles(unittest.TestCase):
+    """Tests for triage_files."""
+
+    def test_triage_empty_list(self):
+        """Verify empty input returns empty output without calling CLI."""
+        result = triage_files([])
+        self.assertEqual(result, [])
+
+    @patch("cafi.describer.subprocess.run")
+    def test_triage_filters_files(self, mock_run):
+        """Verify triage returns only the files Claude selects."""
+        all_files = ["src/main.py", "src/utils.py", "tests/test_main.py", "logo.png"]
+        mock_run.return_value = MagicMock(
+            stdout='["src/main.py", "src/utils.py"]'
+        )
+        result = triage_files(all_files)
+        self.assertEqual(result, ["src/main.py", "src/utils.py"])
+
+    @patch("cafi.describer.subprocess.run")
+    def test_triage_strips_markdown_fences(self, mock_run):
+        """Verify markdown code fences are stripped from response."""
+        all_files = ["src/app.py", "README.md"]
+        mock_run.return_value = MagicMock(
+            stdout='```json\n["src/app.py"]\n```'
+        )
+        result = triage_files(all_files)
+        self.assertEqual(result, ["src/app.py"])
+
+    @patch("cafi.describer.subprocess.run")
+    def test_triage_ignores_unknown_paths(self, mock_run):
+        """Verify paths not in the input list are filtered out."""
+        all_files = ["src/main.py"]
+        mock_run.return_value = MagicMock(
+            stdout='["src/main.py", "src/ghost.py"]'
+        )
+        result = triage_files(all_files)
+        self.assertEqual(result, ["src/main.py"])
+
+    @patch(
+        "cafi.describer.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=60),
+    )
+    def test_triage_fallback_on_timeout(self, _mock_run):
+        """Verify all files returned when CLI times out."""
+        all_files = ["a.py", "b.py"]
+        result = triage_files(all_files)
+        self.assertEqual(result, all_files)
+
+    @patch(
+        "cafi.describer.subprocess.run",
+        side_effect=FileNotFoundError("claude not found"),
+    )
+    def test_triage_fallback_on_missing_cli(self, _mock_run):
+        """Verify all files returned when claude CLI not found."""
+        all_files = ["a.py", "b.py"]
+        result = triage_files(all_files)
+        self.assertEqual(result, all_files)
+
+    @patch("cafi.describer.subprocess.run")
+    def test_triage_fallback_on_invalid_json(self, mock_run):
+        """Verify all files returned when CLI returns invalid JSON."""
+        all_files = ["a.py"]
+        mock_run.return_value = MagicMock(stdout="not json at all")
+        result = triage_files(all_files)
+        self.assertEqual(result, all_files)
+
+    @patch("cafi.describer.subprocess.run")
+    def test_triage_fallback_on_non_list(self, mock_run):
+        """Verify all files returned when CLI returns non-list JSON."""
+        all_files = ["a.py"]
+        mock_run.return_value = MagicMock(stdout='{"files": ["a.py"]}')
+        result = triage_files(all_files)
+        self.assertEqual(result, all_files)
 
 
 if __name__ == "__main__":

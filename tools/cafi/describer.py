@@ -7,6 +7,7 @@ files are relevant for a given task.
 
 from __future__ import annotations
 
+import json
 import logging
 import subprocess
 from collections.abc import Callable
@@ -17,6 +18,34 @@ logger = logging.getLogger(__name__)
 
 MAX_CONTENT_LENGTH = 8000
 CLI_TIMEOUT_SECONDS = 30
+TRIAGE_TIMEOUT_SECONDS = 60
+
+TRIAGE_PROMPT_TEMPLATE = """\
+You are triaging a project's file tree to decide which files are worth indexing \
+for an LLM coding agent's navigation. The index helps agents find the right \
+source files when working on tasks.
+
+INCLUDE files that contain meaningful logic, configuration, or documentation:
+- Source code (implementations, not boilerplate)
+- Configuration that affects behavior (build configs, CI, project settings)
+- Documentation that explains architecture or usage
+- Entry points, main modules, API definitions
+- Schema definitions, migrations
+
+EXCLUDE files that are noise for code navigation:
+- Test files (test_*, *_test.*, *_spec.*, tests/, __tests__/)
+- Asset files (images, fonts, audio, video, SVGs)
+- Generated files (lock files, compiled output, .min.js, dist/)
+- Vendor/dependency files (vendor/, node_modules/)
+- Boilerplate (LICENSE, CHANGELOG, .gitignore, .editorconfig)
+- Duplicate config across formats (.yaml + .json of the same thing)
+- Empty or near-empty init files (__init__.py with no exports)
+
+Return ONLY a JSON array of file paths to include. No explanation, no markdown \
+fences, just the JSON array.
+
+File tree:
+{file_tree}"""
 
 PROMPT_TEMPLATE = """\
 Describe this file as a routing hint for an LLM coding agent. Your description must follow this exact format:
@@ -49,6 +78,60 @@ def generate_prompt(file_path: str, content: str) -> str:
     if len(content) > MAX_CONTENT_LENGTH:
         truncated += "\n\n[... truncated at 8000 characters ...]"
     return PROMPT_TEMPLATE.format(path=file_path, content=truncated)
+
+
+def triage_files(file_paths: list[str]) -> list[str]:
+    """Send the full file tree to Claude and get back only files worth indexing.
+
+    Args:
+        file_paths: All candidate file paths (relative to project root).
+
+    Returns:
+        Filtered list of file paths that should be indexed.
+        Falls back to the full list if the triage call fails.
+    """
+    if not file_paths:
+        return []
+
+    file_tree = "\n".join(sorted(file_paths))
+    prompt = TRIAGE_PROMPT_TEMPLATE.format(file_tree=file_tree)
+
+    try:
+        result = subprocess.run(
+            ["claude", "-p", "-", "--output-format", "text", "--model", "haiku"],
+            input=prompt,
+            capture_output=True,
+            text=True,
+            timeout=TRIAGE_TIMEOUT_SECONDS,
+            check=True,
+        )
+        raw = result.stdout.strip()
+        # Strip markdown fences if present
+        if raw.startswith("```"):
+            raw = "\n".join(raw.split("\n")[1:])
+        if raw.endswith("```"):
+            raw = "\n".join(raw.split("\n")[:-1])
+        selected = json.loads(raw)
+        if not isinstance(selected, list):
+            logger.warning("Triage returned non-list, using all files")
+            return file_paths
+        # Only keep paths that actually exist in the input
+        valid = set(file_paths)
+        filtered = [p for p in selected if p in valid]
+        logger.info(
+            "Triage: %d/%d files selected for indexing",
+            len(filtered),
+            len(file_paths),
+        )
+        return filtered
+    except (
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+        subprocess.CalledProcessError,
+        json.JSONDecodeError,
+    ) as exc:
+        logger.warning("Triage failed (%s), falling back to all files", exc)
+        return file_paths
 
 
 def _call_claude_cli(prompt: str) -> str:
