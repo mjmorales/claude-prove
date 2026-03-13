@@ -1,0 +1,9 @@
+{
+  "name": "workflow",
+  "description": "Plan-to-implementation lifecycle for Claude Code: brainstorm, plan, execute (parallel worktrees), and clean up — for any tech stack.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Manuel Morales"
+  },
+  "license": "MIT"
+}

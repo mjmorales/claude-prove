@@ -1,0 +1,14 @@
+# plugin: workflow
+# Registry of all skills and agents in this plugin.
+# Used by the commit skill to derive valid scopes.
+#
+# Format: type | name | path | description
+# Types: skill, agent
+
+skill | brainstorm         | skills/brainstorm/         | Interactive brainstorming and decision recording
+skill | task-planner       | skills/task-planner/       | Iterative discovery and planning for tasks
+skill | plan-step          | skills/plan-step/          | Deep-dive requirements for individual plan steps
+skill | orchestrator       | skills/orchestrator/       | Autonomous execution with validation gates
+skill | cleanup            | skills/cleanup/            | Archive artifacts and remove working files
+skill | commit             | skills/commit/             | Semantic commits scoped to plugin items
+agent | principal-architect | agents/                   | Architectural review for orchestrator full mode
