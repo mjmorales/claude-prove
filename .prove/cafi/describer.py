@@ -5,6 +5,8 @@ with a structured prompt. Descriptions help LLM coding agents decide which
 files are relevant for a given task.
 """
 
+from __future__ import annotations
+
 import logging
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -43,6 +45,8 @@ def generate_prompt(file_path: str, content: str) -> str:
         The formatted prompt string.
     """
     truncated = content[:MAX_CONTENT_LENGTH]
+    if len(content) > MAX_CONTENT_LENGTH:
+        truncated += "\n\n[... truncated at 8000 characters ...]"
     return PROMPT_TEMPLATE.format(path=file_path, content=truncated)
 
 
@@ -61,7 +65,8 @@ def _call_claude_cli(prompt: str) -> str:
         subprocess.CalledProcessError: If the CLI exits with a non-zero code.
     """
     result = subprocess.run(
-        ["claude", "-p", prompt, "--output-format", "text"],
+        ["claude", "-p", "-", "--output-format", "text"],
+        input=prompt,
         capture_output=True,
         text=True,
         timeout=CLI_TIMEOUT_SECONDS,

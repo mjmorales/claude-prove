@@ -31,12 +31,18 @@ class TestGeneratePrompt(unittest.TestCase):
         self.assertIn("routing hint", prompt)
 
     def test_generate_prompt_truncation(self):
-        """Verify content > 8000 chars is truncated."""
+        """Verify content > 8000 chars is truncated with marker."""
         long_content = "x" * (MAX_CONTENT_LENGTH + 5000)
         prompt = generate_prompt("big.py", long_content)
         # The prompt should contain exactly MAX_CONTENT_LENGTH x's, not the full content
         self.assertIn("x" * MAX_CONTENT_LENGTH, prompt)
         self.assertNotIn("x" * (MAX_CONTENT_LENGTH + 1), prompt)
+        self.assertIn("[... truncated at 8000 characters ...]", prompt)
+
+    def test_generate_prompt_no_truncation_marker_when_short(self):
+        """Verify no truncation marker when content fits."""
+        prompt = generate_prompt("small.py", "short content")
+        self.assertNotIn("truncated", prompt)
 
 
 class TestCallClaudeCli(unittest.TestCase):
@@ -49,7 +55,8 @@ class TestCallClaudeCli(unittest.TestCase):
         result = _call_claude_cli("some prompt")
         self.assertEqual(result, "A description.")
         mock_run.assert_called_once_with(
-            ["claude", "-p", "some prompt", "--output-format", "text"],
+            ["claude", "-p", "-", "--output-format", "text"],
+            input="some prompt",
             capture_output=True,
             text=True,
             timeout=30,
@@ -86,6 +93,12 @@ class TestCallClaudeCli(unittest.TestCase):
 
 class TestDescribeFiles(unittest.TestCase):
     """Tests for describe_file and describe_files."""
+
+    @patch("cafi.describer.Path.read_text", side_effect=OSError("Permission denied"))
+    def test_describe_file_unreadable(self, _mock_read):
+        """Verify describe_file returns empty string when file is unreadable."""
+        result = describe_file("secret.py", project_root=".")
+        self.assertEqual(result, "")
 
     @patch("cafi.describer._call_claude_cli")
     @patch("cafi.describer.Path.read_text", return_value="some content")
