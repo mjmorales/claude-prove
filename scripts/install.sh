@@ -65,9 +65,35 @@ SPARSE_PATHS=(
   tools
 )
 
+# === Resolve latest release tag ===
+
+resolve_latest_tag() {
+  local tag
+  tag=$(git ls-remote --tags --sort=-v:refname "$REPO_URL" 'v*' 2>/dev/null \
+    | head -1 | sed 's|.*refs/tags/||; s|\^{}||')
+  echo "$tag"
+}
+
+RELEASE_TAG=$(resolve_latest_tag)
+
+if [[ -n "$RELEASE_TAG" ]]; then
+  echo "Latest release: $RELEASE_TAG"
+  CHECKOUT_REF="$RELEASE_TAG"
+else
+  echo "No release tags found — using main branch."
+  CHECKOUT_REF="main"
+fi
+
 if [[ -d "$INSTALL_DIR/.git" ]]; then
   echo "Updating existing installation at $INSTALL_DIR..."
-  git -C "$INSTALL_DIR" pull --quiet
+  git -C "$INSTALL_DIR" fetch --tags --quiet
+  RELEASE_TAG=$(git -C "$INSTALL_DIR" tag --sort=-v:refname | head -1)
+  if [[ -n "$RELEASE_TAG" ]]; then
+    echo "Checking out $RELEASE_TAG..."
+    git -C "$INSTALL_DIR" checkout --quiet "$RELEASE_TAG"
+  else
+    git -C "$INSTALL_DIR" pull --quiet
+  fi
 else
   echo "Cloning prove to $INSTALL_DIR..."
   mkdir -p "$(dirname "$INSTALL_DIR")"
@@ -79,7 +105,7 @@ else
     sparse_patterns+=("/$p/")
   done
   git -C "$INSTALL_DIR" sparse-checkout set "${sparse_patterns[@]}"
-  git -C "$INSTALL_DIR" checkout --quiet
+  git -C "$INSTALL_DIR" checkout --quiet "$CHECKOUT_REF"
 fi
 
 # === Check for claude CLI ===

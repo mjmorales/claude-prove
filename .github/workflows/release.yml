@@ -1,0 +1,138 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for tag detection
+
+      - name: Determine version bump
+        id: bump
+        run: |
+          # Get the latest tag (or default to 0.0.0 if none)
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "latest_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+
+          CURRENT="${LATEST_TAG#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+
+          # Analyze commits since last tag
+          if [ "$LATEST_TAG" = "v0.0.0" ]; then
+            COMMITS=$(git log --pretty=format:"%s%n%b" HEAD)
+          else
+            COMMITS=$(git log --pretty=format:"%s%n%b" "${LATEST_TAG}..HEAD")
+          fi
+
+          if [ -z "$COMMITS" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Determine bump type from conventional commits
+          BUMP="none"
+
+          if echo "$COMMITS" | grep -qiE "^[a-z]+(\(.+\))?!:|BREAKING CHANGE:"; then
+            BUMP="major"
+          elif echo "$COMMITS" | grep -qE "^feat(\(.+\))?:"; then
+            BUMP="minor"
+          elif echo "$COMMITS" | grep -qE "^fix(\(.+\))?:"; then
+            BUMP="patch"
+          fi
+
+          if [ "$BUMP" = "none" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Calculate new version
+          case "$BUMP" in
+            major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH + 1)) ;;
+          esac
+
+          NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          echo "new_version=$NEW_VERSION" >> "$GITHUB_OUTPUT"
+          echo "bump=$BUMP" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "Bump: $BUMP ($CURRENT -> $NEW_VERSION)"
+
+      - name: Generate changelog
+        id: changelog
+        if: steps.bump.outputs.skip != 'true'
+        run: |
+          LATEST_TAG="${{ steps.bump.outputs.latest_tag }}"
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+
+          if [ "$LATEST_TAG" = "v0.0.0" ]; then
+            RANGE="HEAD"
+          else
+            RANGE="${LATEST_TAG}..HEAD"
+          fi
+
+          {
+            echo "changelog<<CHANGELOG_EOF"
+
+            # Breaking changes
+            BREAKING=$(git log --pretty=format:"%s" "$RANGE" | grep -iE "^[a-z]+(\(.+\))?!:" || true)
+            BREAKING_BODY=$(git log --pretty=format:"%b" "$RANGE" | grep -A1 "BREAKING CHANGE:" | grep -v "^--$" || true)
+            if [ -n "$BREAKING" ] || [ -n "$BREAKING_BODY" ]; then
+              echo "### Breaking Changes"
+              [ -n "$BREAKING" ] && echo "$BREAKING" | sed 's/^/- /'
+              [ -n "$BREAKING_BODY" ] && echo "$BREAKING_BODY" | sed 's/^/- /'
+              echo ""
+            fi
+
+            # Features
+            FEATURES=$(git log --pretty=format:"- %s (%h)" "$RANGE" | grep -E "^- feat" || true)
+            if [ -n "$FEATURES" ]; then
+              echo "### Features"
+              echo "$FEATURES"
+              echo ""
+            fi
+
+            # Fixes
+            FIXES=$(git log --pretty=format:"- %s (%h)" "$RANGE" | grep -E "^- fix" || true)
+            if [ -n "$FIXES" ]; then
+              echo "### Fixes"
+              echo "$FIXES"
+              echo ""
+            fi
+
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Bump version in plugin files
+        if: steps.bump.outputs.skip != 'true'
+        run: |
+          bash scripts/bump-version.sh "${{ steps.bump.outputs.new_version }}"
+
+      - name: Commit, tag, and push
+        if: steps.bump.outputs.skip != 'true'
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .claude-plugin/plugin.json .claude-plugin/marketplace.json
+          git commit -m "chore(release): v${NEW_VERSION} [skip ci]"
+          git tag "v${NEW_VERSION}"
+          git push origin main --tags
+
+      - name: Create GitHub Release
+        if: steps.bump.outputs.skip != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.bump.outputs.new_version }}
+          name: v${{ steps.bump.outputs.new_version }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          generate_release_notes: false
