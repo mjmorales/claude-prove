@@ -3,6 +3,10 @@
 Selects relevant sections based on scan data, populates templates,
 and outputs the final file. All output is written as behavioral directives
 (imperative, short, actionable) not documentation.
+
+The managed block (between sentinel markers) is owned by prove and can be
+safely regenerated.  Content outside the markers is user-owned and preserved
+across updates.
 """
 
 from __future__ import annotations
@@ -12,6 +16,9 @@ from pathlib import Path
 
 
 SECTIONS_DIR = Path(__file__).resolve().parent / "sections"
+
+MANAGED_START = "<!-- prove:managed:start -->"
+MANAGED_END = "<!-- prove:managed:end -->"
 
 
 def compose(scan: dict, plugin_dir: str | None = None) -> str:
@@ -58,7 +65,8 @@ def compose(scan: dict, plugin_dir: str | None = None) -> str:
     if prove.get("exists"):
         parts.append(_section_tools(plugin_dir))
 
-    return "\n".join(parts) + "\n"
+    body = "\n".join(parts) + "\n"
+    return f"{MANAGED_START}\n{body}{MANAGED_END}\n"
 
 
 def compose_subagent_context(scan: dict, plugin_dir: str | None = None) -> str:
@@ -203,14 +211,54 @@ def _section_tools(plugin_dir: str) -> str:
 def write_claude_md(project_root: str, content: str) -> str:
     """Write CLAUDE.md to the project root.
 
+    If the file already exists and contains the managed-block markers,
+    only the managed block is replaced — user content outside the markers
+    is preserved.  Otherwise the full file is written (first-time generation).
+
     Args:
         project_root: Project root directory.
-        content: The CLAUDE.md content to write.
+        content: The composed CLAUDE.md content (must include sentinel markers).
 
     Returns:
         Absolute path to the written file.
     """
     path = os.path.join(project_root, "CLAUDE.md")
+
+    if os.path.isfile(path):
+        existing = _read(path)
+        merged = _replace_managed_block(existing, content)
+        if merged is not None:
+            _write(path, merged)
+            return path
+
+    # First-time write or file missing markers — write entire content
+    _write(path, content)
+    return path
+
+
+def _read(path: str) -> str:
+    with open(path) as f:
+        return f.read()
+
+
+def _write(path: str, content: str) -> None:
     with open(path, "w") as f:
         f.write(content)
-    return path
+
+
+def _replace_managed_block(existing: str, new_block: str) -> str | None:
+    """Replace the managed block in *existing* with *new_block*.
+
+    Returns the merged content, or None if the markers aren't found.
+    """
+    start_idx = existing.find(MANAGED_START)
+    end_idx = existing.find(MANAGED_END)
+    if start_idx == -1 or end_idx == -1:
+        return None
+
+    # Include everything after the end marker line
+    end_of_marker = existing.index("\n", end_idx) + 1 if "\n" in existing[end_idx:] else len(existing)
+
+    before = existing[:start_idx]
+    after = existing[end_of_marker:]
+    return before + new_block + after

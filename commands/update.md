@@ -86,9 +86,24 @@ Present the final status:
 - Schema version (current)
 - Backup file location (if migration was applied)
 
-### Step 7: Suggest next steps
+### Step 7: Update CLAUDE.md
+
+Regenerate the managed section of CLAUDE.md:
+
+```bash
+python3 skills/claude-md/__main__.py generate
+```
+
+This only replaces the `<!-- prove:managed:start -->` / `<!-- prove:managed:end -->` block. Any user content outside the markers is preserved.
+
+If this is the first run (no markers exist), the full file is written with the markers in place.
+
+Present the result to the user showing what sections were generated.
+
+### Step 8: Suggest next steps
 
 Based on what changed:
 - If `schema_version` was added: "Your config is now tracked. Future updates will migrate incrementally."
 - If validation errors remain: "Fix the remaining issues manually, then run `/prove:update` again."
 - If everything passed: "All configs are valid and up to date."
+- If CLAUDE.md was updated: "CLAUDE.md managed section has been refreshed. Your custom sections are preserved."

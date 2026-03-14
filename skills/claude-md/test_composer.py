@@ -9,7 +9,14 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from composer import compose, compose_subagent_context, write_claude_md
+from composer import (
+    MANAGED_END,
+    MANAGED_START,
+    _replace_managed_block,
+    compose,
+    compose_subagent_context,
+    write_claude_md,
+)
 
 
 @pytest.fixture
@@ -59,9 +66,14 @@ def minimal_scan():
 
 
 class TestCompose:
+    def test_wraps_in_managed_markers(self, full_scan):
+        result = compose(full_scan)
+        assert result.startswith(MANAGED_START + "\n")
+        assert result.rstrip().endswith(MANAGED_END)
+
     def test_includes_header(self, full_scan):
         result = compose(full_scan)
-        assert result.startswith("# my-project\n")
+        assert "# my-project\n" in result
 
     def test_includes_structure(self, full_scan):
         result = compose(full_scan)
@@ -137,16 +149,72 @@ class TestComposeSubagentContext:
         assert "**Validation**" not in result
 
 
+class TestReplaceManagedBlock:
+    def test_replaces_managed_block(self):
+        existing = (
+            "# My Project\n\nUser notes here.\n\n"
+            f"{MANAGED_START}\nold managed content\n{MANAGED_END}\n\n"
+            "## My Custom Section\n\nUser content preserved.\n"
+        )
+        new_block = f"{MANAGED_START}\nnew managed content\n{MANAGED_END}\n"
+        result = _replace_managed_block(existing, new_block)
+        assert result is not None
+        assert "new managed content" in result
+        assert "old managed content" not in result
+        assert "User notes here." in result
+        assert "User content preserved." in result
+
+    def test_returns_none_without_markers(self):
+        assert _replace_managed_block("no markers here", "new") is None
+
+    def test_returns_none_with_only_start_marker(self):
+        assert _replace_managed_block(f"{MANAGED_START}\nstuff", "new") is None
+
+    def test_returns_none_with_only_end_marker(self):
+        assert _replace_managed_block(f"stuff\n{MANAGED_END}\n", "new") is None
+
+    def test_preserves_content_before_and_after(self):
+        existing = f"BEFORE\n{MANAGED_START}\nold\n{MANAGED_END}\nAFTER\n"
+        new_block = f"{MANAGED_START}\nnew\n{MANAGED_END}\n"
+        result = _replace_managed_block(existing, new_block)
+        assert result == f"BEFORE\n{MANAGED_START}\nnew\n{MANAGED_END}\nAFTER\n"
+
+
 class TestWriteClaudeMd:
     def test_writes_file(self, tmp_path):
-        content = "# Test\n\nHello world\n"
+        content = f"{MANAGED_START}\n# Test\n\nHello world\n{MANAGED_END}\n"
         path = write_claude_md(str(tmp_path), content)
         assert os.path.isfile(path)
         with open(path) as f:
             assert f.read() == content
 
-    def test_overwrites_existing(self, tmp_path):
+    def test_full_replace_when_no_markers_in_existing(self, tmp_path):
         target = tmp_path / "CLAUDE.md"
-        target.write_text("old content")
-        write_claude_md(str(tmp_path), "new content")
-        assert target.read_text() == "new content"
+        target.write_text("old content without markers")
+        new_content = f"{MANAGED_START}\nnew content\n{MANAGED_END}\n"
+        write_claude_md(str(tmp_path), new_content)
+        assert target.read_text() == new_content
+
+    def test_partial_replace_preserves_user_content(self, tmp_path):
+        target = tmp_path / "CLAUDE.md"
+        user_section = "\n## My Notes\n\nDo not delete this.\n"
+        target.write_text(
+            f"{MANAGED_START}\nold managed\n{MANAGED_END}\n{user_section}"
+        )
+        new_content = f"{MANAGED_START}\nnew managed\n{MANAGED_END}\n"
+        write_claude_md(str(tmp_path), new_content)
+        result = target.read_text()
+        assert "new managed" in result
+        assert "old managed" not in result
+        assert "Do not delete this." in result
+
+    def test_preserves_content_before_managed_block(self, tmp_path):
+        target = tmp_path / "CLAUDE.md"
+        target.write_text(
+            f"# Custom Header\n\n{MANAGED_START}\nold\n{MANAGED_END}\n"
+        )
+        new_content = f"{MANAGED_START}\nnew\n{MANAGED_END}\n"
+        write_claude_md(str(tmp_path), new_content)
+        result = target.read_text()
+        assert result.startswith("# Custom Header\n")
+        assert "new" in result
