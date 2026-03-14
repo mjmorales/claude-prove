@@ -1,4 +1,5 @@
 {
+  "schema_version": "1",
   "scopes": {
     "skills": "skills/",
     "commands": "commands/",
@@ -29,7 +30,11 @@
     {
       "name": "discord-notify",
       "command": "./.prove/notify-discord.sh",
-      "events": ["step-halted", "wave-complete", "execution-complete"]
+      "events": [
+        "step-halted",
+        "wave-complete",
+        "execution-complete"
+      ]
     }
   ],
   "index": {

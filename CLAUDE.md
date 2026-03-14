@@ -1,3 +1,4 @@
+<!-- prove:managed:start -->
 # claude-prove
 
 
@@ -41,3 +42,4 @@ The index describes *when* to read each file, not just what it contains.
 - `/prove:orchestrator` — Autonomous execution with validation gates
 - `/prove:brainstorm` — Explore options and record decisions
 
+<!-- prove:managed:end -->
