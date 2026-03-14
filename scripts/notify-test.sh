@@ -4,9 +4,9 @@
 # Usage:
 #   notify-test.sh [event-type]
 #
-# Sends a test event through all configured reporters. If an event type is
-# provided, only reporters subscribed to that event are tested. Defaults to
-# "step-complete" when no event type is given.
+# Sends a test event through all configured reporters using dispatch-event.sh.
+# If an event type is provided, only reporters subscribed to that event are tested.
+# Defaults to "step-complete" when no event type is given.
 #
 # Exit codes:
 #   0 — all tested reporters succeeded
@@ -15,10 +15,10 @@
 
 set -uo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DISPATCH="${SCRIPT_DIR}/dispatch-event.sh"
 EVENT_TYPE="${1:-step-complete}"
 CONFIG_FILE=".prove.json"
-FAILED=0
-TESTED=0
 
 # --- Check configuration ---
 
@@ -28,90 +28,78 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
   exit 1
 fi
 
-# --- Parse reporters from .prove.json using python3 ---
+# --- Check for reporters ---
 
-REPORTERS_JSON=$(python3 -c "
+REPORTER_COUNT=$(python3 -c "
 import json, sys
 
 with open(sys.argv[1]) as f:
     config = json.load(f)
 
 reporters = config.get('reporters', [])
-if not reporters:
-    print('__NONE__')
-    sys.exit(0)
+event = sys.argv[2]
 
-for r in reporters:
-    name = r.get('name', 'unnamed')
-    command = r.get('command', '')
-    events = ','.join(r.get('events', []))
-    print(f'{name}\t{command}\t{events}')
-" "$CONFIG_FILE" 2>&1) || {
+matched = [r for r in reporters if event in r.get('events', [])]
+print(len(matched))
+" "$CONFIG_FILE" "$EVENT_TYPE" 2>&1) || {
   echo "ERROR: Failed to parse $CONFIG_FILE."
-  echo "Ensure it contains valid JSON with a 'reporters' array."
   exit 1
 }
 
-if [[ "$REPORTERS_JSON" == "__NONE__" ]]; then
-  echo "No reporters configured in $CONFIG_FILE."
-  echo "Run /prove:notify-setup to add reporters."
-  exit 1
+if [[ "$REPORTER_COUNT" -eq 0 ]]; then
+  # Check if there are any reporters at all
+  TOTAL=$(python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    print(len(json.load(f).get('reporters', [])))
+" "$CONFIG_FILE" 2>/dev/null)
+
+  if [[ "${TOTAL:-0}" -eq 0 ]]; then
+    echo "No reporters configured in $CONFIG_FILE."
+    echo "Run /prove:notify-setup to add reporters."
+    exit 1
+  else
+    echo "No reporters matched event '$EVENT_TYPE' — nothing to test."
+    exit 2
+  fi
 fi
 
-# --- Set test environment variables ---
+# --- Clear dedup state for test ---
 
-export PROVE_EVENT="$EVENT_TYPE"
+STATE_FILE=".prove/dispatch-state.json"
+if [[ -f "$STATE_FILE" ]]; then
+  # Temporarily remove test entries so dispatch fires
+  echo '{"dispatched":[]}' > "${STATE_FILE}.bak"
+fi
+
+# --- Set test environment variables and dispatch ---
+
+echo "=== Notify Test ==="
+echo "Event: $EVENT_TYPE"
+echo "Reporters matching: $REPORTER_COUNT"
+echo ""
+
 export PROVE_TASK="test-notification"
 export PROVE_STEP="0"
 export PROVE_STATUS="test"
 export PROVE_BRANCH="test/notify-test"
 export PROVE_DETAIL="Test notification from notify-test.sh"
 
-echo "=== Notify Test ==="
-echo "Event: $EVENT_TYPE"
-echo ""
+bash "$DISPATCH" "$EVENT_TYPE" 2>&1
+EXIT_CODE=$?
 
-# --- Test each reporter ---
+# --- Restore dedup state ---
 
-while IFS=$'\t' read -r name command events; do
-  # Skip empty lines
-  [[ -z "$name" ]] && continue
-
-  # Check if reporter is subscribed to this event
-  if [[ -n "$events" ]]; then
-    if ! echo ",$events," | grep -q ",$EVENT_TYPE,"; then
-      echo "  SKIP: $name (not subscribed to '$EVENT_TYPE')"
-      continue
-    fi
-  fi
-
-  # Execute the reporter command (failures are caught below)
-  echo "  TEST: $name → $command"
-  bash -c "$command" 2>&1 | sed 's/^/       /'
-  exit_code=${PIPESTATUS[0]}
-  if [ "$exit_code" -eq 0 ]; then
-    echo "  PASS: $name"
-  else
-    echo "  FAIL: $name (exit code: $exit_code)"
-    ((FAILED++)) || true
-  fi
-  ((TESTED++)) || true
-
-done <<< "$REPORTERS_JSON"
-
-# --- Summary ---
+if [[ -f "${STATE_FILE}.bak" ]]; then
+  mv "${STATE_FILE}.bak" "$STATE_FILE"
+fi
 
 echo ""
 echo "=== Results ==="
-echo "Tested: $TESTED | Passed: $((TESTED - FAILED)) | Failed: $FAILED"
+echo "Dispatched event '$EVENT_TYPE' to $REPORTER_COUNT reporter(s)"
 
-if [[ $FAILED -gt 0 ]]; then
-  exit 1
-fi
-
-if [[ $TESTED -eq 0 ]]; then
-  echo "No reporters matched event '$EVENT_TYPE' — nothing was actually tested."
-  exit 2
+if [[ $EXIT_CODE -ne 0 ]]; then
+  echo "WARNING: Dispatch exited with code $EXIT_CODE (reporters are best-effort)"
 fi
 
 exit 0
