@@ -4,3 +4,4 @@ tools/cafi/__pycache__/
 .pytest_cache/
 .ruff_cache/
 __pycache__/
+*.bak
