@@ -10,6 +10,7 @@ A single JSON file in the project root that defines validators and reporters. If
 
 ```json
 {
+  "schema_version": "1",
   "validators": [
     { "name": "build", "command": "go build ./...", "phase": "build" },
     { "name": "lint",  "command": "go vet ./...",   "phase": "lint" },
@@ -21,6 +22,14 @@ A single JSON file in the project root that defines validators and reporters. If
   ]
 }
 ```
+
+### Schema Version
+
+The `schema_version` field tracks the config format version for migration. Configs without this field are treated as v0 (pre-schema). Run `/prove:update` to detect and apply migrations.
+
+| Version | Changes |
+|---------|---------|
+| `"1"` | Initial versioned schema — adds `schema_version` field |
 
 ### Validator Fields
 

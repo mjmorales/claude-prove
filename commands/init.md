@@ -52,6 +52,7 @@ Write the approved configuration to `.prove.json` in the project root.
 
 - If merging: the output from `init-config.sh --merge` already contains all existing sections with updated validators
 - If fresh: write the detection output directly
+- Ensure `schema_version` is set to the current version (run `python3 -m tools.schema migrate` after writing to add it if missing)
 
 ### Step 5: Update .gitignore
 
