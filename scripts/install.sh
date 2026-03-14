@@ -14,6 +14,7 @@
 set -eo pipefail
 
 REPO_URL="https://github.com/mjmorales/claude-prove.git"
+MARKETPLACE_ID="mjmorales/claude-prove"
 INSTALL_DIR=""
 SCOPE="user"
 
@@ -114,7 +115,7 @@ if ! command -v claude &>/dev/null; then
   echo ""
   echo "WARNING: 'claude' CLI not found in PATH."
   echo "Install Claude Code first, then run:"
-  echo "  claude plugin marketplace add $INSTALL_DIR --scope $SCOPE"
+  echo "  claude plugin marketplace add $MARKETPLACE_ID --scope $SCOPE"
   echo "  claude plugin install prove@prove --scope $SCOPE"
   exit 0
 fi
@@ -123,18 +124,19 @@ fi
 
 SCOPE_FLAG="--scope $SCOPE"
 
-# Add as a local marketplace (idempotent — fails gracefully if already added)
+# Register the GitHub repo as marketplace source (not the local dir)
+# so that `claude plugin update` fetches from GitHub.
 if claude plugin marketplace list 2>/dev/null | grep -q "prove"; then
   echo "Marketplace 'prove' already registered."
 else
   echo "Registering prove marketplace..."
-  if claude plugin marketplace add "$INSTALL_DIR" $SCOPE_FLAG 2>/dev/null; then
+  if claude plugin marketplace add "$MARKETPLACE_ID" $SCOPE_FLAG 2>/dev/null; then
     echo "Marketplace registered."
   else
     echo ""
     echo "WARNING: Could not register marketplace automatically."
     echo "Run manually:"
-    echo "  claude plugin marketplace add $INSTALL_DIR $SCOPE_FLAG"
+    echo "  claude plugin marketplace add $MARKETPLACE_ID $SCOPE_FLAG"
     echo "  claude plugin install prove@prove $SCOPE_FLAG"
     exit 0
   fi
