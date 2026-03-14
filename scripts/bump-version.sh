@@ -27,11 +27,20 @@ for f in "$PLUGIN_JSON" "$MARKETPLACE_JSON"; do
   fi
 done
 
+# Cross-platform sed in-place (macOS requires '' arg, Linux does not)
+sedi() {
+  if [[ "$OSTYPE" == darwin* ]]; then
+    sed -i '' "$@"
+  else
+    sed -i "$@"
+  fi
+}
+
 # Update plugin.json — top-level "version" field
-sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" "$PLUGIN_JSON"
+sedi "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" "$PLUGIN_JSON"
 
 # Update marketplace.json — all "version" fields (top-level and in plugins array)
-sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" "$MARKETPLACE_JSON"
+sedi "s/\"version\": \"[^\"]*\"/\"version\": \"$VERSION\"/" "$MARKETPLACE_JSON"
 
 echo "Updated .claude-plugin/ files to version $VERSION"
 echo "  $PLUGIN_JSON"
