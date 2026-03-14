@@ -19,11 +19,19 @@ jobs:
       - name: Determine version bump
         id: bump
         run: |
-          # Get the latest tag (or default to 0.0.0 if none)
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          echo "latest_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+          # Get the latest tag, or read current version from plugin.json
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
 
-          CURRENT="${LATEST_TAG#v}"
+          if [ -z "$LATEST_TAG" ]; then
+            # No tags yet — use version from plugin.json as the base
+            CURRENT=$(grep '"version"' .claude-plugin/plugin.json | head -1 | sed 's/.*"version": "\([^"]*\)".*/\1/')
+            LATEST_TAG="v0.0.0"  # sentinel for changelog range
+            echo "No tags found. Using plugin.json version ($CURRENT) as base."
+          else
+            CURRENT="${LATEST_TAG#v}"
+          fi
+
+          echo "latest_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
 
           # Analyze commits since last tag
@@ -124,7 +132,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .claude-plugin/plugin.json .claude-plugin/marketplace.json
-          git commit -m "chore(release): v${NEW_VERSION} [skip ci]"
+          # Commit only if files actually changed (version may already match)
+          if git diff --cached --quiet; then
+            echo "Version files already at $NEW_VERSION, skipping commit."
+          else
+            git commit -m "chore(release): v${NEW_VERSION} [skip ci]"
+          fi
           git tag "v${NEW_VERSION}"
           git push origin main --tags
 
