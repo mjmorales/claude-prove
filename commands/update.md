@@ -1,8 +1,5 @@
 ---
-name: update
 description: Validate configs, detect schema drift, and apply safe migrations
-allowed_tools: Bash, Read, Write, Edit, AskUserQuestion
-
 ---
 
 # Update Configuration
