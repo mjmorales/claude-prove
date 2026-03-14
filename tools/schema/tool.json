@@ -1,0 +1,5 @@
+{
+  "name": "schema",
+  "description": "Config schema validation and migration for .prove.json and .claude/settings.json",
+  "requires": ["python3"]
+}
