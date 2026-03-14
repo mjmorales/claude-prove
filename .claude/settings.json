@@ -1,3 +1,43 @@
 {
-
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/post-tool-use.sh\"",
+            "async": true,
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "principal-architect|prove:principal-architect|validation-agent|prove:validation-agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/subagent-stop.sh\"",
+            "async": true,
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/session-stop.sh\"",
+            "async": true,
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
 }

@@ -144,16 +144,85 @@ The run-log is updated at these points:
 | Execution complete | Final status, report generated |
 | Cleanup complete | Archive location, deleted branches, removed artifacts |
 
-## Extending the Reporter
+## Hook-Based Dispatch (Deterministic)
 
-To add custom reporting (e.g., Slack notifications, metrics):
+Reporter dispatch is handled **automatically by Claude Code hooks** — the orchestrator does not need to invoke reporters manually. This eliminates the reliability problem of LLM-dependent dispatch.
 
-1. Add a `reporters` key to `.prove.json` in the project root (see `references/validation-config.md` for schema)
-2. The orchestrator runs listed commands at specified events
+### How It Works
+
+Claude Code hooks fire deterministically on tool events. Hook scripts in `scripts/hooks/` detect orchestrator actions and call `scripts/dispatch-event.sh` to fire matching reporters from `.prove.json`.
+
+```
+Claude Code Hook Event → Hook Script → dispatch-event.sh → .prove.json reporters
+```
+
+### Hook → Event Mapping
+
+| Claude Code Hook | Matcher | Orchestrator Event | Detection |
+|---|---|---|---|
+| `PostToolUse` | `Bash` | `step-complete` | Git commit with `orchestrator:` pattern |
+| `PostToolUse` | `Bash` | `step-halted` | Git commit with `[WIP]` pattern |
+| `PostToolUse` | `Bash` | `wave-complete` | Git merge with orchestrator branch |
+| `SubagentStop` | `principal-architect` | `review-approved` | APPROVED in agent output |
+| `SubagentStop` | `principal-architect` | `review-rejected` | CHANGES_REQUIRED in agent output |
+| `SubagentStop` | `validation-agent` | `validation-pass` | PASS in agent output |
+| `SubagentStop` | `validation-agent` | `validation-fail` | FAIL in agent output |
+| `Stop` | (all) | `execution-complete` | Active orchestrator run in PROGRESS.md |
+
+### Hook Configuration
+
+Hooks are configured in `.claude/settings.json` (project-level, committed to git):
 
 ```json
 {
-  "validators": [ ... ],
+  "hooks": {
+    "PostToolUse": [{
+      "matcher": "Bash",
+      "hooks": [{
+        "type": "command",
+        "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/post-tool-use.sh\"",
+        "async": true, "timeout": 30
+      }]
+    }],
+    "SubagentStop": [{
+      "matcher": "principal-architect|prove:principal-architect|validation-agent|prove:validation-agent",
+      "hooks": [{
+        "type": "command",
+        "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/subagent-stop.sh\"",
+        "async": true, "timeout": 30
+      }]
+    }],
+    "Stop": [{
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/session-stop.sh\"",
+        "async": true, "timeout": 30
+      }]
+    }]
+  }
+}
+```
+
+### Deduplication
+
+`dispatch-event.sh` maintains `.prove/dispatch-state.json` to prevent duplicate notifications. Each `(event, step)` tuple is dispatched at most once per orchestrator run.
+
+### Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/dispatch-event.sh` | Core dispatcher — reads `.prove.json`, fires matching reporters, deduplicates |
+| `scripts/hooks/post-tool-use.sh` | Detects orchestrator git commits/merges from Bash tool calls |
+| `scripts/hooks/subagent-stop.sh` | Detects review/validation verdicts from subagent completions |
+| `scripts/hooks/session-stop.sh` | Dispatches execution-complete when session ends |
+
+## Reporter Configuration
+
+Add reporters to `.prove.json`:
+
+```json
+{
   "reporters": [
     {
       "name": "slack-notify",
@@ -170,12 +239,12 @@ To add custom reporting (e.g., Slack notifications, metrics):
 ```
 
 Reporter commands receive event data via environment variables:
-- `PROVE_EVENT`: event name (lifecycle: `step-complete`, `step-halted`, `wave-complete`, `execution-complete`, `cleanup-complete`; agent: `review-approved`, `review-rejected`, `validation-pass`, `validation-fail`)
+- `PROVE_EVENT`: event name (lifecycle: `step-complete`, `step-halted`, `wave-complete`, `execution-complete`; agent: `review-approved`, `review-rejected`, `validation-pass`, `validation-fail`)
 - `PROVE_TASK`: task slug
 - `PROVE_STEP`: step number (if applicable)
 - `PROVE_STATUS`: current status
 - `PROVE_BRANCH`: branch name
-- `PROVE_DETAIL`: one-line summary from agent output (e.g., "3 findings in 2 files", "APPROVED after 2 rounds"). Empty for lifecycle events without agent context
+- `PROVE_DETAIL`: one-line summary (e.g., "3 findings in 2 files", "APPROVED after 2 rounds")
 
 ### Quick Setup
 
