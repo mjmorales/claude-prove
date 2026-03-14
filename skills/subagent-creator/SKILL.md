@@ -84,9 +84,9 @@ You are a [role description with years of experience].
 [How to structure findings/results]
 ```
 
-If adding to a plugin with a MANIFEST, register the agent:
-```
-agent | <name> | agents/ | <description>
+If adding to a plugin, ensure the `agents` scope exists in `.prove.json`:
+```json
+"scopes": { "agents": "agents/" }
 ```
 
 ### 4. Validate the Agent

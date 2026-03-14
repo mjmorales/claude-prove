@@ -173,10 +173,10 @@ bash scripts/setup-tools.sh --project-root . --plugin-dir /path/to/claude-prove
      "requires": ["python3"]
    }
    ```
-3. Add the tool to `MANIFEST` as `tool | my-tool | tools/my-tool/ | Description`
+3. Add a scope to `.prove.json`: `"my-tool": "tools/my-tool/"`
 4. `setup-tools.sh` will auto-detect it and configure `.prove.json` during init
 
-**Manifest fields:**
+**tool.json fields:**
 - `config_key` — Key added to `.prove.json` for tool-specific settings.
 - `config_defaults` — Default values for the config section.
 - `requires` — List of CLI commands that must be available (checked before setup).

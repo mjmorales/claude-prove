@@ -91,12 +91,12 @@ Load and follow the skill (`skills/<name>/SKILL.md` from the workflow plugin).
 
 - **Project commands:** `.claude/commands/<name>.md`
 - **User commands:** `~/.claude/commands/<name>.md`
-- **Plugin commands:** `commands/<name>.md` (register in MANIFEST)
+- **Plugin commands:** `commands/<name>.md` (add scope to `.prove.json` if needed)
 - **Namespaced:** `.claude/commands/<namespace>/<name>.md` → `/<namespace>:<name>`
 
-If adding to a plugin with a MANIFEST, register the command:
-```
-command | <name> | commands/<name>.md | <description>
+If adding to a plugin, ensure the `commands` scope exists in `.prove.json`:
+```json
+"scopes": { "commands": "commands/" }
 ```
 
 ## Frontmatter Reference

@@ -103,7 +103,7 @@ When documenting prove plugin components, follow these conventions:
 - **Commands**: Document frontmatter fields, argument handling, and which skill they delegate to
 - **Scripts**: Document usage, flags, and output format
 
-Reference the MANIFEST for the canonical list of plugin components.
+Reference the `scopes` section of `.prove.json` for the canonical list of plugin components.
 
 ## Output Validation Checklist
 
