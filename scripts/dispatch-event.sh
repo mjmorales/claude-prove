@@ -20,11 +20,18 @@ if [[ -z "$EVENT_TYPE" ]]; then
   exit 0
 fi
 
-# Resolve project root (scripts/ lives one level down)
+# Resolve project root.
+# CLAUDE_PROJECT_DIR or cwd may be a worktree, which has .prove.json (tracked)
+# but NOT .prove/ (gitignored). Use git to find the main worktree for .prove/ artifacts.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="${SCRIPT_DIR%/scripts}"
-CONFIG_FILE="${PROJECT_ROOT}/.prove.json"
-STATE_FILE="${PROJECT_ROOT}/.prove/dispatch-state.json"
+WORK_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+MAIN_ROOT=$(git -C "$WORK_DIR" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print substr($0,10); exit}')
+MAIN_ROOT="${MAIN_ROOT:-$WORK_DIR}"
+# Config (.prove.json) is tracked — read from current worktree (guaranteed up-to-date)
+CONFIG_FILE="${WORK_DIR}/.prove.json"
+# State and reporter scripts live in .prove/ (gitignored) — always in main worktree
+STATE_FILE="${MAIN_ROOT}/.prove/dispatch-state.json"
+REPORTER_ROOT="${MAIN_ROOT}"
 
 # --- Check configuration ---
 
@@ -33,21 +40,27 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
   exit 0
 fi
 
-# --- Deduplication ---
+# --- Deduplication (with file locking for parallel worktree safety) ---
 
 # Build a dedup key from event + step (or event + task if no step)
 DEDUP_KEY="${EVENT_TYPE}:${PROVE_STEP:-${PROVE_TASK:-unknown}}"
+LOCK_FILE="${STATE_FILE}.lock"
 
 # Initialize state file if missing
 if [[ ! -f "$STATE_FILE" ]]; then
   echo '{"dispatched":[]}' > "$STATE_FILE"
 fi
 
+# Acquire lock (wait up to 5s, then proceed anyway — best-effort)
+exec 9>"$LOCK_FILE"
+flock -w 5 9 2>/dev/null || true
+
 # Check if already dispatched
 if command -v jq &>/dev/null; then
   ALREADY=$(jq -r --arg key "$DEDUP_KEY" \
     '.dispatched[] | select(.key == $key) | .key' "$STATE_FILE" 2>/dev/null)
   if [[ -n "$ALREADY" ]]; then
+    exec 9>&-  # release lock
     exit 0
   fi
 fi
@@ -81,8 +94,8 @@ for r in reporters:
 " "$CONFIG_FILE" "$EVENT_TYPE" 2>/dev/null | while IFS=$'\t' read -r name command; do
   [[ -z "$command" ]] && continue
   echo "dispatch-event: firing $name for $EVENT_TYPE" >&2
-  # Run reporter from project root, capture exit code but never fail
-  (cd "$PROJECT_ROOT" && bash -c "$command") 2>&1 | sed 's/^/  ['"$name"'] /' >&2 || true
+  # Run reporter from main worktree root (where .prove/ scripts live)
+  (cd "$REPORTER_ROOT" && bash -c "$command") 2>&1 | sed 's/^/  ['"$name"'] /' >&2 || true
   ((FIRED++)) || true
 done
 
@@ -94,5 +107,8 @@ if command -v jq &>/dev/null; then
     '.dispatched += [{"key": $key, "event": $evt, "timestamp": $ts}]' \
     "$STATE_FILE" > "${STATE_FILE}.tmp" 2>/dev/null && mv "${STATE_FILE}.tmp" "$STATE_FILE"
 fi
+
+# Release lock
+exec 9>&- 2>/dev/null || true
 
 exit 0

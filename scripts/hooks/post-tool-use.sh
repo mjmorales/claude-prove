@@ -10,7 +10,8 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DISPATCH="${SCRIPT_DIR}/../dispatch-event.sh"
-PROJECT_ROOT="${SCRIPT_DIR%/scripts/hooks}"
+# Use CLAUDE_PROJECT_DIR (set by Claude Code hooks) or fall back to cwd
+PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 
 # Read JSON from stdin
 INPUT=$(cat)

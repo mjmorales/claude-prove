@@ -10,8 +10,12 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DISPATCH="${SCRIPT_DIR}/../dispatch-event.sh"
-PROJECT_ROOT="${SCRIPT_DIR%/scripts/hooks}"
-PROGRESS_FILE="${PROJECT_ROOT}/.prove/PROGRESS.md"
+# Use CLAUDE_PROJECT_DIR or cwd for git context (may be a worktree)
+WORK_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+# .prove/ is gitignored — always lives in the main worktree
+MAIN_ROOT=$(git -C "$WORK_DIR" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print substr($0,10); exit}')
+MAIN_ROOT="${MAIN_ROOT:-$WORK_DIR}"
+PROGRESS_FILE="${MAIN_ROOT}/.prove/PROGRESS.md"
 
 # Only dispatch if there's an active orchestrator run
 if [[ ! -f "$PROGRESS_FILE" ]]; then
@@ -24,7 +28,7 @@ if ! grep -qi 'Status.*In Progress' "$PROGRESS_FILE" 2>/dev/null; then
 fi
 
 # Check we're on an orchestrator branch
-BRANCH=$(cd "$PROJECT_ROOT" && git branch --show-current 2>/dev/null || echo "unknown")
+BRANCH=$(cd "$WORK_DIR" && git branch --show-current 2>/dev/null || echo "unknown")
 if [[ "$BRANCH" != orchestrator/* ]]; then
   exit 0
 fi
