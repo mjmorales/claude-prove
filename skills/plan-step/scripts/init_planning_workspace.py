@@ -4,20 +4,25 @@ Initialize planning workspace for a specific task step.
 Usage: python3 init_planning_workspace.py <step_number> [task_title]
 """
 
+from __future__ import annotations
+
 import sys
 from datetime import datetime
 from pathlib import Path
 
-def create_planning_workspace(step_number, task_title="[Task Title]"):
+
+def create_planning_workspace(
+    step_number: str, task_title: str = "[Task Title]"
+) -> tuple[Path, list[str]]:
     """Create the planning workspace directory and all template files."""
-    
+
     # Create the directory
     workspace_dir = Path(f".prove/plans/plan_{step_number}")
     workspace_dir.mkdir(parents=True, exist_ok=True)
-    
+
     # Get current timestamp
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    
+
     # Define all template files
     templates = {
         "00_task_overview.md": f"""# Task {step_number}: {task_title}
@@ -36,7 +41,7 @@ def create_planning_workspace(step_number, task_title="[Task Title]"):
 ## Related Tasks
 - [List related/dependent tasks with numbers]
 """,
-        
+
         "01_requirements.md": f"""# Requirements for Task {step_number}
 
 ## Functional Requirements
@@ -56,7 +61,7 @@ def create_planning_workspace(step_number, task_title="[Task Title]"):
 ## Out of Scope
 - [Explicitly excluded items]
 """,
-        
+
         "02_design_decisions.md": f"""# Design Decisions for Task {step_number}
 
 ## Approach Options
@@ -85,7 +90,7 @@ def create_planning_workspace(step_number, task_title="[Task Title]"):
 ## API/Interface Design
 [Define contracts and interfaces]
 """,
-        
+
         "03_open_questions.md": f"""# Open Questions for Task {step_number}
 
 ## Technical Questions
@@ -106,7 +111,7 @@ def create_planning_workspace(step_number, task_title="[Task Title]"):
 ---
 *Mark questions as resolved by adding answers*
 """,
-        
+
         "04_potential_issues.md": f"""# Potential Issues for Task {step_number}
 
 ## Technical Risks
@@ -125,7 +130,7 @@ def create_planning_workspace(step_number, task_title="[Task Title]"):
 - [System/component to integrate with]
   - Consideration: [what to watch for]
 """,
-        
+
         "05_implementation_plan.md": f"""# Implementation Plan for Task {step_number}
 
 ## Prerequisites
@@ -152,7 +157,7 @@ def create_planning_workspace(step_number, task_title="[Task Title]"):
 - [Important consideration]
 - [Technical detail to remember]
 """,
-        
+
         "06_test_strategy.md": f"""# Test Strategy for Task {step_number}
 
 ## Unit Tests
@@ -175,7 +180,7 @@ def create_planning_workspace(step_number, task_title="[Task Title]"):
 ## Test Coverage Goals
 - [Coverage target and rationale]
 """,
-        
+
         "progress.md": f"""# Planning Progress for Task {step_number}
 
 **Started**: {timestamp}
@@ -196,34 +201,36 @@ def create_planning_workspace(step_number, task_title="[Task Title]"):
 - Planning workspace initialized
 """
     }
-    
+
     # Create all files
-    created_files = []
+    created_files: list[str] = []
     for filename, content in templates.items():
         file_path = workspace_dir / filename
         file_path.write_text(content)
         created_files.append(str(file_path))
-    
+
     return workspace_dir, created_files
 
-def main():
+
+def main() -> None:
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(1)
-    
+
     step_number = sys.argv[1]
     task_title = " ".join(sys.argv[2:]) if len(sys.argv) > 2 else "[Task Title]"
-    
+
     try:
         workspace_dir, created_files = create_planning_workspace(step_number, task_title)
-        print(f"✅ Created planning workspace: {workspace_dir}/")
+        print(f"Created planning workspace: {workspace_dir}/")
         print("\nInitialized files:")
         for file in created_files:
             print(f"  - {file}")
         print(f"\nNext step: Review PLAN.md and update {workspace_dir}/00_task_overview.md with actual task details")
     except Exception as e:
-        print(f"❌ Error creating workspace: {e}")
+        print(f"Error creating workspace: {e}")
         sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
