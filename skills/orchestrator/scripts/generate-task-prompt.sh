@@ -56,50 +56,41 @@ LLM_VALIDATORS=""
 
 if [[ -f "$PROJECT_ROOT/.prove.json" ]]; then
   PROVE_CONFIG="$PROJECT_ROOT/.prove.json"
-  BUILD_CMD=$(python3 -c "
+
+  # Single Python call to extract all validator phases at once (avoids parsing JSON five times)
+  _VALIDATOR_OUTPUT=$(python3 -c "
 import json, sys
+
 with open(sys.argv[1]) as f:
     cfg = json.load(f)
-cmds = [v['command'] for v in cfg.get('validators', []) if v.get('phase') == 'build']
-print('; '.join(cmds))
+
+validators = cfg.get('validators', [])
+
+for phase in ('build', 'lint', 'test', 'custom'):
+    cmds = [v['command'] for v in validators if v.get('phase') == phase]
+    joined = ('; '.join(cmds)) if cmds else ''
+    print(f'{phase.upper()}={joined}')
+
+prompt_validators = [v for v in validators if v.get('prompt')]
+if prompt_validators:
+    lines = [f'   - **{v[\"name\"]}**: \`{v[\"prompt\"]}\`' for v in prompt_validators]
+    print('LLM=' + chr(10).join(lines))
+else:
+    print('LLM=')
 " "$PROVE_CONFIG" 2>/dev/null || true)
 
-  LINT_CMD=$(python3 -c "
-import json, sys
-with open(sys.argv[1]) as f:
-    cfg = json.load(f)
-cmds = [v['command'] for v in cfg.get('validators', []) if v.get('phase') == 'lint']
-print('; '.join(cmds))
-" "$PROVE_CONFIG" 2>/dev/null || true)
-
-  TEST_CMD=$(python3 -c "
-import json, sys
-with open(sys.argv[1]) as f:
-    cfg = json.load(f)
-cmds = [v['command'] for v in cfg.get('validators', []) if v.get('phase') == 'test']
-print('; '.join(cmds))
-" "$PROVE_CONFIG" 2>/dev/null || true)
-
-  CUSTOM_CMDS=$(python3 -c "
-import json, sys
-with open(sys.argv[1]) as f:
-    cfg = json.load(f)
-cmds = [v['command'] for v in cfg.get('validators', []) if v.get('phase') == 'custom']
-print('; '.join(cmds))
-" "$PROVE_CONFIG" 2>/dev/null || true)
-
-  # Extract LLM prompt validators
-  LLM_VALIDATORS=$(python3 -c "
-import json, sys
-with open(sys.argv[1]) as f:
-    cfg = json.load(f)
-validators = [v for v in cfg.get('validators', []) if v.get('prompt')]
-if validators:
-    lines = []
-    for v in validators:
-        lines.append(f\"   - **{v['name']}**: \`{v['prompt']}\`\")
-    print('\n'.join(lines))
-" "$PROVE_CONFIG" 2>/dev/null || true)
+  # Parse the combined output into individual shell variables
+  while IFS= read -r line; do
+    case "$line" in
+      BUILD=*)   BUILD_CMD="${line#BUILD=}" ;;
+      LINT=*)    LINT_CMD="${line#LINT=}" ;;
+      TEST=*)    TEST_CMD="${line#TEST=}" ;;
+      CUSTOM=*)  CUSTOM_CMDS="${line#CUSTOM=}" ;;
+      LLM=*)     LLM_VALIDATORS="${line#LLM=}" ;;
+      # Continuation lines for multi-line LLM validators
+      "   - "*)  LLM_VALIDATORS="${LLM_VALIDATORS}"$'\n'"${line}" ;;
+    esac
+  done <<< "$_VALIDATOR_OUTPUT"
 
 elif [[ -f "$PROJECT_ROOT/CLAUDE.md" ]]; then
   # Fall back to CLAUDE.md scraping
