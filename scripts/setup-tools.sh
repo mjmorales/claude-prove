@@ -58,10 +58,10 @@ config_key_exists() {
     fi
     python3 -c "
 import json, sys
-with open('$PROVE_JSON') as f:
+with open(sys.argv[2]) as f:
     data = json.load(f)
 sys.exit(0 if sys.argv[1] in data else 1)
-" "$key" 2>/dev/null
+" "$key" "$PROVE_JSON" 2>/dev/null
 }
 
 # === Scan tools ===

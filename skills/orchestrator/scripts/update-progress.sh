@@ -18,6 +18,14 @@
 
 set -euo pipefail
 
+sedi() {
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    sed -i '' "$@"
+  else
+    sed -i "$@"
+  fi
+}
+
 PROGRESS="$1"
 ACTION="$2"
 shift 2
@@ -58,7 +66,7 @@ EOF
   task-start)
     TASK_ID="$1"
     if grep -q "Task $TASK_ID:" "$PROGRESS" 2>/dev/null; then
-      sed -i '' "s/\(Task $TASK_ID:.*\)— .*/\1— In Progress ($TIMESTAMP)/" "$PROGRESS"
+      sedi "s/\(Task $TASK_ID:.*\)— .*/\1— In Progress ($TIMESTAMP)/" "$PROGRESS"
     else
       echo "- [ ] Task $TASK_ID — In Progress ($TIMESTAMP)" >> "$PROGRESS"
     fi
@@ -66,13 +74,13 @@ EOF
 
   task-complete)
     TASK_ID="$1"
-    sed -i '' "s/\(Task $TASK_ID:.*\)— .*/\1— Implemented, pending review ($TIMESTAMP)/" "$PROGRESS"
+    sedi "s/\(Task $TASK_ID:.*\)— .*/\1— Implemented, pending review ($TIMESTAMP)/" "$PROGRESS"
     ;;
 
   task-fail)
     TASK_ID="$1"
     REASON="$2"
-    sed -i '' "s/\(Task $TASK_ID:.*\)— .*/\1— FAILED ($TIMESTAMP)/" "$PROGRESS"
+    sedi "s/\(Task $TASK_ID:.*\)— .*/\1— FAILED ($TIMESTAMP)/" "$PROGRESS"
     echo "- $TIMESTAMP: Task $TASK_ID failed: $REASON" >> "$PROGRESS"
     ;;
 
@@ -80,13 +88,13 @@ EOF
     TASK_ID="$1"
     VERDICT="$2"
     if [[ "$VERDICT" == "APPROVED" ]]; then
-      sed -i '' "s/\(Task $TASK_ID:.*\)— .*/\1— Review APPROVED ($TIMESTAMP)/" "$PROGRESS"
+      sedi "s/\(Task $TASK_ID:.*\)— .*/\1— Review APPROVED ($TIMESTAMP)/" "$PROGRESS"
       # Add to review log
-      sed -i '' "/^## Review Log/a\\
+      sedi "/^## Review Log/a\\
 - $TIMESTAMP Task $TASK_ID: APPROVED" "$PROGRESS"
     else
-      sed -i '' "s/\(Task $TASK_ID:.*\)— .*/\1— Review: CHANGES REQUIRED ($TIMESTAMP)/" "$PROGRESS"
-      sed -i '' "/^## Review Log/a\\
+      sedi "s/\(Task $TASK_ID:.*\)— .*/\1— Review: CHANGES REQUIRED ($TIMESTAMP)/" "$PROGRESS"
+      sedi "/^## Review Log/a\\
 - $TIMESTAMP Task $TASK_ID: CHANGES_REQUIRED — fixing..." "$PROGRESS"
     fi
     ;;
@@ -94,39 +102,39 @@ EOF
   task-review-pass)
     TASK_ID="$1"
     ATTEMPT="$2"
-    sed -i '' "s/\[ \] \(Task $TASK_ID:.*\)/[x] \1/" "$PROGRESS"
-    sed -i '' "s/\(Task $TASK_ID:.*\)— .*/\1— APPROVED after $ATTEMPT review(s) ($TIMESTAMP)/" "$PROGRESS"
+    sedi "s/\[ \] \(Task $TASK_ID:.*\)/[x] \1/" "$PROGRESS"
+    sedi "s/\(Task $TASK_ID:.*\)— .*/\1— APPROVED after $ATTEMPT review(s) ($TIMESTAMP)/" "$PROGRESS"
     ;;
 
   merge)
     TASK_ID="$1"
     STATUS="$2"
-    sed -i '' "/^## Merge Log/a\\
+    sedi "/^## Merge Log/a\\
 - $TIMESTAMP Merged task $TASK_ID ($STATUS)" "$PROGRESS"
     ;;
 
   wave-complete)
     WAVE="$1"
     TEST_RESULT="$2"
-    sed -i '' "/^## Test Results/a\\
+    sedi "/^## Test Results/a\\
 - Wave $WAVE post-merge: $TEST_RESULT" "$PROGRESS"
     ;;
 
   issue)
     DESC="$1"
-    sed -i '' "/^## Issues/a\\
+    sedi "/^## Issues/a\\
 - $TIMESTAMP: $DESC" "$PROGRESS"
     ;;
 
   final)
     TEST_RESULT="$1"
-    sed -i '' "/^## Test Results/a\\
+    sedi "/^## Test Results/a\\
 - Final: $TEST_RESULT ($TIMESTAMP)" "$PROGRESS"
     ;;
 
   status)
     NEW_STATUS="$1"
-    sed -i '' "s/\*\*Status\*\*: .*/\*\*Status\*\*: $NEW_STATUS/" "$PROGRESS"
+    sedi "s/\*\*Status\*\*: .*/\*\*Status\*\*: $NEW_STATUS/" "$PROGRESS"
     ;;
 
   *)

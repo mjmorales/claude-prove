@@ -63,6 +63,8 @@ if command -v jq &>/dev/null; then
     exec 9>&-  # release lock
     exit 0
   fi
+else
+  echo "  ⚠ jq not found — deduplication disabled, all reporters will fire" >&2
 fi
 
 # --- Parse and fire reporters ---
@@ -73,8 +75,6 @@ export PROVE_STEP="${PROVE_STEP:-}"
 export PROVE_STATUS="${PROVE_STATUS:-unknown}"
 export PROVE_BRANCH="${PROVE_BRANCH:-unknown}"
 export PROVE_DETAIL="${PROVE_DETAIL:-}"
-
-FIRED=0
 
 python3 -c "
 import json, sys
@@ -96,7 +96,6 @@ for r in reporters:
   echo "dispatch-event: firing $name for $EVENT_TYPE" >&2
   # Run reporter from main worktree root (where .prove/ scripts live)
   (cd "$REPORTER_ROOT" && bash -c "$command") 2>&1 | sed 's/^/  ['"$name"'] /' >&2 || true
-  ((FIRED++)) || true
 done
 
 # --- Record dispatch ---

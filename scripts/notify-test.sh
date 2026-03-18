@@ -68,8 +68,10 @@ fi
 
 STATE_FILE=".prove/dispatch-state.json"
 if [[ -f "$STATE_FILE" ]]; then
-  # Temporarily remove test entries so dispatch fires
-  echo '{"dispatched":[]}' > "${STATE_FILE}.bak"
+  # Back up actual state so it can be restored after the test
+  cp "$STATE_FILE" "${STATE_FILE}.bak"
+  # Clear state so dispatch fires without dedup blocking
+  echo '{"dispatched":[]}' > "$STATE_FILE"
 fi
 
 # --- Set test environment variables and dispatch ---
