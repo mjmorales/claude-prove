@@ -44,11 +44,7 @@ def _scan_project_identity(root: str) -> dict:
     name = os.path.basename(os.path.abspath(root))
 
     # Try to get a better name from common config files
-    for config_file, key_path in [
-        ("package.json", ["name"]),
-        ("Cargo.toml", None),  # handled specially
-        ("pyproject.toml", None),  # handled specially
-    ]:
+    for config_file in ["package.json", "Cargo.toml", "pyproject.toml"]:
         config_path = os.path.join(root, config_file)
         if os.path.isfile(config_path):
             try:
@@ -59,14 +55,8 @@ def _scan_project_identity(root: str) -> dict:
                     if pkg_name:
                         name = pkg_name
                         break
-                elif config_file == "Cargo.toml":
-                    with open(config_path) as f:
-                        content = f.read()
-                    m = re.search(r'name\s*=\s*"([^"]+)"', content)
-                    if m:
-                        name = m.group(1)
-                        break
-                elif config_file == "pyproject.toml":
+                else:
+                    # Cargo.toml and pyproject.toml both use name = "..."
                     with open(config_path) as f:
                         content = f.read()
                     m = re.search(r'name\s*=\s*"([^"]+)"', content)
@@ -101,14 +91,14 @@ def _scan_tech_stack(root: str) -> dict:
         ("build.gradle", "Java/Kotlin", None, "gradle"),
     ]
 
-    for filename, lang, fw, bs in checks:
+    for filename, lang, fw, build_sys in checks:
         if os.path.isfile(os.path.join(root, filename)):
             if lang and lang not in languages:
                 languages.append(lang)
             if fw and fw not in frameworks:
                 frameworks.append(fw)
-            if bs and bs not in build_systems:
-                build_systems.append(bs)
+            if build_sys and build_sys not in build_systems:
+                build_systems.append(build_sys)
 
     # Detect TypeScript specifically
     if os.path.isfile(os.path.join(root, "tsconfig.json")):

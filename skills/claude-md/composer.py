@@ -12,54 +12,51 @@ across updates.
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
-
-SECTIONS_DIR = Path(__file__).resolve().parent / "sections"
 
 MANAGED_START = "<!-- prove:managed:start -->"
 MANAGED_END = "<!-- prove:managed:end -->"
 
 
-def compose(scan: dict, plugin_dir: str | None = None) -> str:
+def compose(project_scan: dict, plugin_dir: str | None = None) -> str:
     """Compose CLAUDE.md from scan results.
 
     Args:
-        scan: Output from scanner.scan_project().
-        plugin_dir: Path to prove plugin. Falls back to scan["plugin_dir"].
+        project_scan: Output from scanner.scan_project().
+        plugin_dir: Path to prove plugin. Falls back to project_scan["plugin_dir"].
 
     Returns:
         The full CLAUDE.md content as a string.
     """
     if plugin_dir is None:
-        plugin_dir = scan.get("plugin_dir", "")
+        plugin_dir = project_scan.get("plugin_dir", "")
 
     parts: list[str] = []
 
     # Header
-    parts.append(_header(scan))
+    parts.append(_header(project_scan))
 
     # Always include: project identity + tech stack
-    parts.append(_section_identity(scan))
+    parts.append(_section_identity(project_scan))
 
     # Structure (if key dirs found)
-    if scan.get("key_dirs"):
-        parts.append(_section_structure(scan))
+    if project_scan.get("key_dirs"):
+        parts.append(_section_structure(project_scan))
 
     # Conventions (if detected)
-    conventions = scan.get("conventions", {})
+    conventions = project_scan.get("conventions", {})
     if conventions.get("naming") and conventions["naming"] != "unknown":
-        parts.append(_section_conventions(scan))
+        parts.append(_section_conventions(project_scan))
 
     # Validation (if .prove.json has validators)
-    prove = scan.get("prove_config", {})
+    prove = project_scan.get("prove_config", {})
     if prove.get("validators"):
-        parts.append(_section_validation(scan))
+        parts.append(_section_validation(project_scan))
 
     # Discovery (if CAFI is available)
-    cafi = scan.get("cafi", {})
+    cafi = project_scan.get("cafi", {})
     if cafi.get("available") or prove.get("has_index"):
-        parts.append(_section_discovery(scan, plugin_dir))
+        parts.append(_section_discovery(project_scan, plugin_dir))
 
     # Prove tools (if prove is configured)
     if prove.get("exists"):
@@ -89,8 +86,8 @@ def compose_subagent_context(scan: dict, plugin_dir: str | None = None) -> str:
     parts.append("")
 
     # Tech stack one-liner
-    ts = scan.get("tech_stack", {})
-    langs = ", ".join(ts.get("languages", [])) or "unknown"
+    tech_stack = scan.get("tech_stack", {})
+    langs = ", ".join(tech_stack.get("languages", [])) or "unknown"
     parts.append(f"**Stack**: {langs}")
 
     # Discovery
@@ -119,20 +116,20 @@ def _header(scan: dict) -> str:
 
 
 def _section_identity(scan: dict) -> str:
-    ts = scan.get("tech_stack", {})
+    tech_stack = scan.get("tech_stack", {})
     lines: list[str] = []
 
-    langs = ts.get("languages", [])
-    fws = ts.get("frameworks", [])
-    bs = ts.get("build_systems", [])
+    langs = tech_stack.get("languages", [])
+    frameworks = tech_stack.get("frameworks", [])
+    build_systems = tech_stack.get("build_systems", [])
 
     stack_parts: list[str] = []
     if langs:
         stack_parts.append(", ".join(langs))
-    if fws:
-        stack_parts.append("+ " + ", ".join(fws))
-    if bs:
-        stack_parts.append(f"({', '.join(bs)})")
+    if frameworks:
+        stack_parts.append("+ " + ", ".join(frameworks))
+    if build_systems:
+        stack_parts.append(f"({', '.join(build_systems)})")
 
     if stack_parts:
         lines.append(" ".join(stack_parts))
