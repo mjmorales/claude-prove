@@ -35,7 +35,7 @@ def is_binary(file_path: str) -> bool:
         with open(file_path, "rb") as f:
             chunk = f.read(8192)
             return b"\x00" in chunk
-    except (OSError, IOError):
+    except OSError:
         return True
 
 
@@ -195,7 +195,7 @@ def save_cache(cache_path: str, cache: dict) -> None:
             json.dump(cache, f, indent=2, sort_keys=True)
             f.write("\n")
         os.replace(tmp_path, cache_path)
-    except BaseException:
+    except BaseException:  # Catch KeyboardInterrupt etc. to ensure temp file cleanup
         # Clean up temp file on failure
         try:
             os.unlink(tmp_path)

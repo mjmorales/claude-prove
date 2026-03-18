@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import subprocess
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -154,12 +153,7 @@ def triage_files(file_paths: list[str]) -> list[str]:
             timeout=TRIAGE_TIMEOUT_SECONDS,
             check=True,
         )
-        raw = result.stdout.strip()
-        # Strip markdown fences if present
-        if raw.startswith("```"):
-            raw = "\n".join(raw.split("\n")[1:])
-        if raw.endswith("```"):
-            raw = "\n".join(raw.split("\n")[:-1])
+        raw = _strip_json_fences(result.stdout)
         selected = json.loads(raw)
         if not isinstance(selected, list):
             logger.warning("Triage returned non-list, using all files")

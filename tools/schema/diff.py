@@ -2,7 +2,6 @@
 
 import json
 from pathlib import Path
-from typing import Any
 
 from tools.schema.migrate import plan_migration
 from tools.schema.schemas import PROVE_SCHEMA, SETTINGS_SCHEMA
