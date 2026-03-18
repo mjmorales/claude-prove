@@ -7,4 +7,4 @@ argument-hint: "[base-branch (default: main)]"
 
 Run a focused quality audit on source files changed in the current branch.
 
-Load and follow the steward-review skill (`skills/steward_review/SKILL.md` from the workflow plugin).
+Load and follow the steward-review skill (`skills/steward-review/SKILL.md` from the workflow plugin).
