@@ -7,16 +7,17 @@
 Takes you from idea to merged code through a structured pipeline:
 
 ```
-/prove:brainstorm  →  /prove:task-planner  →  /prove:plan-step  →  /prove:orchestrator  →  /prove:cleanup
-      │                        │                         │                        │                        │
-.prove/decisions/       .prove/TASK_PLAN.md     .prove/plans/plan_X/    .prove/reports/         .prove/archive/
+/prove:brainstorm  →  /prove:task-planner  →  /prove:plan-step  →  /prove:orchestrator  →  /prove:comprehend  →  /prove:cleanup
+      │                        │                         │                        │                        │                        │
+.prove/decisions/       .prove/TASK_PLAN.md     .prove/plans/plan_X/    .prove/reports/         .prove/learning/         .prove/archive/
 ```
 
 1. **Brainstorm** — Explore options, weigh trade-offs, record decisions
 2. **Task Planner** — Discover requirements via questionnaires, create incremental plans
 3. **Plan Step** — Deep-dive into individual steps: requirements, design decisions, test strategy
 4. **Orchestrator** — Autonomous execution with validation gates and git snapshots
-5. **Cleanup** — Archive artifacts, remove working files, delete branches
+5. **Comprehend** — Socratic quiz on agent-generated diffs to build code comprehension
+6. **Cleanup** — Archive artifacts, remove working files, delete branches
 
 ## Key Features
 
@@ -56,6 +57,9 @@ For manual installation or custom paths, see `scripts/install.sh --help`.
 # Execute autonomously
 /prove:orchestrator
 
+# Quiz yourself on agent-generated code
+/prove:comprehend
+
 # Clean up when done
 /prove:cleanup my-feature
 ```
@@ -76,6 +80,7 @@ skills/
 │   │   ├── handoff-protocol.md    # Inter-agent context passing
 │   │   └── reporter-protocol.md   # Progress & reporting format
 │   └── scripts/
+├── comprehend/              # Socratic quiz for code comprehension
 └── cleanup/                 # Archive & remove artifacts
 scripts/
 ├── init-config.sh              # Tech stack detection → .prove.json
@@ -105,6 +110,7 @@ All prove artifacts are stored under `.prove/` in your project:
 │   └── <task-slug>/
 ├── context/            # Inter-agent handoff context
 │   └── <task-slug>/
+├── learning/           # Comprehension session logs
 ├── archive/            # Archived completed tasks
 ├── TASK_PLAN.md        # Active task plan
 ├── PROGRESS.md         # Live progress (full mode)

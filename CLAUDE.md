@@ -41,5 +41,6 @@ The index describes *when* to read each file, not just what it contains.
 - `/prove:task-planner` — Plan implementation for a task
 - `/prove:orchestrator` — Autonomous execution with validation gates
 - `/prove:brainstorm` — Explore options and record decisions
+- `/prove:comprehend` — Socratic quiz on recent diffs to build code comprehension
 
 <!-- prove:managed:end -->
