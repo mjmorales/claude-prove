@@ -1,0 +1,89 @@
+{
+  "acb_manifest_version": "0.1",
+  "commit_sha": "510bfd41cedace4c8e6c8376f4dc152538cd9d1d",
+  "timestamp": "2026-03-19T13:52:00Z",
+  "intent_groups": [
+    {
+      "id": "acb-hooks",
+      "title": "Git pre-commit/post-commit hooks for intent manifest enforcement",
+      "classification": "explicit",
+      "ambiguity_tags": [],
+      "task_grounding": "The forcing function that rejects commits without intent manifests. Pre-commit validates staged.json exists and has valid structure; post-commit renames to <sha>.json and amends.",
+      "file_refs": [
+        {
+          "path": "packages/acb-core/hooks/pre-commit",
+          "ranges": [
+            "1-109"
+          ],
+          "view_hint": "full_file"
+        },
+        {
+          "path": "packages/acb-core/hooks/post-commit",
+          "ranges": [
+            "1-52"
+          ],
+          "view_hint": "full_file"
+        }
+      ],
+      "annotations": [
+        {
+          "id": "ann-amend-sha-mismatch",
+          "type": "note",
+          "body": "Post-commit amends the commit to include the finalized manifest, which changes the SHA. The manifest's commit_sha and filename reflect the pre-amend SHA. This is acceptable \u2014 the assembler keys on file contents, not SHA matching."
+        },
+        {
+          "id": "ann-python-validation",
+          "type": "judgment_call",
+          "body": "Pre-commit hook uses python3 for JSON validation rather than jq or node. Python3 is more universally available on dev machines. Alternative: shell-only validation (fragile) or node (heavier dependency for a git hook).",
+          "ambiguity_tags": [
+            "convention"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "acb-cli-commands",
+      "title": "CLI install, uninstall, and assemble commands",
+      "classification": "explicit",
+      "ambiguity_tags": [],
+      "task_grounding": "Standardized install step via `acb-review install` and assembly via `acb-review assemble` as requested. Install supports --link (core.hooksPath) and --copy modes.",
+      "file_refs": [
+        {
+          "path": "packages/acb-core/src/cli/install.ts",
+          "ranges": [
+            "1-136"
+          ],
+          "view_hint": "full_file"
+        },
+        {
+          "path": "packages/acb-core/src/cli/assemble.ts",
+          "ranges": [
+            "1-184"
+          ],
+          "view_hint": "full_file"
+        },
+        {
+          "path": "packages/acb-core/src/cli/index.ts",
+          "ranges": [
+            "5-6",
+            "11-12",
+            "15",
+            "19-20",
+            "23",
+            "28-31",
+            "40-46",
+            "69-77"
+          ],
+          "view_hint": "changed_region"
+        },
+        {
+          "path": "packages/acb-core/package.json",
+          "ranges": [
+            "21-22"
+          ],
+          "view_hint": "changed_region"
+        }
+      ]
+    }
+  ]
+}
