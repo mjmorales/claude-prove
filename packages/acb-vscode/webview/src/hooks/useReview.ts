@@ -1,5 +1,5 @@
 import type { GroupVerdictValue, OverallVerdictValue } from "@acb/core";
-import type { WebToExt } from "../../../src/bridge";
+import type { WebToExt } from "../types";
 
 interface VsCodeApi {
   postMessage(msg: unknown): void;
