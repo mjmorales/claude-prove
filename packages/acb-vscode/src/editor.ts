@@ -26,6 +26,7 @@ export async function navigateToFileRef(
 
   const document = await vscode.workspace.openTextDocument(uri);
   const editor = await vscode.window.showTextDocument(document, {
+    viewColumn: vscode.ViewColumn.Beside,
     preserveFocus: false,
   });
 

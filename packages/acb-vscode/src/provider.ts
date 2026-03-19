@@ -127,7 +127,7 @@ export class AcbReviewEditorProvider
 
       const saveReview = (review: ReviewStateDocument) => {
         fs.writeFileSync(reviewPath, serializeReview(review), "utf-8");
-        sendMessage({ type: "acb:review-saved" });
+        sendMessage({ type: "acb:review-saved", review });
       };
 
       try {
@@ -184,14 +184,16 @@ export class AcbReviewEditorProvider
           }
 
           case "navigate:group-diff": {
-            try {
-              const acb: AcbDocument = JSON.parse(rawContent);
-              const group = acb.intent_groups.find((g) => g.id === msg.groupId);
-              if (group) {
-                openGroupDiffs(group, acb.change_set_ref, diffTabTracker);
-              }
-            } catch {
-              sendMessage({ type: "acb:error", message: "Failed to open group diffs" });
+            const acb: AcbDocument = JSON.parse(rawContent);
+            const group = acb.intent_groups.find((g) => g.id === msg.groupId);
+            if (group) {
+              openGroupDiffs(group, acb.change_set_ref, diffTabTracker).catch(
+                (err) => {
+                  const detail = err instanceof Error ? err.message : String(err);
+                  sendMessage({ type: "acb:error", message: `Failed to open group diffs: ${detail}` });
+                  vscode.window.showErrorMessage(`ACB diff error: ${detail}`);
+                },
+              );
             }
             break;
           }

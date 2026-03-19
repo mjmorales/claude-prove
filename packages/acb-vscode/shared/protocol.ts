@@ -17,7 +17,7 @@ import type {
 /** Extension host -> Webview */
 export type ExtToWeb =
   | { type: "acb:load"; acb: AcbDocument; review: ReviewStateDocument | null }
-  | { type: "acb:review-saved" }
+  | { type: "acb:review-saved"; review: ReviewStateDocument }
   | { type: "acb:error"; message: string };
 
 /** Webview -> Extension host */

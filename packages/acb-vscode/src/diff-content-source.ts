@@ -23,7 +23,16 @@ export class LocalGitSource implements DiffContentSource {
         { cwd: this.workspaceRoot, maxBuffer: 10 * 1024 * 1024 },
         (error, stdout) => {
           if (error) {
-            reject(new Error(`git show ${ref}:${filePath} failed: ${error.message}`));
+            // File doesn't exist at this ref (new file or deleted file) — return empty
+            if (
+              error.message.includes('does not exist') ||
+              error.message.includes('exists on disk') ||
+              error.message.includes('bad revision')
+            ) {
+              resolve('');
+            } else {
+              reject(new Error(`git show ${ref}:${filePath} failed: ${error.message}`));
+            }
           } else {
             resolve(stdout);
           }

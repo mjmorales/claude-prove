@@ -26,7 +26,7 @@ export function useAcb(): AcbState {
           setError(msg.message);
           break;
         case "acb:review-saved":
-          // Could display a transient indicator
+          setReview(msg.review);
           break;
       }
     };

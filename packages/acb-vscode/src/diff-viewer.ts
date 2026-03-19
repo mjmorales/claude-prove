@@ -111,13 +111,8 @@ export async function openGroupDiffs(
     fileRef: ref,
   }));
 
-  // Try multi-diff editor first
-  const multiDiffOpened = await tryMultiDiffEditor(group, resources);
-
-  if (!multiDiffOpened) {
-    // Fall back to sequential vscode.diff tabs
-    await openSequentialDiffs(group, resources);
-  }
+  // Open sequential vscode.diff tabs (stable public API)
+  await openSequentialDiffs(group, resources);
 
   // Give VS Code a moment to open tabs, then track them
   await new Promise((resolve) => setTimeout(resolve, 200));
@@ -128,32 +123,6 @@ interface DiffResource {
   originalUri: vscode.Uri;
   modifiedUri: vscode.Uri;
   fileRef: { path: string; ranges: string[]; view_hint?: string };
-}
-
-/**
- * Attempt to open the multi-diff editor (internal VS Code API).
- * Returns true if successful, false if the command is unavailable.
- */
-async function tryMultiDiffEditor(
-  group: IntentGroup,
-  resources: DiffResource[],
-): Promise<boolean> {
-  try {
-    await vscode.commands.executeCommand('_workbench.openMultiDiffEditor', {
-      title: `Changes: ${group.title}`,
-      multiDiffSourceUri: vscode.Uri.parse(
-        `acb-diff-source:/${encodeURIComponent(group.id)}`,
-      ),
-      resources: resources.map((r) => ({
-        originalUri: r.originalUri,
-        modifiedUri: r.modifiedUri,
-      })),
-    });
-    return true;
-  } catch {
-    // Command not available — fall back to sequential diffs
-    return false;
-  }
 }
 
 /**
@@ -173,7 +142,7 @@ async function openSequentialDiffs(
       modifiedUri,
       title,
       {
-        // Only focus the first diff tab
+        viewColumn: vscode.ViewColumn.Beside,
         preserveFocus: i > 0,
       },
     );
