@@ -1,0 +1,109 @@
+{
+  "acb_version": "0.3.0",
+  "generated_at": "2026-03-19T00:00:00Z",
+  "agent_id": "test-agent",
+  "task_description": "Example ACB for testing the VS Code extension",
+  "source_hash": "abc123",
+  "intent_groups": [
+    {
+      "id": "ig-1",
+      "title": "Add user authentication middleware",
+      "classification": "feature",
+      "description": "Implements JWT-based authentication middleware that validates tokens on protected routes.",
+      "rationale": "The API needs auth before exposing user data endpoints.",
+      "file_refs": [
+        {
+          "path": "src/middleware/auth.ts",
+          "ranges": ["10-45"],
+          "view_hint": "full"
+        },
+        {
+          "path": "src/routes/index.ts",
+          "ranges": ["5-8", "22-30"],
+          "view_hint": "diff"
+        }
+      ],
+      "annotations": [
+        {
+          "id": "ann-1",
+          "type": "design_choice",
+          "content": "Used RS256 algorithm for JWT verification to support key rotation.",
+          "file_ref": {
+            "path": "src/middleware/auth.ts",
+            "ranges": ["15-20"],
+            "view_hint": "full"
+          }
+        }
+      ],
+      "dependencies": []
+    },
+    {
+      "id": "ig-2",
+      "title": "Add rate limiting to API endpoints",
+      "classification": "feature",
+      "description": "Adds sliding window rate limiting using Redis to prevent API abuse.",
+      "rationale": "Production traffic analysis showed potential for abuse on public endpoints.",
+      "file_refs": [
+        {
+          "path": "src/middleware/rate-limit.ts",
+          "ranges": ["1-60"],
+          "view_hint": "full"
+        }
+      ],
+      "annotations": [
+        {
+          "id": "ann-2",
+          "type": "ambiguity",
+          "content": "Redis connection pooling strategy needs review — currently using default pool size.",
+          "severity": "medium",
+          "file_ref": {
+            "path": "src/middleware/rate-limit.ts",
+            "ranges": ["25-30"],
+            "view_hint": "full"
+          }
+        }
+      ],
+      "dependencies": ["ig-1"]
+    },
+    {
+      "id": "ig-3",
+      "title": "Refactor error handling",
+      "classification": "refactor",
+      "description": "Centralizes error handling into a single middleware with structured error responses.",
+      "rationale": "Error handling was inconsistent across routes, making debugging difficult.",
+      "file_refs": [
+        {
+          "path": "src/middleware/error-handler.ts",
+          "ranges": ["1-40"],
+          "view_hint": "full"
+        },
+        {
+          "path": "src/types/errors.ts",
+          "ranges": ["1-25"],
+          "view_hint": "full"
+        }
+      ],
+      "annotations": [],
+      "dependencies": []
+    }
+  ],
+  "open_questions": [
+    {
+      "id": "oq-1",
+      "question": "Should rate limiting apply to authenticated admin endpoints?",
+      "context": "Currently rate limiting is applied uniformly. Admin endpoints might need different limits."
+    }
+  ],
+  "negative_space": [
+    {
+      "description": "Database migrations",
+      "reason": "not_in_scope",
+      "detail": "Auth middleware reads from existing user table — no schema changes needed."
+    },
+    {
+      "description": "Session management",
+      "reason": "deferred",
+      "detail": "Session-based auth is planned for phase 2; this PR only implements stateless JWT."
+    }
+  ]
+}
