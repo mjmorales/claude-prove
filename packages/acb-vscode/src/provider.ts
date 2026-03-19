@@ -10,7 +10,7 @@ import {
   setOverallVerdict,
   serializeReview,
 } from "@acb/core";
-import type { ExtToWeb, WebToExt } from "./bridge.js";
+import type { ExtToWeb, WebToExt } from "../shared/protocol.js";
 import { navigateToFileRef } from "./editor.js";
 import { DecorationManager } from "./decoration-manager.js";
 
@@ -178,6 +178,11 @@ export class AcbReviewEditorProvider
               navigateToFileRef(workspaceRoot, msg.path, msg.ranges);
             }
             break;
+          }
+
+          default: {
+            const _exhaustive: never = msg;
+            console.warn("Unhandled message type:", (msg as { type: string }).type);
           }
         }
       } catch (err) {
