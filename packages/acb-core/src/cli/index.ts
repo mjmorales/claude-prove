@@ -6,6 +6,7 @@ import { runAssemble } from "./assemble.js";
 import { runInstall, runUninstall } from "./install.js";
 import { runCheckManifest } from "./check_manifest.js";
 import { runPostCommit } from "./post_commit.js";
+import { runResolve, runFix, runDiscuss } from "./review_prompt.js";
 
 const USAGE = `acb-review - Agent Change Brief CLI
 
@@ -17,6 +18,9 @@ Usage:
   acb-review validate <file> [--json] [--acb <path>]
   acb-review generate --base <ref> --head <ref> [--output <path>]
   acb-review assemble [--base <ref>] [--head <ref>] [--manifests <dir>] [--output <path>] [--task <file>]
+  acb-review resolve [--acb <path>] [--output <path>]
+  acb-review fix [--acb <path>] [--output <path>]
+  acb-review discuss [--acb <path>] [--output <path>]
   acb-review --help
 
 Commands:
@@ -27,13 +31,17 @@ Commands:
   validate         Validate an .acb.json or .acb-review.json file
   generate         Generate a skeleton .acb.json from a git diff
   assemble         Merge per-commit intent manifests into a single .acb.json
+  resolve          Generate approval summary prompt (after all groups accepted)
+  fix              Generate fix prompt for rejected/discussion groups
+  discuss          Generate discussion prompt for groups needing review dialog
 
 Options:
   --help     Show this help message
 
 Install options:
-  --link     Use core.hooksPath instead of copying hooks (stays in sync with package updates)
-  --force    Overwrite existing hooks
+  --link       Use core.hooksPath instead of copying hooks (stays in sync with package updates)
+  --force      Overwrite existing hooks
+  --framework  Scaffold framework-specific glue (supported: claudecode)
 
 Validate options:
   --json     Output results as JSON
@@ -86,6 +94,15 @@ function main(): void {
       break;
     case "post-commit":
       exitCode = runPostCommit(commandArgs);
+      break;
+    case "resolve":
+      exitCode = runResolve(commandArgs);
+      break;
+    case "fix":
+      exitCode = runFix(commandArgs);
+      break;
+    case "discuss":
+      exitCode = runDiscuss(commandArgs);
       break;
     default:
       console.error(`Unknown command: ${command}`);
