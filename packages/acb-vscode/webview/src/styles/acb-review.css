@@ -1,0 +1,459 @@
+/* ACB Review Webview Styles — uses VS Code CSS variables for theming */
+
+.acb-review {
+  padding: 16px;
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size, 13px);
+  color: var(--vscode-editor-foreground);
+  background: var(--vscode-editor-background);
+  line-height: 1.5;
+}
+
+/* ---- Header ---- */
+
+.acb-header {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.acb-header h1 {
+  font-size: 18px;
+  margin: 0 0 8px 0;
+}
+
+.acb-header-meta {
+  font-size: 12px;
+  opacity: 0.75;
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+/* ---- Progress Bar ---- */
+
+.progress-bar-container {
+  margin-bottom: 16px;
+}
+
+.progress-bar-label {
+  font-size: 12px;
+  margin-bottom: 4px;
+  opacity: 0.8;
+}
+
+.progress-bar-track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--vscode-input-background);
+  overflow: hidden;
+  display: flex;
+}
+
+.progress-bar-segment {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+.progress-bar-segment--accepted {
+  background: #388e3c;
+}
+
+.progress-bar-segment--rejected {
+  background: #d32f2f;
+}
+
+.progress-bar-segment--needs_discussion {
+  background: #f9a825;
+}
+
+.progress-bar-segment--pending {
+  background: #616161;
+}
+
+/* ---- Cards ---- */
+
+.intent-card {
+  border: 2px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  margin-bottom: 12px;
+  overflow: hidden;
+  transition: border-color 0.2s ease;
+}
+
+.intent-card--accepted {
+  border-color: #388e3c;
+}
+
+.intent-card--rejected {
+  border-color: #d32f2f;
+}
+
+.intent-card--needs_discussion {
+  border-color: #f9a825;
+}
+
+.intent-card--pending {
+  border-color: var(--vscode-panel-border);
+}
+
+.intent-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  user-select: none;
+}
+
+.intent-card-header:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.intent-card-chevron {
+  font-size: 10px;
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+  transition: transform 0.15s ease;
+}
+
+.intent-card-chevron--open {
+  transform: rotate(90deg);
+}
+
+.intent-card-title {
+  font-size: 14px;
+  font-weight: 600;
+  flex: 1;
+  margin: 0;
+}
+
+.intent-card-body {
+  padding: 12px;
+  border-top: 1px solid var(--vscode-panel-border);
+}
+
+/* ---- Badges ---- */
+
+.classification-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.classification-badge--explicit {
+  background: #2e7d32;
+  color: #fff;
+}
+
+.classification-badge--inferred {
+  background: #f9a825;
+  color: #1a1a1a;
+}
+
+.classification-badge--speculative {
+  background: #d32f2f;
+  color: #fff;
+}
+
+/* ---- Ambiguity Tags ---- */
+
+.ambiguity-tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: var(--vscode-badge-background, #555);
+  color: var(--vscode-badge-foreground, #fff);
+  white-space: nowrap;
+}
+
+.tags-row {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+/* ---- File Ref Links ---- */
+
+.file-ref-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  color: var(--vscode-textLink-foreground);
+  cursor: pointer;
+  text-decoration: none;
+  padding: 2px 0;
+}
+
+.file-ref-link:hover {
+  text-decoration: underline;
+}
+
+.file-ref-hint {
+  font-size: 10px;
+  opacity: 0.6;
+  font-family: var(--vscode-font-family);
+}
+
+.file-refs-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 8px 0;
+}
+
+/* ---- Annotations ---- */
+
+.annotation-block {
+  border-left: 3px solid var(--vscode-panel-border);
+  padding: 8px 12px;
+  margin: 8px 0;
+  background: var(--vscode-sideBar-background, transparent);
+  border-radius: 0 4px 4px 0;
+}
+
+.annotation-block--judgment_call {
+  border-left-color: #f9a825;
+}
+
+.annotation-block--note {
+  border-left-color: var(--vscode-textLink-foreground);
+}
+
+.annotation-block--flag {
+  border-left-color: #d32f2f;
+}
+
+.annotation-type-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  opacity: 0.8;
+  margin-bottom: 4px;
+}
+
+.annotation-body {
+  font-size: 13px;
+  margin: 4px 0;
+}
+
+/* ---- Collapsible Section ---- */
+
+.collapsible-section {
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  margin-bottom: 12px;
+  overflow: hidden;
+}
+
+.collapsible-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  font-size: 13px;
+  font-weight: 600;
+  user-select: none;
+}
+
+.collapsible-header:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.collapsible-body {
+  padding: 12px;
+  border-top: 1px solid var(--vscode-panel-border);
+}
+
+/* ---- Task Grounding ---- */
+
+.task-grounding {
+  font-size: 12px;
+  opacity: 0.85;
+  margin: 8px 0;
+  white-space: pre-wrap;
+}
+
+/* ---- Causal Links ---- */
+
+.causal-link {
+  font-size: 12px;
+  opacity: 0.8;
+  margin: 4px 0;
+}
+
+.causal-link-target {
+  font-weight: 600;
+}
+
+/* ---- Verdict Buttons ---- */
+
+.verdict-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
+.verdict-btn {
+  padding: 4px 14px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  background: var(--vscode-button-secondaryBackground, #333);
+  color: var(--vscode-button-secondaryForeground, #ccc);
+  cursor: pointer;
+  font-size: 12px;
+  font-family: var(--vscode-font-family);
+  transition: background 0.15s;
+}
+
+.verdict-btn:hover {
+  background: var(--vscode-button-secondaryHoverBackground, #444);
+}
+
+.verdict-btn--active {
+  border-color: transparent;
+}
+
+.verdict-btn--accepted.verdict-btn--active {
+  background: #388e3c;
+  color: #fff;
+}
+
+.verdict-btn--rejected.verdict-btn--active {
+  background: #d32f2f;
+  color: #fff;
+}
+
+.verdict-btn--needs_discussion.verdict-btn--active {
+  background: #f9a825;
+  color: #1a1a1a;
+}
+
+/* ---- Text Areas ---- */
+
+.acb-textarea {
+  width: 100%;
+  min-height: 60px;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  border-radius: 4px;
+  background: var(--vscode-input-background);
+  color: var(--vscode-input-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: 12px;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.acb-textarea:focus {
+  outline: 1px solid var(--vscode-focusBorder);
+}
+
+/* ---- Negative Space ---- */
+
+.negative-space-item {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.negative-space-item:last-child {
+  border-bottom: none;
+}
+
+.negative-space-path {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+}
+
+.negative-space-reason {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  opacity: 0.7;
+  margin-top: 2px;
+}
+
+.negative-space-explanation {
+  font-size: 12px;
+  margin-top: 4px;
+  opacity: 0.85;
+}
+
+/* ---- Open Questions ---- */
+
+.open-question-item {
+  padding: 10px 0;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.open-question-item:last-child {
+  border-bottom: none;
+}
+
+.open-question-text {
+  font-weight: 600;
+  font-size: 13px;
+  margin-bottom: 4px;
+}
+
+.open-question-context {
+  font-size: 12px;
+  opacity: 0.8;
+  margin-bottom: 4px;
+}
+
+.open-question-default {
+  font-size: 11px;
+  opacity: 0.65;
+  font-style: italic;
+}
+
+/* ---- Overall Verdict ---- */
+
+.overall-section {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 2px solid var(--vscode-panel-border);
+}
+
+.overall-section h2 {
+  font-size: 15px;
+  margin: 0 0 12px 0;
+}
+
+/* ---- Error / Loading ---- */
+
+.acb-error {
+  color: var(--vscode-errorForeground);
+  padding: 16px;
+}
+
+.acb-loading {
+  padding: 16px;
+  opacity: 0.7;
+}
+
+/* ---- Section Label ---- */
+
+.section-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  opacity: 0.6;
+  margin: 12px 0 4px 0;
+}
