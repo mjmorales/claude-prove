@@ -365,11 +365,12 @@ Generate `.prove/reports/<task-slug>/report.md`:
 
 ## How to Review
 
-Run `/prove:review` for a structured review manifest grouped by semantic concern
-with VS Code-friendly file links. Or use git commands:
+Run `/prove:review` to generate an Agent Change Brief (ACB) that groups changes
+by intent. Open the resulting `.acb.json` in VS Code/Cursor for the full review
+experience (diff viewing, accept/reject per intent group). Or use git commands:
 
 ```bash
-# Structured review (recommended)
+# Generate ACB (recommended)
 # /prove:review
 
 # View all changes
