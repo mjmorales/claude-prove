@@ -1,11 +1,14 @@
 import * as vscode from "vscode";
 import * as path from "node:path";
 import * as fs from "node:fs";
-import type {
-  AcbDocument,
-  ReviewStateDocument,
-  GroupVerdictValue,
-  OverallVerdictValue,
+import type { AcbDocument, ReviewStateDocument } from "@acb/core";
+import {
+  createBlankReview,
+  setGroupVerdict,
+  setAnnotationResponse,
+  answerQuestion,
+  setOverallVerdict,
+  serializeReview,
 } from "@acb/core";
 import type { ExtToWeb, WebToExt } from "./bridge.js";
 
@@ -90,111 +93,74 @@ export class AcbReviewEditorProvider
     // Handle messages from the webview
     webviewPanel.webview.onDidReceiveMessage((msg: WebToExt) => {
       const reviewPath = this.getReviewPath(document.uri.fsPath);
+      const rawContent = document.getText();
 
       const loadReview = (): ReviewStateDocument => {
         if (fs.existsSync(reviewPath)) {
           return JSON.parse(fs.readFileSync(reviewPath, "utf-8"));
         }
-        // Create a blank review
-        const acb: AcbDocument = JSON.parse(document.getText());
-        return {
-          acb_version: acb.acb_version,
-          acb_hash: "",
-          acb_id: acb.id,
-          reviewer: "vscode-user",
-          group_verdicts: acb.intent_groups.map((g) => ({
-            group_id: g.id,
-            verdict: "pending" as const,
-          })),
-          overall_verdict: "pending",
-          updated_at: new Date().toISOString(),
-        };
+        const acb: AcbDocument = JSON.parse(rawContent);
+        return createBlankReview(acb, "vscode-user", rawContent);
       };
 
       const saveReview = (review: ReviewStateDocument) => {
-        review.updated_at = new Date().toISOString();
-        fs.writeFileSync(reviewPath, JSON.stringify(review, null, 2), "utf-8");
+        fs.writeFileSync(reviewPath, serializeReview(review), "utf-8");
         sendMessage({ type: "acb:review-saved" });
       };
 
       try {
         switch (msg.type) {
           case "review:set-verdict": {
-            const review = loadReview();
-            const gv = review.group_verdicts.find(
-              (g) => g.group_id === msg.groupId,
+            const review = setGroupVerdict(
+              loadReview(),
+              msg.groupId,
+              msg.verdict,
+              msg.comment,
             );
-            if (gv) {
-              gv.verdict = msg.verdict;
-              if (msg.comment !== undefined) {
-                gv.comment = msg.comment;
-              }
-            }
             saveReview(review);
             break;
           }
 
           case "review:set-comment": {
-            const review = loadReview();
-            const gv = review.group_verdicts.find(
-              (g) => g.group_id === msg.groupId,
+            const review = setGroupVerdict(
+              loadReview(),
+              msg.groupId,
+              loadReview().group_verdicts.find(
+                (g) => g.group_id === msg.groupId,
+              )?.verdict ?? "pending",
+              msg.comment,
             );
-            if (gv) {
-              gv.comment = msg.comment;
-            }
             saveReview(review);
             break;
           }
 
           case "review:set-overall": {
-            const review = loadReview();
-            review.overall_verdict = msg.verdict;
-            if (msg.comment !== undefined) {
-              review.overall_comment = msg.comment;
-            }
+            const review = setOverallVerdict(
+              loadReview(),
+              msg.verdict,
+              msg.comment,
+            );
             saveReview(review);
             break;
           }
 
           case "review:answer-question": {
-            const review = loadReview();
-            const answers = review.question_answers ?? [];
-            const existing = answers.find(
-              (qa) => qa.question_id === msg.questionId,
+            const review = answerQuestion(
+              loadReview(),
+              msg.questionId,
+              msg.answer,
             );
-            if (existing) {
-              existing.answer = msg.answer;
-            } else {
-              answers.push({
-                question_id: msg.questionId,
-                answer: msg.answer,
-              });
-            }
-            review.question_answers = answers;
             saveReview(review);
             break;
           }
 
           case "review:annotation-response": {
-            const review = loadReview();
-            const gv = review.group_verdicts.find(
-              (g) => g.group_id === msg.groupId,
+            const review = setAnnotationResponse(
+              loadReview(),
+              msg.groupId,
+              msg.annotationId,
+              msg.response,
             );
-            if (gv) {
-              const responses = gv.annotation_responses ?? [];
-              const existing = responses.find(
-                (ar) => ar.annotation_id === msg.annotationId,
-              );
-              if (existing) {
-                existing.response = msg.response;
-              } else {
-                responses.push({
-                  annotation_id: msg.annotationId,
-                  response: msg.response,
-                });
-              }
-              gv.annotation_responses = responses;
-            }
             saveReview(review);
             break;
           }

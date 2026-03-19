@@ -7,7 +7,7 @@ import type {
 import { computeAcbHash } from "./hash.js";
 
 function nowISO(): string {
-  return new Date().toISOString();
+  return new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
 }
 
 /**
@@ -17,8 +17,9 @@ function nowISO(): string {
 export function createBlankReview(
   acb: AcbDocument,
   reviewer: string,
+  rawAcbContent?: string,
 ): ReviewStateDocument {
-  const acbContent = JSON.stringify(acb);
+  const acbContent = rawAcbContent ?? JSON.stringify(acb);
   return {
     acb_version: acb.acb_version,
     acb_hash: computeAcbHash(acbContent),
