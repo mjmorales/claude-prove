@@ -13,6 +13,7 @@ interface Props {
   onSetVerdict: (groupId: string, verdict: GroupVerdictValue, comment?: string) => void;
   onRespondToAnnotation: (groupId: string, annotationId: string, response: string) => void;
   onNavigateFile: (path: string, ranges: string[]) => void;
+  onShowDiff: (groupId: string) => void;
 }
 
 const VERDICT_BUTTONS: { value: GroupVerdictValue; label: string }[] = [
@@ -28,6 +29,7 @@ export function IntentGroupCard({
   onSetVerdict,
   onRespondToAnnotation,
   onNavigateFile,
+  onShowDiff,
 }: Props): React.ReactElement {
   const [expanded, setExpanded] = useState(false);
   const [groundingVisible, setGroundingVisible] = useState(false);
@@ -44,6 +46,16 @@ export function IntentGroupCard({
         <span className={`intent-card-chevron ${expanded ? "intent-card-chevron--open" : ""}`}>&#9654;</span>
         <span className="intent-card-title">{group.title}</span>
         <ClassificationBadge classification={group.classification} />
+        <button
+          className="show-diff-btn"
+          title="Show Changes"
+          onClick={(e) => {
+            e.stopPropagation();
+            onShowDiff(group.id);
+          }}
+        >
+          Show Changes
+        </button>
       </div>
 
       {expanded && (

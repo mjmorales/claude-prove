@@ -57,6 +57,7 @@ export function App(): React.ReactElement {
           onSetVerdict={actions.setVerdict}
           onRespondToAnnotation={actions.respondToAnnotation}
           onNavigateFile={actions.navigateToFile}
+          onShowDiff={actions.showGroupDiff}
         />
       ))}
 

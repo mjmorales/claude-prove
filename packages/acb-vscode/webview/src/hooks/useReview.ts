@@ -28,6 +28,7 @@ export interface ReviewActions {
   answerQuestion(questionId: string, answer: string): void;
   respondToAnnotation(groupId: string, annotationId: string, response: string): void;
   navigateToFile(path: string, ranges: string[]): void;
+  showGroupDiff(groupId: string): void;
 }
 
 export function useReview(): ReviewActions {
@@ -46,6 +47,9 @@ export function useReview(): ReviewActions {
     },
     navigateToFile(path: string, ranges: string[]) {
       post({ type: "navigate:file-ref", path, ranges });
+    },
+    showGroupDiff(groupId: string) {
+      post({ type: "navigate:group-diff", groupId });
     },
   };
 }
