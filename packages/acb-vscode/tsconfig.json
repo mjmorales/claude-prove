@@ -2,10 +2,10 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "src",
+    "rootDir": ".",
     "jsx": "react-jsx"
   },
-  "include": ["src"],
+  "include": ["src", "shared"],
   "references": [
     { "path": "../acb-core" }
   ]

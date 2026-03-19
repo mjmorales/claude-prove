@@ -140,19 +140,6 @@ export class AcbReviewEditorProvider
             break;
           }
 
-          case "review:set-comment": {
-            const review = setGroupVerdict(
-              loadReview(),
-              msg.groupId,
-              loadReview().group_verdicts.find(
-                (g) => g.group_id === msg.groupId,
-              )?.verdict ?? "pending",
-              msg.comment,
-            );
-            saveReview(review);
-            break;
-          }
-
           case "review:set-overall": {
             const review = setOverallVerdict(
               loadReview(),
