@@ -7,6 +7,7 @@
   "engines": {
     "vscode": "^1.85.0"
   },
+  "license": "MIT",
   "categories": ["Other"],
   "activationEvents": [],
   "main": "./dist/extension.js",
@@ -36,7 +37,7 @@
     "build:ext": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
     "build:webview": "esbuild webview/src/index.tsx --bundle --outfile=dist/webview/index.js --format=esm --platform=browser --loader:.tsx=tsx --loader:.ts=ts --loader:.css=css",
     "watch": "npm run build:ext -- --watch",
-    "package": "npm run build && npx @vscode/vsce package --no-dependencies",
+    "package": "npm run build && npx @vscode/vsce package --no-dependencies --allow-missing-repository",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
