@@ -32,7 +32,7 @@
     ]
   },
   "scripts": {
-    "prebuild": "npm run build --workspace=packages/acb-core",
+    "prebuild": "cd ../acb-core && npm run build",
     "build": "npm run build:ext && npm run build:webview",
     "build:ext": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
     "build:webview": "esbuild webview/src/index.tsx --bundle --outfile=dist/webview/index.js --format=esm --platform=browser --loader:.tsx=tsx --loader:.ts=ts --loader:.css=css",
