@@ -35,6 +35,42 @@ export function createBlankReview(
 }
 
 /**
+ * Reconcile an existing review against a (possibly updated) ACB.
+ * - Preserves verdicts for groups that still exist in the ACB
+ * - Adds new groups as "pending"
+ * - Removes verdicts for groups no longer in the ACB
+ * - Updates acb_hash and acb_id to match the current ACB
+ */
+export function reconcileReview(
+  review: ReviewStateDocument,
+  acb: AcbDocument,
+  rawAcbContent?: string,
+): ReviewStateDocument {
+  const acbContent = rawAcbContent ?? JSON.stringify(acb);
+  const acbHash = computeAcbHash(acbContent);
+
+  if (review.acb_hash === acbHash) {
+    return review;
+  }
+
+  const existingByGroupId = new Map(
+    review.group_verdicts.map((g) => [g.group_id, g]),
+  );
+
+  return {
+    ...review,
+    acb_version: acb.acb_version,
+    acb_hash: acbHash,
+    acb_id: acb.id,
+    group_verdicts: acb.intent_groups.map((g) => {
+      const existing = existingByGroupId.get(g.id);
+      return existing ? { ...existing } : { group_id: g.id, verdict: "pending" as const };
+    }),
+    updated_at: nowISO(),
+  };
+}
+
+/**
  * Set the verdict for a specific intent group.
  * Returns a new ReviewStateDocument (immutable update).
  * Throws if groupId is not found.

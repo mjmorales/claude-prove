@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import type { AcbDocument, ReviewStateDocument } from "@acb/core";
 import {
   createBlankReview,
+  reconcileReview,
   setGroupVerdict,
   setAnnotationResponse,
   answerQuestion,
@@ -118,10 +119,11 @@ export class AcbReviewEditorProvider
       const rawContent = document.getText();
 
       const loadReview = (): ReviewStateDocument => {
-        if (fs.existsSync(reviewPath)) {
-          return JSON.parse(fs.readFileSync(reviewPath, "utf-8"));
-        }
         const acb: AcbDocument = JSON.parse(rawContent);
+        if (fs.existsSync(reviewPath)) {
+          const existing: ReviewStateDocument = JSON.parse(fs.readFileSync(reviewPath, "utf-8"));
+          return reconcileReview(existing, acb, rawContent);
+        }
         return createBlankReview(acb, "vscode-user", rawContent);
       };
 

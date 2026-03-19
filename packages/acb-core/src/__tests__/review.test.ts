@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   createBlankReview,
+  reconcileReview,
   setGroupVerdict,
   setAnnotationResponse,
   answerQuestion,
@@ -162,6 +163,74 @@ describe("setOverallVerdict", () => {
     const updated = setOverallVerdict(review, "changes_requested", "Fix tests");
     expect(updated.overall_verdict).toBe("changes_requested");
     expect(updated.overall_comment).toBe("Fix tests");
+  });
+});
+
+describe("reconcileReview", () => {
+  it("returns unchanged review when acb_hash matches", () => {
+    const review = createBlankReview(TEST_ACB, "reviewer-1");
+    const reconciled = reconcileReview(review, TEST_ACB);
+    expect(reconciled.group_verdicts).toEqual(review.group_verdicts);
+    expect(reconciled.acb_hash).toBe(review.acb_hash);
+  });
+
+  it("adds new groups as pending when ACB gains groups", () => {
+    const review = createBlankReview(TEST_ACB, "reviewer-1");
+    const accepted = setGroupVerdict(review, "group-1", "accepted", "LGTM");
+
+    const updatedAcb: AcbDocument = {
+      ...TEST_ACB,
+      id: "new-acb-id",
+      intent_groups: [
+        ...TEST_ACB.intent_groups,
+        {
+          id: "group-3",
+          title: "New group",
+          classification: "explicit",
+          ambiguity_tags: [],
+          task_grounding: "New work.",
+          file_refs: [],
+        },
+      ],
+    };
+
+    const reconciled = reconcileReview(accepted, updatedAcb);
+    expect(reconciled.group_verdicts).toHaveLength(3);
+    expect(reconciled.group_verdicts.find((g) => g.group_id === "group-1")?.verdict).toBe("accepted");
+    expect(reconciled.group_verdicts.find((g) => g.group_id === "group-3")?.verdict).toBe("pending");
+    expect(reconciled.acb_id).toBe("new-acb-id");
+  });
+
+  it("removes verdicts for groups no longer in ACB", () => {
+    const review = createBlankReview(TEST_ACB, "reviewer-1");
+    const updatedAcb: AcbDocument = {
+      ...TEST_ACB,
+      id: "trimmed-acb",
+      intent_groups: [TEST_ACB.intent_groups[0]],
+    };
+
+    const reconciled = reconcileReview(review, updatedAcb);
+    expect(reconciled.group_verdicts).toHaveLength(1);
+    expect(reconciled.group_verdicts[0].group_id).toBe("group-1");
+  });
+
+  it("preserves annotation responses on existing groups", () => {
+    const review = createBlankReview(TEST_ACB, "reviewer-1");
+    const withAnnotation = setAnnotationResponse(review, "group-1", "ann-1", "Noted");
+
+    const updatedAcb: AcbDocument = {
+      ...TEST_ACB,
+      id: "updated-id",
+      intent_groups: [
+        ...TEST_ACB.intent_groups,
+        { id: "group-3", title: "New", classification: "explicit", ambiguity_tags: [], task_grounding: ".", file_refs: [] },
+      ],
+    };
+
+    const reconciled = reconcileReview(withAnnotation, updatedAcb);
+    const g1 = reconciled.group_verdicts.find((g) => g.group_id === "group-1");
+    expect(g1?.annotation_responses).toHaveLength(1);
+    expect(g1?.annotation_responses?.[0].response).toBe("Noted");
   });
 });
 
