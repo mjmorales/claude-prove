@@ -11,6 +11,8 @@ import {
   serializeReview,
 } from "@acb/core";
 import type { ExtToWeb, WebToExt } from "./bridge.js";
+import { navigateToFileRef } from "./editor.js";
+import { DecorationManager } from "./decoration-manager.js";
 
 /**
  * Custom editor provider for .acb.json files.
@@ -56,6 +58,8 @@ export class AcbReviewEditorProvider
       webviewPanel.webview.postMessage(msg);
     };
 
+    const decorationManager = new DecorationManager();
+
     const loadDocument = () => {
       try {
         const acb: AcbDocument = JSON.parse(document.getText());
@@ -64,6 +68,11 @@ export class AcbReviewEditorProvider
 
         if (fs.existsSync(reviewPath)) {
           review = JSON.parse(fs.readFileSync(reviewPath, "utf-8"));
+        }
+
+        decorationManager.setAcb(acb);
+        for (const editor of vscode.window.visibleTextEditors) {
+          decorationManager.updateEditor(editor);
         }
 
         sendMessage({ type: "acb:load", acb, review });
@@ -86,8 +95,18 @@ export class AcbReviewEditorProvider
       },
     );
 
+    const editorSubscription = vscode.window.onDidChangeActiveTextEditor(
+      (editor) => {
+        if (editor) {
+          decorationManager.updateEditor(editor);
+        }
+      },
+    );
+
     webviewPanel.onDidDispose(() => {
       changeSubscription.dispose();
+      editorSubscription.dispose();
+      decorationManager.dispose();
     });
 
     // Handle messages from the webview
@@ -166,10 +185,11 @@ export class AcbReviewEditorProvider
           }
 
           case "navigate:file-ref": {
-            // Stub: will be implemented in Task 3.3
-            vscode.window.showInformationMessage(
-              `Navigate to ${msg.path} (ranges: ${msg.ranges.join(", ")})`,
-            );
+            const workspaceRoot =
+              vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            if (workspaceRoot) {
+              navigateToFileRef(workspaceRoot, msg.path, msg.ranges);
+            }
             break;
           }
         }

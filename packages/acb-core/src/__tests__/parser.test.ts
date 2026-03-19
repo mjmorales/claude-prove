@@ -148,7 +148,7 @@ describe("parseAcbDocument", () => {
 
   it("returns error for invalid ambiguity_tags enum", () => {
     const doc = structuredClone(VALID_ACB);
-    doc.intent_groups[0].ambiguity_tags = ["bad_tag" as any];
+    (doc.intent_groups[0].ambiguity_tags as string[]) = ["bad_tag"];
     const result = parseAcbDocument(JSON.stringify(doc));
     expect(result.ok).toBe(false);
     if (!result.ok) {
