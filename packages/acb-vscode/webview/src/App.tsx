@@ -1,91 +1,108 @@
-import React, { useEffect, useState } from "react";
-import type { AcbDocument, ReviewStateDocument } from "@acb/core";
+import React, { useState } from "react";
+import type { OverallVerdictValue } from "@acb/core";
+import { useAcb } from "./hooks/useAcb";
+import { useReview } from "./hooks/useReview";
+import { ProgressBar } from "./components/ProgressBar";
+import { IntentGroupCard } from "./components/IntentGroupCard";
+import { OpenQuestionSection } from "./components/OpenQuestionSection";
+import { NegativeSpaceSection } from "./components/NegativeSpaceSection";
+import "./styles/acb-review.css";
 
-// Acquire the VS Code API (provided by the webview host)
-const vscode = (window as unknown as { acquireVsCodeApi: () => VsCodeApi }).acquireVsCodeApi();
-
-interface VsCodeApi {
-  postMessage(msg: unknown): void;
-  getState(): unknown;
-  setState(state: unknown): void;
-}
-
-interface LoadedState {
-  acb: AcbDocument;
-  review: ReviewStateDocument | null;
-}
+const OVERALL_BUTTONS: { value: OverallVerdictValue; label: string }[] = [
+  { value: "approved", label: "Approve" },
+  { value: "changes_requested", label: "Request Changes" },
+];
 
 export function App(): React.ReactElement {
-  const [state, setState] = useState<LoadedState | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const handler = (event: MessageEvent) => {
-      const msg = event.data;
-      switch (msg.type) {
-        case "acb:load":
-          setState({ acb: msg.acb, review: msg.review });
-          setError(null);
-          break;
-        case "acb:error":
-          setError(msg.message);
-          break;
-        case "acb:review-saved":
-          // Could show a toast or update indicator
-          break;
-      }
-    };
-
-    window.addEventListener("message", handler);
-    return () => window.removeEventListener("message", handler);
-  }, []);
+  const { acb, review, error } = useAcb();
+  const actions = useReview();
+  const [overallComment, setOverallComment] = useState("");
 
   if (error) {
-    return <div style={{ color: "var(--vscode-errorForeground)", padding: 16 }}>Error: {error}</div>;
+    return <div className="acb-error">Error: {error}</div>;
   }
 
-  if (!state) {
-    return <div style={{ padding: 16 }}>ACB Review Loading...</div>;
+  if (!acb) {
+    return <div className="acb-loading">ACB Review Loading...</div>;
   }
 
-  const { acb, review } = state;
+  const groupTitles = new Map(acb.intent_groups.map((g) => [g.id, g.title]));
+  const verdicts = review?.group_verdicts ?? [];
+  const verdictMap = new Map(verdicts.map((v) => [v.group_id, v]));
+  const questionAnswers = review?.question_answers ?? [];
+  const currentOverall = review?.overall_verdict ?? "pending";
 
   return (
-    <div style={{ padding: 16, fontFamily: "var(--vscode-font-family)" }}>
-      <h1 style={{ fontSize: 18, marginBottom: 8 }}>ACB Review</h1>
-      <p><strong>ID:</strong> {acb.id}</p>
-      <p><strong>Version:</strong> {acb.acb_version}</p>
-      <p><strong>Generated:</strong> {acb.generated_at}</p>
-      <p><strong>Intent Groups:</strong> {acb.intent_groups.length}</p>
+    <div className="acb-review">
+      {/* Header */}
+      <div className="acb-header">
+        <h1>ACB Review</h1>
+        <div className="acb-header-meta">
+          <span>Version: {acb.acb_version}</span>
+          <span>Generated: {acb.generated_at}</span>
+          {acb.agent_id && <span>Agent: {acb.agent_id}</span>}
+        </div>
+      </div>
 
-      {acb.intent_groups.map((group) => {
-        const verdict = review?.group_verdicts.find(
-          (gv) => gv.group_id === group.id,
-        );
-        return (
-          <div
-            key={group.id}
-            style={{
-              border: "1px solid var(--vscode-panel-border)",
-              padding: 12,
-              marginTop: 8,
-              borderRadius: 4,
-            }}
-          >
-            <h2 style={{ fontSize: 14, margin: 0 }}>{group.title}</h2>
-            <p style={{ fontSize: 12, opacity: 0.7 }}>
-              {group.classification} &middot; {group.file_refs.length} file(s)
-              {verdict ? ` · ${verdict.verdict}` : ""}
-            </p>
-          </div>
-        );
-      })}
+      {/* Progress */}
+      <ProgressBar groups={acb.intent_groups} verdicts={verdicts} />
 
-      {review && (
-        <p style={{ marginTop: 16, fontSize: 12, opacity: 0.7 }}>
-          Overall: {review.overall_verdict} &middot; Last updated: {review.updated_at}
-        </p>
+      {/* Intent Groups */}
+      {acb.intent_groups.map((group) => (
+        <IntentGroupCard
+          key={group.id}
+          group={group}
+          verdict={verdictMap.get(group.id)}
+          groupTitles={groupTitles}
+          onSetVerdict={actions.setVerdict}
+          onRespondToAnnotation={actions.respondToAnnotation}
+          onNavigateFile={actions.navigateToFile}
+        />
+      ))}
+
+      {/* Open Questions */}
+      {acb.open_questions && (
+        <OpenQuestionSection
+          questions={acb.open_questions}
+          answers={questionAnswers}
+          onAnswer={actions.answerQuestion}
+        />
       )}
+
+      {/* Negative Space */}
+      {acb.negative_space && <NegativeSpaceSection entries={acb.negative_space} />}
+
+      {/* Overall Verdict */}
+      <div className="overall-section">
+        <h2>Overall Verdict</h2>
+        <div className="verdict-buttons">
+          {OVERALL_BUTTONS.map((btn) => (
+            <button
+              key={btn.value}
+              className={`verdict-btn verdict-btn--${btn.value === "approved" ? "accepted" : "rejected"} ${currentOverall === btn.value ? "verdict-btn--active" : ""}`}
+              onClick={() => actions.setOverall(btn.value, overallComment || undefined)}
+            >
+              {btn.label}
+            </button>
+          ))}
+        </div>
+        <textarea
+          className="acb-textarea"
+          placeholder="Overall comment (optional)..."
+          value={overallComment}
+          onChange={(e) => setOverallComment(e.target.value)}
+          onBlur={() => {
+            if (overallComment.trim() && currentOverall !== "pending") {
+              actions.setOverall(currentOverall as OverallVerdictValue, overallComment);
+            }
+          }}
+        />
+        {review && (
+          <div style={{ fontSize: 11, opacity: 0.6, marginTop: 8 }}>
+            Last updated: {review.updated_at}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
