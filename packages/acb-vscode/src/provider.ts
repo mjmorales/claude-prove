@@ -214,6 +214,15 @@ export class AcbReviewEditorProvider
       ),
     );
 
+    const cssUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(
+        this.context.extensionUri,
+        "dist",
+        "webview",
+        "index.css",
+      ),
+    );
+
     const nonce = getNonce();
 
     return /* html */ `<!DOCTYPE html>
@@ -222,8 +231,9 @@ export class AcbReviewEditorProvider
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline';">
+    content="default-src 'none'; script-src 'nonce-${nonce}'; style-src ${webview.cspSource} 'unsafe-inline';">
   <title>ACB Review</title>
+  <link rel="stylesheet" href="${cssUri}">
 </head>
 <body>
   <div id="root"></div>
