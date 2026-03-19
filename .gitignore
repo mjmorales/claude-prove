@@ -5,3 +5,8 @@ tools/cafi/__pycache__/
 .ruff_cache/
 __pycache__/
 *.bak
+
+# Node.js / TypeScript
+node_modules/
+dist/
+*.tsbuildinfo
