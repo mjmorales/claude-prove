@@ -193,6 +193,18 @@ export interface ReviewStateDocument {
   updated_at: string;
 }
 
+// --- Intent Manifest (per-commit declaration) ---
+
+export interface IntentManifest {
+  acb_manifest_version: string;
+  commit_sha: string;
+  timestamp: string;
+  intent_groups: IntentGroup[];
+  negative_space?: NegativeSpaceEntry[];
+  open_questions?: OpenQuestion[];
+  agent_id?: string;
+}
+
 // --- Utility Types ---
 
 export interface ParseError {

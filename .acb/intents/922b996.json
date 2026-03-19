@@ -1,0 +1,83 @@
+{
+  "acb_manifest_version": "0.1",
+  "commit_sha": "922b996e0ce1fd143a815138301ec376466b398b",
+  "timestamp": "2026-03-19T13:50:00Z",
+  "intent_groups": [
+    {
+      "id": "intent-manifest-core",
+      "title": "Intent manifest types, parser, and assembler",
+      "classification": "explicit",
+      "ambiguity_tags": [],
+      "task_grounding": "Implements per-commit intent declaration system as decided in acb-commit-time-intents decision record. Agents declare intent at commit time; assembler merges manifests into a final ACB.",
+      "file_refs": [
+        {
+          "path": "packages/acb-core/src/types.ts",
+          "ranges": [
+            "196-207"
+          ],
+          "view_hint": "changed_region"
+        },
+        {
+          "path": "packages/acb-core/src/parser.ts",
+          "ranges": [
+            "9",
+            "551-616"
+          ],
+          "view_hint": "changed_region"
+        },
+        {
+          "path": "packages/acb-core/src/assembler.ts",
+          "ranges": [
+            "1-256"
+          ],
+          "view_hint": "full_file"
+        },
+        {
+          "path": "packages/acb-core/src/index.ts",
+          "ranges": [
+            "5-6"
+          ],
+          "view_hint": "changed_region"
+        }
+      ],
+      "annotations": [
+        {
+          "id": "ann-assembler-merge",
+          "type": "judgment_call",
+          "body": "Assembler uses first-commit-wins for group metadata (title, classification, grounding) when merging groups with the same id across manifests. Alternative: last-commit-wins or require identical values. First-commit-wins chosen because the earliest commit has the most focused context.",
+          "ambiguity_tags": [
+            "assumption"
+          ]
+        },
+        {
+          "id": "ann-manifest-empty-groups",
+          "type": "note",
+          "body": "parseIntentManifest accepts empty intent_groups arrays at the structural level. Semantic validation (non-empty groups) is enforced at assembly time or by the pre-commit hook."
+        }
+      ]
+    },
+    {
+      "id": "intent-manifest-tests",
+      "title": "Tests for manifest parser and assembler",
+      "classification": "inferred",
+      "ambiguity_tags": [],
+      "task_grounding": "Test coverage for new manifest parser (9 tests) and assembler (10 tests) \u2014 standard practice for new modules.",
+      "file_refs": [
+        {
+          "path": "packages/acb-core/src/__tests__/manifest-parser.test.ts",
+          "ranges": [
+            "1-123"
+          ],
+          "view_hint": "full_file"
+        },
+        {
+          "path": "packages/acb-core/src/__tests__/assembler.test.ts",
+          "ranges": [
+            "1-305"
+          ],
+          "view_hint": "full_file"
+        }
+      ]
+    }
+  ]
+}

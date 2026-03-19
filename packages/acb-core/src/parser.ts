@@ -6,6 +6,7 @@
 
 import type {
   AcbDocument,
+  IntentManifest,
   ReviewStateDocument,
   ParseResult,
   ParseError,
@@ -546,4 +547,70 @@ export function parseReviewState(json: string): ParseResult<ReviewStateDocument>
     return { ok: false, errors };
   }
   return { ok: true, data: o as unknown as ReviewStateDocument };
+}
+
+/**
+ * Parse a JSON string into a validated IntentManifest.
+ * Returns all structural errors collected, not just the first.
+ */
+export function parseIntentManifest(json: string): ParseResult<IntentManifest> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(json);
+  } catch (e) {
+    return { ok: false, errors: [{ path: "$", message: `Invalid JSON: ${(e as Error).message}` }] };
+  }
+
+  const errors: ParseError[] = [];
+  const root = "$";
+
+  if (!checkType(raw, "object", root, errors)) {
+    return { ok: false, errors };
+  }
+
+  const o = raw as Record<string, unknown>;
+
+  // Required string fields
+  for (const field of ["acb_manifest_version", "commit_sha", "timestamp"] as const) {
+    const v = requireField(o, field, root, errors);
+    if (v !== undefined) checkType(v, "string", `${root}.${field}`, errors);
+  }
+
+  // intent_groups (required, reuses existing validator)
+  const igs = requireField(o, "intent_groups", root, errors);
+  if (igs !== undefined) {
+    if (checkType(igs, "array", `${root}.intent_groups`, errors)) {
+      (igs as unknown[]).forEach((ig, i) =>
+        validateIntentGroup(ig, `${root}.intent_groups[${i}]`, errors),
+      );
+    }
+  }
+
+  // negative_space (optional)
+  if ("negative_space" in o && o.negative_space !== undefined) {
+    if (checkType(o.negative_space, "array", `${root}.negative_space`, errors)) {
+      (o.negative_space as unknown[]).forEach((ns, i) =>
+        validateNegativeSpaceEntry(ns, `${root}.negative_space[${i}]`, errors),
+      );
+    }
+  }
+
+  // open_questions (optional)
+  if ("open_questions" in o && o.open_questions !== undefined) {
+    if (checkType(o.open_questions, "array", `${root}.open_questions`, errors)) {
+      (o.open_questions as unknown[]).forEach((oq, i) =>
+        validateOpenQuestion(oq, `${root}.open_questions[${i}]`, errors),
+      );
+    }
+  }
+
+  // agent_id (optional string)
+  if ("agent_id" in o && o.agent_id !== undefined) {
+    checkType(o.agent_id, "string", `${root}.agent_id`, errors);
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+  return { ok: true, data: o as unknown as IntentManifest };
 }
