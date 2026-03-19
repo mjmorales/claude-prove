@@ -16,7 +16,7 @@ Create Claude Code slash commands following best practices for structure, frontm
 Use `AskUserQuestion` for discrete choices:
 
 1. **Command Location**
-   Use `AskUserQuestion` with header "Location":
+   Use `AskUserQuestion` with header "Location" (when presenting ≤3 choices, include a "Research & proceed" option per the Delegation pattern in `references/interaction-patterns.md`):
    - "Project" (`.claude/commands/` — versioned with the repo)
    - "User Global" (`~/.claude/commands/` — available across all projects)
    - "Plugin" (`commands/` — if adding to a prove-style plugin)

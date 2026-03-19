@@ -13,7 +13,7 @@ Orchestrate the creation, revision, and audit of technical specifications. Deleg
 
 ### Step 1: Determine Mode
 
-Use `AskUserQuestion` with header "Mode" if not obvious from context:
+Use `AskUserQuestion` with header "Mode" if not obvious from context. When presenting ≤3 choices, include a "Research & proceed" option per the Delegation pattern in `references/interaction-patterns.md`:
 
 - **New Draft** — create a spec from scratch based on user description, decision records, or conversation context
 - **Revise** — edit an existing spec (user provides the spec or you find it in `specs/`)

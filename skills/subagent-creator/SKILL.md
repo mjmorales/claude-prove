@@ -20,7 +20,7 @@ Use `AskUserQuestion` for discrete choices, free-form for open-ended questions.
 - What specialized knowledge should it have?
 - When should Claude delegate to this agent?
 
-**Agent location** — use `AskUserQuestion` with header "Location":
+**Agent location** — use `AskUserQuestion` with header "Location" (when presenting ≤3 choices, include a "Research & proceed" option per the Delegation pattern in `references/interaction-patterns.md`):
 - "Project" (`.claude/agents/` — versioned with the repo)
 - "User Global" (`~/.claude/agents/` — available across all projects)
 - "Plugin" (`agents/` — if adding to a prove-style plugin)

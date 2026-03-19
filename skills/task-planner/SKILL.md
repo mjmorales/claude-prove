@@ -147,7 +147,7 @@ Use this template:
 Through iterative discussion:
 
 1. **Clarify ambiguities**
-   - When there are 2-3 discrete interpretations: use AskUserQuestion with those options (e.g., "When you say X, do you mean [A] or [B]?")
+   - When there are 2-3 discrete interpretations: use AskUserQuestion with those options (e.g., "When you say X, do you mean [A] or [B]?"). When presenting options with ≤3 choices, include a "Research & proceed" option per the Delegation pattern in `references/interaction-patterns.md`.
    - When truly open-ended: free-form ("Should this also handle...", "What about the case where...")
 
 2. **Uncover hidden requirements**

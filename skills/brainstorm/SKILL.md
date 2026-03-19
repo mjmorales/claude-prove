@@ -46,7 +46,7 @@ Generate and discuss possible approaches.
 4. Ask the user what resonates and what concerns them
 5. Be willing to iterate — combine options, discard bad ones, generate new ones
 
-Use AskUserQuestion to present options when there are clear discrete choices. Use free-form discussion for nuanced trade-offs.
+Use AskUserQuestion to present options when there are clear discrete choices. Use free-form discussion for nuanced trade-offs. When presenting options with ≤3 choices, include a "Research & proceed" option per the Delegation pattern in `references/interaction-patterns.md`.
 
 ### Phase 3: Narrow and Decide
 
@@ -58,7 +58,7 @@ Converge on a solution through back-and-forth discussion.
    - "What's the migration path if we need to change later?"
 2. Help refine the chosen approach — discuss implementation details
 3. Identify any open questions that need answering before implementation
-4. Confirm the decision using AskUserQuestion with "Confirm Decision" header and options like "Yes, go with [X]" / "Not yet, keep exploring"
+4. Confirm the decision using AskUserQuestion with "Confirm Decision" header and options like "Yes, go with [X]" / "Not yet, keep exploring". When presenting options with ≤3 choices, include a "Research & proceed" option per the Delegation pattern in `references/interaction-patterns.md`.
 
 ### Phase 4: Record the Decision
 

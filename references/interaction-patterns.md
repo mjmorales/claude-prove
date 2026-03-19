@@ -8,6 +8,7 @@ Canonical reference for how prove skills and commands collect user input. All bi
 2. **Multiple-choice decisions** (2-4 discrete options) → `AskUserQuestion` with 2-4 options
 3. **Approval gates** (PRD, plan, permissions, cleanup) → `AskUserQuestion` with Approve + alternative option
 4. **Open-ended clarification** (no discrete options) → free-form text, no `AskUserQuestion`
+5. **Delegation** (user wants Claude to research and decide) → `AskUserQuestion` with "Research & proceed" option
 
 The built-in "Other" option is automatically added by `AskUserQuestion` — do not add a manual escape-hatch option.
 
@@ -21,6 +22,7 @@ The built-in "Other" option is automatically added by `AskUserQuestion` — do n
 | Deadlock resolution | Yes — 3 options | "Force Approve / Fix Manually / Abort" |
 | "What problem are you solving?" | No — open-ended | Free-form discussion |
 | "What should happen when [edge case]?" | No — open-ended | Free-form discussion |
+| Delegate research + decision | Yes — include "Research & proceed" | "Option A / Option B / Research & proceed" |
 | Design tradeoff discussion | No — nuanced | Free-form, then AskUserQuestion to finalize |
 
 ## Patterns
@@ -85,6 +87,30 @@ AskUserQuestion:
       description: "<Brief tradeoff summary>"
     # ... up to 4 options
 ```
+
+### Delegation
+
+Used when the user may want Claude to research options, choose the best one, and proceed autonomously instead of picking manually.
+
+```
+AskUserQuestion:
+  question: "<Describe the decision and context>"
+  header: "<Context>"
+  options:
+    - label: "<Option 1>"
+      description: "<Tradeoffs>"
+    - label: "<Option 2>"
+      description: "<Tradeoffs>"
+    - label: "Research & proceed"
+      description: "I'll investigate, choose the best option, and proceed autonomously"
+```
+
+**When to offer "Research & proceed":** Only when there are ≤3 substantive options (to stay within the 4-option cap, since the built-in "Other" is always added). Do not add it to approval gates — those are intentionally human-in-the-loop.
+
+**Delegation protocol** (blast-radius aware):
+
+- **Low-stakes** (code style, utility choices, config, naming): Research silently → choose → act → report "I went with X because Y"
+- **High-stakes** (architecture, data models, public APIs, approval gates): Research → present 2-3 sentence summary + recommendation → proceed without confirmation gate
 
 ## Writing Good Options
 

@@ -30,7 +30,7 @@ Scan for existing integrations before asking the user to configure anything manu
 
 ### Phase 2: Platform Selection
 
-Use `AskUserQuestion` with header "Platform":
+Use `AskUserQuestion` with header "Platform". When presenting ≤3 choices (e.g., after discovery narrows options), include a "Research & proceed" option per the Delegation pattern in `references/interaction-patterns.md`:
 
 - "Slack (Webhook)" — posts to a Slack channel via `SLACK_WEBHOOK_URL` env var and curl
 - "Discord (Webhook)" — posts to a Discord channel via `DISCORD_WEBHOOK_URL` env var and curl

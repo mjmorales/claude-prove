@@ -18,7 +18,7 @@ Generate structured documentation optimized for LLM consumption and agent recoll
 
 ## Subject Identification
 
-Use `AskUserQuestion` with header "Subject" if the type isn't obvious from context:
+Use `AskUserQuestion` with header "Subject" if the type isn't obvious from context. When presenting ≤3 choices, include a "Research & proceed" option per the Delegation pattern in `references/interaction-patterns.md`:
 - "Agent" (`.md` agent definition with frontmatter)
 - "API" (HTTP handlers, REST endpoints, GraphQL resolvers)
 - "Module" (package exports, public interfaces)

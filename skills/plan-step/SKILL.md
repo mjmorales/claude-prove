@@ -268,7 +268,7 @@ Use these question patterns to gather requirements:
 - When open-ended: free-form ("What should happen when [edge case]?", "Are there any constraints on [aspect]?")
 
 **For design decisions:**
-- Use AskUserQuestion to present approaches: "I see two approaches here — [Option A] (simpler but limited) or [Option B] (complex but flexible). Which aligns better with your needs?"
+- Use AskUserQuestion to present approaches: "I see two approaches here — [Option A] (simpler but limited) or [Option B] (complex but flexible). Which aligns better with your needs?" When presenting options with ≤3 choices, include a "Research & proceed" option per the Delegation pattern in `references/interaction-patterns.md`.
 - "Would you prefer to optimize for [quality A] or [quality B]?" — use AskUserQuestion with the two qualities as options
 
 **For validation:**
