@@ -1,5 +1,5 @@
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, copyFileSync, chmodSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, copyFileSync, chmodSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const HOOKS = ["pre-commit", "post-commit"];
@@ -86,9 +86,24 @@ export function runInstall(args: string[]): number {
     console.log(`Created ${intentsDir}`);
   }
 
+  // Ensure .acb/intents/ is gitignored (ephemeral working artifacts)
+  const gitignorePath = join(gitRoot, ".acb", ".gitignore");
+  const gitignoreContent = "# Intent manifests are ephemeral — the assembled ACB is the artifact\nintents/\n";
+  if (!existsSync(gitignorePath)) {
+    writeFileSync(gitignorePath, gitignoreContent, "utf-8");
+    console.log(`Created ${gitignorePath} (intents/ gitignored)`);
+  } else {
+    const existing = readFileSync(gitignorePath, "utf-8");
+    if (!existing.includes("intents/")) {
+      writeFileSync(gitignorePath, existing.trimEnd() + "\nintents/\n", "utf-8");
+      console.log(`Updated ${gitignorePath} (added intents/)`);
+    }
+  }
+
   console.log("");
   console.log("ACB intent hooks installed. Agents must now write");
   console.log(".acb/intents/staged.json before each commit.");
+  console.log("Progressive ACB output: .acb/review.acb.json");
   console.log("");
   console.log("Humans can bypass with: git commit --no-verify");
 

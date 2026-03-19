@@ -4,23 +4,29 @@ import { runValidate } from "./validate.js";
 import { runGenerate } from "./generate.js";
 import { runAssemble } from "./assemble.js";
 import { runInstall, runUninstall } from "./install.js";
+import { runCheckManifest } from "./check_manifest.js";
+import { runPostCommit } from "./post_commit.js";
 
 const USAGE = `acb-review - Agent Change Brief CLI
 
 Usage:
   acb-review install [--link] [--force]
   acb-review uninstall
+  acb-review check-manifest
+  acb-review post-commit
   acb-review validate <file> [--json] [--acb <path>]
   acb-review generate --base <ref> --head <ref> [--output <path>]
   acb-review assemble [--base <ref>] [--head <ref>] [--manifests <dir>] [--output <path>] [--task <file>]
   acb-review --help
 
 Commands:
-  install    Install ACB git hooks (pre-commit + post-commit)
-  uninstall  Remove ACB git hooks
-  validate   Validate an .acb.json or .acb-review.json file
-  generate   Generate a skeleton .acb.json from a git diff
-  assemble   Merge per-commit intent manifests into a single .acb.json
+  install          Install ACB git hooks (pre-commit + post-commit)
+  uninstall        Remove ACB git hooks
+  check-manifest   Validate staged intent manifest (used by pre-commit hook)
+  post-commit      Finalize manifest and progressively assemble ACB (used by post-commit hook)
+  validate         Validate an .acb.json or .acb-review.json file
+  generate         Generate a skeleton .acb.json from a git diff
+  assemble         Merge per-commit intent manifests into a single .acb.json
 
 Options:
   --help     Show this help message
@@ -74,6 +80,12 @@ function main(): void {
       break;
     case "uninstall":
       exitCode = runUninstall(commandArgs);
+      break;
+    case "check-manifest":
+      exitCode = runCheckManifest(commandArgs);
+      break;
+    case "post-commit":
+      exitCode = runPostCommit(commandArgs);
       break;
     default:
       console.error(`Unknown command: ${command}`);
