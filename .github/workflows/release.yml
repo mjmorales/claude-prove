@@ -53,7 +53,7 @@ jobs:
             BUMP="major"
           elif echo "$COMMITS" | grep -qE "^feat(\(.+\))?:"; then
             BUMP="minor"
-          elif echo "$COMMITS" | grep -qE "^fix(\(.+\))?:"; then
+          elif echo "$COMMITS" | grep -qE "^(fix|docs|refactor|perf|style|build)(\(.+\))?:"; then
             BUMP="patch"
           fi
 
@@ -114,6 +114,14 @@ jobs:
             if [ -n "$FIXES" ]; then
               echo "### Fixes"
               echo "$FIXES"
+              echo ""
+            fi
+
+            # Other changes (docs, refactor, perf, style, build)
+            OTHER=$(git log --pretty=format:"- %s (%h)" "$RANGE" | grep -E "^- (docs|refactor|perf|style|build)" || true)
+            if [ -n "$OTHER" ]; then
+              echo "### Other"
+              echo "$OTHER"
               echo ""
             fi
 
