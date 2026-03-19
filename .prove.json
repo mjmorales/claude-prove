@@ -8,7 +8,8 @@
     "tools": "tools/",
     "plugin": ".",
     "cafi": "tools/cafi/",
-    "specs": "specs/"
+    "specs": "specs/",
+    "packages": "packages/"
   },
   "validators": [
     {
