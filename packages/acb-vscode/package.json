@@ -7,6 +7,7 @@
   "engines": {
     "vscode": "^1.85.0"
   },
+  "license": "MIT",
   "categories": ["Other"],
   "activationEvents": [],
   "main": "./dist/extension.js",
@@ -31,20 +32,24 @@
     ]
   },
   "scripts": {
-    "build": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
-    "build:webview": "esbuild webview/src/index.tsx --bundle --outfile=dist/webview/index.js --format=esm --loader:.tsx=tsx --loader:.ts=ts",
-    "watch": "npm run build -- --watch",
+    "prebuild": "cd ../acb-core && npm run build",
+    "build": "npm run build:ext && npm run build:webview",
+    "build:ext": "esbuild src/extension.ts --bundle --outfile=dist/extension.js --external:vscode --format=cjs --platform=node",
+    "build:webview": "esbuild webview/src/index.tsx --bundle --outfile=dist/webview/index.js --format=esm --platform=browser --loader:.tsx=tsx --loader:.ts=ts --loader:.css=css",
+    "watch": "npm run build:ext -- --watch",
+    "package": "npm run build && npx @vscode/vsce package --no-dependencies --allow-missing-repository",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "@types/react": "^18.3.0",
+    "@types/react-dom": "^18.3.0",
     "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.26.0",
     "esbuild": "^0.20.0",
-    "typescript": "^5.4.0",
     "react": "^18.3.0",
     "react-dom": "^18.3.0",
-    "@types/react": "^18.3.0",
-    "@types/react-dom": "^18.3.0"
+    "typescript": "^5.4.0"
   },
   "dependencies": {
     "@acb/core": "*"

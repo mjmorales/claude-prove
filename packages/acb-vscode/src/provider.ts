@@ -10,7 +10,7 @@ import {
   setOverallVerdict,
   serializeReview,
 } from "@acb/core";
-import type { ExtToWeb, WebToExt } from "./bridge.js";
+import type { ExtToWeb, WebToExt } from "../shared/protocol.js";
 import { navigateToFileRef } from "./editor.js";
 import { DecorationManager } from "./decoration-manager.js";
 
@@ -140,19 +140,6 @@ export class AcbReviewEditorProvider
             break;
           }
 
-          case "review:set-comment": {
-            const review = setGroupVerdict(
-              loadReview(),
-              msg.groupId,
-              loadReview().group_verdicts.find(
-                (g) => g.group_id === msg.groupId,
-              )?.verdict ?? "pending",
-              msg.comment,
-            );
-            saveReview(review);
-            break;
-          }
-
           case "review:set-overall": {
             const review = setOverallVerdict(
               loadReview(),
@@ -192,6 +179,11 @@ export class AcbReviewEditorProvider
             }
             break;
           }
+
+          default: {
+            const _exhaustive: never = msg;
+            console.warn("Unhandled message type:", (msg as { type: string }).type);
+          }
         }
       } catch (err) {
         const message =
@@ -214,6 +206,15 @@ export class AcbReviewEditorProvider
       ),
     );
 
+    const cssUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(
+        this.context.extensionUri,
+        "dist",
+        "webview",
+        "index.css",
+      ),
+    );
+
     const nonce = getNonce();
 
     return /* html */ `<!DOCTYPE html>
@@ -222,8 +223,9 @@ export class AcbReviewEditorProvider
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy"
-    content="default-src 'none'; script-src 'nonce-${nonce}'; style-src 'unsafe-inline';">
+    content="default-src 'none'; script-src 'nonce-${nonce}'; style-src ${webview.cspSource} 'unsafe-inline';">
   <title>ACB Review</title>
+  <link rel="stylesheet" href="${cssUri}">
 </head>
 <body>
   <div id="root"></div>

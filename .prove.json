@@ -9,7 +9,8 @@
     "plugin": ".",
     "cafi": "tools/cafi/",
     "specs": "specs/",
-    "packages": "packages/"
+    "acb-core": "packages/acb-core/",
+    "acb-vscode": "packages/acb-vscode/"
   },
   "validators": [
     {

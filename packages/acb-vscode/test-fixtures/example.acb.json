@@ -1,0 +1,132 @@
+{
+  "acb_version": "0.1.0",
+  "id": "acb-test-001",
+  "generated_at": "2026-03-19T00:00:00Z",
+  "agent_id": "test-agent",
+  "change_set_ref": {
+    "base_ref": "abc1234",
+    "head_ref": "def5678"
+  },
+  "task_statement": {
+    "turns": [
+      {
+        "turn_id": "t-1",
+        "role": "user",
+        "content": "Add authentication middleware and rate limiting to the API, and refactor error handling."
+      }
+    ]
+  },
+  "intent_groups": [
+    {
+      "id": "ig-1",
+      "title": "Add user authentication middleware",
+      "classification": "explicit",
+      "ambiguity_tags": [],
+      "task_grounding": "Implements JWT-based authentication middleware that validates tokens on protected routes.",
+      "file_refs": [
+        {
+          "path": "src/middleware/auth.ts",
+          "ranges": ["10-45"],
+          "view_hint": "full_file"
+        },
+        {
+          "path": "src/routes/index.ts",
+          "ranges": ["5-8", "22-30"],
+          "view_hint": "changed_region"
+        }
+      ],
+      "annotations": [
+        {
+          "id": "ann-1",
+          "type": "judgment_call",
+          "body": "Used RS256 algorithm for JWT verification to support key rotation.",
+          "file_refs": [
+            {
+              "path": "src/middleware/auth.ts",
+              "ranges": ["15-20"],
+              "view_hint": "full_file"
+            }
+          ]
+        }
+      ],
+      "causal_links": []
+    },
+    {
+      "id": "ig-2",
+      "title": "Add rate limiting to API endpoints",
+      "classification": "inferred",
+      "ambiguity_tags": ["assumption"],
+      "task_grounding": "Adds sliding window rate limiting using Redis to prevent API abuse.",
+      "file_refs": [
+        {
+          "path": "src/middleware/rate-limit.ts",
+          "ranges": ["1-60"],
+          "view_hint": "full_file"
+        }
+      ],
+      "annotations": [
+        {
+          "id": "ann-2",
+          "type": "flag",
+          "body": "Redis connection pooling strategy needs review — currently using default pool size.",
+          "ambiguity_tags": ["underspecified"],
+          "file_refs": [
+            {
+              "path": "src/middleware/rate-limit.ts",
+              "ranges": ["25-30"],
+              "view_hint": "full_file"
+            }
+          ]
+        }
+      ],
+      "causal_links": [
+        {
+          "target_group_id": "ig-1",
+          "rationale": "Rate limiting depends on auth middleware to identify authenticated vs anonymous requests."
+        }
+      ]
+    },
+    {
+      "id": "ig-3",
+      "title": "Refactor error handling",
+      "classification": "speculative",
+      "ambiguity_tags": ["scope_creep"],
+      "task_grounding": "Centralizes error handling into a single middleware with structured error responses.",
+      "file_refs": [
+        {
+          "path": "src/middleware/error-handler.ts",
+          "ranges": ["1-40"],
+          "view_hint": "full_file"
+        },
+        {
+          "path": "src/types/errors.ts",
+          "ranges": ["1-25"],
+          "view_hint": "full_file"
+        }
+      ],
+      "annotations": [],
+      "causal_links": []
+    }
+  ],
+  "open_questions": [
+    {
+      "id": "oq-1",
+      "question": "Should rate limiting apply to authenticated admin endpoints?",
+      "context": "Currently rate limiting is applied uniformly. Admin endpoints might need different limits.",
+      "default_behavior": "Apply the same rate limits to all endpoints including admin.",
+      "related_group_ids": ["ig-2"]
+    }
+  ],
+  "negative_space": [
+    {
+      "path": "src/db/migrations/",
+      "reason": "out_of_scope",
+      "explanation": "Auth middleware reads from existing user table — no schema changes needed."
+    },
+    {
+      "path": "src/middleware/session.ts",
+      "reason": "would_require_escalation",
+      "explanation": "Session-based auth is planned for phase 2; this PR only implements stateless JWT."
+    }
+  ]
+}

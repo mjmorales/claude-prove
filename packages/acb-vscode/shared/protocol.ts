@@ -1,3 +1,12 @@
+/**
+ * Shared protocol types for messages exchanged between the VS Code
+ * extension host and the ACB webview. Both esbuild bundles import
+ * from this file so the two sides stay in sync.
+ *
+ * IMPORTANT: This file must contain ONLY pure TypeScript type
+ * definitions -- no runtime code, no Node-specific imports.
+ */
+
 import type {
   AcbDocument,
   ReviewStateDocument,
@@ -5,13 +14,13 @@ import type {
   OverallVerdictValue,
 } from "@acb/core";
 
-// Extension → Webview messages
+/** Extension host -> Webview */
 export type ExtToWeb =
   | { type: "acb:load"; acb: AcbDocument; review: ReviewStateDocument | null }
   | { type: "acb:review-saved" }
   | { type: "acb:error"; message: string };
 
-// Webview → Extension messages
+/** Webview -> Extension host */
 export type WebToExt =
   | {
       type: "review:set-verdict";
@@ -19,7 +28,6 @@ export type WebToExt =
       verdict: GroupVerdictValue;
       comment?: string;
     }
-  | { type: "review:set-comment"; groupId: string; comment: string }
   | {
       type: "review:set-overall";
       verdict: OverallVerdictValue;

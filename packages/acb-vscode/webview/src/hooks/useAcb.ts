@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { AcbDocument, ReviewStateDocument } from "@acb/core";
+import type { ExtToWeb } from "../types.js";
 
 export interface AcbState {
   acb: AcbDocument | null;
@@ -14,7 +15,7 @@ export function useAcb(): AcbState {
 
   useEffect(() => {
     const handler = (event: MessageEvent) => {
-      const msg = event.data;
+      const msg = event.data as ExtToWeb;
       switch (msg.type) {
         case "acb:load":
           setAcb(msg.acb);

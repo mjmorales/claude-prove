@@ -3,12 +3,12 @@
 import { runValidate } from "./validate.js";
 import { runGenerate } from "./generate.js";
 
-const USAGE = `acb - Agent Change Brief CLI
+const USAGE = `acb-review - Agent Change Brief CLI
 
 Usage:
-  acb validate <file> [--json] [--acb <path>]
-  acb generate --base <ref> --head <ref> [--output <path>]
-  acb --help
+  acb-review validate <file> [--json] [--acb <path>]
+  acb-review generate --base <ref> --head <ref> [--output <path>]
+  acb-review --help
 
 Commands:
   validate   Validate an .acb.json or .acb-review.json file
