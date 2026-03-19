@@ -1,6 +1,6 @@
 # Agent Change Brief (ACB) -- Specification
 
-**Version:** 0.2 (Draft)
+**Version:** 0.3 (Draft)
 **Status:** Draft
 **Date:** 2026-03-19
 **Authors:** Manuel Morales, Claude Opus 4.6
@@ -9,7 +9,7 @@
 
 ## 1. Purpose
 
-Git diffs organize code changes by file path. When the author is an AI agent, human reviewers need changes organized by declared intent so they can evaluate whether each change was grounded in the task, whether agent judgment calls were sound, and whether anything was changed without justification. The Agent Change Brief (ACB) is a structured JSON document that reorganizes a code change set by intent, surfaces agent decisions explicitly, and enables per-group accept/reject review. A companion review state document tracks reviewer responses. Both formats are defined in this specification.
+Git diffs organize code changes by file path. When the author is an AI agent, human reviewers need changes organized by declared intent so they can evaluate whether each change was grounded in the task, whether agent judgment calls were sound, and whether anything was changed without justification. The Agent Change Brief (ACB) is a structured JSON document that reorganizes a code change set by intent, surfaces agent decisions explicitly, and enables per-group accept/reject review. A companion review state document tracks reviewer responses. A per-commit intent manifest format captures agent reasoning at the source. All three formats and their lifecycle are defined in this specification.
 
 ## 2. Scope
 
@@ -19,26 +19,34 @@ This specification defines:
 
 - The `.acb.json` document format (the ACB Document), including all fields, types, and constraints.
 - The `.acb-review.json` document format (the Review State Document), including all fields, types, and constraints.
-- All controlled vocabularies used by both documents.
-- Validation rules that determine whether an instance of either document is well-formed.
-- The hash-based linking mechanism between the two documents.
+- The Intent Manifest format for per-commit intent declarations.
+- Assembly semantics for merging Intent Manifests into an ACB Document.
+- The post-review workflow: how review verdicts are consumed to produce structured follow-up prompts.
+- All controlled vocabularies used by all documents.
+- Validation rules that determine whether an instance of any document is well-formed.
+- The hash-based linking mechanism between the ACB Document and Review State Document.
 
 ### 2.2 Out of Scope
 
 This specification does NOT define:
 
-- How ACB Documents are generated (prompt design, agent tooling, framework integration).
 - How ACB Documents are rendered for human consumption (UI, terminal, IDE plugins, markdown views).
 - How ACB Documents integrate with CI pipelines, merge gates, or automated workflows.
 - Version history, diffing, or migration of ACB Documents across revisions.
-- Where ACB Documents are stored within a repository or file system.
 - Transport or exchange protocols for ACB Documents.
+- Framework-specific integration details (Claude Code slash commands, Cursor rules, etc.).
 
 ## 3. Terminology
 
 **ACB Document** -- A JSON file conforming to the `.acb.json` schema defined in this specification. It is the agent's structured declaration of intent over a code change set. Once generated, it is immutable.
 
 **Review State Document** -- A JSON file conforming to the `.acb-review.json` schema defined in this specification. It is the reviewer's mutable response to an ACB Document, linked by the ACB Document's content hash.
+
+**Intent Manifest** -- A per-commit JSON file that an agent produces at commit time, declaring the intent behind changes in that commit. Intent manifests are the primary input to ACB assembly. They capture first-party agent reasoning that would otherwise be lost after the commit.
+
+**Assembly** -- The process of merging multiple Intent Manifests into a single ACB Document. Assembly combines intent groups, deduplicates metadata, and produces a conformant ACB Document.
+
+**Progressive Assembly** -- Assembly that runs automatically after each commit (typically via a post-commit hook), keeping the ACB Document continuously up-to-date as the agent works.
 
 **Change Set** -- The set of all lines added, modified, or deleted in a git diff that the ACB Document describes. The ACB Document does not define the change set; it references one.
 
@@ -64,6 +72,8 @@ This specification does NOT define:
 
 **View Hint** -- An advisory label on a file reference that suggests how a renderer might display the referenced region. View hints are non-normative recommendations to rendering tools.
 
+**Post-Review Prompt** -- A deterministic plain-text output generated from a Review State Document and its referenced ACB Document. Post-review prompts communicate the reviewer's decisions back to the agent or human for follow-up action.
+
 ## 4. Conformance
 
 The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in RFC 2119.
@@ -72,9 +82,13 @@ A conformant ACB Document is a JSON file that satisfies all MUST and MUST NOT re
 
 A conformant Review State Document is a JSON file that satisfies all MUST and MUST NOT requirements in Section 6 and all validation rules in Section 7.
 
-A conformant producer is any system that generates conformant ACB Documents.
+A conformant Intent Manifest is a JSON file that satisfies all MUST and MUST NOT requirements in Section 8.
+
+A conformant producer is any system that generates conformant ACB Documents or Intent Manifests.
 
 A conformant reviewer tool is any system that generates conformant Review State Documents.
+
+A conformant post-review tool is any system that generates post-review prompts from conformant ACB Documents and Review State Documents, following the rules in Section 9.
 
 ## 5. ACB Document (`.acb.json`)
 
@@ -84,7 +98,7 @@ A conformant ACB Document MUST be a single JSON object with the following fields
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `acb_version` | string | MUST | The version of this specification the document conforms to. For this version: `"0.1"`. |
+| `acb_version` | string | MUST | The version of this specification the document conforms to. For this version: `"0.3"`. |
 | `id` | string | MUST | A unique identifier for this ACB Document. MUST be a UUID v4. |
 | `change_set_ref` | object | MUST | Identifies the change set this ACB describes. See Section 5.2. |
 | `task_statement` | object | MUST | The verbatim task given to the agent. See Section 5.6. |
@@ -285,7 +299,7 @@ A conformant Review State Document MUST be a single JSON object with the followi
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `acb_version` | string | MUST | The version of this specification the document conforms to. For this version: `"0.1"`. |
+| `acb_version` | string | MUST | The version of this specification the document conforms to. For this version: `"0.3"`. |
 | `acb_hash` | string | MUST | The SHA-256 content hash of the ACB Document this review applies to, encoded as a lowercase hexadecimal string (64 characters). |
 | `acb_id` | string | MUST | The `id` field from the referenced ACB Document. Provided for human readability; the `acb_hash` is the authoritative link. |
 | `reviewer` | string | MUST | Identifier of the reviewer. No format constraint beyond non-empty string. |
@@ -353,7 +367,7 @@ If the SHA-256 hash of the current `.acb.json` file content does not match the `
 
 ## 7. Validation Rules
 
-The following numbered rules define well-formedness for ACB Documents and Review State Documents. Each rule is independently testable. A document that violates any applicable rule is non-conformant.
+The following numbered rules define well-formedness for ACB Documents, Review State Documents, and Intent Manifests. Each rule is independently testable. A document that violates any applicable rule is non-conformant.
 
 ### 7.1 ACB Document Rules
 
@@ -397,6 +411,14 @@ The following numbered rules define well-formedness for ACB Documents and Review
 
 **Rule REV-6: Non-empty reviewer.** The `reviewer` field MUST be a non-empty string.
 
+### 7.3 Intent Manifest Rules
+
+**Rule MAN-1: Required fields.** An Intent Manifest MUST contain `acb_manifest_version`, `commit_sha`, `timestamp`, and `intent_groups` fields.
+
+**Rule MAN-2: Valid intent groups.** Every intent group within an Intent Manifest MUST satisfy the same structural constraints as intent groups in an ACB Document (Section 5.7), including non-empty `file_refs`, valid classification values, and valid ambiguity tags.
+
+**Rule MAN-3: Internal causal link consistency.** All `target_group_id` values in causal links within an Intent Manifest MUST reference intent groups within the same manifest. Cross-manifest causal links are resolved during assembly.
+
 ## 8. Intent Manifest (Per-Commit Declaration)
 
 ### 8.1 Purpose
@@ -411,10 +433,10 @@ An Intent Manifest MUST be a single JSON object with the following fields:
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `acb_manifest_version` | string | MUST | The version of this specification. For this version: `"0.1"`. |
+| `acb_manifest_version` | string | MUST | The version of this specification. For this version: `"0.3"`. |
 | `commit_sha` | string | MUST | The git commit SHA this manifest describes. MAY be `"pending"` before the commit is finalized. |
 | `timestamp` | string | MUST | ISO 8601 timestamp (UTC) of when the manifest was created. |
-| `intent_groups` | array | MUST | Array of intent group objects (same schema as Section 5.7). |
+| `intent_groups` | array | MUST | Array of intent group objects (same schema as Section 5.7). MUST contain at least one element. |
 | `negative_space` | array | MAY | Array of negative space entry objects (same schema as Section 5.10). |
 | `open_questions` | array | MAY | Array of open question objects (same schema as Section 5.9). |
 | `agent_id` | string | MAY | Identifier for the agent that produced this manifest. |
@@ -434,7 +456,7 @@ Intent groups within a manifest use the same schema as ACB Document intent group
 An assembler merges multiple Intent Manifests into a single ACB Document. The assembly process:
 
 1. Sorts manifests by `timestamp` (chronological order).
-2. For intent groups with the same `id` across manifests: merges `file_refs` (combining ranges for the same path), takes the union of `ambiguity_tags`, merges annotations (deduplicated by `id`, first-seen wins), and merges causal links (deduplicated by `target_group_id`).
+2. For intent groups with the same `id` across manifests: merges `file_refs` (combining ranges for the same path into minimal merged ranges), takes the union of `ambiguity_tags`, merges annotations (deduplicated by `id`, first-seen wins), and merges causal links (deduplicated by `target_group_id`).
 3. For intent groups with distinct `id` values: preserves them as separate groups in the assembled ACB, ordered by first appearance.
 4. Merges `negative_space` entries (deduplicated by `path` + `reason`).
 5. Merges `open_questions` (deduplicated by `id`).
@@ -446,20 +468,86 @@ The assembled ACB Document MUST conform to all requirements in Sections 5 and 7.
 A conformant producer MAY use a git `pre-commit` hook to reject commits that lack an Intent Manifest. The recommended flow:
 
 1. Agent stages changes and runs `git commit`.
-2. `pre-commit` hook checks for a manifest at `.acb/intents/staged.json`.
-3. If missing, the commit is rejected with an error message describing the required manifest format.
-4. Agent writes the manifest and retries the commit.
-5. A `post-commit` hook renames the manifest to `.acb/intents/<short-sha>.json`, updates the `commit_sha` field, and amends the commit.
+2. The `pre-commit` hook invokes a validation command (e.g., `acb-review check-manifest`) that checks for a manifest at `.acb/intents/staged.json`.
+3. The validation command parses the manifest and checks structural validity.
+4. If missing or invalid, the commit is rejected with an error message describing the required manifest format.
+5. Agent writes the manifest and retries the commit.
+6. A `post-commit` hook invokes a finalization command (e.g., `acb-review post-commit`) that renames the manifest to `.acb/intents/<short-sha>.json`, updates the `commit_sha` field, and runs progressive assembly.
+
+Git hooks SHOULD be thin wrappers (1-3 lines) that delegate to CLI commands. All validation and processing logic SHOULD reside in the CLI, not in shell scripts.
 
 Human commits MAY bypass the hook using `git commit --no-verify`.
 
 ### 8.6 Storage
 
-Intent manifests SHOULD be committed to the feature branch at `.acb/intents/<identifier>.json`. This ensures they travel through worktree merges and branch operations via git.
+Intent manifests are ephemeral working artifacts. They SHOULD be stored in a gitignored directory (`.acb/intents/`) and SHOULD NOT be committed to the repository. The assembled ACB Document is the persistent artifact.
 
-Intent manifests are agent-to-human review artifacts. They SHOULD be stripped or excluded before code enters team-level PR review workflows.
+The `acb-review install` command SHOULD create `.acb/intents/` with a `.gitignore` that excludes the intents directory.
 
-## 9. Security / Privacy Considerations
+### 8.7 Progressive Assembly
+
+A conformant post-commit hook SHOULD run assembly after each commit, producing an up-to-date ACB Document at a well-known location (`.acb/review.acb.json`). This enables the reviewer to open the ACB at any point during the agent's work, not only after a manual assembly step.
+
+Progressive assembly reads all manifests in `.acb/intents/`, merges them per Section 8.4, resolves git refs for the `change_set_ref`, and writes the result. If no manifests exist, the post-commit hook SHOULD exit silently.
+
+## 9. Post-Review Workflow
+
+### 9.1 Purpose
+
+After a reviewer completes their review in the ACB extension (or any conformant reviewer tool), the Review State Document contains structured verdicts. The post-review workflow defines how these verdicts are consumed to produce deterministic follow-up prompts.
+
+Post-review prompts are plain text generated from the ACB Document and Review State Document with no LLM involvement. The same input always produces the same output.
+
+### 9.2 Review Outcomes
+
+A completed review results in one of three overall states:
+
+| Overall Verdict | Meaning | Follow-up Action |
+|---|---|---|
+| `approved` | All groups accepted or explicitly handled. | Resolve: generate approval summary. Branch is ready to merge. |
+| `changes_requested` | One or more groups rejected or needing discussion. | Fix: generate structured fix prompt targeting rejected groups. |
+| `pending` | Review not yet complete. | No follow-up until review is finalized. |
+
+### 9.3 Resolve Prompt
+
+When the overall verdict is `approved`, a resolve prompt MUST include:
+
+- Count of accepted groups vs total groups.
+- Any annotation responses the reviewer provided.
+- The overall comment, if present.
+- A statement that the branch is ready to merge.
+
+### 9.4 Fix Prompt
+
+When the overall verdict is `changes_requested`, a fix prompt MUST include:
+
+- **Rejected groups:** For each rejected group: the group title, the reviewer's comment, the agent's original `task_grounding`, the file refs, and any annotation responses.
+- **Discussion groups:** For each group with verdict `needs_discussion`: the same information as rejected groups.
+- **Pending groups:** Listed by title (not yet reviewed).
+- **Accepted groups:** Listed by title with a checkmark, marked as "no changes needed."
+- **Unanswered open questions:** Listed with context and default behavior.
+- **Instructions:** "Fix the rejected groups. Do not modify accepted groups. Commit with an intent manifest as usual."
+
+### 9.5 Discuss Prompt
+
+When any groups have verdict `needs_discussion` or there are unanswered open questions, a discuss prompt MUST include:
+
+- **Discussion groups:** For each group with verdict `needs_discussion`: the group title, reviewer comment, agent grounding, file refs, and all annotations with any responses.
+- **Reviewer comments on other groups:** For groups with a comment but a non-discussion verdict.
+- **Open questions:** Unanswered questions with context, default behavior, and related groups.
+- **Answered questions:** For reference.
+
+### 9.6 Output Format
+
+Post-review prompts MUST be plain text (markdown-formatted). They MUST be written to stdout by default. Implementations SHOULD support `--output <path>` for file output and `--json` for machine-readable output.
+
+Post-review prompts are framework-agnostic. They can be piped to an agent, pasted into a conversation, saved to a file, or consumed by any tool that reads text.
+
+### 9.7 Framework Integration
+
+Implementations MAY provide framework-specific convenience wrappers. For example, for Claude Code, an `install` command MAY scaffold slash commands in `.claude/commands/` that invoke the post-review CLI commands. These wrappers are not part of this specification.
+
+## 10. Security / Privacy Considerations
 
 **Task statement exposure.** The ACB Document contains a verbatim copy of the task given to the agent. If the task includes sensitive information (credentials, internal URLs, personal data), that information will be present in the ACB Document. Producers SHOULD warn users when generating ACB Documents for tasks that may contain sensitive content. Organizations MAY define policies for redacting sensitive content from task statements, but any such redaction violates Rule ACB-7 and MUST be documented in the `extensions` field with key `"task_redaction_policy"`.
 
@@ -467,12 +555,15 @@ Intent manifests are agent-to-human review artifacts. They SHOULD be stripped or
 
 **No code content.** By design, the ACB Document contains no source code. It contains file paths and line numbers, which may reveal repository structure. Organizations SHOULD assess whether path and line number metadata constitutes sensitive information in their context.
 
-## 10. Change Log
+**Intent manifest ephemeral storage.** Intent manifests are stored in a gitignored directory and are not committed to the repository. However, the assembled ACB Document may be stored locally. Implementations SHOULD ensure that ACB Documents and review state files are not inadvertently shared beyond the intended reviewer.
+
+## 11. Change Log
 
 | Version | Date | Summary |
 |---|---|---|
 | 0.1 | 2026-03-19 | Initial draft. Defines ACB Document and Review State Document formats, all controlled vocabularies, and validation rules. |
 | 0.2 | 2026-03-19 | Adds Intent Manifest format (Section 8) for per-commit intent declarations and assembly. |
+| 0.3 | 2026-03-19 | Updates intent manifest storage (ephemeral/gitignored), adds progressive assembly (Section 8.7), adds post-review workflow (Section 9), adds manifest validation rules (Section 7.3), updates forcing function to delegate to CLI commands. |
 
 ## Appendix A: Example ACB Document (Informative)
 
@@ -480,7 +571,7 @@ This appendix is non-normative. It illustrates a minimal conformant ACB Document
 
 ```json
 {
-  "acb_version": "0.1",
+  "acb_version": "0.3",
   "id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
   "change_set_ref": {
     "base_ref": "abc1234",
@@ -550,7 +641,7 @@ This appendix is non-normative. It illustrates a Review State Document correspon
 
 ```json
 {
-  "acb_version": "0.1",
+  "acb_version": "0.3",
   "acb_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "acb_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
   "reviewer": "mmorales",
@@ -573,5 +664,48 @@ This appendix is non-normative. It illustrates a Review State Document correspon
   ],
   "overall_verdict": "approved",
   "updated_at": "2026-03-19T15:00:00Z"
+}
+```
+
+## Appendix C: Example Intent Manifest (Informative)
+
+This appendix is non-normative. It illustrates a per-commit Intent Manifest.
+
+```json
+{
+  "acb_manifest_version": "0.3",
+  "commit_sha": "9a8b7c6d5e4f",
+  "timestamp": "2026-03-19T14:00:00Z",
+  "intent_groups": [
+    {
+      "id": "input-validation",
+      "title": "Add username validation to login handler",
+      "classification": "explicit",
+      "ambiguity_tags": [],
+      "task_grounding": "Directly requested: 'Add input validation to the login endpoint.'",
+      "file_refs": [
+        {
+          "path": "src/auth/login.go",
+          "ranges": ["15-28"],
+          "view_hint": "changed_region"
+        }
+      ],
+      "annotations": [
+        {
+          "id": "ann-1",
+          "type": "judgment_call",
+          "body": "Used regex validation instead of length check. Regex catches whitespace-only usernames. Alternative: simple len(username) > 0.",
+          "ambiguity_tags": ["underspecified"]
+        }
+      ]
+    }
+  ],
+  "negative_space": [
+    {
+      "path": "src/auth/signup.go",
+      "reason": "out_of_scope",
+      "explanation": "Signup has similar gaps but task targets login only."
+    }
+  ]
 }
 ```
