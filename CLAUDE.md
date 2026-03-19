@@ -43,4 +43,19 @@ The index describes *when* to read each file, not just what it contains.
 - `/prove:brainstorm` — Explore options and record decisions
 - `/prove:comprehend` — Socratic quiz on recent diffs to build code comprehension
 
+## Scripts
+
+- **Worktree cleanup**: `bash scripts/cleanup-worktrees.sh` — removes all stale worktrees under `.claude/worktrees/`. Use `--dry-run` to preview.
+- **Task cleanup**: `PROJECT_ROOT="." bash scripts/cleanup.sh --auto <task-slug>` — archives `.prove/` artifacts for a completed task.
+
+## Completing a Task Branch
+
+After merging an orchestrator branch to main, sync with origin before pushing:
+
+1. `git checkout main`
+2. `git merge --no-ff orchestrator/<slug> -m "merge: <slug>"`
+3. If origin/main has diverged, `git merge origin/main` (avoid rebase — too many conflicts across long branch histories)
+4. `git push origin main`
+5. `bash scripts/cleanup-worktrees.sh` to remove any leftover worktrees
+
 <!-- prove:managed:end -->
