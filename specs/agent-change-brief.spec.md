@@ -1,6 +1,6 @@
 # Agent Change Brief (ACB) -- Specification
 
-**Version:** 0.1 (Draft)
+**Version:** 0.2 (Draft)
 **Status:** Draft
 **Date:** 2026-03-19
 **Authors:** Manuel Morales, Claude Opus 4.6
@@ -397,7 +397,69 @@ The following numbered rules define well-formedness for ACB Documents and Review
 
 **Rule REV-6: Non-empty reviewer.** The `reviewer` field MUST be a non-empty string.
 
-## 8. Security / Privacy Considerations
+## 8. Intent Manifest (Per-Commit Declaration)
+
+### 8.1 Purpose
+
+An Intent Manifest is a lightweight JSON document that an agent produces at commit time, declaring the intent behind the changes in that commit. Intent manifests are the primary input to ACB assembly — they capture first-party agent reasoning that would otherwise be lost after the commit.
+
+Intent manifests are NOT ACB Documents. They are per-commit fragments that an assembler merges into a single ACB Document for review.
+
+### 8.2 Top-Level Structure
+
+An Intent Manifest MUST be a single JSON object with the following fields:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `acb_manifest_version` | string | MUST | The version of this specification. For this version: `"0.1"`. |
+| `commit_sha` | string | MUST | The git commit SHA this manifest describes. MAY be `"pending"` before the commit is finalized. |
+| `timestamp` | string | MUST | ISO 8601 timestamp (UTC) of when the manifest was created. |
+| `intent_groups` | array | MUST | Array of intent group objects (same schema as Section 5.7). |
+| `negative_space` | array | MAY | Array of negative space entry objects (same schema as Section 5.10). |
+| `open_questions` | array | MAY | Array of open question objects (same schema as Section 5.9). |
+| `agent_id` | string | MAY | Identifier for the agent that produced this manifest. |
+
+### 8.3 Intent Group Reuse
+
+Intent groups within a manifest use the same schema as ACB Document intent groups (Section 5.7). All constraints from Section 5.7 apply, including:
+
+- Valid classification values (Section 5.3)
+- Valid ambiguity tags (Section 5.4)
+- Valid annotation types (Section 5.5)
+- Non-empty `file_refs` arrays
+- Causal links referencing valid group IDs within the same manifest
+
+### 8.4 Assembly
+
+An assembler merges multiple Intent Manifests into a single ACB Document. The assembly process:
+
+1. Sorts manifests by `timestamp` (chronological order).
+2. For intent groups with the same `id` across manifests: merges `file_refs` (combining ranges for the same path), takes the union of `ambiguity_tags`, merges annotations (deduplicated by `id`, first-seen wins), and merges causal links (deduplicated by `target_group_id`).
+3. For intent groups with distinct `id` values: preserves them as separate groups in the assembled ACB, ordered by first appearance.
+4. Merges `negative_space` entries (deduplicated by `path` + `reason`).
+5. Merges `open_questions` (deduplicated by `id`).
+
+The assembled ACB Document MUST conform to all requirements in Sections 5 and 7.
+
+### 8.5 Forcing Function
+
+A conformant producer MAY use a git `pre-commit` hook to reject commits that lack an Intent Manifest. The recommended flow:
+
+1. Agent stages changes and runs `git commit`.
+2. `pre-commit` hook checks for a manifest at `.acb/intents/staged.json`.
+3. If missing, the commit is rejected with an error message describing the required manifest format.
+4. Agent writes the manifest and retries the commit.
+5. A `post-commit` hook renames the manifest to `.acb/intents/<short-sha>.json`, updates the `commit_sha` field, and amends the commit.
+
+Human commits MAY bypass the hook using `git commit --no-verify`.
+
+### 8.6 Storage
+
+Intent manifests SHOULD be committed to the feature branch at `.acb/intents/<identifier>.json`. This ensures they travel through worktree merges and branch operations via git.
+
+Intent manifests are agent-to-human review artifacts. They SHOULD be stripped or excluded before code enters team-level PR review workflows.
+
+## 9. Security / Privacy Considerations
 
 **Task statement exposure.** The ACB Document contains a verbatim copy of the task given to the agent. If the task includes sensitive information (credentials, internal URLs, personal data), that information will be present in the ACB Document. Producers SHOULD warn users when generating ACB Documents for tasks that may contain sensitive content. Organizations MAY define policies for redacting sensitive content from task statements, but any such redaction violates Rule ACB-7 and MUST be documented in the `extensions` field with key `"task_redaction_policy"`.
 
@@ -405,11 +467,12 @@ The following numbered rules define well-formedness for ACB Documents and Review
 
 **No code content.** By design, the ACB Document contains no source code. It contains file paths and line numbers, which may reveal repository structure. Organizations SHOULD assess whether path and line number metadata constitutes sensitive information in their context.
 
-## 9. Change Log
+## 10. Change Log
 
 | Version | Date | Summary |
 |---|---|---|
 | 0.1 | 2026-03-19 | Initial draft. Defines ACB Document and Review State Document formats, all controlled vocabularies, and validation rules. |
+| 0.2 | 2026-03-19 | Adds Intent Manifest format (Section 8) for per-commit intent declarations and assembly. |
 
 ## Appendix A: Example ACB Document (Informative)
 
