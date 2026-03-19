@@ -1,15 +1,15 @@
 ---
 name: review
 description: >
-  Generate an Agent Change Brief (ACB) from the current branch diff. Groups changes by
-  semantic intent, produces a .acb.json document, and opens it for review in the ACB
-  VS Code extension. Use when reviewing AI-generated branches or any large feature branch.
+  Generate an Agent Change Brief (ACB) from the current branch diff. Assembles per-commit
+  intent manifests when available, falls back to LLM analysis for uncovered changes.
+  Produces a .acb.json document for review in the ACB VS Code extension.
 argument-hint: "[base-branch (default: main)]"
 ---
 
 # ACB Branch Review: $ARGUMENTS
 
-Generate an Agent Change Brief from the current branch diff. Groups changes by declared intent, produces a structured `.acb.json`, and directs the user to open it in the ACB review extension.
+Generate an Agent Change Brief from the current branch. Prefers assembling from per-commit intent manifests (first-party agent declarations) over post-hoc reconstruction.
 
 ## Phase 1: Extract Diff Context
 
@@ -27,9 +27,6 @@ Generate an Agent Change Brief from the current branch diff. Groups changes by d
    # Change types per file
    git diff --name-status <base>...HEAD
 
-   # Full diff (for semantic analysis)
-   git diff <base>...HEAD
-
    # Changed line ranges per file (unified=0 for precise ranges)
    git diff --unified=0 <base>...HEAD
 
@@ -46,9 +43,42 @@ Generate an Agent Change Brief from the current branch diff. Groups changes by d
    - **Binary files**: Note them in the ACB's `negative_space` as `out_of_scope`
    - **Generated files** (dist/, build/, lock files): Exclude from intent groups, note in `negative_space`
 
-## Phase 2: Semantic Grouping into Intent Groups
+## Phase 2: Check for Intent Manifests
 
-Analyze the full diff and create intent groups. This is the core LLM analysis step — the same analysis the old review manifest did, but now structured as ACB intent groups.
+Look for per-commit intent manifests in `.acb/intents/`:
+
+```bash
+ls .acb/intents/*.json 2>/dev/null
+```
+
+**If manifests exist**, proceed to Phase 2a (assembly path).
+**If no manifests exist**, proceed to Phase 2b (reconstruction fallback).
+
+### Phase 2a: Assemble from Manifests
+
+When intent manifests are present, the implementing agents already declared their intent at commit time. Use the assembler to merge them.
+
+1. Read all `.acb/intents/*.json` files
+2. Parse each as an IntentManifest (skip files with parse errors, warn the user)
+3. Identify which changed files are **covered** by manifests and which are **uncovered**:
+   - For each changed file+range from the diff, check if any manifest's intent groups reference it
+   - Uncovered files need reconstruction (Phase 2b) for just those files
+
+4. If all files are covered:
+   - The manifests are the complete source of truth
+   - Skip Phase 2b entirely
+   - Merge manifests: groups with the same `id` across commits get their file_refs combined
+
+5. If some files are uncovered:
+   - Assemble covered files from manifests
+   - Run Phase 2b reconstruction **only for uncovered files**
+   - Merge both sets of intent groups into the final ACB
+
+### Phase 2b: Reconstruct Intent Groups (Fallback)
+
+This is the reconstruction path — used when no manifests exist or to fill gaps for files not covered by any manifest.
+
+Analyze the diff (full diff if no manifests, or just the uncovered portion) and create intent groups.
 
 **Grouping criteria** (in priority order):
 1. **Shared purpose** — files that implement the same feature or fix the same bug
@@ -58,22 +88,15 @@ Analyze the full diff and create intent groups. This is the core LLM analysis st
 **For each intent group, determine:**
 
 - **`id`**: Unique slug (e.g., `auth-middleware`, `schema-changes`)
-- **`title`**: Short, descriptive name (e.g., "Authentication middleware", "Database schema changes")
-- **`classification`**: One of:
-  - `explicit` — directly requested by the task/user
-  - `inferred` — logically follows from the task but not explicitly stated
-  - `speculative` — went beyond what was asked (cleanup, refactoring, etc.)
+- **`title`**: Short, descriptive name
+- **`classification`**: One of `explicit`, `inferred`, `speculative`
 - **`ambiguity_tags`**: Any applicable tags from: `underspecified`, `conflicting_signals`, `assumption`, `scope_creep`, `convention`
 - **`task_grounding`**: One sentence explaining how this group connects to the task/branch purpose
-- **`file_refs`**: List of files with:
-  - `path`: Relative file path
-  - `ranges`: Line ranges from the diff (parsed from `@@ +start,count @@` hunks)
-  - `view_hint`: `changed_region` (default for most files), `full_file` (for new/deleted files or config), `context` (referenced but unchanged files)
-- **`annotations`** (optional): Add when there's something notable:
-  - `judgment_call` — a non-trivial decision was made; state alternatives
-  - `note` — factual context the reviewer would need to reconstruct
-  - `flag` — quality concern, deviation, or code smell
+- **`file_refs`**: List of files with `path`, `ranges`, and `view_hint`
+- **`annotations`** (optional): `judgment_call`, `note`, or `flag`
 - **`causal_links`** (optional): References to other groups this depends on
+
+**Mark reconstructed groups**: When generating groups via reconstruction (not from manifests), add an annotation with type `note` and body: "This intent group was reconstructed post-hoc, not declared by the implementing agent."
 
 **Group ordering** (suggested review priority):
 1. Configuration and infrastructure changes
@@ -137,6 +160,7 @@ Validate the document structure before writing — every changed file must appea
 1. Output a compact summary:
    - Total files, insertions/deletions
    - Number of intent groups
+   - How many groups came from manifests vs reconstruction
    - List of group titles in review order with classification badges
    - Any open questions or flags
 
@@ -156,7 +180,8 @@ Validate the document structure before writing — every changed file must appea
 ## Rules
 
 - **Read-only with respect to project code** — this skill only reads diffs and writes the ACB
-- **Deterministic grouping** — given the same diff, grouping should be consistent
+- **Prefer manifests over reconstruction** — first-party agent declarations are always richer than third-party analysis
+- **Deterministic grouping** — given the same diff + manifests, output should be consistent
 - **No validation** — this is review organization, not testing or linting
 - **Overwrite ACB** — each run replaces the previous ACB for this branch
 - **Respect .gitignore** — don't include ignored files even if they show in diff
