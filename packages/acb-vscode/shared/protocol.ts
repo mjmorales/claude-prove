@@ -40,4 +40,5 @@ export type WebToExt =
       annotationId: string;
       response: string;
     }
-  | { type: "navigate:file-ref"; path: string; ranges: string[] };
+  | { type: "navigate:file-ref"; path: string; ranges: string[] }
+  | { type: "navigate:group-diff"; groupId: string };

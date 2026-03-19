@@ -13,6 +13,7 @@ import {
 import type { ExtToWeb, WebToExt } from "../shared/protocol.js";
 import { navigateToFileRef } from "./editor.js";
 import { DecorationManager } from "./decoration-manager.js";
+import { DiffTabTracker, openGroupDiffs } from "./diff-viewer.js";
 
 /**
  * Custom editor provider for .acb.json files.
@@ -59,6 +60,7 @@ export class AcbReviewEditorProvider
     };
 
     const decorationManager = new DecorationManager();
+    const diffTabTracker = new DiffTabTracker();
 
     const loadDocument = () => {
       try {
@@ -107,6 +109,7 @@ export class AcbReviewEditorProvider
       changeSubscription.dispose();
       editorSubscription.dispose();
       decorationManager.dispose();
+      diffTabTracker.dispose();
     });
 
     // Handle messages from the webview
@@ -176,6 +179,19 @@ export class AcbReviewEditorProvider
               vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
             if (workspaceRoot) {
               navigateToFileRef(workspaceRoot, msg.path, msg.ranges);
+            }
+            break;
+          }
+
+          case "navigate:group-diff": {
+            try {
+              const acb: AcbDocument = JSON.parse(rawContent);
+              const group = acb.intent_groups.find((g) => g.id === msg.groupId);
+              if (group) {
+                openGroupDiffs(group, acb.change_set_ref, diffTabTracker);
+              }
+            } catch {
+              sendMessage({ type: "acb:error", message: "Failed to open group diffs" });
             }
             break;
           }
