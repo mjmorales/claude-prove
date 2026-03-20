@@ -56,13 +56,9 @@ If a symlink or directory already exists at the target path, the hook skips sile
 
 ## Installation
 
-### What the prove plugin install does
+### Installing ACB hooks
 
-When you install the prove plugin via `scripts/install.sh`, the script:
-
-1. Clones the repository
-2. Runs `npm install && npx tsc` inside `packages/acb-core/` to produce `dist/`
-3. Does **not** install hooks automatically — hooks are per-project and must be installed explicitly
+The plugin install does **not** install hooks automatically — hooks are per-project and must be installed explicitly.
 
 Install hooks in each project where you want ACB enforcement:
 
@@ -237,7 +233,7 @@ npm install
 npx tsc
 ```
 
-If you installed via `scripts/install.sh`, the build runs automatically but can fail silently if Node.js was not available at install time. Check for the warning in the install output.
+If the build was not run during plugin setup, the hooks will not work until it completes.
 
 ### Manifest validation errors
 

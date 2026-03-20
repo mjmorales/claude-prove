@@ -33,14 +33,11 @@ Takes you from idea to merged code through a structured pipeline:
 ## Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/mjmorales/claude-prove/main/scripts/install.sh | bash
+claude plugin marketplace add mjmorales/claude-prove
+claude plugin install prove@prove
 ```
 
-The installer will ask whether to install as a **user-level** plugin (available in all projects) or **project-level** (current directory only), register the plugin in the appropriate `settings.json`, and clone the repo to `~/.claude/plugins/prove`.
-
 If Claude Code is already running, restart it for the plugin to take effect.
-
-For manual installation or custom paths, see `scripts/install.sh --help`.
 
 ## Quick Start
 
@@ -192,7 +189,6 @@ skills/
 ├── slash-command-creator/      # Slash command scaffolding
 └── subagent-creator/           # Subagent scaffolding
 scripts/
-├── install.sh                  # Plugin installer
 ├── init-config.sh              # Tech stack detection → .prove.json
 ├── setup-tools.sh              # Auto-configure tools
 ├── cleanup.sh                  # Task artifact cleanup
