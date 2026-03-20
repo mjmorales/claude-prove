@@ -60,6 +60,7 @@ SPARSE_PATHS=(
   .claude-plugin
   agents
   commands
+  packages
   references
   scripts
   skills

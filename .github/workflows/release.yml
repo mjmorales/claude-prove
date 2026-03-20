@@ -133,13 +133,26 @@ jobs:
         run: |
           bash scripts/bump-version.sh "${{ steps.bump.outputs.new_version }}"
 
+      - name: Setup Node.js
+        if: steps.bump.outputs.skip != 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build acb-core
+        if: steps.bump.outputs.skip != 'true'
+        run: |
+          cd packages/acb-core
+          npm install --ignore-scripts
+          npx tsc
+
       - name: Commit, tag, and push
         if: steps.bump.outputs.skip != 'true'
         run: |
           NEW_VERSION="${{ steps.bump.outputs.new_version }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .claude-plugin/plugin.json .claude-plugin/marketplace.json
+          git add .claude-plugin/plugin.json .claude-plugin/marketplace.json packages/acb-core/dist/
           # Commit only if files actually changed (version may already match)
           if git diff --cached --quiet; then
             echo "Version files already at $NEW_VERSION, skipping commit."
