@@ -2,7 +2,7 @@ import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, copyFileSync, chmodSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-const HOOKS = ["pre-commit", "post-commit"];
+const HOOKS = ["pre-commit", "post-commit", "post-checkout"];
 
 function getPackageHooksDir(): string {
   // Resolve relative to this file: cli/install.js → cli/ → dist/ → acb-core/ → hooks/

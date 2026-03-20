@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# ACB post-checkout hook — symlinks worktree intents to main repo
+#
+# When a git worktree is created, .acb/intents/ is gitignored and won't
+# exist in the worktree. This hook detects worktrees and creates a symlink
+# so agents write staged.json directly into the main repo's filesystem.
+
+# Only act on branch checkouts (flag=1), not file checkouts
+[ "$3" = "1" ] || exit 0
+
+# Detect if we're in a worktree: .git is a file, not a directory
+GIT_DIR_FILE="$(git rev-parse --git-dir 2>/dev/null)"
+[ -n "$GIT_DIR_FILE" ] || exit 0
+
+WORK_TREE="$(git rev-parse --show-toplevel 2>/dev/null)"
+[ -n "$WORK_TREE" ] || exit 0
+
+# If .git is a directory, this is the main repo — nothing to do
+[ -f "$WORK_TREE/.git" ] || exit 0
+
+# Parse the main repo's git common dir (works for worktrees)
+COMMON_DIR="$(git rev-parse --git-common-dir 2>/dev/null)"
+[ -n "$COMMON_DIR" ] || exit 0
+
+# Resolve the main repo root from the common git dir
+# commondir is <main-repo>/.git — go up one level
+MAIN_REPO="$(cd "$COMMON_DIR/.." && pwd)"
+
+MAIN_INTENTS="$MAIN_REPO/.acb/intents"
+WORKTREE_ACB="$WORK_TREE/.acb"
+WORKTREE_INTENTS="$WORKTREE_ACB/intents"
+
+# If main repo has no .acb/intents/, create it
+if [ ! -d "$MAIN_INTENTS" ]; then
+  mkdir -p "$MAIN_INTENTS"
+fi
+
+# If intents already exists as a symlink or real dir, skip
+if [ -e "$WORKTREE_INTENTS" ] || [ -L "$WORKTREE_INTENTS" ]; then
+  exit 0
+fi
+
+# Ensure .acb/ exists in worktree
+mkdir -p "$WORKTREE_ACB"
+
+# Create the symlink
+ln -s "$MAIN_INTENTS" "$WORKTREE_INTENTS"
+echo "ACB: linked worktree intents → $MAIN_INTENTS"
