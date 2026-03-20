@@ -21,15 +21,20 @@ Parse `$ARGUMENTS` to determine which subcommand to run. If empty or unrecognize
 
 ## Resolving the ACB CLI
 
-This skill runs as part of the prove plugin. The ACB CLI lives inside the plugin package:
+This skill runs as part of the prove plugin. The ACB CLI is accessed via npx from the plugin's acb-core package:
 
 ```bash
-ACB_CLI="node $PLUGIN_DIR/packages/acb-core/dist/cli/index.js"
+ACB_CLI="npx --prefix $PLUGIN_DIR/packages/acb-core acb-review"
 ```
 
 where `$PLUGIN_DIR` is the plugin root (parent of `commands/` and `skills/`).
 
-Use `$ACB_CLI` for all CLI invocations throughout this skill. If the CLI is not found at that path, fall back to `npx acb-review` (for standalone `@acb/core` installs).
+Use `$ACB_CLI` for all CLI invocations throughout this skill (e.g., `$ACB_CLI install --link`).
+
+If the CLI fails (dist/ not built), tell the user to run:
+```bash
+cd "$PLUGIN_DIR/packages/acb-core" && npm install && npx tsc
+```
 
 The hooks directory is at `$PLUGIN_DIR/packages/acb-core/hooks/`.
 
@@ -313,6 +318,6 @@ in the main repo's filesystem.
 - **Prefer link mode** — always recommend `--link` for new installs. Copy mode is legacy.
 - **Don't overwrite config** — if `.acb/config.json` exists, read and preserve it.
 - **Idempotent** — running setup multiple times should be safe.
-- **Use $PLUGIN_DIR** — always resolve the ACB CLI and hooks via `$PLUGIN_DIR/packages/acb-core/`, not `npx acb-review`. The plugin bundles the package.
+- **Use $PLUGIN_DIR** — always resolve the ACB CLI via `npx --prefix $PLUGIN_DIR/packages/acb-core acb-review`, not bare `npx acb-review`.
 
 **Interaction patterns**: See `references/interaction-patterns.md` for when to use `AskUserQuestion` vs free-form discussion.

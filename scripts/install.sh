@@ -110,6 +110,25 @@ else
   git -C "$INSTALL_DIR" checkout --quiet "$CHECKOUT_REF"
 fi
 
+# === Build acb-core CLI ===
+
+ACB_CORE_DIR="$INSTALL_DIR/packages/acb-core"
+if [[ -f "$ACB_CORE_DIR/package.json" ]]; then
+  if command -v node &>/dev/null; then
+    echo "Building acb-core CLI..."
+    (cd "$ACB_CORE_DIR" && npm install --ignore-scripts --quiet 2>/dev/null && npx tsc 2>/dev/null)
+    if [[ -f "$ACB_CORE_DIR/dist/cli/index.js" ]]; then
+      echo "acb-core CLI built successfully."
+    else
+      echo "WARNING: acb-core build failed. ACB hooks will not be available."
+      echo "  Ensure Node.js 18+ and run: cd $ACB_CORE_DIR && npm install && npx tsc"
+    fi
+  else
+    echo "WARNING: Node.js not found. ACB hooks require Node.js 18+."
+    echo "  After installing Node.js, run: cd $ACB_CORE_DIR && npm install && npx tsc"
+  fi
+fi
+
 # === Check for claude CLI ===
 
 if ! command -v claude &>/dev/null; then

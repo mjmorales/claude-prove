@@ -9,7 +9,6 @@ __pycache__/
 # Node.js / TypeScript
 node_modules/
 dist/
-!packages/acb-core/dist/
 *.tsbuildinfo
 packages/acb-vscode/acb-vscode-*.vsix
 .acb/review.acb.json
