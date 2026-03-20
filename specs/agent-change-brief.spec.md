@@ -1,6 +1,6 @@
 # Agent Change Brief (ACB) -- Specification
 
-**Version:** 0.3 (Draft)
+**Version:** 0.4 (Draft)
 **Status:** Draft
 **Date:** 2026-03-19
 **Authors:** Manuel Morales, Claude Opus 4.6
@@ -564,6 +564,7 @@ Implementations MAY provide framework-specific convenience wrappers. For example
 | 0.1 | 2026-03-19 | Initial draft. Defines ACB Document and Review State Document formats, all controlled vocabularies, and validation rules. |
 | 0.2 | 2026-03-19 | Adds Intent Manifest format (Section 8) for per-commit intent declarations and assembly. |
 | 0.3 | 2026-03-19 | Updates intent manifest storage (ephemeral/gitignored), adds progressive assembly (Section 8.7), adds post-review workflow (Section 9), adds manifest validation rules (Section 7.3), updates forcing function to delegate to CLI commands. |
+| 0.4 | 2026-03-20 | Adds Appendix D with reference rendering of the VS Code review experience. |
 
 ## Appendix A: Example ACB Document (Informative)
 
@@ -709,3 +710,29 @@ This appendix is non-normative. It illustrates a per-commit Intent Manifest.
   ]
 }
 ```
+
+## Appendix D: VS Code Review Experience (Informative)
+
+This appendix is non-normative. It shows how the `acb-vscode` extension renders an ACB Document and Review State Document for human review.
+
+![ACB Review in VS Code](../docs/assets/acb-vscode-review.png)
+
+The extension presents the following elements, mapped to specification concepts:
+
+| UI Element | Specification Source |
+|---|---|
+| **Header** (version, generated timestamp, agent ID) | ACB Document top-level fields: `acb_version`, `generated_at`, `agent_id` (Section 5.1) |
+| **Progress bar** ("N of M groups reviewed") | Derived from `group_verdicts` in the Review State Document (Section 6.2): count of non-`pending` verdicts vs total intent groups |
+| **Collapsible intent group cards** | One card per element in `intent_groups` (Section 5.7). Card title is the group's `title` field. |
+| **Classification badge** (e.g., "Explicit") | The group's `classification` field (Section 5.3), rendered as a colored label |
+| **Task Grounding** | The group's `task_grounding` field (Section 5.7) |
+| **Files list** (e.g., `packages/acb-core/hooks/post-checkout:1-49 [full]`) | The group's `file_refs` array (Section 5.8). Format: `path:ranges [view_hint]`. Clickable to navigate to source. |
+| **Accept / Reject / Needs Discussion buttons** | Write to the corresponding `group_verdicts[].verdict` field in the Review State Document (Section 6.2) |
+| **Per-group comment textarea** | Writes to `group_verdicts[].comment` in the Review State Document (Section 6.2) |
+| **Card border color** (green = accepted, red = rejected) | Visual indicator of the current `verdict` value for that group |
+| **"Show Changes" button** | Opens the git diff scoped to the file refs in the group. Not a spec concept — a renderer convenience. |
+| **Overall Verdict** (Approve / Request Changes) | Writes to `overall_verdict` in the Review State Document (Section 6.4) |
+| **Overall comment textarea** | Writes to `overall_comment` in the Review State Document (Section 6.1) |
+| **Last updated timestamp** | The Review State Document's `updated_at` field (Section 6.1) |
+
+This rendering demonstrates the primary review workflow described in Section 9: the reviewer evaluates each intent group independently, sets per-group verdicts, then renders an overall verdict. The resulting Review State Document is consumed by post-review tools (Section 9) to generate follow-up prompts.

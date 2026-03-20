@@ -247,6 +247,8 @@ The `acb-vscode` extension adds a custom editor for `.acb.json` files. Open the 
 code .acb/review.acb.json
 ```
 
+![ACB Review in VS Code](assets/acb-vscode-review.png)
+
 The extension displays the change set reorganized by intent group. For each group you can:
 
 - Read the agent's `task_grounding`, annotations, and ambiguity tags
