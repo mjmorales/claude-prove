@@ -133,13 +133,41 @@ jobs:
         run: |
           bash scripts/bump-version.sh "${{ steps.bump.outputs.new_version }}"
 
+      - name: Update CHANGELOG.md
+        if: steps.bump.outputs.skip != 'true'
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          DATE=$(date -u +%Y-%m-%d)
+          CHANGELOG="${{ steps.changelog.outputs.changelog }}"
+
+          # Build the new entry
+          ENTRY=$(printf "## [%s] - %s\n\n%s\n" "$NEW_VERSION" "$DATE" "$CHANGELOG")
+
+          # Insert new entry after the header block (line 4 = blank line after header)
+          # Find the line number of the first "## [" entry
+          INSERT_LINE=$(grep -n "^## \[" CHANGELOG.md | head -1 | cut -d: -f1)
+
+          if [ -n "$INSERT_LINE" ]; then
+            # Insert before the first existing entry
+            head -n $((INSERT_LINE - 1)) CHANGELOG.md > CHANGELOG.tmp
+            echo "$ENTRY" >> CHANGELOG.tmp
+            tail -n +${INSERT_LINE} CHANGELOG.md >> CHANGELOG.tmp
+          else
+            # No existing entries — append after header
+            cat CHANGELOG.md > CHANGELOG.tmp
+            echo "" >> CHANGELOG.tmp
+            echo "$ENTRY" >> CHANGELOG.tmp
+          fi
+
+          mv CHANGELOG.tmp CHANGELOG.md
+
       - name: Commit, tag, and push
         if: steps.bump.outputs.skip != 'true'
         run: |
           NEW_VERSION="${{ steps.bump.outputs.new_version }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .claude-plugin/plugin.json .claude-plugin/marketplace.json
+          git add .claude-plugin/plugin.json .claude-plugin/marketplace.json CHANGELOG.md
           # Commit only if files actually changed (version may already match)
           if git diff --cached --quiet; then
             echo "Version files already at $NEW_VERSION, skipping commit."
