@@ -8,6 +8,7 @@ import { execSync } from "node:child_process";
 import { parseIntentManifest } from "../parser.js";
 
 const STAGED_MANIFEST = ".acb/intents/staged.json";
+const ACB_CONFIG = ".acb/config.json";
 
 const MANIFEST_TEMPLATE = `
 Before committing, write an intent manifest to declare what
@@ -53,6 +54,11 @@ export function runCheckManifest(_args: string[]): number {
 
   // Skip if amending (post-commit hook sets this)
   if (process.env.ACB_AMENDING === "1") {
+    return 0;
+  }
+
+  // Skip on trunk branch — direct commits don't need intent manifests
+  if (isOnTrunkBranch()) {
     return 0;
   }
 
@@ -113,4 +119,31 @@ export function runCheckManifest(_args: string[]): number {
   }
 
   return 0;
+}
+
+function isOnTrunkBranch(): boolean {
+  let branch: string;
+  try {
+    branch = execSync("git rev-parse --abbrev-ref HEAD", {
+      encoding: "utf-8",
+      stdio: "pipe",
+    }).trim();
+  } catch {
+    return false;
+  }
+
+  // Read trunk branch from .acb/config.json, default to main
+  let trunk = "main";
+  try {
+    if (existsSync(ACB_CONFIG)) {
+      const config = JSON.parse(readFileSync(ACB_CONFIG, "utf-8"));
+      if (typeof config.trunk_branch === "string") {
+        trunk = config.trunk_branch;
+      }
+    }
+  } catch {
+    // Config parse failure — fall back to default
+  }
+
+  return branch === trunk;
 }
