@@ -7,24 +7,27 @@
 Takes you from idea to merged code through a structured pipeline:
 
 ```
-/prove:brainstorm  →  /prove:task-planner  →  /prove:plan-step  →  /prove:orchestrator  →  /prove:comprehend  →  /prove:cleanup
-      │                        │                         │                        │                        │                        │
-.prove/decisions/       .prove/TASK_PLAN.md     .prove/plans/plan_X/    .prove/reports/         .prove/learning/         .prove/archive/
+/prove:brainstorm  →  /prove:task-planner  →  /prove:plan-step  →  /prove:orchestrator  →  /prove:review  →  /prove:comprehend  →  /prove:cleanup
+      │                        │                         │                        │                        │                        │                        │
+.prove/decisions/       .prove/TASK_PLAN.md     .prove/plans/plan_X/    .prove/reports/         .acb/review.acb.json    .prove/learning/         .prove/archive/
 ```
 
 1. **Brainstorm** — Explore options, weigh trade-offs, record decisions
 2. **Task Planner** — Discover requirements via questionnaires, create incremental plans
 3. **Plan Step** — Deep-dive into individual steps: requirements, design decisions, test strategy
 4. **Orchestrator** — Autonomous execution with validation gates and git snapshots
-5. **Comprehend** — Socratic quiz on agent-generated diffs to build code comprehension
-6. **Cleanup** — Archive artifacts, remove working files, delete branches
+5. **Review** — Generate an Agent Change Brief for structured code review
+6. **Comprehend** — Socratic quiz on agent-generated diffs to build code comprehension
+7. **Cleanup** — Archive artifacts, remove working files, delete branches
 
 ## Key Features
 
-- **Auto-scaling orchestrator**: Small tasks (≤3 steps) run sequentially. Larger tasks use parallel git worktrees with mandatory architect review.
-- **Inter-agent handoff**: Agents pass context between steps via a task-scoped directory (`.prove/context/`). Simple log by default, structured files (API contracts, discoveries, gotchas) when needed.
-- **Stack-agnostic validation**: Auto-detects your project type (Go, Rust, Python, Node, Godot, Makefile) and runs appropriate build/lint/test checks. Configure with `.prove.json` or let auto-detection handle it. Bootstrap with `/prove:init`.
-- **Extensible reporting**: Progress tracked in markdown. Add custom reporters (Slack, metrics) via the `reporters` key in `.prove.json`.
+- **Auto-scaling orchestrator**: Small tasks (≤3 steps) run sequentially. Larger tasks use parallel git worktrees with mandatory architect review. Three execution modes: `/prove:orchestrator`, `/prove:autopilot`, and `/prove:full-auto`.
+- **Agent Change Brief (ACB)**: Intent-manifest-driven code review. Agents declare *why* they made each change at commit time via git hooks. Changes are grouped by intent for structured review in the ACB VS Code extension. See [docs/agent-change-brief.md](docs/agent-change-brief.md).
+- **Code quality steward**: Deep line-by-line audits (`/prove:steward`), iterative audit-fix loops (`/prove:auto-steward`), and lightweight session-scoped reviews (`/prove:steward-review`). See [docs/code-quality.md](docs/code-quality.md).
+- **Stack-agnostic validation**: Auto-detects your project type (Go, Rust, Python, Node, Godot, Makefile) and runs appropriate build/lint/test checks. Supports LLM-based prompt validators for higher-level checks. Configure with `.prove.json` or let auto-detection handle it.
+- **Session management**: Create handoff prompts (`/prove:handoff`) to preserve context across Claude Code sessions. Resume with `/prove:pickup` in a fresh session.
+- **Documentation generation**: Human-readable docs (`/prove:docs`), LLM-optimized agent docs (`/prove:agentic-docs`), or both at once (`/prove:auto-docs`).
 - **Git-based rollback**: Every step is committed individually. Revert any step, reset to any point.
 
 ## Installation
@@ -39,9 +42,9 @@ If Claude Code is already running, restart it for the plugin to take effect.
 
 For manual installation or custom paths, see `scripts/install.sh --help`.
 
-## Usage
+## Quick Start
 
-```
+```bash
 # Initialize validation config for your project
 /prove:init
 
@@ -57,44 +60,153 @@ For manual installation or custom paths, see `scripts/install.sh --help`.
 # Execute autonomously
 /prove:orchestrator
 
-# Quiz yourself on agent-generated code
+# Review agent-generated code
+/prove:review
+
+# Quiz yourself on what the agent wrote
 /prove:comprehend
 
 # Clean up when done
 /prove:cleanup my-feature
 ```
 
+## Commands Reference
+
+### Planning & Discovery
+
+| Command | Description |
+|---------|-------------|
+| `/prove:brainstorm` | Interactive brainstorming — explore options, record decisions to `.prove/decisions/` |
+| `/prove:task-planner` | Guided requirements gathering and incremental plan creation |
+| `/prove:plan-step [step]` | Deep-dive into a specific plan step: requirements, design, test strategy |
+| `/prove:spec [topic]` | Author formal specifications following RFC/IETF conventions |
+
+### Execution
+
+| Command | Description |
+|---------|-------------|
+| `/prove:orchestrator` | Execute a task plan with validation gates. Auto-scales between simple and full mode |
+| `/prove:autopilot [plan]` | Run the orchestrator hands-off on a specific plan |
+| `/prove:full-auto` | End-to-end: requirements → plan → parallel execution → merge |
+| `/prove:prep-permissions` | Pre-configure Claude Code permissions for smooth orchestrator runs |
+
+### Code Review
+
+| Command | Description |
+|---------|-------------|
+| `/prove:review` | Generate an Agent Change Brief from the current branch diff |
+| `/prove:resolve` | Generate approval summary after ACB review |
+| `/prove:fix` | Generate fix prompts from rejected ACB review groups |
+| `/prove:discuss` | Surface groups needing discussion from ACB review |
+| `/prove:acb-setup` | Install, migrate, or diagnose ACB intent hooks |
+
+### Code Quality
+
+| Command | Description |
+|---------|-------------|
+| `/prove:steward` | Deep line-by-line codebase audit with automated fixes |
+| `/prove:auto-steward` | Iterative audit-fix loop — runs until clean or cap is hit |
+| `/prove:steward-review` | Lightweight review of current branch changes only |
+
+### Documentation
+
+| Command | Description |
+|---------|-------------|
+| `/prove:docs` | Generate human-readable documentation |
+| `/prove:agentic-docs` | Generate LLM-optimized documentation for agents |
+| `/prove:auto-docs` | Analyze scope and generate both doc types in one pass |
+| `/prove:claude-md` | Generate or update the project's CLAUDE.md |
+
+### Session & Lifecycle
+
+| Command | Description |
+|---------|-------------|
+| `/prove:handoff` | Create a handoff prompt for clean context transfer between sessions |
+| `/prove:pickup` | Resume work from a handoff prompt in a fresh session |
+| `/prove:comprehend` | Socratic quiz on agent-generated diffs to build code comprehension |
+| `/prove:commit` | Semantic commit assistant — reads `.prove.json` scopes for valid scopes |
+| `/prove:cleanup [task]` | Archive artifacts, remove working files, delete branches |
+| `/prove:complete-task` | Merge a task branch to main and run cleanup |
+
+### Utilities
+
+| Command | Description |
+|---------|-------------|
+| `/prove:init` | Detect tech stack and generate `.prove.json` |
+| `/prove:doctor` | Diagnose installation health — configs, tooling, drift |
+| `/prove:update` | Validate configs, detect schema drift, apply migrations |
+| `/prove:index` | Build or update the content-addressable file index |
+| `/prove:progress` | Show orchestrator execution status and blockers |
+| `/prove:notify-setup` | Configure notification integrations (Slack, Discord, custom) |
+| `/prove:notify-test` | Send a test notification through configured reporters |
+
+## Deep Dives
+
+Detailed documentation for major feature areas:
+
+- **[Agent Change Brief (ACB)](docs/agent-change-brief.md)** — Intent-manifest-driven code review system with git hooks and VS Code extension
+- **[Orchestrator](docs/orchestrator.md)** — Execution modes, validation gates, worktrees, and reporting
+- **[Code Quality](docs/code-quality.md)** — Steward, auto-steward, and steward-review audit system
+- **[Session Management](docs/session-management.md)** — Handoff/pickup workflow for context preservation
+
 ## Project Structure
 
 ```
 .claude-plugin/
-└── plugin.json              # Plugin metadata
+└── plugin.json                 # Plugin metadata (v0.14.1)
+packages/
+├── acb-core/                   # ACB CLI, git hooks, intent manifest system
+│   ├── src/                    # TypeScript source
+│   ├── hooks/                  # Git hook scripts
+│   └── docs/                   # Hook guide, agent contract, setup
+└── acb-vscode/                 # VS Code extension for ACB review
+    ├── src/                    # Extension host
+    ├── webview/                # Review UI
+    └── shared/                 # Shared types
+specs/
+└── agent-change-brief.spec.md  # ACB protocol specification (v0.3)
 references/
-└── validation-config.md        # Canonical validation spec (.prove.json schema, auto-detection)
+├── validation-config.md        # Canonical validation spec (.prove.json schema)
+└── interaction-patterns.md     # UX interaction patterns
 skills/
-├── brainstorm/              # Interactive brainstorming → .prove/decisions/
-├── task-planner/            # Discovery & planning → .prove/TASK_PLAN.md
-├── plan-step/               # Step-level requirements → .prove/plans/
-├── orchestrator/            # Autonomous execution
-│   ├── references/
-│   │   ├── handoff-protocol.md    # Inter-agent context passing
-│   │   └── reporter-protocol.md   # Progress & reporting format
-│   └── scripts/
-├── comprehend/              # Socratic quiz for code comprehension
-└── cleanup/                 # Archive & remove artifacts
+├── brainstorm/                 # Interactive brainstorming → .prove/decisions/
+├── task-planner/               # Discovery & planning → .prove/TASK_PLAN.md
+├── plan-step/                  # Step-level requirements → .prove/plans/
+├── orchestrator/               # Autonomous execution with validation gates
+├── review/                     # ACB-based code review generation
+├── acb-setup/                  # ACB hook installation and migration
+├── steward/                    # Deep codebase quality audit
+├── auto-steward/               # Iterative audit-fix loop
+├── steward-review/             # Session-scoped quality review
+├── comprehend/                 # Socratic quiz for code comprehension
+├── handoff/                    # Session handoff prompt generation
+├── commit/                     # Semantic commit assistant
+├── cleanup/                    # Archive & remove artifacts
+├── docs-writer/                # Human-readable documentation
+├── agentic-doc-writer/         # LLM-optimized documentation
+├── auto-docs/                  # Orchestrates both doc types
+├── claude-md/                  # CLAUDE.md generation
+├── spec-writer/                # RFC/IETF-style spec authoring
+├── notify-setup/               # Notification integrations
+├── prep-permissions/           # Permission pre-configuration
+├── slash-command-creator/      # Slash command scaffolding
+└── subagent-creator/           # Subagent scaffolding
 scripts/
+├── install.sh                  # Plugin installer
 ├── init-config.sh              # Tech stack detection → .prove.json
-└── setup-tools.sh              # Auto-configure tools (config)
+├── setup-tools.sh              # Auto-configure tools
+├── cleanup.sh                  # Task artifact cleanup
+├── cleanup-worktrees.sh        # Stale worktree removal
+├── build-extension.sh          # Build ACB VS Code extension
+└── hooks/                      # Git hook templates
 tools/
 └── cafi/                       # Content-addressable file index
-    ├── tool.json               # Tool manifest (config, requirements)
-    ├── hasher.py               # SHA256 hashing + cache diffing
-    ├── describer.py            # Claude CLI routing-hint generation
-    ├── indexer.py              # Orchestrates hash→diff→describe→save
-    └── __main__.py             # CLI: index, status, get, clear, context
 agents/
-├── principal-architect.md   # Code review for orchestrator's full mode
-└── validation-agent.md      # LLM-based validation for prompt validators
+├── principal-architect.md      # Architect review for orchestrator full mode
+├── code_steward.md             # Deep code quality auditor
+├── validation-agent.md         # LLM-based validation (haiku)
+├── spec-writer.md              # Specification author
+└── technical-writer.md         # Documentation writer
 ```
 
 ## Working Directory
@@ -161,36 +273,11 @@ Hashes all project files, generates routing-hint descriptions via Claude CLI ("R
 /prove:index status       # Check what's changed
 ```
 
-Setup happens automatically during `/prove:init`, or manually:
-```bash
-bash scripts/setup-tools.sh --project-root . --plugin-dir /path/to/claude-prove
-```
-
-### Creating New Tools
-
-1. Create a directory under `tools/<name>/`
-2. Add a `tool.json` manifest:
-   ```json
-   {
-     "name": "my-tool",
-     "description": "What this tool does",
-     "config_key": "my_tool",
-     "config_defaults": {"option": "default_value"},
-     "requires": ["python3"]
-   }
-   ```
-3. Add a scope to `.prove.json`: `"my-tool": "tools/my-tool/"`
-4. `setup-tools.sh` will auto-detect it and configure `.prove.json` during init
-
-**tool.json fields:**
-- `config_key` — Key added to `.prove.json` for tool-specific settings.
-- `config_defaults` — Default values for the config section.
-- `requires` — List of CLI commands that must be available (checked before setup).
-
 ## Protocols
 
-The orchestrator is built on three protocols that make it extensible:
+The system is built on extensible protocols:
 
+- **ACB Spec** — The Agent Change Brief protocol for structured code review. See `specs/agent-change-brief.spec.md`
 - **Handoff Protocol** — How agents pass context between steps. See `skills/orchestrator/references/handoff-protocol.md`
 - **Validation Config** — How project-specific checks are configured and run. See `references/validation-config.md`
 - **Reporter Protocol** — How progress is tracked and reported. See `skills/orchestrator/references/reporter-protocol.md`
