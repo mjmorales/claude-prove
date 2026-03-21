@@ -6,13 +6,13 @@ The orchestrator takes a task plan and executes it autonomously — creating a f
 
 You give it a plan; it does the implementation. At every step it runs your validators, commits the result, and moves on. If anything fails after one retry, it halts and tells you exactly where and why.
 
-**Prerequisite**: A `.prove/TASK_PLAN.md` or `.prove/plans/` directory must exist before running the orchestrator. If you don't have a plan yet, run `/prove:task-planner` first.
+**Prerequisite**: A `.prove/runs/<slug>/TASK_PLAN.md` or `.prove/plans/` directory must exist before running the orchestrator. If you don't have a plan yet, run `/prove:task-planner` first.
 
 ## Execution Modes
 
 ### `/prove:orchestrator`
 
-Standard entry point. Reads `.prove/TASK_PLAN.md` and/or `.prove/plans/`, counts the steps, and auto-scales to simple or full mode.
+Standard entry point. Reads `.prove/runs/<slug>/TASK_PLAN.md` and/or `.prove/plans/`, counts the steps, and auto-scales to simple or full mode.
 
 ```
 /prove:orchestrator
@@ -36,7 +36,7 @@ End-to-end mode. Starts from a plain-language feature description rather than an
 
 1. **Requirements gathering** — interviews you to produce a PRD (user stories, acceptance criteria, non-goals, constraints)
 2. **User approval gate** — shows the PRD, waits for "Approve" or "Request Changes"
-3. **Planning** — generates `.prove/TASK_PLAN.md` with a wave-based task graph
+3. **Planning** — generates `.prove/runs/<slug>/TASK_PLAN.md` with a wave-based task graph
 4. **User approval gate** — shows the plan, waits for "Approve" or "Request Changes"
 5. **Execution** — runs full mode orchestration
 
@@ -57,7 +57,7 @@ The orchestrator counts the implementation steps and picks a mode automatically.
 
 **Full mode** groups independent steps into waves and runs each wave in parallel using isolated git worktrees. Each task must pass a principal architect review before merge. Max concurrency per wave is 4 parallel agents; larger waves are split into sub-waves.
 
-The mode is logged at initialization and visible in `.prove/reports/<task-slug>/run-log.md`.
+The mode is logged at initialization and visible in `.prove/runs/<slug>/reports/run-log.md`.
 
 ## Validation Gates
 
@@ -254,7 +254,7 @@ git merge --no-ff orchestrator/<task-slug> -m "merge: <task-slug>"
 
 | Situation | What happens |
 | --- | --- |
-| No `.prove/TASK_PLAN.md` or `.prove/plans/` | Stops immediately, suggests `/prove:task-planner` |
+| No `.prove/runs/<slug>/TASK_PLAN.md` or `.prove/plans/` | Stops immediately, suggests `/prove:task-planner` |
 | Branch already exists | Asks: resume from last commit or start fresh |
 | Validation fails after one retry | WIP commit, halt, report shows blocker |
 | Subagent produces no file changes | Logs warning, skips commit, continues |

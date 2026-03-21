@@ -42,14 +42,14 @@ if [[ -z "$RUN_SLUG" ]]; then
 fi
 
 # State is namespaced per run under .prove/runs/<slug>/ (supports concurrent orchestrators)
-if [[ -n "$RUN_SLUG" ]]; then
-  STATE_DIR="${MAIN_ROOT}/.prove/runs/${RUN_SLUG}"
-  mkdir -p "$STATE_DIR" 2>/dev/null || true
-  STATE_FILE="${STATE_DIR}/dispatch-state.json"
-else
-  # Fallback for non-orchestrator dispatch (e.g. manual reporter testing)
-  STATE_FILE="${MAIN_ROOT}/.prove/dispatch-state.json"
+if [[ -z "$RUN_SLUG" ]]; then
+  # No orchestrator context — nothing to deduplicate against
+  exit 0
 fi
+
+STATE_DIR="${MAIN_ROOT}/.prove/runs/${RUN_SLUG}"
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+STATE_FILE="${STATE_DIR}/dispatch-state.json"
 
 # --- Check configuration ---
 

@@ -74,11 +74,12 @@ if [[ -z "$_TEST_SLUG" ]]; then
   fi
 fi
 
-if [[ -n "$_TEST_SLUG" ]]; then
-  STATE_FILE=".prove/runs/${_TEST_SLUG}/dispatch-state.json"
-else
-  STATE_FILE=".prove/dispatch-state.json"
+if [[ -z "$_TEST_SLUG" ]]; then
+  echo "No orchestrator context — set PROVE_TASK or be on an orchestrator/* branch" >&2
+  exit 1
 fi
+
+STATE_FILE=".prove/runs/${_TEST_SLUG}/dispatch-state.json"
 
 if [[ -f "$STATE_FILE" ]]; then
   # Back up actual state so it can be restored after the test

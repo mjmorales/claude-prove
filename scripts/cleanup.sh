@@ -36,24 +36,18 @@ done
 
 # --- Scan for artifacts ---
 
-found_reports=()
+found_runs=()
 found_plans=()
 found_context=()
 found_branches=()
-found_runs=()
 found_worktrees=()
-found_prd=false
-found_task_plan=false
-found_progress=false
 
 scan_artifacts() {
   local slug="$1"
 
   if [[ -n "$slug" ]]; then
-    # Scan for specific task — check namespaced run directory first
+    # Scan for specific task
     [[ -d "$PROVE_DIR/runs/$slug" ]] && found_runs+=("$slug") || true
-    # Legacy: also check old-style report/context paths
-    [[ -d "$PROVE_DIR/reports/$slug" ]] && found_reports+=("$slug") || true
     for d in "$PROVE_DIR"/plans/plan_*/; do
       [[ -d "$d" ]] && found_plans+=("$(basename "$d")")
     done
@@ -70,9 +64,6 @@ scan_artifacts() {
     for d in "$PROVE_DIR"/runs/*/; do
       [[ -d "$d" ]] && found_runs+=("$(basename "$d")")
     done
-    for d in "$PROVE_DIR"/reports/*/; do
-      [[ -d "$d" ]] && found_reports+=("$(basename "$d")")
-    done
     for d in "$PROVE_DIR"/plans/plan_*/; do
       [[ -d "$d" ]] && found_plans+=("$(basename "$d")")
     done
@@ -88,10 +79,6 @@ scan_artifacts() {
       [[ -d "$d" ]] && found_worktrees+=("$d")
     done
   fi
-
-  [[ -f "$PROVE_DIR/PRD.md" ]] && found_prd=true || true
-  [[ -f "$PROVE_DIR/TASK_PLAN.md" ]] && found_task_plan=true || true
-  [[ -f "$PROVE_DIR/PROGRESS.md" ]] && found_progress=true || true
 }
 
 # --- Print scan results ---
@@ -102,12 +89,6 @@ print_found() {
   if [[ ${#found_runs[@]} -gt 0 ]]; then
     for r in "${found_runs[@]}"; do
       echo "  run: .prove/runs/$r/"
-      ((count++)) || true
-    done
-  fi
-  if [[ ${#found_reports[@]} -gt 0 ]]; then
-    for r in "${found_reports[@]}"; do
-      echo "  report: .prove/reports/$r/ (legacy)"
       ((count++)) || true
     done
   fi
@@ -122,18 +103,6 @@ print_found() {
       echo "  context: .prove/context/$c/"
       ((count++)) || true
     done
-  fi
-  if $found_prd; then
-    echo "  file: .prove/PRD.md"
-    ((count++)) || true
-  fi
-  if $found_task_plan; then
-    echo "  file: .prove/TASK_PLAN.md"
-    ((count++)) || true
-  fi
-  if $found_progress; then
-    echo "  file: .prove/PROGRESS.md (legacy)"
-    ((count++)) || true
   fi
   if [[ ${#found_worktrees[@]} -gt 0 ]]; then
     for w in "${found_worktrees[@]}"; do
@@ -180,7 +149,7 @@ archive_slug() {
   local archive_dir="$PROVE_DIR/archive/${TODAY}_${slug}"
   mkdir -p "$archive_dir"
 
-  # Archive namespaced run directory (new layout)
+  # Archive run directory
   if [[ "$slug" == "all" ]]; then
     for d in "$PROVE_DIR"/runs/*/; do
       if [[ -d "$d" ]]; then
@@ -195,24 +164,6 @@ archive_slug() {
     echo "  archived: runs/$slug/ -> archive/${TODAY}_${slug}/"
   fi
 
-  # Archive legacy reports (pre-concurrent layout)
-  if [[ "$slug" == "all" ]]; then
-    for d in "$PROVE_DIR"/reports/*/; do
-      if [[ -d "$d" ]]; then
-        local rname
-        rname=$(basename "$d")
-        cp -r "$d" "$archive_dir/reports-$rname/"
-        echo "  archived: reports/$rname/ -> archive/${TODAY}_${slug}/ (legacy)"
-      fi
-    done
-  elif [[ -d "$PROVE_DIR/reports/$slug" ]]; then
-    [[ -f "$PROVE_DIR/reports/$slug/report.md" ]] && \
-      cp "$PROVE_DIR/reports/$slug/report.md" "$archive_dir/workflow-report.md"
-    [[ -f "$PROVE_DIR/reports/$slug/run-log.md" ]] && \
-      cp "$PROVE_DIR/reports/$slug/run-log.md" "$archive_dir/run-log.md"
-    echo "  archived: reports/$slug/ -> archive/${TODAY}_${slug}/ (legacy)"
-  fi
-
   # Archive plans (copy key files from any matching plan dirs)
   for d in "$PROVE_DIR"/plans/plan_*/; do
     if [[ -d "$d" ]]; then
@@ -223,16 +174,6 @@ archive_slug() {
       echo "  archived: plans/$(basename "$d")/ -> archive/${TODAY}_${slug}/"
     fi
   done
-
-  # Archive top-level files (legacy — these are now copied into runs/<slug>/ at start)
-  if [[ -f "$PROVE_DIR/PRD.md" ]]; then
-    cp "$PROVE_DIR/PRD.md" "$archive_dir/PRD.md"
-    echo "  archived: PRD.md -> archive/${TODAY}_${slug}/"
-  fi
-  if [[ -f "$PROVE_DIR/TASK_PLAN.md" ]]; then
-    cp "$PROVE_DIR/TASK_PLAN.md" "$archive_dir/TASK_PLAN.md"
-    echo "  archived: TASK_PLAN.md -> archive/${TODAY}_${slug}/"
-  fi
 
   # Archive handoff context
   if [[ -d "$PROVE_DIR/context/$slug" ]]; then
@@ -258,7 +199,7 @@ remove_artifacts() {
   local remove_all=false
   [[ "$slug" == "all" ]] && remove_all=true
 
-  # Remove namespaced run directories (new layout)
+  # Remove run directories
   if $remove_all; then
     for d in "$PROVE_DIR"/runs/*/; do
       [[ -d "$d" ]] && rm -rf "$d" && echo "  removed: .prove/runs/$(basename "$d")/"
@@ -268,17 +209,6 @@ remove_artifacts() {
     echo "  removed: .prove/runs/$slug/"
   fi
   rmdir "$PROVE_DIR/runs" 2>/dev/null && echo "  removed: .prove/runs/ (empty)" || true
-
-  # Remove legacy reports
-  if $remove_all; then
-    for d in "$PROVE_DIR"/reports/*/; do
-      [[ -d "$d" ]] && rm -rf "$d" && echo "  removed: .prove/reports/$(basename "$d")/ (legacy)"
-    done
-  elif [[ -d "$PROVE_DIR/reports/$slug" ]]; then
-    rm -rf "$PROVE_DIR/reports/$slug"
-    echo "  removed: .prove/reports/$slug/ (legacy)"
-  fi
-  rmdir "$PROVE_DIR/reports" 2>/dev/null && echo "  removed: .prove/reports/ (empty)" || true
 
   # Remove plans
   for d in "$PROVE_DIR"/plans/plan_*/; do
@@ -299,29 +229,6 @@ remove_artifacts() {
     echo "  removed: .prove/context/$slug/"
   fi
   rmdir "$PROVE_DIR/context" 2>/dev/null && echo "  removed: .prove/context/ (empty)" || true
-
-  # Remove top-level files (legacy — only if no other runs are active)
-  local active_runs=0
-  for d in "$PROVE_DIR"/runs/*/; do
-    [[ -d "$d" ]] && ((active_runs++)) || true
-  done
-
-  if [[ $active_runs -eq 0 ]]; then
-    if [[ -f "$PROVE_DIR/PRD.md" ]]; then
-      rm "$PROVE_DIR/PRD.md"
-      echo "  removed: .prove/PRD.md"
-    fi
-    if [[ -f "$PROVE_DIR/TASK_PLAN.md" ]]; then
-      rm "$PROVE_DIR/TASK_PLAN.md"
-      echo "  removed: .prove/TASK_PLAN.md"
-    fi
-    if [[ -f "$PROVE_DIR/PROGRESS.md" ]]; then
-      rm "$PROVE_DIR/PROGRESS.md"
-      echo "  removed: .prove/PROGRESS.md (legacy)"
-    fi
-  else
-    echo "  kept: .prove/PRD.md, TASK_PLAN.md (other runs still active)"
-  fi
 
   # Remove orchestrator worktrees
   if $remove_all; then

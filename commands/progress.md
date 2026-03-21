@@ -9,9 +9,7 @@ Read the current orchestrator state and present a compact status summary. Suppor
 ## Steps
 
 1. Scan for active orchestrator runs:
-   - Check `.prove/runs/*/PROGRESS.md` for namespaced run directories
-   - Fall back to `.prove/PROGRESS.md` for legacy single-run layout
-   - Check `.prove/reports/` for any run logs
+   - Check `.prove/runs/*/PROGRESS.md` for run directories
    - If nothing exists, tell the user: "No active orchestrator run found. Start one with `/prove:orchestrator` or `/prove:full-auto`."
 
 2. If multiple runs are found, list them all in a summary table first:
@@ -32,7 +30,7 @@ Read the current orchestrator state and present a compact status summary. Suppor
    - Any items in the Issues section
    - Test results if available
 
-4. Also check `.prove/runs/<slug>/reports/run-log.md` (or legacy `.prove/reports/*/run-log.md`) for the most recent report:
+4. Also check `.prove/runs/<slug>/reports/run-log.md` for the most recent report:
    - Extract the Step Log table
    - Note any WIP or failed steps
 

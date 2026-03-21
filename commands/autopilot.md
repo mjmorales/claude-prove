@@ -11,18 +11,18 @@ Load and follow the orchestrator skill (`skills/orchestrator/SKILL.md` from the 
 
 ## Quick Start
 
-1. **Locate the plan**: Find `.prove/TASK_PLAN.md` and/or `.prove/plans/` directory in the current project
-2. **If $ARGUMENTS is provided**: Look for a specific plan matching the argument
+1. **Locate the plan**: Find `.prove/runs/<slug>/TASK_PLAN.md` and/or `.prove/plans/` directory in the current project
+2. **If $ARGUMENTS is provided**: Derive slug from the argument, look for a matching run directory or plan
 3. **Follow the orchestrator skill phases in order**: Initialization -> Plan Review -> Execution Loop -> Completion
 
 ## Key Behaviors
 
-- Create a feature branch in its own worktree: `orchestrator/<task-slug>` at `.claude/worktrees/orchestrator-<slug>`
-- Namespace all run state under `.prove/runs/<task-slug>/` (supports concurrent orchestrator runs)
+- Create a feature branch in its own worktree: `orchestrator/<slug>` at `.claude/worktrees/orchestrator-<slug>`
+- Namespace all run state under `.prove/runs/<slug>/` (supports concurrent orchestrator runs)
 - Auto-validate after EVERY step (build, tests, lint)
 - Commit after each successful step
 - On validation failure: one retry, then HALT
-- Generate reports in `.prove/runs/<task-slug>/reports/`
+- Generate reports in `.prove/runs/<slug>/reports/`
 - Present the final report and review instructions to the user
 
 ## Do NOT

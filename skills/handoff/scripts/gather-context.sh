@@ -100,18 +100,13 @@ echo ""
 
 FOUND_ARTIFACTS=false
 
-if [[ -f .prove/TASK_PLAN.md ]]; then
-  echo "- \`.prove/TASK_PLAN.md\` — Implementation plan with steps"
-  FOUND_ARTIFACTS=true
-fi
-if [[ -f .prove/PRD.md ]]; then
-  echo "- \`.prove/PRD.md\` — Product requirements document"
-  FOUND_ARTIFACTS=true
-fi
-if [[ -f .prove/PROGRESS.md ]]; then
-  echo "- \`.prove/PROGRESS.md\` — Orchestrator progress tracker (legacy)"
-  FOUND_ARTIFACTS=true
-fi
+for run_dir in .prove/runs/*/; do
+  if [[ -d "$run_dir" ]]; then
+    run_slug=$(basename "$run_dir")
+    [[ -f "$run_dir/TASK_PLAN.md" ]] && echo "- \`.prove/runs/$run_slug/TASK_PLAN.md\` — Implementation plan" && FOUND_ARTIFACTS=true
+    [[ -f "$run_dir/PRD.md" ]] && echo "- \`.prove/runs/$run_slug/PRD.md\` — Product requirements" && FOUND_ARTIFACTS=true
+  fi
+done
 for run_dir in .prove/runs/*/; do
   if [[ -d "$run_dir" ]]; then
     run_slug=$(basename "$run_dir")
@@ -183,10 +178,13 @@ for v in cfg.get('validators', []):
 fi
 
 # --- Task Plan Summary ---
-# If TASK_PLAN.md exists, extract step status for the pickup note
-if [[ -f .prove/TASK_PLAN.md ]]; then
-  echo "## Task Plan Steps"
-  echo ""
-  grep -E '^### Step [0-9]+:' .prove/TASK_PLAN.md 2>/dev/null | sed 's/^### /- /' || true
-  echo ""
-fi
+# Extract step status from active run plans
+for run_dir in .prove/runs/*/; do
+  if [[ -d "$run_dir" && -f "$run_dir/TASK_PLAN.md" ]]; then
+    run_slug=$(basename "$run_dir")
+    echo "## Task Plan Steps ($run_slug)"
+    echo ""
+    grep -E '^### Step [0-9]+:' "$run_dir/TASK_PLAN.md" 2>/dev/null | sed 's/^### /- /' || true
+    echo ""
+  fi
+done
