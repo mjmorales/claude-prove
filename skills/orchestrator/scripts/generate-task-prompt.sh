@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # generate-task-prompt.sh — Generates a focused prompt for a worktree implementation agent.
 #
-# Usage: generate-task-prompt.sh <task-plan-path> <task-id> <prd-path> <project-root>
+# Usage: generate-task-prompt.sh <task-plan-path> <task-id> <prd-path> <project-root> [worktree-path]
 #
 # Reads TASK_PLAN.md and PRD, extracts the relevant task detail section,
 # and outputs a complete, self-contained prompt for a worktree agent.
+#
+# If worktree-path is provided, the prompt includes a directive to cd into it first.
 
 set -euo pipefail
 
@@ -12,6 +14,7 @@ TASK_PLAN="$1"
 TASK_ID="$2"
 PRD="$3"
 PROJECT_ROOT="$4"
+WORKTREE_PATH="${5:-}"
 
 if [[ ! -f "$TASK_PLAN" ]]; then
   echo "ERROR: TASK_PLAN.md not found at $TASK_PLAN" >&2
@@ -100,6 +103,20 @@ fi
 
 # Output the prompt
 cat <<PROMPT
+$(if [[ -n "$WORKTREE_PATH" ]]; then
+cat <<WORKTREE_BLOCK
+## Worktree
+
+You are working in a pre-created worktree. Before doing anything else, change into it:
+
+\`\`\`bash
+cd $WORKTREE_PATH
+\`\`\`
+
+All file reads, edits, and git commands must happen inside this directory.
+WORKTREE_BLOCK
+fi)
+
 You are implementing **Task $TASK_ID: $TASK_NAME**
 
 ## Task Details

@@ -141,25 +141,29 @@ For each wave:
 
 #### 2a. Launch Worktree Agents (parallel within wave)
 
-For each task in the wave, generate a prompt and launch:
+For each task in the wave:
 
-```bash
-# Generate the task prompt (use run-local copies)
-PROMPT=$(bash scripts/generate-task-prompt.sh \
-  .prove/runs/<slug>/TASK_PLAN.md <task-id> .prove/runs/<slug>/PRD.md <project-root>)
-```
+1. Create a namespaced worktree for the task:
+   ```bash
+   WT_PATH=$(bash scripts/manage-worktree.sh create <slug> <task-id>)
+   ```
 
-Then launch with the Agent tool:
-```
-Agent(
-  subagent_type: "general-purpose",
-  isolation: "worktree",
-  run_in_background: true,
-  prompt: $PROMPT
-)
-```
+2. Generate the task prompt (use run-local copies):
+   ```bash
+   PROMPT=$(bash scripts/generate-task-prompt.sh \
+     .prove/runs/<slug>/TASK_PLAN.md <task-id> .prove/runs/<slug>/PRD.md <project-root> "$WT_PATH")
+   ```
 
-- Launch ALL tasks in a wave as parallel Agent calls in a single message.
+3. Launch the agent **without** `isolation: "worktree"` — the worktree already exists:
+   ```
+   Agent(
+     subagent_type: "general-purpose",
+     run_in_background: true,
+     prompt: $PROMPT
+   )
+   ```
+
+- Create ALL worktrees first, then launch ALL agents as parallel Agent calls in a single message.
 - Update progress for each task start:
   ```bash
   bash scripts/update-progress.sh .prove/runs/<slug>/PROGRESS.md task-start <task-id>
@@ -182,8 +186,9 @@ For each completed worktree agent, run the review-fix loop:
 REVIEW LOOP (max 3 iterations per task):
 
 1. Generate review prompt:
+   WT_PATH=$(bash scripts/manage-worktree.sh path <slug> <task-id>)
    REVIEW_PROMPT=$(bash scripts/generate-review-prompt.sh \
-     <worktree-path> <task-id> .prove/runs/<slug>/TASK_PLAN.md .prove/runs/<slug>/PRD.md <base-branch>)
+     "$WT_PATH" <task-id> .prove/runs/<slug>/TASK_PLAN.md .prove/runs/<slug>/PRD.md <base-branch>)
 
 2. Launch principal-architect review:
    Agent(
@@ -231,17 +236,17 @@ After ALL tasks in the wave are reviewed and approved:
 1. For each approved task (in task order), merge into the orchestrator worktree:
    ```bash
    cd .claude/worktrees/orchestrator-<slug>
-   git merge <worktree-branch> --no-ff -m "merge: task <id> - <name>"
+   BRANCH=$(bash scripts/manage-worktree.sh branch <slug> <task-id>)
+   git merge "$BRANCH" --no-ff -m "merge: task <id> - <name>"
    ```
    Update progress:
    ```bash
    bash scripts/update-progress.sh .prove/runs/<slug>/PROGRESS.md merge <task-id> "clean"
    ```
 
-2. After merging, clean up the worktree and its branch:
+2. After merging, clean up the task worktree and its branch:
    ```bash
-   git worktree remove <worktree-path> --force
-   git branch -D <worktree-branch>
+   bash scripts/manage-worktree.sh remove <slug> <task-id>
    ```
 
 3. If merge conflict:
@@ -583,7 +588,8 @@ All artifacts are written directly to the run directory — no global `.prove/` 
 
 ### Branch Naming
 - Orchestrator branch: `orchestrator/<slug>` (lives in its own worktree at `.claude/worktrees/orchestrator-<slug>`)
-- Sub-task worktree branches: managed by `isolation: "worktree"` (full mode only)
+- Sub-task branches: `task/<slug>/<task-id>` (worktree at `.claude/worktrees/<slug>-task-<task-id>`)
+- Managed by `scripts/manage-worktree.sh` — deterministic naming prevents collisions between concurrent runs
 
 ### Slug Generation
 Kebab-case, max 40 chars: "Add user authentication" -> `add-user-authentication`
