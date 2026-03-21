@@ -2,7 +2,7 @@
 # dispatch-event.sh — Core event dispatcher for prove orchestrator
 #
 # Reads .prove.json reporters, fires matching ones for the given event,
-# and deduplicates via .prove/dispatch-state.json.
+# and deduplicates via .prove/runs/<slug>/dispatch-state.json.
 #
 # Usage:
 #   PROVE_TASK="my-task" PROVE_STEP="1" PROVE_STATUS="done" \
@@ -29,9 +29,27 @@ MAIN_ROOT=$(git -C "$WORK_DIR" worktree list --porcelain 2>/dev/null | awk '/^wo
 MAIN_ROOT="${MAIN_ROOT:-$WORK_DIR}"
 # Config (.prove.json) is tracked — read from current worktree (guaranteed up-to-date)
 CONFIG_FILE="${WORK_DIR}/.prove.json"
-# State and reporter scripts live in .prove/ (gitignored) — always in main worktree
-STATE_FILE="${MAIN_ROOT}/.prove/dispatch-state.json"
+# Reporter scripts live in .prove/ (gitignored) — always in main worktree
 REPORTER_ROOT="${MAIN_ROOT}"
+
+# Derive run slug from PROVE_TASK env var or branch name for namespaced state
+RUN_SLUG="${PROVE_TASK:-}"
+if [[ -z "$RUN_SLUG" ]]; then
+  BRANCH=$(cd "$WORK_DIR" && git branch --show-current 2>/dev/null || echo "")
+  if [[ "$BRANCH" == orchestrator/* ]]; then
+    RUN_SLUG="${BRANCH#orchestrator/}"
+  fi
+fi
+
+# State is namespaced per run under .prove/runs/<slug>/ (supports concurrent orchestrators)
+if [[ -n "$RUN_SLUG" ]]; then
+  STATE_DIR="${MAIN_ROOT}/.prove/runs/${RUN_SLUG}"
+  mkdir -p "$STATE_DIR" 2>/dev/null || true
+  STATE_FILE="${STATE_DIR}/dispatch-state.json"
+else
+  # Fallback for non-orchestrator dispatch (e.g. manual reporter testing)
+  STATE_FILE="${MAIN_ROOT}/.prove/dispatch-state.json"
+fi
 
 # --- Check configuration ---
 
