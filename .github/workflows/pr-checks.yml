@@ -13,7 +13,7 @@ jobs:
     name: DCO
     runs-on: ubuntu-latest
     steps:
-      - uses: probot/dco@v2
+      - uses: dkhamsing/dco@v2
         with:
           require_for_members: false
 
