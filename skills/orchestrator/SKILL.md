@@ -8,8 +8,8 @@ description: >
   concurrent orchestrator runs that consolidate at merge time. Creates feature
   branches, runs validation gates (build, test, lint), commits after each successful
   step, generates progress reports, and supports rollback via git. Use when a
-  .prove/TASK_PLAN.md or .prove/plans/ directory exists and the user wants hands-off
-  execution. Triggers on "orchestrate", "autopilot", "full auto", "run autonomously",
+  TASK_PLAN.md exists (in .prove/runs/<slug>/ or .prove/) or .prove/plans/ directory
+  exists and the user wants hands-off execution. Triggers on "orchestrate", "autopilot", "full auto", "run autonomously",
   "implement without me", "hands-off mode".
 ---
 
@@ -23,29 +23,42 @@ Autonomous orchestration skill that executes planned tasks end-to-end. Auto-scal
 ## Prerequisites
 
 Before invoking, one of the following must exist:
-- A `.prove/TASK_PLAN.md` with implementation steps (created via `/plan-task`)
+- A `.prove/runs/<slug>/TASK_PLAN.md` with implementation steps (written by full-auto or moved from legacy location)
+- A `.prove/TASK_PLAN.md` with implementation steps (legacy — will be moved into run directory)
 - A `.prove/plans/plan_X/` directory with planning docs (created via `/plan-step`)
-- Both (ideal)
 
-If neither exists, inform the user and suggest running `/plan-task` first.
+If none exist, inform the user and suggest running `/plan-task` first.
 
 ---
 
 ## Phase 0: Initialization
 
-1. **Validate inputs**
-   - Check for `.prove/TASK_PLAN.md` and/or `.prove/plans/` directory
+1. **Derive slug early** — Slugify the task name (lowercase, hyphens, no special chars, max 40 chars).
+   This is done first so the run directory can be created before any artifacts are written.
+
+2. **Initialize run directory** (namespaced per slug — supports concurrent runs)
+   ```bash
+   mkdir -p .prove/runs/<task-slug>/reports/
+   ```
+
+3. **Validate inputs** — look for planning artifacts in this order:
+   - `.prove/runs/<task-slug>/TASK_PLAN.md` (already in run directory from a prior session or full-auto flow)
+   - `.prove/TASK_PLAN.md` (legacy global location) — if found here, **move** it into the run directory:
+     ```bash
+     mv .prove/TASK_PLAN.md .prove/runs/<task-slug>/TASK_PLAN.md
+     [[ -f .prove/PRD.md ]] && mv .prove/PRD.md .prove/runs/<task-slug>/PRD.md
+     ```
+   - `.prove/plans/plan_X/` directories (created via `/plan-step`)
    - Read all available planning documents to understand full scope
    - Extract task name and ordered implementation steps
 
-2. **Auto-scale decision**
+4. **Auto-scale decision**
    - Count implementation steps
    - **<=3 steps**: Simple mode (sequential, no worktrees)
    - **4+ steps**: Full mode (parallel worktrees + architect review)
    - Log which mode was selected
 
-3. **Create feature branch in a worktree** (enables concurrent orchestrator runs)
-   - Slugify the task name (lowercase, hyphens, no special chars, max 40 chars)
+5. **Create feature branch in a worktree** (enables concurrent orchestrator runs)
    - If branch already exists, use AskUserQuestion with header "Branch" and options: "Resume" (continue from last commit) / "Start Fresh" (delete and recreate)
    - Create the branch and worktree:
      ```bash
@@ -55,10 +68,7 @@ If neither exists, inform the user and suggest running `/plan-task` first.
      The main worktree remains on its current branch, so other orchestrators
      (or manual work) can run concurrently without interference.
 
-4. **Initialize run directory** (namespaced per slug — supports concurrent runs)
-   ```bash
-   mkdir -p .prove/runs/<task-slug>/reports/
-   ```
+6. **Create run log**
    Create `.prove/runs/<task-slug>/reports/run-log.md`:
    ```markdown
    # Orchestrator Run Log: <Task Name>
@@ -78,15 +88,9 @@ If neither exists, inform the user and suggest running `/plan-task` first.
    |---|------|--------|--------|-------|
    ```
 
-   Copy planning inputs into the run directory for isolation:
-   ```bash
-   cp .prove/TASK_PLAN.md .prove/runs/<task-slug>/TASK_PLAN.md
-   [[ -f .prove/PRD.md ]] && cp .prove/PRD.md .prove/runs/<task-slug>/PRD.md
-   ```
+7. **Load validators** from `.prove.json` or auto-detect per `references/validation-config.md`
 
-5. **Load validators** from `.prove.json` or auto-detect per `references/validation-config.md`
-
-6. **Load reporters** from `.prove.json`
+8. **Load reporters** from `.prove.json`
    - Read the `reporters` array (may be empty or absent)
    - Log loaded reporters to run-log: `Reporters: <name1>, <name2>` (or `Reporters: none`)
    - Reporter dispatch is handled automatically by Claude Code hooks — no manual dispatch needed
@@ -538,18 +542,22 @@ Update after: task start, task complete, review verdict, review pass, merge, wav
 
 When triggered with "full auto" and no existing plan, run requirements gathering first:
 
-1. **Read project context** — Scan `CLAUDE.md`, `README.md`, `docs/`, recent git history.
-2. **Launch a requirements-gathering subagent** that interviews the user to clarify:
+1. **Derive slug and create run directory** — Slugify the feature name and run:
+   ```bash
+   mkdir -p .prove/runs/<slug>/reports/
+   ```
+2. **Read project context** — Scan `CLAUDE.md`, `README.md`, `docs/`, recent git history.
+3. **Launch a requirements-gathering subagent** that interviews the user to clarify:
    - What the feature does (user stories, acceptance criteria)
    - What it does NOT do (explicit non-goals)
    - Technical constraints
    - How to verify it works
-3. **Write the PRD** using the template in `references/prd-template.md`
-4. **User approval gate** — Use AskUserQuestion with header "PRD" and options: "Approve" (proceed to planning) / "Request Changes" (I have feedback before proceeding)
-5. **Generate `.prove/TASK_PLAN.md`** with wave-based task graph
-6. **User approval gate** — Use AskUserQuestion with header "Plan" and options: "Approve" (begin execution) / "Request Changes" (I have feedback before proceeding)
+4. **Write the PRD** directly to `.prove/runs/<slug>/PRD.md` using the template in `references/prd-template.md`
+5. **User approval gate** — Use AskUserQuestion with header "PRD" and options: "Approve" (proceed to planning) / "Request Changes" (I have feedback before proceeding)
+6. **Generate `.prove/runs/<slug>/TASK_PLAN.md`** with wave-based task graph
+7. **User approval gate** — Use AskUserQuestion with header "Plan" and options: "Approve" (begin execution) / "Request Changes" (I have feedback before proceeding)
 
-Note: PRD and TASK_PLAN are written to `.prove/` initially (shared). Phase 0 copies them into `.prove/runs/<slug>/` for run isolation.
+All artifacts are written directly to the run directory — no global `.prove/` singletons are created. This allows multiple full-auto runs to proceed concurrently.
 
 ---
 
@@ -557,7 +565,7 @@ Note: PRD and TASK_PLAN are written to `.prove/` initially (shared). Phase 0 cop
 
 | Scenario | Action |
 |----------|--------|
-| No .prove/TASK_PLAN.md or .prove/plans/ | Stop. Suggest `/plan-task` |
+| No TASK_PLAN.md (in runs/<slug>/ or .prove/) and no .prove/plans/ | Stop. Suggest `/plan-task` |
 | Branch already exists | Ask: resume or fresh start |
 | Build fails after step | One retry, then halt with report |
 | Tests fail after step | One retry, then halt with report |
