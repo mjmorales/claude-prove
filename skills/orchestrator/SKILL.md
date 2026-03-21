@@ -8,8 +8,8 @@ description: >
   concurrent orchestrator runs that consolidate at merge time. Creates feature
   branches, runs validation gates (build, test, lint), commits after each successful
   step, generates progress reports, and supports rollback via git. Use when a
-  .prove/TASK_PLAN.md or .prove/plans/ directory exists and the user wants hands-off
-  execution. Triggers on "orchestrate", "autopilot", "full auto", "run autonomously",
+  .prove/runs/<slug>/TASK_PLAN.md or .prove/plans/ directory exists and the user
+  wants hands-off execution. Triggers on "orchestrate", "autopilot", "full auto", "run autonomously",
   "implement without me", "hands-off mode".
 ---
 
@@ -23,9 +23,8 @@ Autonomous orchestration skill that executes planned tasks end-to-end. Auto-scal
 ## Prerequisites
 
 Before invoking, one of the following must exist:
-- A `.prove/TASK_PLAN.md` with implementation steps (created via `/plan-task`)
+- A `.prove/runs/<slug>/TASK_PLAN.md` with implementation steps (written by full-auto or task-planner)
 - A `.prove/plans/plan_X/` directory with planning docs (created via `/plan-step`)
-- Both (ideal)
 
 If neither exists, inform the user and suggest running `/plan-task` first.
 
@@ -33,37 +32,43 @@ If neither exists, inform the user and suggest running `/plan-task` first.
 
 ## Phase 0: Initialization
 
-1. **Validate inputs**
-   - Check for `.prove/TASK_PLAN.md` and/or `.prove/plans/` directory
+> **Path convention**: All `.prove/...` paths are rooted at the **main worktree** (`$MAIN_ROOT`), not the orchestrator worktree. Scripts resolve this via `git worktree list`.
+
+1. **Derive slug** — Slugify the task name from the command arguments or feature description
+   (lowercase, hyphens, no special chars, max 40 chars). The slug is derived from user input,
+   not from parsing the plan — it determines where to find/create the run directory.
+
+2. **Initialize run directory** (namespaced per slug — supports concurrent runs)
+   ```bash
+   mkdir -p .prove/runs/<slug>/reports/
+   ```
+
+3. **Validate inputs** — look for `.prove/runs/<slug>/TASK_PLAN.md` or `.prove/plans/plan_X/` directories.
    - Read all available planning documents to understand full scope
    - Extract task name and ordered implementation steps
 
-2. **Auto-scale decision**
+4. **Auto-scale decision**
    - Count implementation steps
    - **<=3 steps**: Simple mode (sequential, no worktrees)
    - **4+ steps**: Full mode (parallel worktrees + architect review)
    - Log which mode was selected
 
-3. **Create feature branch in a worktree** (enables concurrent orchestrator runs)
-   - Slugify the task name (lowercase, hyphens, no special chars, max 40 chars)
+5. **Create feature branch in a worktree** (enables concurrent orchestrator runs)
    - If branch already exists, use AskUserQuestion with header "Branch" and options: "Resume" (continue from last commit) / "Start Fresh" (delete and recreate)
    - Create the branch and worktree:
      ```bash
-     git worktree add .claude/worktrees/orchestrator-<task-slug> -b orchestrator/<task-slug>
+     git worktree add .claude/worktrees/orchestrator-<slug> -b orchestrator/<slug>
      ```
    - All subsequent orchestrator work happens inside this worktree path.
      The main worktree remains on its current branch, so other orchestrators
      (or manual work) can run concurrently without interference.
 
-4. **Initialize run directory** (namespaced per slug — supports concurrent runs)
-   ```bash
-   mkdir -p .prove/runs/<task-slug>/reports/
-   ```
-   Create `.prove/runs/<task-slug>/reports/run-log.md`:
+6. **Create run log**
+   Create `.prove/runs/<slug>/reports/run-log.md`:
    ```markdown
    # Orchestrator Run Log: <Task Name>
-   **Branch**: orchestrator/<task-slug>
-   **Worktree**: .claude/worktrees/orchestrator-<task-slug>
+   **Branch**: orchestrator/<slug>
+   **Worktree**: .claude/worktrees/orchestrator-<slug>
    **Mode**: Simple | Full
    **Started**: <ISO timestamp>
    **Status**: In Progress
@@ -78,15 +83,9 @@ If neither exists, inform the user and suggest running `/plan-task` first.
    |---|------|--------|--------|-------|
    ```
 
-   Copy planning inputs into the run directory for isolation:
-   ```bash
-   cp .prove/TASK_PLAN.md .prove/runs/<task-slug>/TASK_PLAN.md
-   [[ -f .prove/PRD.md ]] && cp .prove/PRD.md .prove/runs/<task-slug>/PRD.md
-   ```
+7. **Load validators** from `.prove.json` or auto-detect per `references/validation-config.md`
 
-5. **Load validators** from `.prove.json` or auto-detect per `references/validation-config.md`
-
-6. **Load reporters** from `.prove.json`
+8. **Load reporters** from `.prove.json`
    - Read the `reporters` array (may be empty or absent)
    - Log loaded reporters to run-log: `Reporters: <name1>, <name2>` (or `Reporters: none`)
    - Reporter dispatch is handled automatically by Claude Code hooks — no manual dispatch needed
@@ -348,12 +347,12 @@ Record commit SHA in run-log.
 
 ## Phase 3: Completion
 
-Generate `.prove/runs/<task-slug>/reports/report.md`:
+Generate `.prove/runs/<slug>/reports/report.md`:
 
 ```markdown
 # Orchestrator Report: <Task Name>
 
-**Branch**: orchestrator/<task-slug>
+**Branch**: orchestrator/<slug>
 **Mode**: Simple | Full
 **Status**: Completed | Halted at Step N
 **Started**: <timestamp>
@@ -389,10 +388,10 @@ experience (diff viewing, accept/reject per intent group). Or use git commands:
 # /prove:review
 
 # View all changes
-git diff main...orchestrator/<task-slug>
+git diff main...orchestrator/<slug>
 
 # View step-by-step
-git log --oneline main..orchestrator/<task-slug>
+git log --oneline main..orchestrator/<slug>
 git show <commit-sha>  # inspect individual step
 ```
 
@@ -400,7 +399,7 @@ git show <commit-sha>  # inspect individual step
 ```bash
 # Undo everything
 git checkout main
-git branch -D orchestrator/<task-slug>
+git branch -D orchestrator/<slug>
 
 # Revert a specific step
 git revert <commit-sha>
@@ -412,7 +411,7 @@ git reset --hard <commit-sha>
 ## Merge When Satisfied
 ```bash
 git checkout main
-git merge --no-ff orchestrator/<task-slug>
+git merge --no-ff orchestrator/<slug>
 ```
 ```
 
@@ -447,7 +446,7 @@ If the user chose "Merge & Clean" or "Merge Only":
 
 ```bash
 # Merge from the main worktree (not from inside the orchestrator worktree)
-git merge --no-ff orchestrator/<task-slug> -m "merge: <task-name>"
+git merge --no-ff orchestrator/<slug> -m "merge: <task-name>"
 ```
 
 If another orchestrator merged to main first, you may need to pull/merge main first.
@@ -460,14 +459,14 @@ If merge conflicts occur, halt and inform the user. Do NOT force-merge.
 Run cleanup automatically — no confirmation needed since the user already approved:
 
 ```bash
-PROJECT_ROOT="." bash scripts/cleanup.sh --auto <task-slug>
+PROJECT_ROOT="." bash scripts/cleanup.sh --auto <slug>
 ```
 
 This will:
-1. Archive key documents to `.prove/archive/<date>_<task-slug>/`
-2. Remove `.prove/runs/<task-slug>/` (reports, progress, plan copies)
-3. Remove the orchestrator worktree: `git worktree remove .claude/worktrees/orchestrator-<task-slug> --force`
-4. Delete the merged `orchestrator/<task-slug>` branch
+1. Archive key documents to `.prove/archive/<date>_<slug>/`
+2. Remove `.prove/runs/<slug>/` (reports, progress, plan copies)
+3. Remove the orchestrator worktree: `git worktree remove .claude/worktrees/orchestrator-<slug> --force`
+4. Delete the merged `orchestrator/<slug>` branch
 
 Generate a `SUMMARY.md` in the archive directory (same as cleanup skill Phase 3).
 
@@ -477,10 +476,10 @@ Present to the user:
 - Merge status (commit SHA on main)
 - What was archived and where
 - Any skipped items (unmerged branches, missing files)
-- Reminder: archived docs available at `.prove/archive/<date>_<task-slug>/`
+- Reminder: archived docs available at `.prove/archive/<date>_<slug>/`
 
 If the user chose "Skip", remind them:
-> Run `/task-cleanup <task-slug>` after you merge to clean up artifacts.
+> Run `/task-cleanup <slug>` after you merge to clean up artifacts.
 
 ---
 
@@ -493,7 +492,7 @@ Maintain a live `.prove/runs/<slug>/PROGRESS.md` using `scripts/update-progress.
 
 **Started**: <YYYY-MM-DD HH:MM>
 **Status**: In Progress | Completed | Failed | Paused
-**Branch**: orchestrator/<feature-slug>
+**Branch**: orchestrator/<slug>
 
 ## Overview
 | Wave | Tasks | Completed | Reviewed | Status |
@@ -538,18 +537,22 @@ Update after: task start, task complete, review verdict, review pass, merge, wav
 
 When triggered with "full auto" and no existing plan, run requirements gathering first:
 
-1. **Read project context** — Scan `CLAUDE.md`, `README.md`, `docs/`, recent git history.
-2. **Launch a requirements-gathering subagent** that interviews the user to clarify:
+1. **Derive slug and create run directory** — Slugify the feature name and run:
+   ```bash
+   mkdir -p .prove/runs/<slug>/reports/
+   ```
+2. **Read project context** — Scan `CLAUDE.md`, `README.md`, `docs/`, recent git history.
+3. **Launch a requirements-gathering subagent** that interviews the user to clarify:
    - What the feature does (user stories, acceptance criteria)
    - What it does NOT do (explicit non-goals)
    - Technical constraints
    - How to verify it works
-3. **Write the PRD** using the template in `references/prd-template.md`
-4. **User approval gate** — Use AskUserQuestion with header "PRD" and options: "Approve" (proceed to planning) / "Request Changes" (I have feedback before proceeding)
-5. **Generate `.prove/TASK_PLAN.md`** with wave-based task graph
-6. **User approval gate** — Use AskUserQuestion with header "Plan" and options: "Approve" (begin execution) / "Request Changes" (I have feedback before proceeding)
+4. **Write the PRD** directly to `.prove/runs/<slug>/PRD.md` using the template in `references/prd-template.md`
+5. **User approval gate** — Use AskUserQuestion with header "PRD" and options: "Approve" (proceed to planning) / "Request Changes" (I have feedback before proceeding)
+6. **Generate `.prove/runs/<slug>/TASK_PLAN.md`** with wave-based task graph
+7. **User approval gate** — Use AskUserQuestion with header "Plan" and options: "Approve" (begin execution) / "Request Changes" (I have feedback before proceeding)
 
-Note: PRD and TASK_PLAN are written to `.prove/` initially (shared). Phase 0 copies them into `.prove/runs/<slug>/` for run isolation.
+All artifacts are written directly to the run directory — no global `.prove/` singletons are created. This allows multiple full-auto runs to proceed concurrently.
 
 ---
 
@@ -557,7 +560,7 @@ Note: PRD and TASK_PLAN are written to `.prove/` initially (shared). Phase 0 cop
 
 | Scenario | Action |
 |----------|--------|
-| No .prove/TASK_PLAN.md or .prove/plans/ | Stop. Suggest `/plan-task` |
+| No `.prove/runs/<slug>/TASK_PLAN.md` and no `.prove/plans/` | Stop. Suggest `/plan-task` |
 | Branch already exists | Ask: resume or fresh start |
 | Build fails after step | One retry, then halt with report |
 | Tests fail after step | One retry, then halt with report |
@@ -579,7 +582,7 @@ Note: PRD and TASK_PLAN are written to `.prove/` initially (shared). Phase 0 cop
 ## Conventions
 
 ### Branch Naming
-- Orchestrator branch: `orchestrator/<task-slug>` (lives in its own worktree at `.claude/worktrees/orchestrator-<slug>`)
+- Orchestrator branch: `orchestrator/<slug>` (lives in its own worktree at `.claude/worktrees/orchestrator-<slug>`)
 - Sub-task worktree branches: managed by `isolation: "worktree"` (full mode only)
 
 ### Slug Generation
@@ -589,13 +592,13 @@ Kebab-case, max 40 chars: "Add user authentication" -> `add-user-authentication`
 All per-run state lives under `.prove/runs/<slug>/`:
 ```
 .prove/runs/<slug>/
-├── TASK_PLAN.md      # Copy of plan at run start
-├── PRD.md            # Copy of PRD at run start (if exists)
-├── PROGRESS.md       # Live progress tracking (full mode)
+├── TASK_PLAN.md         # Implementation plan
+├── PRD.md               # Product requirements (if full-auto)
+├── PROGRESS.md          # Live progress tracking (full mode)
 ├── dispatch-state.json  # Reporter deduplication state
 └── reports/
-    ├── run-log.md    # Audit trail
-    └── report.md     # Final report
+    ├── run-log.md       # Audit trail
+    └── report.md        # Final report
 ```
 This isolation allows multiple orchestrator runs to proceed concurrently.
 
