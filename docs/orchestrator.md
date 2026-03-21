@@ -161,7 +161,7 @@ See `skills/orchestrator/references/handoff-protocol.md` for the full protocol.
 
 ### PROGRESS.md
 
-During full mode execution, the orchestrator maintains a live `.prove/PROGRESS.md` tracking wave status, per-task status, review verdicts, merge events, and test results.
+During full mode execution, the orchestrator maintains a live `.prove/runs/<slug>/PROGRESS.md` tracking wave status, per-task status, review verdicts, merge events, and test results. Each orchestrator run has its own namespaced directory, enabling multiple concurrent runs.
 
 ### `/prove:progress`
 

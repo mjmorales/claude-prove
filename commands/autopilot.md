@@ -17,11 +17,12 @@ Load and follow the orchestrator skill (`skills/orchestrator/SKILL.md` from the 
 
 ## Key Behaviors
 
-- Create a feature branch: `orchestrator/<task-slug>`
+- Create a feature branch in its own worktree: `orchestrator/<task-slug>` at `.claude/worktrees/orchestrator-<slug>`
+- Namespace all run state under `.prove/runs/<task-slug>/` (supports concurrent orchestrator runs)
 - Auto-validate after EVERY step (build, tests, lint)
 - Commit after each successful step
 - On validation failure: one retry, then HALT
-- Generate reports in `.prove/reports/<task-slug>/`
+- Generate reports in `.prove/runs/<task-slug>/reports/`
 - Present the final report and review instructions to the user
 
 ## Do NOT
@@ -29,5 +30,5 @@ Load and follow the orchestrator skill (`skills/orchestrator/SKILL.md` from the 
 - Skip validation gates
 - Continue past a failed step (after retry)
 - Force-push or amend commits
-- Make changes on the main branch
+- Make changes on the main branch or check out branches in the main worktree
 - Proceed if requirements are ambiguous — halt and use `AskUserQuestion` to clarify (when discrete options exist) or ask free-form (when open-ended)

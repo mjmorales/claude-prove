@@ -65,8 +65,21 @@ with open(sys.argv[1]) as f:
 fi
 
 # --- Clear dedup state for test ---
+# Derive slug from PROVE_TASK or branch, matching dispatch-event.sh logic
+_TEST_SLUG="${PROVE_TASK:-}"
+if [[ -z "$_TEST_SLUG" ]]; then
+  _TEST_BRANCH=$(git branch --show-current 2>/dev/null || echo "")
+  if [[ "$_TEST_BRANCH" == orchestrator/* ]]; then
+    _TEST_SLUG="${_TEST_BRANCH#orchestrator/}"
+  fi
+fi
 
-STATE_FILE=".prove/dispatch-state.json"
+if [[ -n "$_TEST_SLUG" ]]; then
+  STATE_FILE=".prove/runs/${_TEST_SLUG}/dispatch-state.json"
+else
+  STATE_FILE=".prove/dispatch-state.json"
+fi
+
 if [[ -f "$STATE_FILE" ]]; then
   # Back up actual state so it can be restored after the test
   cp "$STATE_FILE" "${STATE_FILE}.bak"

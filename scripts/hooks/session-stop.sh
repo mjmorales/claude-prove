@@ -15,7 +15,17 @@ WORK_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 # .prove/ is gitignored — always lives in the main worktree
 MAIN_ROOT=$(git -C "$WORK_DIR" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print substr($0,10); exit}')
 MAIN_ROOT="${MAIN_ROOT:-$WORK_DIR}"
-PROGRESS_FILE="${MAIN_ROOT}/.prove/PROGRESS.md"
+
+# Check we're on an orchestrator branch
+BRANCH=$(cd "$WORK_DIR" && git branch --show-current 2>/dev/null || echo "unknown")
+if [[ "$BRANCH" != orchestrator/* ]]; then
+  exit 0
+fi
+
+TASK="${BRANCH#orchestrator/}"
+
+# Progress is namespaced per run under .prove/runs/<slug>/
+PROGRESS_FILE="${MAIN_ROOT}/.prove/runs/${TASK}/PROGRESS.md"
 
 # Only dispatch if there's an active orchestrator run
 if [[ ! -f "$PROGRESS_FILE" ]]; then
@@ -26,14 +36,6 @@ fi
 if ! grep -qi 'Status.*In Progress' "$PROGRESS_FILE" 2>/dev/null; then
   exit 0
 fi
-
-# Check we're on an orchestrator branch
-BRANCH=$(cd "$WORK_DIR" && git branch --show-current 2>/dev/null || echo "unknown")
-if [[ "$BRANCH" != orchestrator/* ]]; then
-  exit 0
-fi
-
-TASK="${BRANCH#orchestrator/}"
 
 # Count completed steps from PROGRESS.md
 COMPLETED=$(grep -c '\[x\]' "$PROGRESS_FILE" 2>/dev/null || echo "0")

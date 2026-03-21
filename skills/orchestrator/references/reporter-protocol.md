@@ -206,7 +206,7 @@ Hooks are configured in `.claude/settings.json` (project-level, committed to git
 
 ### Deduplication
 
-`dispatch-event.sh` maintains `.prove/dispatch-state.json` to prevent duplicate notifications. Each `(event, step)` tuple is dispatched at most once per orchestrator run.
+`dispatch-event.sh` maintains `.prove/runs/<slug>/dispatch-state.json` to prevent duplicate notifications. Each `(event, step)` tuple is dispatched at most once per orchestrator run. The slug is derived from the `PROVE_TASK` env var or the current branch name.
 
 ### Scripts
 

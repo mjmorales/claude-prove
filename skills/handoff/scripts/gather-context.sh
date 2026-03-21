@@ -109,9 +109,16 @@ if [[ -f .prove/PRD.md ]]; then
   FOUND_ARTIFACTS=true
 fi
 if [[ -f .prove/PROGRESS.md ]]; then
-  echo "- \`.prove/PROGRESS.md\` — Orchestrator progress tracker"
+  echo "- \`.prove/PROGRESS.md\` — Orchestrator progress tracker (legacy)"
   FOUND_ARTIFACTS=true
 fi
+for run_dir in .prove/runs/*/; do
+  if [[ -d "$run_dir" ]]; then
+    run_slug=$(basename "$run_dir")
+    echo "- \`.prove/runs/$run_slug/\` — Orchestrator run state"
+    FOUND_ARTIFACTS=true
+  fi
+done
 if [[ -d .prove/plans ]]; then
   PLAN_COUNT=$(find .prove/plans -maxdepth 1 -type d | tail -n +2 | wc -l | tr -d ' ')
   if [[ "$PLAN_COUNT" -gt 0 ]]; then

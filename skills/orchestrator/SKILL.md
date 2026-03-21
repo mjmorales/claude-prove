@@ -3,11 +3,14 @@ name: orchestrator
 description: >
   Autonomous task orchestrator that auto-scales between simple mode (<=3 steps,
   sequential, no worktrees) and full mode (4+ steps, parallel worktrees with
-  mandatory principal-architect review). Creates feature branches, runs validation
-  gates (build, test, lint), commits after each successful step, generates progress
-  reports, and supports rollback via git. Use when a .prove/TASK_PLAN.md or .prove/plans/ directory
-  exists and the user wants hands-off execution. Triggers on "orchestrate", "autopilot",
-  "full auto", "run autonomously", "implement without me", "hands-off mode".
+  mandatory principal-architect review). Each orchestrator run operates in its own
+  git worktree with namespaced state (.prove/runs/<slug>/), enabling multiple
+  concurrent orchestrator runs that consolidate at merge time. Creates feature
+  branches, runs validation gates (build, test, lint), commits after each successful
+  step, generates progress reports, and supports rollback via git. Use when a
+  .prove/TASK_PLAN.md or .prove/plans/ directory exists and the user wants hands-off
+  execution. Triggers on "orchestrate", "autopilot", "full auto", "run autonomously",
+  "implement without me", "hands-off mode".
 ---
 
 # Orchestrator Skill
@@ -41,21 +44,26 @@ If neither exists, inform the user and suggest running `/plan-task` first.
    - **4+ steps**: Full mode (parallel worktrees + architect review)
    - Log which mode was selected
 
-3. **Create feature branch**
-   ```bash
-   git checkout -b orchestrator/<task-slug>
-   ```
-   - Slugify the task name (lowercase, hyphens, no special chars, max 50 chars)
+3. **Create feature branch in a worktree** (enables concurrent orchestrator runs)
+   - Slugify the task name (lowercase, hyphens, no special chars, max 40 chars)
    - If branch already exists, use AskUserQuestion with header "Branch" and options: "Resume" (continue from last commit) / "Start Fresh" (delete and recreate)
+   - Create the branch and worktree:
+     ```bash
+     git worktree add .claude/worktrees/orchestrator-<task-slug> -b orchestrator/<task-slug>
+     ```
+   - All subsequent orchestrator work happens inside this worktree path.
+     The main worktree remains on its current branch, so other orchestrators
+     (or manual work) can run concurrently without interference.
 
-4. **Initialize report directory**
+4. **Initialize run directory** (namespaced per slug — supports concurrent runs)
    ```bash
-   mkdir -p .prove/reports/<task-slug>/
+   mkdir -p .prove/runs/<task-slug>/reports/
    ```
-   Create `.prove/reports/<task-slug>/run-log.md`:
+   Create `.prove/runs/<task-slug>/reports/run-log.md`:
    ```markdown
    # Orchestrator Run Log: <Task Name>
    **Branch**: orchestrator/<task-slug>
+   **Worktree**: .claude/worktrees/orchestrator-<task-slug>
    **Mode**: Simple | Full
    **Started**: <ISO timestamp>
    **Status**: In Progress
@@ -68,6 +76,12 @@ If neither exists, inform the user and suggest running `/plan-task` first.
    ## Step Log
    | # | Step | Status | Commit | Notes |
    |---|------|--------|--------|-------|
+   ```
+
+   Copy planning inputs into the run directory for isolation:
+   ```bash
+   cp .prove/TASK_PLAN.md .prove/runs/<task-slug>/TASK_PLAN.md
+   [[ -f .prove/PRD.md ]] && cp .prove/PRD.md .prove/runs/<task-slug>/PRD.md
    ```
 
 5. **Load validators** from `.prove.json` or auto-detect per `references/validation-config.md`
@@ -88,7 +102,7 @@ Configured in `.claude/settings.json`:
 - **SubagentStop(principal-architect|validation-agent)** — detects review/validation verdicts, dispatches `review-approved`, `review-rejected`, `validation-pass`, `validation-fail`
 - **Stop** — dispatches `execution-complete` when the session ends with an active orchestrator run
 
-All dispatch reads the `reporters` array from `.prove.json` and deduplicates via `.prove/dispatch-state.json`. See `references/reporter-protocol.md` for details.
+All dispatch reads the `reporters` array from `.prove.json` and deduplicates via `.prove/runs/<slug>/dispatch-state.json`. See `references/reporter-protocol.md` for details.
 
 **The orchestrator should focus on execution — notifications happen automatically.**
 
@@ -96,12 +110,12 @@ All dispatch reads the `reporters` array from `.prove.json` and deduplicates via
 
 ## Phase 1: Plan Review
 
-1. **Extract ordered steps** from:
-   - `.prove/TASK_PLAN.md` > "Implementation Steps" section, OR
+1. **Extract ordered steps** from (paths relative to run directory):
+   - `.prove/runs/<slug>/TASK_PLAN.md` > "Implementation Steps" section, OR
    - `.prove/plans/plan_X/05_implementation_plan.md`
 2. **Resolve dependencies** — topological sort if needed
 3. **Map validation criteria** per step from `06_test_strategy.md` and step-level verification items
-4. **Log the execution plan** to run-log.md
+4. **Log the execution plan** to `.prove/runs/<slug>/reports/run-log.md`
 
 ---
 
@@ -131,9 +145,9 @@ For each wave:
 For each task in the wave, generate a prompt and launch:
 
 ```bash
-# Generate the task prompt
+# Generate the task prompt (use run-local copies)
 PROMPT=$(bash scripts/generate-task-prompt.sh \
-  <task-plan-path> <task-id> <prd-path> <project-root>)
+  .prove/runs/<slug>/TASK_PLAN.md <task-id> .prove/runs/<slug>/PRD.md <project-root>)
 ```
 
 Then launch with the Agent tool:
@@ -149,14 +163,14 @@ Agent(
 - Launch ALL tasks in a wave as parallel Agent calls in a single message.
 - Update progress for each task start:
   ```bash
-  bash scripts/update-progress.sh <progress-path> task-start <task-id>
+  bash scripts/update-progress.sh .prove/runs/<slug>/PROGRESS.md task-start <task-id>
   ```
 
 #### 2b. Wait for Completion
 
 Wait for all background agents in the wave to complete. Update progress as each finishes:
 ```bash
-bash scripts/update-progress.sh <progress-path> task-complete <task-id>
+bash scripts/update-progress.sh .prove/runs/<slug>/PROGRESS.md task-complete <task-id>
 ```
 
 #### 2c. Mandatory Architect Review (per task)
@@ -170,7 +184,7 @@ REVIEW LOOP (max 3 iterations per task):
 
 1. Generate review prompt:
    REVIEW_PROMPT=$(bash scripts/generate-review-prompt.sh \
-     <worktree-path> <task-id> <task-plan-path> <prd-path> <base-branch>)
+     <worktree-path> <task-id> .prove/runs/<slug>/TASK_PLAN.md .prove/runs/<slug>/PRD.md <base-branch>)
 
 2. Launch principal-architect review:
    Agent(
@@ -185,7 +199,7 @@ REVIEW LOOP (max 3 iterations per task):
      - Continue to step 4
 
 4. Update progress:
-   bash scripts/update-progress.sh <progress-path> task-review <task-id> "CHANGES_REQUIRED"
+   bash scripts/update-progress.sh .prove/runs/<slug>/PROGRESS.md task-review <task-id> "CHANGES_REQUIRED"
 
 5. Launch a fix agent in the SAME worktree to address review findings:
    Agent(
@@ -207,7 +221,7 @@ REVIEW LOOP (max 3 iterations per task):
 6. Go to step 1 (re-review)
 
 If 3 iterations pass without APPROVED:
-  - Log failure in .prove/PROGRESS.md
+  - Log failure in .prove/runs/<slug>/PROGRESS.md
   - Use AskUserQuestion with header "Resolution" and options: "Force Approve" (merge as-is) / "Fix Manually" (I'll address the findings) / "Abort" (stop the run)
 ```
 
@@ -215,13 +229,14 @@ If 3 iterations pass without APPROVED:
 
 After ALL tasks in the wave are reviewed and approved:
 
-1. For each approved task (in task order):
+1. For each approved task (in task order), merge into the orchestrator worktree:
    ```bash
+   cd .claude/worktrees/orchestrator-<slug>
    git merge <worktree-branch> --no-ff -m "merge: task <id> - <name>"
    ```
    Update progress:
    ```bash
-   bash scripts/update-progress.sh <progress-path> merge <task-id> "clean"
+   bash scripts/update-progress.sh .prove/runs/<slug>/PROGRESS.md merge <task-id> "clean"
    ```
 
 2. After merging, clean up the worktree and its branch:
@@ -231,7 +246,7 @@ After ALL tasks in the wave are reviewed and approved:
    ```
 
 3. If merge conflict:
-   - Log: `update-progress.sh <path> merge <task-id> "conflict"`
+   - Log: `update-progress.sh .prove/runs/<slug>/PROGRESS.md merge <task-id> "conflict"`
    - Attempt auto-resolution for trivial conflicts
    - For non-trivial: ask user
 
@@ -333,7 +348,7 @@ Record commit SHA in run-log.
 
 ## Phase 3: Completion
 
-Generate `.prove/reports/<task-slug>/report.md`:
+Generate `.prove/runs/<task-slug>/reports/report.md`:
 
 ```markdown
 # Orchestrator Report: <Task Name>
@@ -431,9 +446,12 @@ Use `AskUserQuestion` with:
 If the user chose "Merge & Clean" or "Merge Only":
 
 ```bash
-git checkout main
+# Merge from the main worktree (not from inside the orchestrator worktree)
 git merge --no-ff orchestrator/<task-slug> -m "merge: <task-name>"
 ```
+
+If another orchestrator merged to main first, you may need to pull/merge main first.
+Standard git conflict resolution applies — this is the consolidation point for concurrent runs.
 
 If merge conflicts occur, halt and inform the user. Do NOT force-merge.
 
@@ -447,8 +465,8 @@ PROJECT_ROOT="." bash scripts/cleanup.sh --auto <task-slug>
 
 This will:
 1. Archive key documents to `.prove/archive/<date>_<task-slug>/`
-2. Remove `.prove/reports/<task-slug>/`, `.prove/plans/plan_*/`, `.prove/context/<task-slug>/`
-3. Remove `.prove/PRD.md`, `.prove/TASK_PLAN.md`, `.prove/PROGRESS.md`
+2. Remove `.prove/runs/<task-slug>/` (reports, progress, plan copies)
+3. Remove the orchestrator worktree: `git worktree remove .claude/worktrees/orchestrator-<task-slug> --force`
 4. Delete the merged `orchestrator/<task-slug>` branch
 
 Generate a `SUMMARY.md` in the archive directory (same as cleanup skill Phase 3).
@@ -468,7 +486,7 @@ If the user chose "Skip", remind them:
 
 ## Full Mode: Progress Tracking
 
-Maintain a live `.prove/PROGRESS.md` using `scripts/update-progress.sh`:
+Maintain a live `.prove/runs/<slug>/PROGRESS.md` using `scripts/update-progress.sh`:
 
 ```markdown
 # Progress: <Feature Name>
@@ -531,6 +549,8 @@ When triggered with "full auto" and no existing plan, run requirements gathering
 5. **Generate `.prove/TASK_PLAN.md`** with wave-based task graph
 6. **User approval gate** — Use AskUserQuestion with header "Plan" and options: "Approve" (begin execution) / "Request Changes" (I have feedback before proceeding)
 
+Note: PRD and TASK_PLAN are written to `.prove/` initially (shared). Phase 0 copies them into `.prove/runs/<slug>/` for run isolation.
+
 ---
 
 ## Error Handling
@@ -559,12 +579,25 @@ When triggered with "full auto" and no existing plan, run requirements gathering
 ## Conventions
 
 ### Branch Naming
-- Simple mode: `orchestrator/<task-slug>`
-- Full mode: `orchestrator/<feature-slug>`
-- Worktree branches: managed by `isolation: "worktree"`
+- Orchestrator branch: `orchestrator/<task-slug>` (lives in its own worktree at `.claude/worktrees/orchestrator-<slug>`)
+- Sub-task worktree branches: managed by `isolation: "worktree"` (full mode only)
 
 ### Slug Generation
 Kebab-case, max 40 chars: "Add user authentication" -> `add-user-authentication`
+
+### Run Directory Layout
+All per-run state lives under `.prove/runs/<slug>/`:
+```
+.prove/runs/<slug>/
+├── TASK_PLAN.md      # Copy of plan at run start
+├── PRD.md            # Copy of PRD at run start (if exists)
+├── PROGRESS.md       # Live progress tracking (full mode)
+├── dispatch-state.json  # Reporter deduplication state
+└── reports/
+    ├── run-log.md    # Audit trail
+    └── report.md     # Final report
+```
+This isolation allows multiple orchestrator runs to proceed concurrently.
 
 ## Scripts
 
@@ -574,8 +607,8 @@ Helper scripts live in `scripts/`:
 |--------|---------|
 | `generate-task-prompt.sh` | Generates a focused, self-contained prompt for worktree implementation agents |
 | `generate-review-prompt.sh` | Generates a structured review prompt for the principal-architect agent |
-| `update-progress.sh` | Updates .prove/PROGRESS.md with task/wave status changes |
-| `cleanup.sh` | Archives and removes .prove task artifacts (used by Phase 4 and `/task-cleanup`) |
+| `update-progress.sh` | Updates `.prove/runs/<slug>/PROGRESS.md` with task/wave status changes |
+| `cleanup.sh` | Archives and removes `.prove/runs/<slug>/` artifacts (used by Phase 4 and `/task-cleanup`) |
 
 ## References
 
