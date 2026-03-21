@@ -11,5 +11,4 @@ node_modules/
 dist/
 *.tsbuildinfo
 packages/acb-vscode/acb-vscode-*.vsix
-.acb/review.acb.json
-.acb/review.acb-review.json
+.acb/
