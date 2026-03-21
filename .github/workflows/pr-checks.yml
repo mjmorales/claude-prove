@@ -13,9 +13,7 @@ jobs:
     name: DCO
     runs-on: ubuntu-latest
     steps:
-      - uses: dkhamsing/dco@v2
-        with:
-          require_for_members: false
+      - uses: KineticCafe/actions-dco@v1
 
   commitlint:
     name: Semantic Pull Request
