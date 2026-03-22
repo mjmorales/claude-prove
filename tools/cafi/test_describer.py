@@ -18,6 +18,7 @@ from cafi.describer import (  # noqa: E402
     _call_claude_cli,
     _chunk_list,
     _describe_batch,
+    _is_triage_excluded,
     _strip_json_fences,
     describe_file,
     describe_files,
@@ -295,79 +296,84 @@ class TestDescribeFiles(unittest.TestCase):
         self.assertTrue(any(done == 3 for done, total in calls))
 
 
+class TestIsTriageExcluded(unittest.TestCase):
+    """Tests for _is_triage_excluded heuristic."""
+
+    def test_keeps_source_files(self):
+        self.assertFalse(_is_triage_excluded("src/main.py"))
+        self.assertFalse(_is_triage_excluded("lib/utils.go"))
+        self.assertFalse(_is_triage_excluded("app/models/user.rb"))
+
+    def test_excludes_test_files(self):
+        self.assertTrue(_is_triage_excluded("test_main.py"))
+        self.assertTrue(_is_triage_excluded("src/utils_test.go"))
+        self.assertTrue(_is_triage_excluded("app.spec.js"))
+        self.assertTrue(_is_triage_excluded("component.test.tsx"))
+        self.assertTrue(_is_triage_excluded("conftest.py"))
+
+    def test_excludes_test_directories(self):
+        self.assertTrue(_is_triage_excluded("tests/test_main.py"))
+        self.assertTrue(_is_triage_excluded("__tests__/App.test.js"))
+        self.assertTrue(_is_triage_excluded("spec/models/user_spec.rb"))
+
+    def test_excludes_assets(self):
+        self.assertTrue(_is_triage_excluded("logo.png"))
+        self.assertTrue(_is_triage_excluded("assets/icon.svg"))
+        self.assertTrue(_is_triage_excluded("fonts/mono.woff2"))
+
+    def test_excludes_generated_files(self):
+        self.assertTrue(_is_triage_excluded("package-lock.json"))
+        self.assertTrue(_is_triage_excluded("yarn.lock"))
+        self.assertTrue(_is_triage_excluded("poetry.lock"))
+        self.assertTrue(_is_triage_excluded("go.sum"))
+        self.assertTrue(_is_triage_excluded("bundle.min.js"))
+
+    def test_excludes_boilerplate(self):
+        self.assertTrue(_is_triage_excluded("LICENSE"))
+        self.assertTrue(_is_triage_excluded("LICENSE.md"))
+        self.assertTrue(_is_triage_excluded(".gitignore"))
+        self.assertTrue(_is_triage_excluded(".editorconfig"))
+        self.assertTrue(_is_triage_excluded("CHANGELOG.md"))
+
+    def test_excludes_vendor_dirs(self):
+        self.assertTrue(_is_triage_excluded("vendor/lib/foo.go"))
+        self.assertTrue(_is_triage_excluded("node_modules/pkg/index.js"))
+        self.assertTrue(_is_triage_excluded("dist/bundle.js"))
+
+    def test_keeps_config_files(self):
+        self.assertFalse(_is_triage_excluded("Taskfile.yml"))
+        self.assertFalse(_is_triage_excluded("Dockerfile"))
+        self.assertFalse(_is_triage_excluded(".github/workflows/ci.yml"))
+
+    def test_keeps_docs(self):
+        self.assertFalse(_is_triage_excluded("README.md"))
+        self.assertFalse(_is_triage_excluded("docs/architecture.md"))
+
+
 class TestTriageFiles(unittest.TestCase):
-    """Tests for triage_files."""
+    """Tests for triage_files (heuristic, no LLM call)."""
 
     def test_triage_empty_list(self):
-        """Verify empty input returns empty output without calling CLI."""
         result = triage_files([])
         self.assertEqual(result, [])
 
-    @patch("cafi.describer.subprocess.run")
-    def test_triage_filters_files(self, mock_run):
-        """Verify triage returns only the files Claude selects."""
+    def test_triage_filters_tests_and_assets(self):
         all_files = ["src/main.py", "src/utils.py", "tests/test_main.py", "logo.png"]
-        mock_run.return_value = MagicMock(
-            stdout='["src/main.py", "src/utils.py"]'
-        )
         result = triage_files(all_files)
         self.assertEqual(result, ["src/main.py", "src/utils.py"])
 
-    @patch("cafi.describer.subprocess.run")
-    def test_triage_strips_markdown_fences(self, mock_run):
-        """Verify markdown code fences are stripped from response."""
-        all_files = ["src/app.py", "README.md"]
-        mock_run.return_value = MagicMock(
-            stdout='```json\n["src/app.py"]\n```'
-        )
+    def test_triage_keeps_source_and_config(self):
+        all_files = ["src/app.py", "Dockerfile", "package-lock.json", "README.md"]
         result = triage_files(all_files)
-        self.assertEqual(result, ["src/app.py"])
+        self.assertIn("src/app.py", result)
+        self.assertIn("Dockerfile", result)
+        self.assertIn("README.md", result)
+        self.assertNotIn("package-lock.json", result)
 
-    @patch("cafi.describer.subprocess.run")
-    def test_triage_ignores_unknown_paths(self, mock_run):
-        """Verify paths not in the input list are filtered out."""
-        all_files = ["src/main.py"]
-        mock_run.return_value = MagicMock(
-            stdout='["src/main.py", "src/ghost.py"]'
-        )
+    def test_triage_preserves_order(self):
+        all_files = ["z.py", "a.py", "test_z.py"]
         result = triage_files(all_files)
-        self.assertEqual(result, ["src/main.py"])
-
-    @patch(
-        "cafi.describer.subprocess.run",
-        side_effect=subprocess.TimeoutExpired(cmd="claude", timeout=60),
-    )
-    def test_triage_fallback_on_timeout(self, _mock_run):
-        """Verify all files returned when CLI times out."""
-        all_files = ["a.py", "b.py"]
-        result = triage_files(all_files)
-        self.assertEqual(result, all_files)
-
-    @patch(
-        "cafi.describer.subprocess.run",
-        side_effect=FileNotFoundError("claude not found"),
-    )
-    def test_triage_fallback_on_missing_cli(self, _mock_run):
-        """Verify all files returned when claude CLI not found."""
-        all_files = ["a.py", "b.py"]
-        result = triage_files(all_files)
-        self.assertEqual(result, all_files)
-
-    @patch("cafi.describer.subprocess.run")
-    def test_triage_fallback_on_invalid_json(self, mock_run):
-        """Verify all files returned when CLI returns invalid JSON."""
-        all_files = ["a.py"]
-        mock_run.return_value = MagicMock(stdout="not json at all")
-        result = triage_files(all_files)
-        self.assertEqual(result, all_files)
-
-    @patch("cafi.describer.subprocess.run")
-    def test_triage_fallback_on_non_list(self, mock_run):
-        """Verify all files returned when CLI returns non-list JSON."""
-        all_files = ["a.py"]
-        mock_run.return_value = MagicMock(stdout='{"files": ["a.py"]}')
-        result = triage_files(all_files)
-        self.assertEqual(result, all_files)
+        self.assertEqual(result, ["z.py", "a.py"])
 
 
 if __name__ == "__main__":

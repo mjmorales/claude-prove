@@ -24,6 +24,7 @@ DEFAULT_CONFIG = {
     "excludes": [],
     "max_file_size": 102400,
     "concurrency": 3,
+    "batch_size": 25,
     "triage": True,
 }
 
@@ -134,6 +135,7 @@ def build_index(project_root: str, force: bool = False) -> dict:
             to_describe,
             project_root,
             concurrency=config["concurrency"],
+            batch_size=config["batch_size"],
             on_progress=_progress,
         )
     else:
