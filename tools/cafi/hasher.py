@@ -11,7 +11,7 @@ import json
 import os
 import subprocess
 import tempfile
-from fnmatch import fnmatch
+from pathlib import PurePath
 
 CACHE_VERSION = 1
 DEFAULT_MAX_FILE_SIZE = 102400  # 100KB
@@ -92,22 +92,45 @@ def _git_check_ignore(root: str, paths: list[str]) -> set[str]:
         return set()
 
 
-def _matches_any(path: str, patterns: list[str]) -> bool:
-    """Check if a relative path matches any of the given glob/fnmatch patterns.
+def _normalize_pattern(pattern: str) -> str:
+    """Normalize an exclude pattern for use with PurePath.full_match().
 
-    Supports:
-    - Simple globs: ``*.log``, ``*.txt`` (matched against full path and basename)
-    - Directory prefixes: ``dist/``, ``packages/acb-vscode/`` (any file under that dir)
-    - Standard fnmatch patterns: ``src/*.py``, ``test_*``
+    - Bare directory names (``dist``, ``client/addons/gut``) → ``**/dist/**``, etc.
+    - Trailing-slash directories (``dist/``) → ``dist/**``
+    - Simple extension globs (``*.log``) → ``**/*.log``
+    - Patterns already containing ``**`` or ``/`` with wildcards pass through.
     """
+    stripped = pattern.rstrip("/")
+
+    # Bare directory name — no wildcards at all
+    if not any(c in stripped for c in "*?["):
+        if "/" in stripped:
+            # Rooted directory like client/addons/gut → match anything under it
+            return stripped + "/**"
+        # Top-level name like dist → match anywhere in tree
+        return "**/" + stripped + "/**"
+
+    # Trailing-slash directory with wildcards (unusual but handle it)
+    if pattern.endswith("/"):
+        return stripped + "/**"
+
+    # Simple basename glob like *.log — match at any depth
+    if "/" not in pattern:
+        return "**/" + pattern
+
+    return pattern
+
+
+def _matches_any(path: str, patterns: list[str]) -> bool:
+    """Check if a relative path matches any of the given glob patterns.
+
+    Uses PurePath.full_match() with normalized patterns for recursive
+    directory matching.  Bare directory names, extension globs, and
+    ``**`` patterns are all supported.
+    """
+    p = PurePath(path)
     for pattern in patterns:
-        # Directory prefix pattern (e.g., "dist/" or "packages/foo/")
-        if pattern.endswith("/") and path.startswith(pattern):
-            return True
-        if fnmatch(path, pattern):
-            return True
-        # Also match against the basename for simple patterns like "*.log"
-        if fnmatch(os.path.basename(path), pattern):
+        if p.full_match(_normalize_pattern(pattern)):
             return True
     return False
 
