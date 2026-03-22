@@ -3,7 +3,7 @@ description: Generate an ACB from the current branch diff — groups changes by 
 argument-hint: "[base-branch (default: main)]"
 ---
 
-# ACB Branch Review
+# ACB Branch Review: $ARGUMENTS
 
 Generate an Agent Change Brief from the current branch diff, grouping changes by semantic intent.
 

@@ -1,13 +1,13 @@
 ---
-description: Generate approval summary after ACB review — shows accepted groups, annotation responses, and merge readiness
+description: Show ACB approval summary — accepted groups, annotation responses, and merge readiness
 ---
 
 # ACB Resolve
-
-Run the following command and present the output to the user:
 
 ```bash
 node "$CLAUDE_PROJECT_DIR/packages/acb-core/dist/cli/index.js" resolve
 ```
 
-If the command fails because no review file exists, inform the user they need to complete the review in the ACB VS Code extension first.
+**On success**: Present the approval summary to the user.
+
+**On failure**: Inform the user they need to complete the review in the ACB VS Code extension first.

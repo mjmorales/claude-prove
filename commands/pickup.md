@@ -1,44 +1,35 @@
 ---
-description: Resume work from a handoff prompt file (.prove/handoff.md). Run this in a fresh session after /prove:handoff.
-argument-hint: ""
+description: Resume work from a handoff prompt (.prove/handoff.md) created by /prove:handoff
 ---
 
 # Pickup Handoff
 
-Resume work from a prior session's handoff context.
+## Step 1: Locate
 
-## Step 1: Locate Handoff
-
-Check if `.prove/handoff.md` exists in the project root.
-
-- **If it exists**: Read it in full. This is your context — it tells you what to do, what files to read, and where to resume.
-- **If it does not exist**: Inform the user: "No handoff file found at `.prove/handoff.md`. Run `/prove:handoff` in your previous session first to create one."  Then stop.
+Read `.prove/handoff.md`. If missing, tell the user to run `/prove:handoff` first, then stop.
 
 ## Step 2: Load Context
 
-1. Read `.prove/handoff.md` completely
-2. Follow the **"Files to Read First"** section — read each listed file in order
-3. Read any prove artifacts referenced (TASK_PLAN.md, decision records, etc.)
+1. Read the handoff file completely
+2. Read each file listed in "Files to Read First" in order
+3. Read any referenced prove artifacts (TASK_PLAN.md, decision records)
 
-## Step 3: Confirm & Clean Up
+## Step 3: Confirm and Clean Up
 
-Tell the user:
-- What you picked up (brief summary of the pickup note)
-- What you're about to work on
-- The branch you're on
+Tell the user: what you picked up, what you will work on, which branch you are on.
 
-Then delete the handoff file:
+Delete the handoff file:
 ```bash
 rm .prove/handoff.md
 ```
 
 ## Step 4: Begin Work
 
-Follow the **"Instructions"** section from the handoff file. Start working on whatever the pickup note describes — do not ask the user to repeat what needs to be done.
+Follow the "Instructions" section from the handoff file. Start immediately -- do not ask the user to repeat the task.
 
 ## Rules
 
-- **Read everything before acting** — load all referenced files before making any changes
-- **Delete the handoff file after loading** — it's ephemeral, a relay baton
-- **Don't ask the user what to do** — the handoff file already tells you
-- **If the handoff recommends a specific agent**, inform the user: "This handoff was written for the `<agent>` agent. Consider restarting with: `claude --agent agents/<name>.md --prompt-file .prove/handoff.md`"
+- Read everything before acting -- load all referenced files before making changes
+- Delete the handoff file after loading -- it is ephemeral
+- Never ask the user what to do -- the handoff file already tells you
+- If the handoff recommends a specific agent, inform the user: "This handoff targets the `<agent>` agent. Consider: `claude --agent agents/<name>.md --prompt-file .prove/handoff.md`"

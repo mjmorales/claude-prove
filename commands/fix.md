@@ -1,19 +1,13 @@
 ---
-description: Generate a fix prompt from ACB review — targets rejected groups with reviewer comments and file refs for the agent to act on
+description: Fix rejected ACB review groups — targets rejected groups with reviewer comments and file refs
 ---
 
 # ACB Fix
-
-Run the following command and use the output as your instructions:
 
 ```bash
 node "$CLAUDE_PROJECT_DIR/packages/acb-core/dist/cli/index.js" fix
 ```
 
-If the command succeeds, follow the instructions in the output:
-1. Fix only the rejected groups listed
-2. Do not modify accepted groups
-3. Commit with an intent manifest as usual
-4. The ACB will be progressively reassembled on each commit
+**On success**: Follow the output as instructions. Fix ONLY rejected groups — do not modify accepted groups. Commit with an intent manifest as usual (ACB reassembles progressively on each commit).
 
-If the command fails because all groups are accepted, inform the user and suggest `/prove:resolve` instead.
+**On failure**: Inform the user all groups are accepted and suggest `/prove:resolve`.

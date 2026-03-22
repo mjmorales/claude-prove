@@ -3,7 +3,7 @@ description: Iterative code quality audit that loops until clean. Runs steward i
 argument-hint: "[--full] [--max-passes N] [directory or module]"
 ---
 
-# Auto Steward: Iterative Audit Loop
+# Auto Steward: $ARGUMENTS
 
 Run an iterative code quality audit that keeps fixing and re-auditing until clean.
 
