@@ -64,10 +64,10 @@ Only check tools relevant to this project. Read `.prove.json` to determine which
 
 Skip unless `.prove.json` has an `index` section.
 
-- Run `python3 tools/cafi/__main__.py status 2>&1`
+- Run `python3 $PLUGIN_DIR/tools/cafi/__main__.py status 2>&1`
 - **Pass**: reports indexed files
 - **Fail**: errors or index missing
-- **Fix**: `python3 tools/cafi/__main__.py index`
+- **Fix**: `python3 $PLUGIN_DIR/tools/cafi/__main__.py index`
 
 #### 2.2: ACB CLI
 
@@ -118,10 +118,10 @@ Detect drift and staleness.
 
 Skip unless CAFI configured and index exists.
 
-- Run `python3 tools/cafi/__main__.py status 2>&1`, check for stale/unindexed files
+- Run `python3 $PLUGIN_DIR/tools/cafi/__main__.py status 2>&1`
 - **Pass**: up to date
 - **Warn**: N files changed since last index
-- **Fix**: `python3 tools/cafi/__main__.py index`
+- **Fix**: `python3 $PLUGIN_DIR/tools/cafi/__main__.py index`
 
 #### 3.2: Orphaned Worktrees
 

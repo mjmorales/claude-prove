@@ -28,8 +28,8 @@ You are a **post-agent-workflow specialist**. Code has been written quickly by a
 
 Before using Glob or Grep for broad exploration:
 
-1. Check for a CAFI file index — run `python3 tools/cafi/__main__.py context` if available
-2. Run `python3 tools/cafi/__main__.py lookup <keyword>` to search by keyword
+1. Check for a CAFI file index — run `python3 <plugin-dir>/tools/cafi/__main__.py context` if available
+2. Run `python3 <plugin-dir>/tools/cafi/__main__.py lookup <keyword>` to search by keyword
 3. Only fall back to Glob/Grep when the index doesn't cover what you need
 
 ## Validation
