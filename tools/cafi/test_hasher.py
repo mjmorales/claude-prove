@@ -13,6 +13,7 @@ _sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from hasher import (  # noqa: E402
     _git_check_ignore,
+    _matches_any,
     compute_hash,
     diff_cache,
     is_binary,
@@ -200,6 +201,76 @@ class TestWalkProjectExcludes(unittest.TestCase):
         self.assertIn("main.py", files)
         for f in files:
             self.assertFalse(f.startswith("packages/foo/"), f"Should exclude: {f}")
+
+    def test_exclude_directory_prefix_no_trailing_slash(self):
+        """Patterns without trailing '/' also exclude all files under that directory."""
+        pkg_dir = os.path.join(self.tmpdir, "client", "addons", "gut")
+        os.makedirs(pkg_dir)
+        Path(os.path.join(pkg_dir, "gut.gd")).write_text("# gut\n")
+        Path(os.path.join(pkg_dir, "runner.gd")).write_text("# runner\n")
+
+        files = walk_project(self.tmpdir, excludes=["client/addons/gut"])
+        self.assertIn("main.py", files)
+        for f in files:
+            self.assertFalse(f.startswith("client/addons/gut/"), f"Should exclude: {f}")
+
+
+class TestMatchesAny(unittest.TestCase):
+    """Test _matches_any glob pattern matching."""
+
+    def test_wildcard_extension(self):
+        self.assertTrue(_matches_any("data.log", ["*.log"]))
+        self.assertTrue(_matches_any("sub/debug.log", ["*.log"]))
+        self.assertFalse(_matches_any("main.py", ["*.log"]))
+
+    def test_directory_with_trailing_slash(self):
+        self.assertTrue(_matches_any("dist/bundle.js", ["dist/"]))
+        self.assertTrue(_matches_any("dist/sub/file.js", ["dist/"]))
+        self.assertFalse(_matches_any("distro/file.txt", ["dist/"]))
+
+    def test_directory_without_trailing_slash(self):
+        self.assertTrue(_matches_any("client/addons/gut/gut.gd", ["client/addons/gut"]))
+        self.assertTrue(_matches_any("client/addons/gut/sub/deep.gd", ["client/addons/gut"]))
+        self.assertFalse(_matches_any("client/addons/gutter/x.gd", ["client/addons/gut"]))
+
+    def test_nested_directory_no_partial_match(self):
+        """Bare directory pattern must not match a sibling with a longer name."""
+        self.assertFalse(_matches_any("src/utils_extra/foo.py", ["src/utils"]))
+        self.assertTrue(_matches_any("src/utils/foo.py", ["src/utils"]))
+
+    def test_double_star_glob(self):
+        self.assertTrue(_matches_any("src/a/b/c.py", ["src/**/*.py"]))
+        self.assertFalse(_matches_any("src/a/b/c.js", ["src/**/*.py"]))
+
+    def test_question_mark_wildcard(self):
+        self.assertTrue(_matches_any("file1.py", ["file?.py"]))
+        self.assertFalse(_matches_any("file10.py", ["file?.py"]))
+
+    def test_multiple_patterns(self):
+        self.assertTrue(_matches_any("data.log", ["*.txt", "*.log"]))
+        self.assertTrue(_matches_any("notes.txt", ["*.txt", "*.log"]))
+        self.assertFalse(_matches_any("main.py", ["*.txt", "*.log"]))
+
+    def test_no_patterns(self):
+        self.assertFalse(_matches_any("anything.py", []))
+
+    def test_uid_extension(self):
+        """Real-world pattern from wargounds .prove.json."""
+        self.assertTrue(_matches_any("client/scenes/main.uid", ["*.uid"]))
+        self.assertTrue(_matches_any("deep/nested/thing.uid", ["*.uid"]))
+        self.assertFalse(_matches_any("client/scenes/main.gd", ["*.uid"]))
+
+
+class TestWalkProjectSkipsProve(unittest.TestCase):
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        for name in ["main.py"]:
+            Path(os.path.join(self.tmpdir, name)).write_text(f"# {name}\n")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir)
 
     def test_skips_prove_directory(self):
         prove_dir = os.path.join(self.tmpdir, ".prove")
