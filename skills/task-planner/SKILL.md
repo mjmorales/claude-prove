@@ -204,7 +204,9 @@ After discovery, create `.prove/TASK_PLAN.md`:
 
 ## Implementation Steps
 
-### Step 1: [Preparation/Setup]
+> **Header format (mandatory)**: Use `### Task {wave}.{seq}: {name}` — e.g., `### Task 1.1:`, `### Task 2.1:`. The wave number groups parallelizable tasks; the seq number orders within a wave. The orchestrator's shell scripts parse these headers by exact pattern — any other format will break execution.
+
+### Task 1.1: [Preparation/Setup]
 **Size**: XS/S/M/L/XL
 **Description**: [What we're doing]
 **Changes**:
@@ -212,28 +214,28 @@ After discovery, create `.prove/TASK_PLAN.md`:
   - Action: [Add/Modify/Delete]
   - Details: [Specific changes]
 **Verification**:
-- [ ] [How to verify this step worked]
+- [ ] [How to verify this task worked]
 - [ ] [Another verification]
 **Tests**:
 - Unit test: [Test to write/update]
 - Manual test: [Steps to verify]
 
-### Step 2: [Core Implementation]
+### Task 1.2: [Core Implementation]
 **Size**: XS/S/M/L/XL
 **Description**: [What we're doing]
 **Changes**:
 - File: `path/to/another.py`
   - Action: [Specific changes]
-**Dependencies**: Step 1 must be complete
+**Dependencies**: Task 1.1 must be complete
 **Verification**:
 - [ ] [How to verify]
 **Tests**:
 - [Specific test cases]
 
-### Step 3: [Edge Case Handling]
+### Task 1.3: [Edge Case Handling]
 [Continue pattern...]
 
-### Step 4: [Testing & Validation]
+### Task 2.1: [Testing & Validation]
 [Continue pattern...]
 
 ## Edge Cases to Handle

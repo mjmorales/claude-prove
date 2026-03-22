@@ -41,7 +41,7 @@ After implementation:
 
 ## Implementation Steps
 
-### Step 1: [Setup/Preparation]
+### Task 1.1: [Setup/Preparation]
 **Size**: XS
 **Risk**: Low
 **Description**: [What we're doing and why]
@@ -71,11 +71,11 @@ python -m module.config --validate
 
 ---
 
-### Step 2: [Core Implementation Part 1]
+### Task 1.2: [Core Implementation Part 1]
 **Size**: M
 **Risk**: Medium
 **Description**: [Main functionality being added]
-**Dependencies**: Step 1 must be complete
+**Dependencies**: Task 1.1 must be complete
 
 **Changes**:
 - `src/core/feature.py`:
@@ -119,11 +119,11 @@ def test_feature_handler_error_cases():
 
 ---
 
-### Step 3: [Edge Case Handling]
+### Task 1.3: [Edge Case Handling]
 **Size**: S
 **Risk**: Low
 **Description**: Handle edge cases discovered during exploration
-**Dependencies**: Step 2
+**Dependencies**: Task 1.2
 
 **Edge Cases to Address**:
 1. **Null input**: Currently crashes → Should return default
@@ -143,11 +143,11 @@ def test_feature_handler_error_cases():
 
 ---
 
-### Step 4: [Integration]
+### Task 2.1: [Integration]
 **Size**: M
 **Risk**: Medium
 **Description**: Connect new feature to existing system
-**Dependencies**: Steps 2-3
+**Dependencies**: Tasks 1.2-1.3
 
 **Changes**:
 - `src/api/endpoints.py`:
@@ -165,11 +165,11 @@ def test_feature_handler_error_cases():
 
 ---
 
-### Step 5: [Performance Optimization]
+### Task 2.2: [Performance Optimization]
 **Size**: S
 **Risk**: Low
 **Description**: Optimize based on profiling results
-**Dependencies**: Step 4
+**Dependencies**: Task 2.1
 
 **Optimizations**:
 - [ ] Add caching for repeated calls
@@ -183,11 +183,11 @@ def test_feature_handler_error_cases():
 
 ---
 
-### Step 6: [Documentation & Cleanup]
+### Task 3.1: [Documentation & Cleanup]
 **Size**: XS
 **Risk**: Low
 **Description**: Document changes and clean up code
-**Dependencies**: All previous steps
+**Dependencies**: All previous tasks
 
 **Tasks**:
 - [ ] Write API documentation
@@ -275,17 +275,17 @@ This task is complete when:
 
 This .prove/TASK_PLAN.md integrates with the plan-step skill:
 
-1. Each step becomes a planning item in plan-step
-2. The plan-step skill creates detailed requirements for each step
+1. Each task becomes a planning item in plan-step
+2. The plan-step skill creates detailed requirements for each task
 3. Verification criteria enable testing
 4. Dependencies ensure correct order
 
 Example workflow:
 ```
 1. Use task-planner to create .prove/TASK_PLAN.md
-2. "Let's work on Step 2 from the task plan"
-3. plan-step creates .prove/plans/plan_step_2/ with detailed requirements
-4. Implement step by step with verification
+2. "Let's work on Task 1.2 from the task plan"
+3. plan-step creates .prove/plans/plan_task_1.2/ with detailed requirements
+4. Implement task by task with verification
 ```
 
 ## Key Principles

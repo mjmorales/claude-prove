@@ -554,7 +554,8 @@ When triggered with "full auto" and no existing plan, run requirements gathering
    - How to verify it works
 4. **Write the PRD** directly to `.prove/runs/<slug>/PRD.md` using the template in `references/prd-template.md`
 5. **User approval gate** — Use AskUserQuestion with header "PRD" and options: "Approve" (proceed to planning) / "Request Changes" (I have feedback before proceeding)
-6. **Generate `.prove/runs/<slug>/TASK_PLAN.md`** with wave-based task graph
+6. **Generate `.prove/runs/<slug>/TASK_PLAN.md`** with wave-based task graph.
+   **CRITICAL FORMAT**: Tasks MUST use `### Task {wave}.{seq}: {name}` headers (e.g., `### Task 1.1: Setup config`, `### Task 1.2: Core logic`, `### Task 2.1: Integration`). The wave number groups independent tasks into parallel batches; the seq number orders tasks within a wave. The shell scripts in `scripts/generate-task-prompt.sh` and `scripts/generate-review-prompt.sh` parse these headers with awk — any other format (e.g., `### Step N:`) will cause task extraction to fail silently.
 7. **User approval gate** — Use AskUserQuestion with header "Plan" and options: "Approve" (begin execution) / "Request Changes" (I have feedback before proceeding)
 
 All artifacts are written directly to the run directory — no global `.prove/` singletons are created. This allows multiple full-auto runs to proceed concurrently.
