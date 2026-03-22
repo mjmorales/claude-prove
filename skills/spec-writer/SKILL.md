@@ -27,7 +27,7 @@ Before delegating to the agent, collect the inputs it needs.
 
 **For New Draft:**
 
-1. Read any referenced decision records from `.prove/decisions/`
+1. Read any referenced decision records from `.prove/decisions/`. When a decision record is the primary input, extract the chosen option and its design details to frame the draft prompt.
 2. Check `specs/` for existing specs that might be related or that the new spec should reference
 3. Ask the user to confirm scope — what the spec covers and what it explicitly does not
 
@@ -122,24 +122,6 @@ After the agent completes:
    - "Fix issues" — switch to Revise mode and address the findings
    - "Done" — audit complete, no further action
 
-## Spec Conventions
-
-- Specs live in `specs/` at the project root
-- Filename format: `{slug}.spec.md`
-- One spec per file
-- The spec-writer agent enforces RFC 2119 keywords, section numbering, and the full document structure
-
-## Promoting Decisions to Specs
-
-A common workflow: the user runs `/prove:brainstorm`, records a decision, then wants to formalize it.
-
-When the user references a decision record:
-
-1. Read the decision from `.prove/decisions/`
-2. Extract the chosen option and its design details
-3. Frame a New Draft prompt that uses the decision as the primary input
-4. The agent transforms the informal decision into a formal specification with proper normative language
-
 ## Committing
 
 When the user asks to commit specs, delegate to the `commit` skill. The commit skill reads `.prove.json` scopes for valid commit scopes.
@@ -153,6 +135,4 @@ Examples:
 
 - ALWAYS delegate writing to the `spec-writer` agent. The skill orchestrates; the agent writes.
 - ALWAYS confirm scope before drafting. A spec without clear boundaries drifts.
-- NEVER skip the Terminology section. Undefined terms cause implementation divergence.
-- NEVER let the agent use RFC 2119 keywords in examples or informative sections.
 - PREFER promoting existing decision records over starting from scratch.

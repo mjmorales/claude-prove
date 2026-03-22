@@ -53,21 +53,9 @@ Determine exactly what source files to review:
 
 Launch the `code-steward` agent with this directive:
 
-> Review ONLY the following source files that changed in this session: [list the filtered source files].
->
-> **Do NOT review test files** — they are excluded from this audit.
->
-> For each file, do a line-by-line review focusing on:
-> 1. Does the new/changed code follow the patterns established in the rest of the codebase?
-> 2. Are new abstractions properly extracted or is there copy-paste drift?
-> 3. Naming — do new names communicate intent and match existing conventions?
-> 4. Error handling — consistent with the rest of the codebase?
-> 5. Are there any agent-generated anti-patterns (over-engineering, stale scaffolding, orphaned helpers)?
-> 6. Would a human reviewer be confused by anything?
->
-> Also check: do the changed files work well TOGETHER? Are the integration points clean? Is there duplication across the changed files?
->
-> Produce findings but do NOT fix anything yet.
+> Audit ONLY these source files: [list the filtered source files].
+> Scope is read-only — produce findings, do NOT fix anything yet.
+> In addition to your standard audit dimensions, check cross-file integration: do the changed files work well together? Are there duplications or inconsistencies across them?
 
 ## Phase 3: Findings
 
@@ -117,10 +105,7 @@ Based on user approval:
 - **If 1-2 small work packages**: Fix directly in this conversation using the `code-steward` agent — no need to spawn multiple subagents for a handful of files.
 - **If 3+ independent packages**: Spawn parallel `code-steward` agents, each with a focused prompt and explicit file list.
 
-For all fixes:
-- Backwards compatibility is NOT required. Clean breaks are fine.
-- Do NOT modify test files. Tests will be updated separately.
-- If you discover additional issues while fixing, note them but stay focused on the assigned work.
+If you discover additional issues while fixing, note them in the findings doc but stay focused on the approved scope.
 
 ## Phase 6: Verification
 
@@ -137,11 +122,8 @@ For all fixes:
 3. Run `git diff --stat` to show the user what changed.
 4. Present a one-paragraph summary of improvements made, plus the test remediation table if any tests broke.
 
-## Important Rules
+## Constraints
 
-- **Stay scoped.** Only review and fix source files from this branch/session. Flag broader issues for a full `/prove:steward` run.
-- **Skip all test files.** Source first, tests adapt second.
-- **Read context, don't fix context.** You may read unchanged files to understand patterns, but only modify changed source files (unless a rename/refactor naturally requires updating source references).
-- **Use `.prove.json` validators.** Never guess test/lint commands.
-- **Quality over speed**, but this should be meaningfully faster than a full `/prove:steward` audit.
+- **Read context, don't fix context.** Read unchanged files for patterns, but only modify files in scope (unless a rename naturally requires updating source references).
 - **Steward artifacts live in `.prove/steward/`**. Do not create top-level directories.
+- Flag broader codebase issues for a full `/prove:steward` run.

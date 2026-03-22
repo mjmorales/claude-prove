@@ -10,7 +10,7 @@ description: >
 
 # Comprehend
 
-Build deep comprehension of code you didn't write through targeted Socratic questioning. This skill analyzes a recent diff, generates causal and design-focused questions, quizzes you interactively, explains correct answers, and optionally logs gaps for future review.
+Quiz the developer on a recent diff to build comprehension of code they didn't write. Generates causal/design questions, evaluates answers interactively, and logs gaps.
 
 ## When to Use
 
@@ -37,7 +37,7 @@ Read the diff and generate 3-5 targeted questions.
 
 1. **Read the full diff** using `git diff` (or `git show` for commits)
 2. **Read surrounding context** for each changed file — at minimum, read the full file to understand where changes fit
-3. **Generate exactly 5 questions** (drop to 3 if the diff is small/trivial). Each question MUST target one of these categories:
+3. **Generate exactly 5 questions** (drop to 3 if the diff touches fewer than 3 functions or ~50 lines). Each question MUST target one of these categories:
 
    | Category | Example |
    |----------|---------|
@@ -130,16 +130,12 @@ After all questions are answered:
 
 ## Rules
 
-- ALWAYS generate questions from the actual diff — never make up hypothetical scenarios unrelated to the code
-- ALWAYS reference specific code (file, function, line) in questions and explanations
-- NEVER ask more than 5 questions — respect the developer's time (target: 2-5 minutes per session)
-- NEVER judge the user for wrong answers — the tone is collaborative, not evaluative
+- NEVER ask more than 5 questions — target 2-5 minutes per session
+- NEVER judge the user for wrong answers — tone is collaborative, not evaluative
 - NEVER skip the explanation step, even for correct answers (reinforcement matters)
-- PREFER questions that would catch real bugs over academic understanding
-- PREFER questions spanning multiple parts of the diff over single-line questions
 
 ## Committing
 
 This skill does not create or modify project code. No commits are generated. If learning logs need to be committed, delegate to the `commit` skill.
 
-**Interaction patterns**: See `references/interaction-patterns.md` for when to use `AskUserQuestion` vs free-form discussion.
+**Interaction patterns**: Follow `references/interaction-patterns.md` for `AskUserQuestion` usage.

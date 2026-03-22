@@ -34,34 +34,25 @@ The pickup note must answer:
 2. **Current blockers or gotchas** — anything non-obvious that would trip up a fresh agent
 3. **Key decisions made** — critical choices from this session that aren't captured in artifacts
 
-### How to write the pickup note
+Conditional context to include:
+- `.prove/TASK_PLAN.md` exists: reference the specific step to resume (e.g., "Resume at Step 3")
+- `.prove/decisions/` has entries: mention the most recent/relevant decision
+- No prove artifacts exist: summarize from git state — what was changed and what remains
+- `$ARGUMENTS` provided: incorporate the user's context
 
-- If `.prove/TASK_PLAN.md` exists: reference the specific step to resume (e.g., "Resume at Step 3")
-- If `.prove/decisions/` has entries: mention the most recent/relevant decision
-- If no prove artifacts exist: summarize from git state — what was changed and what remains
-- If `$ARGUMENTS` is provided: incorporate the user's context into the note
-- **Be concrete, not abstract.** "Fix the failing test in auth/middleware.test.ts caused by the new token format" beats "Continue working on auth."
+Be concrete: "Fix the failing test in auth/middleware.test.ts caused by the new token format" not "Continue working on auth."
 
 ## Phase 3: Agent Recommendation
 
-Read all `.md` files in the project's `agents/` directory (if it exists). For each agent, parse the YAML frontmatter `description` field.
+If `agents/` exists, read all `.md` files and parse each YAML frontmatter `description`. Match against the pickup note's work domain:
 
-Compare each agent's description against the domain of work described in the pickup note. Decide:
-
-1. **Strong match** — an existing agent's description clearly covers the remaining work domain
-   - Recommend: `claude --agent agents/<name>.md --prompt-file .prove/handoff.md`
-2. **No match, but specific domain** — the remaining work is specialized enough that a dedicated agent (with focused model/tools) would outperform general-purpose
-   - Recommend: "Consider creating a dedicated agent first with `/prove:create-agent`, then use it with the handoff"
-3. **General-purpose is fine** — the remaining work is broad or simple enough that a general agent works well
-   - Recommend: `claude --prompt-file .prove/handoff.md`
-
-If no `agents/` directory exists, default to option 3.
+- **Agent matches**: `claude --agent agents/<name>.md --prompt-file .prove/handoff.md` — explain the match briefly
+- **No agent matches, specialized work**: suggest creating one first with `/prove:create-agent`
+- **No agents dir OR general-purpose work**: `claude --prompt-file .prove/handoff.md`
 
 ## Phase 4: Write & Output
 
-### 4a. Assemble the handoff file
-
-Combine the gathered context and pickup note into `.prove/handoff.md` using this structure:
+Write `.prove/handoff.md` using this exact structure:
 
 ```markdown
 # Handoff Context
@@ -73,9 +64,8 @@ Combine the gathered context and pickup note into `.prove/handoff.md` using this
 <gathered context from Phase 1 — State, Files Modified, Prove Artifacts, Discovery sections>
 
 ## Files to Read First
-<Priority-ordered list: 3-7 files the new agent should read before doing anything.
- For each file, add a one-line "why" explanation.
- Prioritize: task plan > files being actively modified > decision records > config>
+<3-7 files, priority-ordered. Each with a one-line "why".
+ Priority: task plan > actively modified files > decision records > config>
 
 ## Instructions
 1. Read the files listed in "Files to Read First" before starting
@@ -84,39 +74,16 @@ Combine the gathered context and pickup note into `.prove/handoff.md` using this
 4. When done with this handoff, delete the prompt file: `rm .prove/handoff.md`
 ```
 
-### 4b. Write the file
-
-Write the assembled content to `.prove/handoff.md`.
-
-### 4c. Output to user
-
-Present the result:
-
-1. Confirm the handoff file was written: `.prove/handoff.md`
+After writing, output to the user:
+1. Confirm: `.prove/handoff.md` written
 2. Show the recommended command from Phase 3
 3. If an agent was recommended, briefly explain why
 
-Example output:
-```
-Handoff written to `.prove/handoff.md`
-
-Start fresh with:
-  claude --prompt-file .prove/handoff.md
-
-(Or delete the handoff file if you no longer need it: rm .prove/handoff.md)
-```
-
 ## Rules
 
-- **Deterministic first** — the gather script does the heavy lifting. The LLM only writes the pickup note.
-- **Reference, don't inline** — point to files by path. The handoff should be ~100-200 lines, not a novel.
-- **Fresh snapshot** — each handoff is independent. Don't append to or reference prior handoffs.
-- **Ephemeral by design** — the file is a relay baton. Stale handoffs are auto-deleted on next run.
-- **No interview** — don't ask the user questions. Gather context silently and write the file. The user already told you what they need via `$ARGUMENTS` or you have enough context from the conversation.
-- **Cap file lists** — max 50 files in "Files Modified", max 7 files in "Files to Read First".
+- **Reference, don't inline** — point to files by path. Target ~100-200 lines total.
+- **Fresh snapshot** — each handoff is independent. Never append to or reference prior handoffs.
+- **No interview** — never ask the user questions. Use `$ARGUMENTS` and conversation context.
+- **Cap file lists** — max 50 files in "Files Modified", max 7 in "Files to Read First".
 
-## Scripts
-
-| Script | Purpose |
-|--------|---------|
-| `scripts/gather-context.sh` | Deterministic context gathering from git state and prove artifacts |
+**Gather script**: `scripts/gather-context.sh` — deterministic context from git state and prove artifacts.

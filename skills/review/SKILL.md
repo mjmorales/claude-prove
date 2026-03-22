@@ -9,7 +9,7 @@ argument-hint: "[base-branch (default: main)]"
 
 # ACB Branch Review: $ARGUMENTS
 
-Generate an Agent Change Brief from the current branch. Prefers assembling from per-commit intent manifests (first-party agent declarations) over post-hoc reconstruction.
+Generate an Agent Change Brief from the current branch. Assemble from per-commit intent manifests when available; fall back to reconstruction for uncovered changes.
 
 ## Phase 1: Extract Diff Context
 
@@ -39,9 +39,9 @@ Generate an Agent Change Brief from the current branch. Prefers assembling from 
    ```
 
 3. **Handle edge cases**:
-   - **Empty diff**: Inform user "No changes between current branch and `<base>`." and stop
-   - **Binary files**: Note them in the ACB's `negative_space` as `out_of_scope`
-   - **Generated files** (dist/, build/, lock files): Exclude from intent groups, note in `negative_space`
+   - **Empty diff**: Print "No changes between current branch and `<base>`." and stop
+   - **Binary files**: Add to `negative_space` as `out_of_scope`
+   - **Generated files** (dist/, build/, lock files): Exclude from intent groups, add to `negative_space`
 
 ## Phase 2: Check for Intent Manifests
 
@@ -56,7 +56,7 @@ ls .acb/intents/*.json 2>/dev/null
 
 ### Phase 2a: Assemble from Manifests
 
-When intent manifests are present, the implementing agents already declared their intent at commit time. Use the assembler to merge them.
+Merge intent manifests declared at commit time.
 
 1. Read all `.acb/intents/*.json` files
 2. Parse each as an IntentManifest (skip files with parse errors, warn the user)
@@ -76,9 +76,7 @@ When intent manifests are present, the implementing agents already declared thei
 
 ### Phase 2b: Reconstruct Intent Groups (Fallback)
 
-This is the reconstruction path — used when no manifests exist or to fill gaps for files not covered by any manifest.
-
-Analyze the diff (full diff if no manifests, or just the uncovered portion) and create intent groups.
+Reconstruct intent groups from the diff when no manifests exist, or for files not covered by any manifest.
 
 **Grouping criteria** (in priority order):
 1. **Shared purpose** — files that implement the same feature or fix the same bug
@@ -98,14 +96,7 @@ Analyze the diff (full diff if no manifests, or just the uncovered portion) and 
 
 **Mark reconstructed groups**: When generating groups via reconstruction (not from manifests), add an annotation with type `note` and body: "This intent group was reconstructed post-hoc, not declared by the implementing agent."
 
-**Group ordering** (suggested review priority):
-1. Configuration and infrastructure changes
-2. Data layer (schemas, models)
-3. Core logic (business logic, services)
-4. Interface layer (API endpoints, CLI, UI)
-5. Supporting files (utilities, helpers)
-6. Documentation changes
-7. Test files (always last)
+**Group ordering**: Order groups from foundational to dependent — infrastructure and data first, tests last.
 
 **Rules:**
 - A file belongs to exactly one intent group (no duplicates)
@@ -145,7 +136,7 @@ Construct the full `.acb.json` document:
 }
 ```
 
-**Open questions**: Add any ambiguities or decisions you'd want the reviewer to weigh in on.
+**Open questions**: Add ambiguities or decisions the reviewer should weigh in on.
 
 **Negative space**: Add entries for:
 - Files that look related but were intentionally not changed (with reason)
@@ -153,7 +144,7 @@ Construct the full `.acb.json` document:
 
 Write the document to `.prove/reviews/<branch-slug>.acb.json` (overwrite if exists).
 
-Validate the document structure before writing — every changed file must appear in exactly one intent group, all required fields present.
+Validate before writing: every changed file must appear in exactly one intent group, all required fields present.
 
 ## Phase 5: Present Results
 
@@ -164,27 +155,14 @@ Validate the document structure before writing — every changed file must appea
    - List of group titles in review order with classification badges
    - Any open questions or flags
 
-2. Tell the user where the ACB is and how to review:
+2. Print the output path:
    ```
    ACB written to: .prove/reviews/<branch-slug>.acb.json
-
-   Open in VS Code/Cursor to use the ACB review extension:
-     code .prove/reviews/<branch-slug>.acb.json
-
-   The extension shows intent groups with:
-   - "Show Changes" to view diffs per group
-   - Accept/Reject per intent group
-   - Clickable file refs for navigation
    ```
 
 ## Rules
 
-- **Read-only with respect to project code** — this skill only reads diffs and writes the ACB
-- **Prefer manifests over reconstruction** — first-party agent declarations are always richer than third-party analysis
-- **Deterministic grouping** — given the same diff + manifests, output should be consistent
+- **Read-only** — only read diffs and write the ACB; never modify project code
+- **Deterministic grouping** — same diff + manifests must produce consistent output
 - **No validation** — this is review organization, not testing or linting
-- **Overwrite ACB** — each run replaces the previous ACB for this branch
-- **Respect .gitignore** — don't include ignored files even if they show in diff
-- **Valid ACB** — the output must be a valid ACB document per the spec
-
-**Interaction patterns**: See `references/interaction-patterns.md` for when to use `AskUserQuestion` vs free-form discussion.
+- **Respect .gitignore** — exclude ignored files even if they appear in diff

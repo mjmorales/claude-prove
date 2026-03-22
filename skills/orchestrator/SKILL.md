@@ -15,18 +15,17 @@ description: >
 
 # Orchestrator Skill
 
-Autonomous orchestration skill that executes planned tasks end-to-end. Auto-scales between:
-
+Auto-scales between:
 - **Simple mode** (<=3 steps): Sequential execution, no worktrees, lightweight reporting
 - **Full mode** (4+ steps): Parallel worktrees, mandatory architect review, full progress tracking
 
 ## Prerequisites
 
-Before invoking, one of the following must exist:
-- A `.prove/runs/<slug>/TASK_PLAN.md` with implementation steps (written by full-auto or task-planner)
-- A `.prove/plans/plan_X/` directory with planning docs (created via `/plan-step`)
+Requires one of:
+- `.prove/runs/<slug>/TASK_PLAN.md` — implementation steps (from full-auto or task-planner)
+- `.prove/plans/plan_X/` — planning docs (from `/plan-step`)
 
-If neither exists, inform the user and suggest running `/plan-task` first.
+If neither exists, suggest `/plan-task`.
 
 ---
 
@@ -34,9 +33,7 @@ If neither exists, inform the user and suggest running `/plan-task` first.
 
 > **Path convention**: All `.prove/...` paths are rooted at the **main worktree** (`$MAIN_ROOT`), not the orchestrator worktree. Scripts resolve this via `git worktree list`.
 
-1. **Derive slug** — Slugify the task name from the command arguments or feature description
-   (lowercase, hyphens, no special chars, max 40 chars). The slug is derived from user input,
-   not from parsing the plan — it determines where to find/create the run directory.
+1. **Derive slug** — Slugify from user input (lowercase, hyphens, no special chars, max 40 chars). The slug determines where to find/create the run directory — do not derive it from parsing the plan.
 
 2. **Initialize run directory** (namespaced per slug — supports concurrent runs)
    ```bash
@@ -53,15 +50,13 @@ If neither exists, inform the user and suggest running `/plan-task` first.
    - **4+ steps**: Full mode (parallel worktrees + architect review)
    - Log which mode was selected
 
-5. **Create feature branch in a worktree** (enables concurrent orchestrator runs)
+5. **Create feature branch in a worktree**
    - If branch already exists, use AskUserQuestion with header "Branch" and options: "Resume" (continue from last commit) / "Start Fresh" (delete and recreate)
    - Create the branch and worktree:
      ```bash
      git worktree add .claude/worktrees/orchestrator-<slug> -b orchestrator/<slug>
      ```
-   - All subsequent orchestrator work happens inside this worktree path.
-     The main worktree remains on its current branch, so other orchestrators
-     (or manual work) can run concurrently without interference.
+   - All subsequent work happens inside this worktree. Main worktree stays on its current branch.
 
 6. **Create run log**
    Create `.prove/runs/<slug>/reports/run-log.md`:
@@ -72,11 +67,8 @@ If neither exists, inform the user and suggest running `/plan-task` first.
    **Mode**: Simple | Full
    **Started**: <ISO timestamp>
    **Status**: In Progress
-
-   ## Configuration
-   - Mode: <Simple|Full>
-   - Validators: <loaded from .prove.json or auto-detected>
-   - Steps: <total count>
+   **Validators**: <loaded from .prove.json or auto-detected>
+   **Steps**: <total count>
 
    ## Step Log
    | # | Step | Status | Commit | Notes |
@@ -88,22 +80,17 @@ If neither exists, inform the user and suggest running `/plan-task` first.
 8. **Load reporters** from `.prove.json`
    - Read the `reporters` array (may be empty or absent)
    - Log loaded reporters to run-log: `Reporters: <name1>, <name2>` (or `Reporters: none`)
-   - Reporter dispatch is handled automatically by Claude Code hooks — no manual dispatch needed
 
 ---
 
 ## Reporter Dispatch (Automatic via Hooks)
 
-**Reporter dispatch is handled automatically by Claude Code hooks.** The orchestrator does NOT need to invoke reporters manually — hooks fire deterministically on tool events and detect orchestrator actions.
+Reporter dispatch is handled by Claude Code hooks — the orchestrator never invokes reporters manually. Hooks in `.claude/settings.json`:
+- **PostToolUse(Bash)** — dispatches `step-complete`, `step-halted`, `wave-complete` on git commits/merges
+- **SubagentStop(principal-architect|validation-agent)** — dispatches `review-approved`, `review-rejected`, `validation-pass`, `validation-fail`
+- **Stop** — dispatches `execution-complete` when session ends with an active run
 
-Configured in `.claude/settings.json`:
-- **PostToolUse(Bash)** — detects orchestrator git commits/merges, dispatches `step-complete`, `step-halted`, `wave-complete`
-- **SubagentStop(principal-architect|validation-agent)** — detects review/validation verdicts, dispatches `review-approved`, `review-rejected`, `validation-pass`, `validation-fail`
-- **Stop** — dispatches `execution-complete` when the session ends with an active orchestrator run
-
-All dispatch reads the `reporters` array from `.prove.json` and deduplicates via `.prove/runs/<slug>/dispatch-state.json`. See `references/reporter-protocol.md` for details.
-
-**The orchestrator should focus on execution — notifications happen automatically.**
+Deduplication via `.prove/runs/<slug>/dispatch-state.json`. Details: `references/reporter-protocol.md`.
 
 ---
 
@@ -254,7 +241,7 @@ After ALL tasks in the wave are reviewed and approved:
    - Attempt auto-resolution for trivial conflicts
    - For non-trivial: ask user
 
-3. Run the full test suite after merging the wave
+4. Run the full test suite after merging the wave
 
 #### 2e. Advance to Next Wave
 
@@ -303,18 +290,6 @@ For each prompt validator configured in `.prove.json`:
 5. PASS: log result and continue
 6. FAIL: same retry cycle as command validators (one auto-fix, then halt)
 
-LLM validators follow the same output format logged to the run-log:
-
-```markdown
-### <Validator Name>
-**Status**: PASS | FAIL
-**Duration**: Xs
-**Output** (on failure):
-```
-(findings from the validation-agent)
-```
-```
-
 Record all results (pass/fail + output) in run-log.
 
 **ALL pass:** Proceed to git snapshot.
@@ -352,7 +327,7 @@ Record commit SHA in run-log.
 
 ## Phase 3: Completion
 
-Generate `.prove/runs/<slug>/reports/report.md`:
+Generate `.prove/runs/<slug>/reports/report.md` with these sections:
 
 ```markdown
 # Orchestrator Report: <Task Name>
@@ -360,8 +335,7 @@ Generate `.prove/runs/<slug>/reports/report.md`:
 **Branch**: orchestrator/<slug>
 **Mode**: Simple | Full
 **Status**: Completed | Halted at Step N
-**Started**: <timestamp>
-**Finished**: <timestamp>
+**Started**: <timestamp>  **Finished**: <timestamp>
 **Total Commits**: N
 
 ## Summary
@@ -370,61 +344,30 @@ Generate `.prove/runs/<slug>/reports/report.md`:
 ## Steps
 | # | Step | Status | Commit |
 |---|------|--------|--------|
-| 1 | <desc> | done | <sha-short> |
-| 2 | <desc> | done | <sha-short> |
-| 3 | <desc> | HALTED | <sha-short> [WIP] |
+(one row per step — mark HALTED steps with [WIP])
 
 ## Validation Summary
-- Build: PASS/FAIL
-- Tests: X passed, Y failed, Z skipped
-- Lint: PASS/FAIL
+- Build/Tests/Lint: PASS or FAIL (include counts for tests)
 
 ## Files Changed
 <output of: git diff --stat main...HEAD>
 
 ## How to Review
-
-Run `/prove:review` to generate an Agent Change Brief (ACB) that groups changes
-by intent. Open the resulting `.acb.json` in VS Code/Cursor for the full review
-experience (diff viewing, accept/reject per intent group). Or use git commands:
-
-```bash
-# Generate ACB (recommended)
-# /prove:review
-
-# View all changes
-git diff main...orchestrator/<slug>
-
-# View step-by-step
-git log --oneline main..orchestrator/<slug>
-git show <commit-sha>  # inspect individual step
-```
+Run `/prove:review` to generate an ACB, or use git commands:
+- `git diff main...orchestrator/<slug>` — all changes
+- `git log --oneline main..orchestrator/<slug>` — step-by-step
+- `git show <commit-sha>` — inspect individual step
 
 ## Rollback Options
-```bash
-# Undo everything
-git checkout main
-git branch -D orchestrator/<slug>
-
-# Revert a specific step
-git revert <commit-sha>
-
-# Rollback to a specific step
-git reset --hard <commit-sha>
-```
+- Undo all: `git checkout main && git branch -D orchestrator/<slug>`
+- Revert one step: `git revert <commit-sha>`
+- Reset to step: `git reset --hard <commit-sha>`
 
 ## Merge When Satisfied
-```bash
-git checkout main
-git merge --no-ff orchestrator/<slug>
-```
+git checkout main && git merge --no-ff orchestrator/<slug>
 ```
 
-Present to the user:
-- Completion status (all done vs halted at step N)
-- Report file location
-- Key review command
-- Next action recommendation (review, fix blocker, or merge)
+Present to user: completion status, report location, next action (review / fix blocker / merge).
 
 ---
 
@@ -490,51 +433,18 @@ If the user chose "Skip", remind them:
 
 ## Full Mode: Progress Tracking
 
-Maintain a live `.prove/runs/<slug>/PROGRESS.md` using `scripts/update-progress.sh`:
+Maintain a live `.prove/runs/<slug>/PROGRESS.md` using `scripts/update-progress.sh`.
 
-```markdown
-# Progress: <Feature Name>
+Sections (script manages content — orchestrator triggers updates):
+- **Header**: Feature name, status (In Progress | Completed | Failed | Paused), branch
+- **Overview table**: Wave / Tasks / Completed / Reviewed / Status
+- **Task Status**: Per-wave checklist — `- [x] Task 1.1: <name> -- APPROVED after N review(s) (HH:MM)`
+- **Review Log**: Chronological review verdicts
+- **Merge Log**: Chronological merge results (clean/conflict)
+- **Issues**: Timestamped problems
+- **Test Results**: Per-wave and final test outcomes
 
-**Started**: <YYYY-MM-DD HH:MM>
-**Status**: In Progress | Completed | Failed | Paused
-**Branch**: orchestrator/<slug>
-
-## Overview
-| Wave | Tasks | Completed | Reviewed | Status |
-|------|-------|-----------|----------|--------|
-| 1    | 3     | 3         | 3        | Merged |
-| 2    | 1     | 0         | 0        | Pending |
-
-## Task Status
-
-### Wave 1
-- [x] Task 1.1: <name> -- APPROVED after 1 review(s) (14:32)
-- [x] Task 1.2: <name> -- APPROVED after 2 review(s) (14:45)
-- [x] Task 1.3: <name> -- APPROVED after 1 review(s) (14:38)
-
-### Wave 2
-- [ ] Task 2.1: <name> -- Pending
-
-## Review Log
-- 14:30 Task 1.1: APPROVED
-- 14:35 Task 1.2: CHANGES_REQUIRED -- fixing...
-- 14:38 Task 1.3: APPROVED
-- 14:45 Task 1.2: APPROVED (round 2)
-
-## Merge Log
-- 14:46 Merged task 1.1 (clean)
-- 14:46 Merged task 1.2 (clean)
-- 14:47 Merged task 1.3 (clean)
-
-## Issues
-- <timestamp>: <description>
-
-## Test Results
-- Wave 1 post-merge: PASS (12 tests)
-- Final: <pending>
-```
-
-Update after: task start, task complete, review verdict, review pass, merge, wave complete, issues, final tests.
+Update triggers: task start, task complete, review verdict, merge, wave complete, issue, final tests.
 
 ---
 
@@ -542,23 +452,16 @@ Update after: task start, task complete, review verdict, review pass, merge, wav
 
 When triggered with "full auto" and no existing plan, run requirements gathering first:
 
-1. **Derive slug and create run directory** — Slugify the feature name and run:
-   ```bash
-   mkdir -p .prove/runs/<slug>/reports/
-   ```
-2. **Read project context** — Scan `CLAUDE.md`, `README.md`, `docs/`, recent git history.
-3. **Launch a requirements-gathering subagent** that interviews the user to clarify:
-   - What the feature does (user stories, acceptance criteria)
-   - What it does NOT do (explicit non-goals)
-   - Technical constraints
-   - How to verify it works
-4. **Write the PRD** directly to `.prove/runs/<slug>/PRD.md` using the template in `references/prd-template.md`
-5. **User approval gate** — Use AskUserQuestion with header "PRD" and options: "Approve" (proceed to planning) / "Request Changes" (I have feedback before proceeding)
+1. **Derive slug and create run directory**: `mkdir -p .prove/runs/<slug>/reports/`
+2. **Read project context** — `CLAUDE.md`, `README.md`, `docs/`, recent git history
+3. **Launch requirements-gathering subagent** — interview user for: user stories, acceptance criteria, non-goals, technical constraints, verification approach
+4. **Write PRD** to `.prove/runs/<slug>/PRD.md` using `references/prd-template.md`
+5. **User approval gate** — AskUserQuestion header "PRD", options: "Approve" / "Request Changes"
 6. **Generate `.prove/runs/<slug>/TASK_PLAN.md`** with wave-based task graph.
-   **CRITICAL FORMAT**: Tasks MUST use `### Task {wave}.{seq}: {name}` headers (e.g., `### Task 1.1: Setup config`, `### Task 1.2: Core logic`, `### Task 2.1: Integration`). The wave number groups independent tasks into parallel batches; the seq number orders tasks within a wave. The shell scripts in `scripts/generate-task-prompt.sh` and `scripts/generate-review-prompt.sh` parse these headers with awk — any other format (e.g., `### Step N:`) will cause task extraction to fail silently.
-7. **User approval gate** — Use AskUserQuestion with header "Plan" and options: "Approve" (begin execution) / "Request Changes" (I have feedback before proceeding)
+   **CRITICAL FORMAT**: Tasks MUST use `### Task {wave}.{seq}: {name}` headers (e.g., `### Task 1.1: Setup config`, `### Task 2.1: Integration`). Wave number = parallel batch; seq = order within wave. Scripts `generate-task-prompt.sh` and `generate-review-prompt.sh` parse these headers with awk — any other format (e.g., `### Step N:`) causes silent extraction failure.
+7. **User approval gate** — AskUserQuestion header "Plan", options: "Approve" / "Request Changes"
 
-All artifacts are written directly to the run directory — no global `.prove/` singletons are created. This allows multiple full-auto runs to proceed concurrently.
+All artifacts go in the run directory — no global `.prove/` singletons. Concurrent runs stay isolated.
 
 ---
 
@@ -579,9 +482,7 @@ All artifacts are written directly to the run directory — no global `.prove/` 
 
 - **Never force-push** or rewrite history on the orchestrator branch
 - **Never skip validation** — every step must pass gates before proceeding
-- **Halt on ambiguity** — if requirements are unclear, stop and ask
 - **Preserve main** — all work on the feature branch only
-- **One retry max** — no infinite fix loops
 - **Log everything** — run-log is the audit trail
 - **Specific file staging** — prefer `git add <files>` over `git add -A`
 
@@ -596,7 +497,6 @@ All artifacts are written directly to the run directory — no global `.prove/` 
 Kebab-case, max 40 chars: "Add user authentication" -> `add-user-authentication`
 
 ### Run Directory Layout
-All per-run state lives under `.prove/runs/<slug>/`:
 ```
 .prove/runs/<slug>/
 ├── TASK_PLAN.md         # Implementation plan
@@ -607,7 +507,6 @@ All per-run state lives under `.prove/runs/<slug>/`:
     ├── run-log.md       # Audit trail
     └── report.md        # Final report
 ```
-This isolation allows multiple orchestrator runs to proceed concurrently.
 
 ## Scripts
 
@@ -630,13 +529,6 @@ Helper scripts live in `scripts/`:
 | `references/validation-config.md` (top-level) | Canonical validation spec — schema, auto-detection, execution order |
 | `references/interaction-patterns.md` | When to use `AskUserQuestion` vs free-form discussion |
 
-**Interaction patterns**: See `references/interaction-patterns.md` for when to use `AskUserQuestion` vs free-form discussion.
-
 ## Committing
 
-All commits created during orchestrated execution MUST follow the `commit` skill conventions:
-
-1. Read `scopes` from `.prove.json` to derive valid scopes (fall back to directory-based scoping if not configured)
-2. Use conventional commit format: `<type>(<scope>): <description>`
-
-The orchestrator creates commits after each successful step. Each commit must be atomic and scoped — never bundle multiple steps into one commit.
+Follow the `commit` skill conventions: read `scopes` from `.prove.json` (fall back to directory-based), use `<type>(<scope>): <description>` format. Each step gets one atomic commit — never bundle steps.

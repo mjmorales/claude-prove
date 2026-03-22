@@ -18,35 +18,20 @@ Generate structured documentation optimized for LLM consumption and agent recoll
 
 ## Subject Identification
 
-Use `AskUserQuestion` with header "Subject" if the type isn't obvious from context. When presenting ≤3 choices, include a "Research & proceed" option per the Delegation pattern in `references/interaction-patterns.md`:
-- "Agent" (`.md` agent definition with frontmatter)
-- "API" (HTTP handlers, REST endpoints, GraphQL resolvers)
-- "Module" (package exports, public interfaces)
-- "Code" (functions, classes, complex logic)
+Use `AskUserQuestion` with header "Subject" if the type isn't obvious from context. When presenting ≤3 choices, include a "Research & proceed" option per the Delegation pattern in `references/interaction-patterns.md`.
 
-| Subject | Indicators | Key Contracts |
-|---------|------------|---------------|
-| **Agent** | `.md` in agents dir, frontmatter with `tools:` | Triggers, inputs, outputs, workflow |
-| **API** | HTTP handlers, REST endpoints | Request/response schemas, errors |
-| **Module** | Package exports, public interfaces | Parameters, return types, side effects |
-| **Code** | Functions, classes, complex logic | Types, behavior, edge cases |
+| Subject | Indicators | Key Contracts | AskUserQuestion Label |
+|---------|------------|---------------|-----------------------|
+| **Agent** | `.md` in agents dir, frontmatter with `tools:` | Triggers, inputs, outputs, workflow | "Agent" |
+| **API** | HTTP handlers, REST endpoints, GraphQL resolvers | Request/response schemas, errors | "API" |
+| **Module** | Package exports, public interfaces | Parameters, return types, side effects | "Module" |
+| **Code** | Functions, classes, complex logic | Types, behavior, edge cases | "Code" |
 
-## Context Gathering Best Practices
+## Context Gathering
 
-Minimize context usage:
-
-- **Targeted reads**: Read only the file/function being documented
-- **Grep before read**: Use `Grep` to find relevant sections, then read specific lines
-- **Avoid recursion**: Don't follow every import; document the interface, not dependencies
-- **Single pass**: Gather all needed info before delegating
-
-```
-# Good: Targeted
-Read -> specific file:lines -> delegate
-
-# Bad: Exploratory
-Read file A -> Read import B -> Read import C -> ...
-```
+- **Grep before read**: Use `Grep` to locate relevant sections, then read only those lines
+- **Interface boundary**: Document the public interface, not dependencies. Never follow imports recursively.
+- **Single pass**: Gather all needed context before delegating -- do not interleave gathering and writing
 
 ## Delegation to technical-writer
 
@@ -105,30 +90,23 @@ When documenting prove plugin components, follow these conventions:
 
 Reference the `scopes` section of `.prove.json` for the canonical list of plugin components.
 
-## Output Validation Checklist
+## Output Validation
 
-Before accepting documentation:
+Before accepting documentation, verify items NOT covered by the delegation templates or the technical-writer's own quality checklist:
 
 - [ ] YAML frontmatter present with `name`, `type`
-- [ ] All inputs explicitly typed
-- [ ] All outputs explicitly structured
-- [ ] Examples are concrete (no `...` placeholders)
-- [ ] No ambiguous language ("may", "might", "sometimes")
-- [ ] Error conditions documented
+- [ ] Every contract from the Subject Identification table is addressed
+- [ ] Examples use concrete values (no `...` or `foo`/`bar` placeholders)
+- [ ] Error/failure conditions documented
 
 Use `AskUserQuestion` with header "Quality" to confirm: "Approve" (documentation meets standards) / "Revise" (needs improvements).
 
 ## Anti-Patterns
 
-Avoid these context-wasting patterns:
-
-| Anti-Pattern | Impact | Alternative |
-|--------------|--------|-------------|
-| Reading entire file | Token waste | Grep for target, read lines |
-| Documenting internals | Noise | Document public interface only |
-| Verbose examples | Context bloat | Minimal working examples |
-| Redundant explanations | Duplication | Assume LLM baseline knowledge |
-| Nested exploration | Exponential reads | Stop at interface boundary |
+| Anti-Pattern | Alternative |
+|--------------|-------------|
+| Verbose examples with inline commentary | Minimal working examples -- code speaks for itself |
+| Explaining what the code does line-by-line | Document behavior and contracts, assume reader can read code |
 
 ## Committing
 

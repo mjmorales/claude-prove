@@ -39,28 +39,13 @@ Additionally, these built-in scopes are always available regardless of configura
 - `repo` — `.gitignore`, CI/CD, or other repo infrastructure
 - `config` — `.prove.json`, project configuration files
 
-## Phase 3: Analyze and Group Changes
+## Phase 3: Analyze, Group, and Order Changes
 
-Review all changed files and group them into logical commit units based on:
+Review all changed files and group them into logical commit units — one per coherent change. Each group maps to one conventional commit type. When a single file belongs to multiple logical changes, assign it to the primary purpose.
 
-- Feature additions (files that implement a new capability together)
-- Bug fixes (files that fix a specific issue)
-- Refactoring (files that restructure without changing behavior)
-- Configuration changes (build system, project config)
-- Documentation updates (README, docs, comments)
-- Test additions/modifications
-- Dependencies
+When grouping is ambiguous and there are 2-4 discrete options, use `AskUserQuestion` to present the choices; use free-form if the ambiguity needs open-ended explanation. See `references/interaction-patterns.md` for guidance.
 
-## Phase 4: Determine Commit Order
-
-Order commits logically:
-
-1. Infrastructure/config changes first
-2. Core implementation next
-3. Supporting files (scripts, assets)
-4. Documentation last
-
-## Phase 5: Create Semantic Commits
+## Phase 4: Create Semantic Commits
 
 For each logical group, create a commit using conventional commit format:
 
@@ -72,21 +57,12 @@ For each logical group, create a commit using conventional commit format:
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 
-**Types:**
-- `feat`: New feature or capability
-- `fix`: Bug fix
-- `refactor`: Restructuring without behavior change
-- `docs`: Documentation only
-- `test`: Adding or updating tests
-- `chore`: Build process, dependencies, configs
-- `style`: Formatting, whitespace (no content change)
-- `perf`: Performance improvements
-- `ci`: CI/CD changes
+Use standard conventional commit types (`feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `style`, `perf`, `ci`), plus:
 - `migrate`: Content migrated from an external source
 
-**Scope:** Derived from `.prove.json` scopes or directory structure.
+**Scope:** Derived from Phase 2.
 
-## Phase 6: Execute Commits
+## Phase 5: Execute Commits
 
 For each group:
 
@@ -94,20 +70,9 @@ For each group:
 2. Create the commit with the semantic message
 3. Verify with `git status` before moving to the next group
 
-## Phase 7: Summary
-
-After all commits are created, show:
-
-- List of commits created with their messages
-- Any remaining uncommitted changes
-- Suggest `git log --oneline -n <count>` to review
+After all commits, run `git log --oneline -n <count>` and report any remaining uncommitted changes.
 
 ## Rules
 
-- Keep commits atomic — each should represent one logical change
-- If a single file belongs to multiple logical changes, prioritize the primary purpose
-- When grouping is ambiguous and there are 2-4 discrete options, use AskUserQuestion to present the grouping choices; use free-form if the ambiguity needs open-ended explanation
 - Never force push or amend existing commits without explicit permission
-- Always check `.prove.json` for scopes before committing — do not hardcode scopes
-
-**Interaction patterns**: See `references/interaction-patterns.md` for when to use `AskUserQuestion` vs free-form discussion.
+- Never hardcode scopes — always derive from `.prove.json` or directory structure

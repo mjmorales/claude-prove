@@ -6,15 +6,9 @@ argument-hint: "[task-slug or plan-number]"
 
 # Task Cleanup: $ARGUMENTS
 
-Clean up all artifacts from a completed task lifecycle, archiving key documents before removal.
+Archive and remove artifacts from a completed task lifecycle. The script handles all file operations (archive-before-delete, branch merge checks, directory cleanup). This skill handles user interaction and SUMMARY.md generation.
 
-## Scripts
-
-Use `scripts/cleanup.sh` from the plugin directory for scanning, archiving, and removing artifacts. The script handles file operations; this skill handles user interaction and SUMMARY.md generation.
-
-## Phase 1: Identify Task (Dry Run)
-
-Run the cleanup script in dry-run mode to scan for artifacts:
+## Phase 1: Dry Run
 
 ```bash
 bash "$PLUGIN_DIR/scripts/cleanup.sh" --dry-run [task-slug]
@@ -24,11 +18,11 @@ bash "$PLUGIN_DIR/scripts/cleanup.sh" --dry-run --all
 
 If `$ARGUMENTS` is provided, pass it as the task-slug. Otherwise, use `--all`.
 
-Present the dry-run output, then use AskUserQuestion with header "Cleanup" and options: "Proceed" (archive and delete listed artifacts) / "Cancel" (abort cleanup).
+Present the dry-run output, then use AskUserQuestion with header "Cleanup" and options: "Proceed" / "Cancel".
 
-## Phase 2: Archive & Remove
+## Phase 2: Execute
 
-On user approval, run the script without `--dry-run`:
+On user approval, run without `--dry-run`:
 
 ```bash
 bash "$PLUGIN_DIR/scripts/cleanup.sh" [task-slug]
@@ -36,15 +30,11 @@ bash "$PLUGIN_DIR/scripts/cleanup.sh" [task-slug]
 bash "$PLUGIN_DIR/scripts/cleanup.sh" --all
 ```
 
-The script will:
-1. Archive key files to `.prove/archive/<YYYY-MM-DD>_<task-slug>/`
-2. Remove working artifacts (reports, plans, context, PRD.md, TASK_PLAN.md, PROGRESS.md)
-3. Delete merged branches (skips unmerged ones with a warning)
-4. Clean up empty parent directories
+Report the script output: what was archived, removed, and skipped.
 
 ## Phase 3: Generate SUMMARY.md
 
-After the script runs, generate a `SUMMARY.md` in the archive directory. This requires reading the archived files to summarize what was done:
+Read the archived files in `.prove/archive/<YYYY-MM-DD>_<task-slug>/` and write a `SUMMARY.md` there:
 
 ```markdown
 # Task Summary: <Task Name>
@@ -63,26 +53,10 @@ After the script runs, generate a `SUMMARY.md` in the archive directory. This re
 <from archived files-changed.txt, if present>
 ```
 
-## Phase 4: Confirm
-
-Output:
-- What was archived and where
-- What was deleted
-- Any items skipped (unmerged branches, missing files)
-- Path to archive: `.prove/archive/<date>_<task-slug>/`
-
 ## Committing
 
-When archiving or removing artifacts results in changes that should be committed, delegate to the `commit` skill. Do not create ad-hoc commits. The commit skill reads `.prove.json` scopes for valid commit scopes and uses conventional commit format.
+Delegate to the `commit` skill. Do not create ad-hoc commits.
 
 Example: `chore(cleanup): archive and remove api-refactor artifacts`
-
-## Safety Rules
-
-- **Always archive before deleting** — the script does this automatically
-- **Verify changes landed on main** before deleting branches — the script checks this and skips unmerged branches
-- **Confirm with user** before starting cleanup — use AskUserQuestion with "Proceed" / "Cancel" options
-- **Show dry-run first** — always run with `--dry-run` before executing, then use AskUserQuestion to confirm
-- **Idempotent** — safe to run multiple times; skips already-cleaned items
 
 **Interaction patterns**: See `references/interaction-patterns.md` for when to use `AskUserQuestion` vs free-form discussion.

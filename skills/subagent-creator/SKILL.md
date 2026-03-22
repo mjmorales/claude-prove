@@ -1,6 +1,6 @@
 ---
 name: subagent-creator
-description: Guide for creating specialized Claude Code subagents (AI assistants that Claude delegates tasks to). Use when users want to create a new agent, ask "create an agent for...", "new subagent", or need help designing agent prompts, tool permissions, or role definitions. Also use when asked about agent best practices or configuration options.
+description: Create Claude Code subagents. Triggers on "create an agent", "new subagent", agent design questions, or tool permission/role definition requests.
 ---
 
 # Subagent Creator
@@ -36,60 +36,22 @@ Use `AskUserQuestion` for discrete choices, free-form for open-ended questions.
 - "sonnet (Recommended)" (general development, good default)
 - "haiku" (simple, repetitive, cost-efficient tasks)
 
-### 2. Design the Agent
+### 2. Create the Agent File
 
-Based on requirements, determine:
+**Agent name** — derive a hyphen-case name from the role (e.g., `code-reviewer`, `security-auditor`, `test-engineer`).
 
-**Agent name** (hyphen-case):
-- Use descriptive, role-based names
-- Examples: `code-reviewer`, `security-auditor`, `test-engineer`
+Use `assets/agent-template.md` as the scaffold. Fill in all placeholder fields based on the gathered requirements.
 
-**Tool permissions reference**:
-
-| Agent Type | Recommended Tools |
-|------------|-------------------|
-| Reviewers/Auditors | Read, Grep, Glob |
-| Researchers | Read, Grep, Glob, WebFetch, WebSearch |
-| Developers | Read, Write, Edit, Bash, Glob, Grep |
-| Planners | Read, Grep, Glob |
-
-### 3. Create the Agent File
-
-Write the agent using this structure:
-
-```yaml
----
-name: agent-name
-description: [Role description]. [Trigger scenarios]. Use [proactively/when X].
-tools: Read, Grep, Glob
-model: sonnet
----
-
-You are a [role description with years of experience].
-
-## Core Responsibilities
-- [Key responsibility 1]
-- [Key responsibility 2]
-
-## When Invoked
-1. [First step]
-2. [Analysis step]
-3. [Action step]
-4. [Documentation step]
-
-## [Domain-Specific Section]
-- [Checklist or guidelines]
-
-## Output Format
-[How to structure findings/results]
-```
+Refer to `references/subagents-best-practices.md` for tool permission patterns by agent type, example agents, and pipeline composition patterns.
 
 If adding to a plugin, ensure the `agents` scope exists in `.prove.json`:
 ```json
 "scopes": { "agents": "agents/" }
 ```
 
-### 4. Validate the Agent
+For plugin agents, follow established patterns: heavyweight (opus, write access) for complex judgment, lightweight (haiku, read-only) for fast focused tasks. See `agents/principal-architect.md` and `agents/validation-agent.md` as examples.
+
+### 3. Validate the Agent
 
 Check:
 - [ ] Name is hyphen-case and matches filename
@@ -100,27 +62,6 @@ Check:
 - [ ] Model is appropriate for the task complexity
 
 Use `AskUserQuestion` with header "Review" to confirm: "Create Agent" (write the file) / "Revise" (make changes first).
-
-## Key Principles
-
-**Single Responsibility**: Each agent should have one clear purpose.
-
-**Focused Descriptions**: Be specific about when to invoke:
-- Good: "Senior code reviewer. Proactively reviews code for quality and security. Use immediately after writing or modifying code."
-- Bad: "Reviews code"
-
-**Appropriate Permissions**: Restrict tools based on role. Reviewers shouldn't have Write access.
-
-**Structured Instructions**: Include step-by-step workflows and checklists.
-
-## Prove Plugin Agents
-
-When creating agents for a prove-style plugin, follow the patterns established by existing agents:
-
-- **principal-architect** (`agents/principal-architect.md`) — opus model, full tools, code review role
-- **validation-agent** (`agents/validation-agent.md`) — haiku model, read-only tools, lightweight validation
-
-These demonstrate the two common patterns: heavyweight (opus, write access) for complex judgment, and lightweight (haiku, read-only) for fast, focused tasks.
 
 ## Committing
 
