@@ -61,6 +61,37 @@ def _git_ls_files(root: str) -> set[str] | None:
         return None
 
 
+def _git_check_ignore(root: str, paths: list[str]) -> set[str]:
+    """Return the subset of *paths* that are gitignored.
+
+    Uses ``git check-ignore --stdin`` which respects all .gitignore
+    layers (repo, global, nested), even for tracked-but-ignored files.
+    Returns an empty set if git is unavailable.
+    """
+    if not paths:
+        return set()
+    try:
+        result = subprocess.run(
+            ["git", "check-ignore", "--stdin"],
+            cwd=root,
+            input="\n".join(paths),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        # Exit 0 = some ignored, exit 1 = none ignored, other = error
+        if result.returncode not in (0, 1):
+            return set()
+        ignored = set()
+        for line in result.stdout.strip().splitlines():
+            line = line.strip()
+            if line:
+                ignored.add(line)
+        return ignored
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return set()
+
+
 def _matches_any(path: str, patterns: list[str]) -> bool:
     """Check if a relative path matches any of the given glob/fnmatch patterns.
 
@@ -98,7 +129,8 @@ def walk_project(
     git_files = _git_ls_files(root)
 
     if git_files is not None:
-        # Use git's list — already respects .gitignore
+        # Use git's list — --exclude-standard filters untracked files but
+        # not tracked-then-ignored ones, so we post-filter with check-ignore.
         candidates = sorted(git_files)
     else:
         # Fallback: walk the filesystem manually
@@ -114,6 +146,13 @@ def walk_project(
                 rel = os.path.relpath(full, root)
                 candidates.append(rel)
         candidates.sort()
+
+    # Filter out anything matched by .gitignore (covers tracked-but-ignored
+    # files that git ls-files --exclude-standard misses, and also handles
+    # the non-git fallback path when git is still available).
+    ignored = _git_check_ignore(root, candidates)
+    if ignored:
+        candidates = [c for c in candidates if c not in ignored]
 
     for rel_path in candidates:
         # Skip .prove directory and .prove.json config

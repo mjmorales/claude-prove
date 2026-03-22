@@ -12,6 +12,7 @@ import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from hasher import (  # noqa: E402
+    _git_check_ignore,
     compute_hash,
     diff_cache,
     is_binary,
@@ -207,6 +208,62 @@ class TestWalkProjectExcludes(unittest.TestCase):
         files = walk_project(self.tmpdir)
         for f in files:
             self.assertFalse(f.startswith(".prove"), f"Should skip .prove: {f}")
+
+
+class TestGitCheckIgnore(unittest.TestCase):
+    """Test _git_check_ignore and gitignore integration in walk_project."""
+
+    def setUp(self):
+        import subprocess as _sp
+        self.tmpdir = tempfile.mkdtemp()
+        # Init a git repo
+        _sp.run(["git", "init"], cwd=self.tmpdir, capture_output=True)
+        _sp.run(["git", "config", "user.email", "test@test.com"], cwd=self.tmpdir, capture_output=True)
+        _sp.run(["git", "config", "user.name", "Test"], cwd=self.tmpdir, capture_output=True)
+
+        # Create files
+        Path(os.path.join(self.tmpdir, "keep.py")).write_text("# keep\n")
+        Path(os.path.join(self.tmpdir, "secret.env")).write_text("KEY=val\n")
+        os.makedirs(os.path.join(self.tmpdir, "dist"))
+        Path(os.path.join(self.tmpdir, "dist", "bundle.js")).write_text("// bundle\n")
+
+        # Create .gitignore
+        Path(os.path.join(self.tmpdir, ".gitignore")).write_text("*.env\ndist/\n")
+
+        # Track everything (including files that match .gitignore)
+        _sp.run(["git", "add", "-A"], cwd=self.tmpdir, capture_output=True)
+        _sp.run(["git", "commit", "-m", "init"], cwd=self.tmpdir, capture_output=True)
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmpdir)
+
+    def test_check_ignore_identifies_ignored_files(self):
+        """_git_check_ignore returns files matching .gitignore patterns."""
+        ignored = _git_check_ignore(
+            self.tmpdir, ["keep.py", "secret.env", "dist/bundle.js"]
+        )
+        self.assertNotIn("keep.py", ignored)
+        self.assertIn("secret.env", ignored)
+        self.assertIn("dist/bundle.js", ignored)
+
+    def test_check_ignore_empty_input(self):
+        """Empty path list returns empty set."""
+        self.assertEqual(_git_check_ignore(self.tmpdir, []), set())
+
+    def test_check_ignore_no_git(self):
+        """Non-git directory returns empty set (graceful fallback)."""
+        with tempfile.TemporaryDirectory() as non_git:
+            ignored = _git_check_ignore(non_git, ["foo.py"])
+            self.assertEqual(ignored, set())
+
+    def test_walk_project_skips_gitignored(self):
+        """walk_project filters out files matching .gitignore, even if tracked."""
+        files = walk_project(self.tmpdir)
+        self.assertIn("keep.py", files)
+        self.assertNotIn("secret.env", files)
+        for f in files:
+            self.assertFalse(f.startswith("dist/"), f"Should skip gitignored: {f}")
 
 
 class TestLoadSaveCache(unittest.TestCase):
