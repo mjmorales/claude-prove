@@ -62,8 +62,17 @@ def _git_ls_files(root: str) -> set[str] | None:
 
 
 def _matches_any(path: str, patterns: list[str]) -> bool:
-    """Check if a relative path matches any of the given glob/fnmatch patterns."""
+    """Check if a relative path matches any of the given glob/fnmatch patterns.
+
+    Supports:
+    - Simple globs: ``*.log``, ``*.txt`` (matched against full path and basename)
+    - Directory prefixes: ``dist/``, ``packages/acb-vscode/`` (any file under that dir)
+    - Standard fnmatch patterns: ``src/*.py``, ``test_*``
+    """
     for pattern in patterns:
+        # Directory prefix pattern (e.g., "dist/" or "packages/foo/")
+        if pattern.endswith("/") and path.startswith(pattern):
+            return True
         if fnmatch(path, pattern):
             return True
         # Also match against the basename for simple patterns like "*.log"
@@ -107,8 +116,10 @@ def walk_project(
         candidates.sort()
 
     for rel_path in candidates:
-        # Skip .prove directory
+        # Skip .prove directory and .prove.json config
         if rel_path.startswith(".prove") or rel_path.startswith(os.sep + ".prove"):
+            continue
+        if rel_path == ".prove.json":
             continue
 
         # Skip if matches exclude patterns

@@ -18,6 +18,7 @@ if _tools_dir not in sys.path:
 _project_root = os.getcwd()
 
 from cafi import indexer  # noqa: E402
+from cafi.indexer import MissingConfigError  # noqa: E402
 
 
 def cmd_index(args: argparse.Namespace) -> None:
@@ -126,7 +127,16 @@ def main(argv: list[str] | None = None) -> None:
         parser.print_help()
         sys.exit(1)
 
-    args.func(args)
+    abs_root = os.path.abspath(args.project_root)
+    config_path = os.path.join(abs_root, ".prove.json")
+    print(f"CAFI: project_root={abs_root}", file=sys.stderr)
+    print(f"CAFI: config={config_path}", file=sys.stderr)
+
+    try:
+        args.func(args)
+    except MissingConfigError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ if str(_cafi_dir.parent) not in sys.path:
     sys.path.insert(0, str(_cafi_dir.parent))
 
 from cafi.indexer import (  # noqa: E402
+    MissingConfigError,
     build_index,
     clear_cache,
     format_index_for_context,
@@ -25,13 +26,28 @@ from cafi.indexer import (  # noqa: E402
 )
 
 
+def _write_prove_json(tmpdir: str, index_cfg: dict | None = None) -> None:
+    """Write a minimal .prove.json to tmpdir."""
+    config: dict = {}
+    if index_cfg:
+        config["index"] = index_cfg
+    with open(os.path.join(tmpdir, ".prove.json"), "w") as fh:
+        json.dump(config, fh)
+
+
 class TestLoadConfig(unittest.TestCase):
     """Tests for load_config."""
 
-    def test_load_config_defaults(self):
-        """No .prove.json present — returns default config."""
+    def test_load_config_missing_raises(self):
+        """No .prove.json present — raises MissingConfigError by default."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            cfg = load_config(tmpdir)
+            with self.assertRaises(MissingConfigError):
+                load_config(tmpdir)
+
+    def test_load_config_missing_no_require(self):
+        """No .prove.json present with require=False — returns defaults."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            cfg = load_config(tmpdir, require=False)
             self.assertEqual(cfg["excludes"], [])
             self.assertEqual(cfg["max_file_size"], 102400)
             self.assertEqual(cfg["concurrency"], 3)
@@ -55,15 +71,23 @@ class TestLoadConfig(unittest.TestCase):
 class TestBuildIndex(unittest.TestCase):
     """Tests for build_index."""
 
+    def test_build_index_no_config_raises(self):
+        """build_index raises MissingConfigError without .prove.json."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with self.assertRaises(MissingConfigError):
+                build_index(tmpdir)
+
+    @patch("cafi.indexer.triage_files", side_effect=lambda files: files)
     @patch("cafi.indexer.describe_files")
-    def test_build_index_new_files(self, mock_describe):
+    def test_build_index_new_files(self, mock_describe, _mock_triage):
         """New files get described and written to cache."""
         mock_describe.return_value = {
             "hello.py": "Read this file when greeting users.",
         }
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create .prove dir and a source file
+            # Create .prove dir, .prove.json, and a source file
             os.makedirs(os.path.join(tmpdir, ".prove"))
+            _write_prove_json(tmpdir)
             hello = os.path.join(tmpdir, "hello.py")
             with open(hello, "w") as fh:
                 fh.write("print('hello')\n")
@@ -85,11 +109,13 @@ class TestBuildIndex(unittest.TestCase):
                 "Read this file when greeting users.",
             )
 
+    @patch("cafi.indexer.triage_files", side_effect=lambda files: files)
     @patch("cafi.indexer.describe_files")
-    def test_build_index_incremental(self, mock_describe):
+    def test_build_index_incremental(self, mock_describe, _mock_triage):
         """Only stale files are re-described on incremental run."""
         with tempfile.TemporaryDirectory() as tmpdir:
             os.makedirs(os.path.join(tmpdir, ".prove"))
+            _write_prove_json(tmpdir)
 
             # Create two source files
             for name in ("a.py", "b.py"):
@@ -120,11 +146,13 @@ class TestBuildIndex(unittest.TestCase):
             called_paths = mock_describe.call_args[0][0]
             self.assertEqual(called_paths, ["a.py"])
 
+    @patch("cafi.indexer.triage_files", side_effect=lambda files: files)
     @patch("cafi.indexer.describe_files")
-    def test_build_index_force(self, mock_describe):
+    def test_build_index_force(self, mock_describe, _mock_triage):
         """force=True re-describes all files."""
         with tempfile.TemporaryDirectory() as tmpdir:
             os.makedirs(os.path.join(tmpdir, ".prove"))
+            _write_prove_json(tmpdir)
 
             with open(os.path.join(tmpdir, "x.py"), "w") as fh:
                 fh.write("# x\n")
@@ -152,6 +180,7 @@ class TestGetStatus(unittest.TestCase):
         """Verify status returns correct counts."""
         with tempfile.TemporaryDirectory() as tmpdir:
             os.makedirs(os.path.join(tmpdir, ".prove"))
+            _write_prove_json(tmpdir)
             with open(os.path.join(tmpdir, "f.py"), "w") as fh:
                 fh.write("# f\n")
 

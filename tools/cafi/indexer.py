@@ -28,20 +28,36 @@ DEFAULT_CONFIG = {
 }
 
 
-def load_config(project_root: str) -> dict:
+class MissingConfigError(Exception):
+    """Raised when .prove.json is not found and CAFI cannot proceed."""
+
+
+def load_config(project_root: str, require: bool = True) -> dict:
     """Read index config from ``.prove.json`` under the ``"index"`` key.
 
     Args:
         project_root: The project root directory.
+        require: If True (default), raise ``MissingConfigError`` when
+            ``.prove.json`` is absent. If False, fall back to defaults.
 
     Returns:
         Config dict with keys ``excludes``, ``max_file_size``, ``concurrency``.
-        Falls back to defaults for any missing keys or if the file is absent.
+        Falls back to defaults for any missing keys.
+
+    Raises:
+        MissingConfigError: If ``require`` is True and ``.prove.json`` is absent.
     """
     config_path = os.path.join(project_root, ".prove.json")
     result = dict(DEFAULT_CONFIG)
 
     if not os.path.isfile(config_path):
+        if require:
+            raise MissingConfigError(
+                f"No .prove.json found.\n"
+                f"  Project root: {os.path.abspath(project_root)}\n"
+                f"  Expected config: {os.path.abspath(config_path)}\n"
+                f"CAFI requires a .prove.json config to run."
+            )
         return result
 
     try:

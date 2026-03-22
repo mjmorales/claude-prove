@@ -188,6 +188,18 @@ class TestWalkProjectExcludes(unittest.TestCase):
         files = walk_project(self.tmpdir, max_file_size=102400)
         self.assertNotIn("big.txt", files)
 
+    def test_exclude_directory_prefix(self):
+        """Patterns ending with '/' exclude all files under that directory."""
+        pkg_dir = os.path.join(self.tmpdir, "packages", "foo")
+        os.makedirs(pkg_dir)
+        Path(os.path.join(pkg_dir, "index.js")).write_text("// js\n")
+        Path(os.path.join(pkg_dir, "util.js")).write_text("// util\n")
+
+        files = walk_project(self.tmpdir, excludes=["packages/foo/"])
+        self.assertIn("main.py", files)
+        for f in files:
+            self.assertFalse(f.startswith("packages/foo/"), f"Should exclude: {f}")
+
     def test_skips_prove_directory(self):
         prove_dir = os.path.join(self.tmpdir, ".prove")
         os.makedirs(prove_dir)
