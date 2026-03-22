@@ -163,7 +163,26 @@ Wait for all background agents in the wave to complete. Update progress as each 
 bash scripts/update-progress.sh .prove/runs/<slug>/PROGRESS.md task-complete <task-id>
 ```
 
-#### 2c. Mandatory Architect Review (per task)
+#### 2c. Validation Gate (per task)
+
+**Run before architect review.** For each completed worktree task, run ALL validators per the "Validation Gate (both modes)" section below.
+
+Implementation agents already run command validators (build/lint/test/custom) during their work, but the orchestrator must **verify** them here as a gate. For LLM validators, the orchestrator must execute them — implementation agents cannot launch `validation-agent` subagents.
+
+For each completed task:
+
+1. `cd` into the task worktree
+2. Run command validators in phase order (build → lint → test → custom)
+3. Run LLM validators per the "LLM Validator Execution" section below — read prompt file, generate diff, launch `validation-agent` subagent
+4. **ALL pass**: proceed to architect review (2d)
+5. **ANY fail**: follow the retry/halt protocol in "Validation Gate (both modes)"
+
+Update progress after validation:
+```bash
+bash scripts/update-progress.sh .prove/runs/<slug>/PROGRESS.md task-validated <task-id>
+```
+
+#### 2d. Mandatory Architect Review (per task)
 
 **CRITICAL: No task may be merged without passing review. Zero exceptions.**
 
@@ -216,7 +235,7 @@ If 3 iterations pass without APPROVED:
   - Use AskUserQuestion with header "Resolution" and options: "Force Approve" (merge as-is) / "Fix Manually" (I'll address the findings) / "Abort" (stop the run)
 ```
 
-#### 2d. Sequential Merge-Back
+#### 2e. Sequential Merge-Back
 
 After ALL tasks in the wave are reviewed and approved:
 
@@ -243,11 +262,13 @@ After ALL tasks in the wave are reviewed and approved:
 
 4. Run the full test suite after merging the wave
 
-#### 2e. Advance to Next Wave
+#### 2f. Advance to Next Wave
 
-Repeat 2a-2d for each subsequent wave.
+Repeat 2a-2e for each subsequent wave.
 
 ### Validation Gate (both modes)
+
+Called from: **Simple mode** step 4 | **Full mode** step 2c (per task, before architect review).
 
 Validators loaded per `references/validation-config.md` — from `.prove.json` if present, otherwise auto-detected.
 
@@ -265,7 +286,7 @@ Run ALL applicable validators in phase order (build → lint → test → custom
 For each prompt validator configured in `.prove.json`:
 
 1. Read the prompt file specified in the validator's `prompt` field
-2. Generate the diff for the current step: `git diff HEAD~1`
+2. Generate the diff: `git diff HEAD~1` (simple mode) or `git diff <base-branch>...HEAD` (full mode, captures all task commits)
 3. Launch the `validation-agent` (haiku model, read-only tools):
    ```
    Agent(
