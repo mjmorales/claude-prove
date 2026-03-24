@@ -71,3 +71,9 @@ After merging an orchestrator branch to main, sync with origin before pushing:
   - `CURRENT_SCHEMA_VERSION` matches if schema changed
   - `commands/update.md` Step 5 covers any new discoverable features
   - New `core: true` commands have `summary:` frontmatter
+
+## Prompt Quality Gate
+
+- **NEVER ship new or modified LLM-fed text without review by `llm-prompt-engineer`**: this includes `agents/*.md`, `commands/*.md`, `skills/*/SKILL.md`, CLAUDE.md directives, and any other content consumed by a model
+- **Workflow**: finish drafting the text, then invoke the `llm-prompt-engineer` agent on the file before committing. Apply its recommendations or explicitly document why you rejected them.
+- **Applies to edits too** — changing even a single directive in an existing prompt triggers the gate
