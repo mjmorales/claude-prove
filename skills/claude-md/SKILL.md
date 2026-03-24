@@ -34,4 +34,9 @@ Replace `$PLUGIN` below with the absolute path to this plugin's root directory.
   python3 $PLUGIN/skills/claude-md/__main__.py subagent-context --project-root /path/to/project --plugin-dir $PLUGIN
   ```
 
-Default (no argument): run `generate` targeting the current working directory.
+**Default**: `generate` — runs when no subcommand is given.
+
+### Flag defaults
+
+- `--project-root` — pass the user's current working directory (the target project, NOT the plugin directory)
+- `--plugin-dir` — pass `$PLUGIN` (the absolute path to this plugin's root)

@@ -100,8 +100,8 @@ def main(argv: list[str] | None = None) -> None:
 
     args = parser.parse_args(argv)
     if not args.command:
-        parser.print_help()
-        sys.exit(1)
+        # Default to generate when no subcommand given
+        args = parser.parse_args(["generate"] + (argv if argv else []))
 
     args.func(args)
 
