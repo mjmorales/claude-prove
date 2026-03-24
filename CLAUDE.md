@@ -59,3 +59,15 @@ After merging an orchestrator branch to main, sync with origin before pushing:
 5. `bash scripts/cleanup-worktrees.sh` to remove any leftover worktrees
 
 <!-- prove:managed:end -->
+
+## Release Tracking
+
+- **UPDATES.md is mandatory for user-facing features**: any new command, config field, reference, or behavior change that requires user action gets a `## vX.Y.Z` section in `UPDATES.md` before the PR merges. Include: what changed, migration steps (manual + `/prove:update` path), and whether new projects get it automatically.
+- **Feature discovery stays in sync**: when adding a discoverable feature (new bundled reference in `references/`, new config field in `tools/schema/schemas.py`), update `commands/update.md` Step 5 to detect and offer it. If the feature is auto-detected (like `core: true` commands), document that explicitly in the UPDATES.md entry.
+- **Schema version bump on config shape changes**: adding/removing/renaming fields in `PROVE_SCHEMA` or `SETTINGS_SCHEMA` requires incrementing `CURRENT_SCHEMA_VERSION` in `tools/schema/schemas.py` and adding a migration path.
+- **CHANGELOG.md is auto-generated** — NEVER edit it manually. Conventional commit messages are the only input.
+- **Release artifact checklist** (verify before tagging):
+  - `UPDATES.md` has a section for the new version (if user-facing changes exist)
+  - `CURRENT_SCHEMA_VERSION` matches if schema changed
+  - `commands/update.md` Step 5 covers any new discoverable features
+  - New `core: true` commands have `summary:` frontmatter
