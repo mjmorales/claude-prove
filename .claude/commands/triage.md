@@ -5,9 +5,7 @@ argument-hint: "[issue number, label filter, or 'all']"
 
 # Triage Issues: $ARGUMENTS
 
-Review and triage open issues on the prove plugin repository.
-
-`$PLUGIN_DIR` refers to this plugin's root (parent of `commands/`).
+Review and triage open issues on the prove plugin repository. This is a project-local command for maintainers — it does not ship with the plugin.
 
 ## Instructions
 
