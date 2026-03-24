@@ -36,6 +36,12 @@ def compose(project_scan: dict, plugin_dir: str | None = None) -> str:
     # Header
     parts.append(_header(project_scan))
 
+    # Plugin version check (always, if prove is configured)
+    plugin_version = project_scan.get("plugin_version", "unknown")
+    prove = project_scan.get("prove_config", {})
+    if prove.get("exists") and plugin_version != "unknown":
+        parts.append(_section_version_check(plugin_version, plugin_dir))
+
     # Always include: project identity + tech stack
     parts.append(_section_identity(project_scan))
 
@@ -49,7 +55,6 @@ def compose(project_scan: dict, plugin_dir: str | None = None) -> str:
         parts.append(_section_conventions(project_scan))
 
     # Validation (if .prove.json has validators)
-    prove = project_scan.get("prove_config", {})
     if prove.get("validators"):
         parts.append(_section_validation(project_scan))
 
@@ -119,6 +124,22 @@ def compose_subagent_context(scan: dict, plugin_dir: str | None = None) -> str:
 def _header(scan: dict) -> str:
     name = scan.get("project", {}).get("name", "Project")
     return f"# {name}\n"
+
+
+def _section_version_check(plugin_version: str, plugin_dir: str) -> str:
+    """Render a version verification directive.
+
+    Embeds the plugin version that generated this CLAUDE.md so Claude Code
+    can detect stale cached plugins. Placed early for primacy positioning.
+    """
+    lines = [
+        f"<!-- prove:plugin-version:{plugin_version} -->",
+        f"**Prove plugin v{plugin_version}** — if the installed plugin version "
+        f"(`cat {plugin_dir}/.claude-plugin/plugin.json | grep version`) does not "
+        f"match v{plugin_version}, run `/prove:update` to sync.",
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def _section_identity(scan: dict) -> str:

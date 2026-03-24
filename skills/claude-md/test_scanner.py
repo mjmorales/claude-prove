@@ -11,7 +11,7 @@ import pytest
 # Add skill dir to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from scanner import scan_project, _detect_naming, _scan_tech_stack, _scan_key_dirs, _scan_core_commands
+from scanner import scan_project, _detect_naming, _scan_tech_stack, _scan_key_dirs, _scan_core_commands, _scan_plugin_version
 
 
 @pytest.fixture
@@ -247,3 +247,20 @@ class TestCoreCommands:
         (cmds / "plain.md").write_text("# No frontmatter\n\nJust content.")
         result = _scan_core_commands(str(tmp_path))
         assert result == []
+
+
+class TestPluginVersion:
+    def test_reads_version_from_plugin_json(self, tmp_path):
+        plugin_dir = tmp_path / ".claude-plugin"
+        plugin_dir.mkdir()
+        (plugin_dir / "plugin.json").write_text(json.dumps({"version": "1.2.3"}))
+        assert _scan_plugin_version(str(tmp_path)) == "1.2.3"
+
+    def test_returns_unknown_when_missing(self, tmp_path):
+        assert _scan_plugin_version(str(tmp_path)) == "unknown"
+
+    def test_returns_unknown_on_invalid_json(self, tmp_path):
+        plugin_dir = tmp_path / ".claude-plugin"
+        plugin_dir.mkdir()
+        (plugin_dir / "plugin.json").write_text("not json")
+        assert _scan_plugin_version(str(tmp_path)) == "unknown"

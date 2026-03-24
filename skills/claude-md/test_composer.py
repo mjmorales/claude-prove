@@ -51,6 +51,7 @@ def full_scan():
             {"name": "index", "summary": "Update the file index"},
             {"name": "claude-md", "summary": "Regenerate this file"},
         ],
+        "plugin_version": "0.19.0",
         "plugin_dir": "/opt/prove",
     }
 
@@ -66,6 +67,7 @@ def minimal_scan():
         "prove_config": {"exists": False, "validators": [], "has_index": False},
         "cafi": {"available": False, "file_count": 0},
         "core_commands": [],
+        "plugin_version": "unknown",
         "plugin_dir": "/opt/prove",
     }
 
@@ -79,6 +81,20 @@ class TestCompose:
     def test_includes_header(self, full_scan):
         result = compose(full_scan)
         assert "# my-project\n" in result
+
+    def test_includes_version_check(self, full_scan):
+        result = compose(full_scan)
+        assert "prove:plugin-version:0.19.0" in result
+        assert "Prove plugin v0.19.0" in result
+
+    def test_no_version_check_when_unknown(self, minimal_scan):
+        result = compose(minimal_scan)
+        assert "prove:plugin-version" not in result
+
+    def test_no_version_check_when_no_prove(self, full_scan):
+        full_scan["prove_config"]["exists"] = False
+        result = compose(full_scan)
+        assert "prove:plugin-version" not in result
 
     def test_includes_structure(self, full_scan):
         result = compose(full_scan)

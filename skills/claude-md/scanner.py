@@ -36,6 +36,7 @@ def scan_project(project_root: str, plugin_dir: str | None = None) -> dict:
         "prove_config": _scan_prove_config(project_root),
         "cafi": _scan_cafi(project_root),
         "core_commands": _scan_core_commands(plugin_dir),
+        "plugin_version": _scan_plugin_version(plugin_dir),
         "plugin_dir": plugin_dir,
     }
 
@@ -300,6 +301,19 @@ def _scan_prove_config(root: str) -> dict:
             if r.get("path")
         ],
     }
+
+
+def _scan_plugin_version(plugin_dir: str) -> str:
+    """Read the plugin version from .claude-plugin/plugin.json."""
+    plugin_json = os.path.join(plugin_dir, ".claude-plugin", "plugin.json")
+    if not os.path.isfile(plugin_json):
+        return "unknown"
+    try:
+        with open(plugin_json) as f:
+            data = json.load(f)
+        return data.get("version", "unknown")
+    except (json.JSONDecodeError, OSError):
+        return "unknown"
 
 
 def _scan_core_commands(plugin_dir: str) -> list[dict]:
