@@ -23,7 +23,7 @@ class MigrationChange:
         self.value = value
 
     def __str__(self) -> str:
-        symbol = {"add": "+", "remove": "-", "change": "~"}[self.action]
+        symbol = {"add": "+", "remove": "-", "change": "~", "rename": "~"}[self.action]
         return f"  {symbol} {self.path}: {self.description}"
 
 
@@ -76,6 +76,18 @@ def _migrate_v1_to_v2(config: dict) -> tuple[dict, list[MigrationChange]]:
     changes.append(
         MigrationChange("change", "schema_version", '"1" -> "2"')
     )
+
+    # Rename stage -> phase in validators
+    for validator in result.get("validators", []):
+        if "stage" in validator and "phase" not in validator:
+            validator["phase"] = validator.pop("stage")
+            changes.append(
+                MigrationChange(
+                    "rename",
+                    f"validators[{validator.get('name', '?')}].stage",
+                    'renamed "stage" -> "phase"',
+                )
+            )
 
     if "claude_md" not in result:
         result["claude_md"] = {"references": []}

@@ -86,6 +86,48 @@ class TestPlanMigration:
         assert target["claude_md"]["references"][0]["path"] == "~/.claude/standards.md"
         assert not any(c.path == "claude_md" for c in changes)
 
+    def test_v1_to_v2_renames_stage_to_phase(self):
+        config = {
+            "schema_version": "1",
+            "validators": [
+                {"name": "lint", "command": "ruff check .", "stage": "lint"},
+                {"name": "test", "command": "pytest", "stage": "test"},
+            ],
+        }
+        target, changes = plan_migration(config)
+
+        assert target["schema_version"] == "2"
+        for v in target["validators"]:
+            assert "phase" in v
+            assert "stage" not in v
+        assert target["validators"][0]["phase"] == "lint"
+        assert target["validators"][1]["phase"] == "test"
+        assert any("stage" in c.path for c in changes)
+
+    def test_v1_to_v2_skips_rename_if_phase_exists(self):
+        config = {
+            "schema_version": "1",
+            "validators": [
+                {"name": "test", "command": "pytest", "phase": "test"},
+            ],
+        }
+        target, changes = plan_migration(config)
+
+        assert target["validators"][0]["phase"] == "test"
+        assert not any("stage" in c.path for c in changes)
+
+    def test_v0_with_stage_migrates_to_phase(self):
+        config = {
+            "validators": [
+                {"name": "lint", "command": "ruff check .", "stage": "lint"},
+            ],
+        }
+        target, changes = plan_migration(config)
+
+        assert target["schema_version"] == CURRENT_SCHEMA_VERSION
+        assert target["validators"][0]["phase"] == "lint"
+        assert "stage" not in target["validators"][0]
+
     def test_v0_migrates_through_v1_to_v2(self):
         config = {"validators": [], "scopes": {"plugin": "."}}
         target, changes = plan_migration(config)
