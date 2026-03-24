@@ -11,7 +11,7 @@ Each field spec is a dict with:
   - default: default value for migrations
 """
 
-CURRENT_SCHEMA_VERSION = "1"
+CURRENT_SCHEMA_VERSION = "2"
 
 # --- .prove.json schema ---
 

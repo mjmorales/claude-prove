@@ -47,32 +47,46 @@ def _migrate_v0_to_v1(config: dict) -> tuple[dict, list[MigrationChange]]:
 
     # Add schema_version as first key
     if "schema_version" not in result:
-        new_result = {"schema_version": CURRENT_SCHEMA_VERSION}
+        new_result = {"schema_version": "1"}
         new_result.update(result)
         result = new_result
         changes.append(
             MigrationChange(
                 "add",
                 "schema_version",
-                f'set to "{CURRENT_SCHEMA_VERSION}"',
-                CURRENT_SCHEMA_VERSION,
+                'set to "1"',
+                "1",
             )
         )
 
-    # Add defaults for missing optional sections that have defaults
-    for field_name, spec in PROVE_SCHEMA["fields"].items():
-        if field_name in result:
-            continue
-        if "default" in spec:
-            result[field_name] = spec["default"]
-            changes.append(
-                MigrationChange(
-                    "add",
-                    field_name,
-                    f"added with default value {spec['default']!r}",
-                    spec["default"],
-                )
+    return result, changes
+
+
+def _migrate_v1_to_v2(config: dict) -> tuple[dict, list[MigrationChange]]:
+    """Migrate from v1 to v2.
+
+    Changes:
+    - Bumps schema_version to "2"
+    - Adds claude_md section with empty references if not present
+    """
+    changes: list[MigrationChange] = []
+    result = dict(config)
+
+    result["schema_version"] = "2"
+    changes.append(
+        MigrationChange("change", "schema_version", '"1" -> "2"')
+    )
+
+    if "claude_md" not in result:
+        result["claude_md"] = {"references": []}
+        changes.append(
+            MigrationChange(
+                "add",
+                "claude_md",
+                "added with empty references (configure via /prove:init or /prove:update)",
+                {"references": []},
             )
+        )
 
     return result, changes
 
@@ -80,6 +94,7 @@ def _migrate_v0_to_v1(config: dict) -> tuple[dict, list[MigrationChange]]:
 # Migration registry: maps "from_to" version pairs to functions
 MIGRATIONS: dict[str, Any] = {
     "0_to_1": _migrate_v0_to_v1,
+    "1_to_2": _migrate_v1_to_v2,
 }
 
 

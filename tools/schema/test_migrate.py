@@ -25,14 +25,14 @@ class TestDetectVersion:
 
 
 class TestPlanMigration:
-    def test_v0_to_v1_adds_schema_version(self):
+    def test_v0_to_current_adds_schema_version(self):
         config = {"validators": [], "scopes": {"plugin": "."}}
         target, changes = plan_migration(config)
 
         assert target["schema_version"] == CURRENT_SCHEMA_VERSION
         assert any(c.path == "schema_version" for c in changes)
 
-    def test_v0_to_v1_preserves_all_sections(self):
+    def test_v0_to_current_preserves_all_sections(self):
         config = {
             "scopes": {"skills": "skills/"},
             "validators": [{"name": "test", "command": "pytest", "phase": "test"}],
@@ -62,6 +62,36 @@ class TestPlanMigration:
 
         keys = list(target.keys())
         assert keys[0] == "schema_version"
+
+    def test_v1_to_v2_adds_claude_md(self):
+        config = {"schema_version": "1", "validators": []}
+        target, changes = plan_migration(config)
+
+        assert target["schema_version"] == "2"
+        assert target["claude_md"] == {"references": []}
+        assert any(c.path == "claude_md" for c in changes)
+
+    def test_v1_to_v2_preserves_existing_claude_md(self):
+        config = {
+            "schema_version": "1",
+            "claude_md": {
+                "references": [
+                    {"path": "~/.claude/standards.md", "label": "Standards"}
+                ]
+            },
+        }
+        target, changes = plan_migration(config)
+
+        assert target["schema_version"] == "2"
+        assert target["claude_md"]["references"][0]["path"] == "~/.claude/standards.md"
+        assert not any(c.path == "claude_md" for c in changes)
+
+    def test_v0_migrates_through_v1_to_v2(self):
+        config = {"validators": [], "scopes": {"plugin": "."}}
+        target, changes = plan_migration(config)
+
+        assert target["schema_version"] == CURRENT_SCHEMA_VERSION
+        assert "claude_md" in target
 
 
 class TestApplyMigration:
