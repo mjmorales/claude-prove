@@ -1,6 +1,8 @@
 ---
 description: Run the orchestrator in autopilot mode to autonomously implement a planned task
 argument-hint: "[plan-number or task name]"
+core: true
+summary: Autonomous execution with validation gates
 ---
 
 # Autopilot: $ARGUMENTS

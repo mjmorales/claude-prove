@@ -87,6 +87,34 @@ PROVE_SCHEMA = {
             },
             "description": "Notification reporters for orchestrator events",
         },
+        "claude_md": {
+            "type": "dict",
+            "required": False,
+            "fields": {
+                "references": {
+                    "type": "list",
+                    "required": False,
+                    "items": {
+                        "type": "dict",
+                        "fields": {
+                            "path": {
+                                "type": "str",
+                                "required": True,
+                                "description": "File path for @ inclusion (supports ~ expansion)",
+                            },
+                            "label": {
+                                "type": "str",
+                                "required": True,
+                                "description": "Human-readable label for this reference",
+                            },
+                        },
+                    },
+                    "description": "External files to include in CLAUDE.md via @ references",
+                    "default": [],
+                },
+            },
+            "description": "CLAUDE.md generation settings",
+        },
         "index": {
             "type": "dict",
             "required": False,

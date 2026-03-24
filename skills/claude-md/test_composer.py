@@ -47,6 +47,10 @@ def full_scan():
             "has_index": True,
         },
         "cafi": {"available": True, "file_count": 50},
+        "core_commands": [
+            {"name": "index", "summary": "Update the file index"},
+            {"name": "claude-md", "summary": "Regenerate this file"},
+        ],
         "plugin_dir": "/opt/prove",
     }
 
@@ -61,6 +65,7 @@ def minimal_scan():
         "conventions": {"naming": "unknown", "test_patterns": [], "primary_extensions": []},
         "prove_config": {"exists": False, "validators": [], "has_index": False},
         "cafi": {"available": False, "file_count": 0},
+        "core_commands": [],
         "plugin_dir": "/opt/prove",
     }
 
@@ -102,6 +107,21 @@ class TestCompose:
         result = compose(full_scan)
         assert "## Prove Commands" in result
         assert "/prove:index" in result
+        assert "/prove:claude-md" in result
+
+    def test_tools_from_core_commands(self, full_scan):
+        full_scan["core_commands"] = [
+            {"name": "custom-cmd", "summary": "Do something custom"},
+        ]
+        result = compose(full_scan)
+        assert "/prove:custom-cmd" in result
+        assert "Do something custom" in result
+
+    def test_tools_fallback_when_no_core_commands(self, full_scan):
+        full_scan["core_commands"] = []
+        result = compose(full_scan)
+        assert "## Prove Commands" in result
+        assert "/prove:claude-md" in result
 
     def test_minimal_project_no_extra_sections(self, minimal_scan):
         result = compose(minimal_scan)
@@ -125,6 +145,50 @@ class TestCompose:
     def test_plugin_dir_in_commands(self, full_scan):
         result = compose(full_scan, "/custom/path")
         assert "/custom/path" in result
+
+
+class TestReferences:
+    def test_includes_references_section(self, full_scan):
+        full_scan["prove_config"]["references"] = [
+            {"path": "~/.claude/llm-coding-standards.md", "label": "LLM Coding Standards"},
+        ]
+        result = compose(full_scan)
+        assert "## References" in result
+        assert "### LLM Coding Standards" in result
+        assert "@~/.claude/llm-coding-standards.md" in result
+
+    def test_multiple_references(self, full_scan):
+        full_scan["prove_config"]["references"] = [
+            {"path": "~/.claude/llm-coding-standards.md", "label": "LLM Coding Standards"},
+            {"path": "~/.claude/security-policy.md", "label": "Security Policy"},
+        ]
+        result = compose(full_scan)
+        assert "@~/.claude/llm-coding-standards.md" in result
+        assert "@~/.claude/security-policy.md" in result
+        assert "### Security Policy" in result
+
+    def test_resolves_plugin_dir_in_path(self, full_scan):
+        full_scan["prove_config"]["references"] = [
+            {"path": "$PLUGIN_DIR/references/llm-coding-standards.md", "label": "LLM Coding Standards"},
+        ]
+        result = compose(full_scan, "/home/user/.claude/plugins/prove")
+        assert "@/home/user/.claude/plugins/prove/references/llm-coding-standards.md" in result
+        assert "$PLUGIN_DIR" not in result
+
+    def test_no_references_section_when_empty(self, full_scan):
+        result = compose(full_scan)
+        assert "## References" not in result
+
+    def test_reference_without_label_skips_heading(self, full_scan):
+        full_scan["prove_config"]["references"] = [
+            {"path": "~/.claude/standards.md", "label": ""},
+        ]
+        result = compose(full_scan)
+        assert "## References" in result
+        assert "@~/.claude/standards.md" in result
+        # No ### heading when label is empty
+        refs_section = result.split("## References")[1].split("\n## ")[0]
+        assert "###" not in refs_section
 
 
 class TestComposeSubagentContext:

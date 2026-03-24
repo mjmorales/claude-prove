@@ -11,7 +11,7 @@ import pytest
 # Add skill dir to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from scanner import scan_project, _detect_naming, _scan_tech_stack, _scan_key_dirs
+from scanner import scan_project, _detect_naming, _scan_tech_stack, _scan_key_dirs, _scan_core_commands
 
 
 @pytest.fixture
@@ -154,3 +154,96 @@ class TestScanProveConfig:
         scan = scan_project(str(tmp_path))
         assert scan["cafi"]["available"] is False
         assert scan["cafi"]["file_count"] == 0
+
+
+class TestReferences:
+    def test_reads_references_from_prove_json(self, tmp_path):
+        config = {
+            "claude_md": {
+                "references": [
+                    {"path": "~/.claude/standards.md", "label": "Standards"},
+                ]
+            }
+        }
+        (tmp_path / ".prove.json").write_text(json.dumps(config))
+        scan = scan_project(str(tmp_path))
+        assert scan["prove_config"]["references"] == [
+            {"path": "~/.claude/standards.md", "label": "Standards"},
+        ]
+
+    def test_empty_references_when_not_configured(self, tmp_path):
+        scan = scan_project(str(tmp_path))
+        assert scan["prove_config"]["references"] == []
+
+    def test_skips_references_without_path(self, tmp_path):
+        config = {
+            "claude_md": {
+                "references": [
+                    {"path": "", "label": "Empty"},
+                    {"label": "No path"},
+                    {"path": "~/.claude/valid.md", "label": "Valid"},
+                ]
+            }
+        }
+        (tmp_path / ".prove.json").write_text(json.dumps(config))
+        scan = scan_project(str(tmp_path))
+        assert len(scan["prove_config"]["references"]) == 1
+        assert scan["prove_config"]["references"][0]["path"] == "~/.claude/valid.md"
+
+
+class TestCoreCommands:
+    def test_reads_core_commands(self, tmp_path):
+        cmds = tmp_path / "commands"
+        cmds.mkdir()
+        (cmds / "index.md").write_text(
+            "---\ndescription: Update file index\ncore: true\nsummary: Update the file index\n---\n"
+        )
+        (cmds / "review.md").write_text(
+            "---\ndescription: Review changes\n---\n"
+        )
+        result = _scan_core_commands(str(tmp_path))
+        assert len(result) == 1
+        assert result[0]["name"] == "index"
+        assert result[0]["summary"] == "Update the file index"
+
+    def test_sorted_alphabetically(self, tmp_path):
+        cmds = tmp_path / "commands"
+        cmds.mkdir()
+        (cmds / "zeta.md").write_text(
+            "---\ndescription: Zeta\ncore: true\nsummary: Zeta cmd\n---\n"
+        )
+        (cmds / "alpha.md").write_text(
+            "---\ndescription: Alpha\ncore: true\nsummary: Alpha cmd\n---\n"
+        )
+        result = _scan_core_commands(str(tmp_path))
+        assert [c["name"] for c in result] == ["alpha", "zeta"]
+
+    def test_empty_when_no_commands_dir(self, tmp_path):
+        result = _scan_core_commands(str(tmp_path))
+        assert result == []
+
+    def test_skips_non_md_files(self, tmp_path):
+        cmds = tmp_path / "commands"
+        cmds.mkdir()
+        (cmds / "script.sh").write_text("#!/bin/bash\n")
+        (cmds / "index.md").write_text(
+            "---\ndescription: Index\ncore: true\nsummary: Index\n---\n"
+        )
+        result = _scan_core_commands(str(tmp_path))
+        assert len(result) == 1
+
+    def test_falls_back_to_description_when_no_summary(self, tmp_path):
+        cmds = tmp_path / "commands"
+        cmds.mkdir()
+        (cmds / "test.md").write_text(
+            "---\ndescription: Run all tests\ncore: true\n---\n"
+        )
+        result = _scan_core_commands(str(tmp_path))
+        assert result[0]["summary"] == "Run all tests"
+
+    def test_skips_files_without_frontmatter(self, tmp_path):
+        cmds = tmp_path / "commands"
+        cmds.mkdir()
+        (cmds / "plain.md").write_text("# No frontmatter\n\nJust content.")
+        result = _scan_core_commands(str(tmp_path))
+        assert result == []

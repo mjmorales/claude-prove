@@ -1,3 +1,9 @@
+---
+description: Plan implementation for a task
+core: true
+summary: Plan implementation for a task
+---
+
 # Plan Task
 
 Start a task discovery and planning session.

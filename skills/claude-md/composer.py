@@ -58,9 +58,15 @@ def compose(project_scan: dict, plugin_dir: str | None = None) -> str:
     if cafi.get("available") or prove.get("has_index"):
         parts.append(_section_discovery(project_scan, plugin_dir))
 
+    # External references (if configured in .prove.json)
+    references = prove.get("references", [])
+    if references:
+        parts.append(_section_references(references, plugin_dir))
+
     # Prove tools (if prove is configured)
+    core_commands = project_scan.get("core_commands", [])
     if prove.get("exists"):
-        parts.append(_section_tools(plugin_dir))
+        parts.append(_section_tools(core_commands))
 
     body = "\n".join(parts) + "\n"
     return f"{MANAGED_START}\n{body}{MANAGED_END}\n"
@@ -178,30 +184,51 @@ def _section_discovery(scan: dict, plugin_dir: str) -> str:
     lines = [
         "## Discovery Protocol",
         "",
-        "Before using Glob or Grep for broad codebase exploration:",
+        "Before broad Glob/Grep searches, check the file index first:",
         "",
-        "1. Check the file index first — it has routing hints for every file",
-        f"2. Run `python3 {plugin_dir}/tools/cafi/__main__.py context` for the full index",
-        f"3. Run `python3 {plugin_dir}/tools/cafi/__main__.py lookup <keyword>` to search by keyword",
-        "4. Only fall back to Glob/Grep when the index doesn't cover what you need",
+        f"- `python3 {plugin_dir}/tools/cafi/__main__.py context` — full index with routing hints",
+        f"- `python3 {plugin_dir}/tools/cafi/__main__.py lookup <keyword>` — search by keyword",
         "",
-        "The index describes *when* to read each file, not just what it contains.",
-        "",
+        "Only fall back to Glob/Grep when the index doesn't cover what you need.",
     ]
     return "\n".join(lines)
 
 
-def _section_tools(plugin_dir: str) -> str:
-    lines = [
-        "## Prove Commands",
-        "",
-        "- `/prove:index` — Update the file index (run after significant changes)",
-        "- `/prove:claude-md` — Regenerate this file",
-        "- `/prove:task-planner` — Plan implementation for a task",
-        "- `/prove:orchestrator` — Autonomous execution with validation gates",
-        "- `/prove:brainstorm` — Explore options and record decisions",
-        "",
-    ]
+def _section_tools(core_commands: list[dict]) -> str:
+    """Render Prove Commands section from core command metadata.
+
+    core_commands is a list of {name, summary} dicts from scanner._scan_core_commands().
+    Falls back to a minimal entry if no core commands are detected.
+    """
+    lines = ["## Prove Commands", ""]
+    if core_commands:
+        for cmd in core_commands:
+            lines.append(f"- `/prove:{cmd['name']}` — {cmd['summary']}")
+    else:
+        lines.append("- `/prove:claude-md` — Regenerate this file")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _section_references(references: list[dict], plugin_dir: str) -> str:
+    """Render @ file references for external standards/guidelines.
+
+    Each reference becomes a labeled @ inclusion that Claude Code resolves
+    at load time. Stored in .prove.json under claude_md.references.
+
+    Paths containing $PLUGIN_DIR are resolved to the actual plugin directory,
+    enabling bundled references that ship with the plugin.
+    """
+    lines = ["## References", ""]
+    for ref in references:
+        label = ref.get("label", "")
+        path = ref.get("path", "")
+        resolved = path.replace("$PLUGIN_DIR", plugin_dir) if path else ""
+        if label:
+            lines.append(f"### {label}")
+            lines.append("")
+        lines.append(f"@{resolved}")
+        lines.append("")
     return "\n".join(lines)
 
 

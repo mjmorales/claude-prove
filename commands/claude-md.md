@@ -1,6 +1,8 @@
 ---
 description: Generate or update the project's CLAUDE.md with LLM-optimized behavioral directives
 argument-hint: "[generate | update] [--plugin-dir path]"
+core: true
+summary: Regenerate this file
 ---
 
 # Generate CLAUDE.md

@@ -35,6 +35,7 @@ def scan_project(project_root: str, plugin_dir: str | None = None) -> dict:
         "conventions": _scan_conventions(project_root),
         "prove_config": _scan_prove_config(project_root),
         "cafi": _scan_cafi(project_root),
+        "core_commands": _scan_core_commands(plugin_dir),
         "plugin_dir": plugin_dir,
     }
 
@@ -275,15 +276,17 @@ def _scan_prove_config(root: str) -> dict:
     """Read .prove.json configuration."""
     config_path = os.path.join(root, ".prove.json")
     if not os.path.isfile(config_path):
-        return {"exists": False, "validators": [], "has_index": False}
+        return {"exists": False, "validators": [], "has_index": False, "references": []}
 
     try:
         with open(config_path) as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError):
-        return {"exists": False, "validators": [], "has_index": False}
+        return {"exists": False, "validators": [], "has_index": False, "references": []}
 
     validators = data.get("validators", [])
+    claude_md = data.get("claude_md", {})
+    references = claude_md.get("references", [])
     return {
         "exists": True,
         "validators": [
@@ -291,7 +294,68 @@ def _scan_prove_config(root: str) -> dict:
             for v in validators
         ],
         "has_index": "index" in data,
+        "references": [
+            {"path": r.get("path", ""), "label": r.get("label", "")}
+            for r in references
+            if r.get("path")
+        ],
     }
+
+
+def _scan_core_commands(plugin_dir: str) -> list[dict]:
+    """Read commands/ directory for entries with core: true in frontmatter.
+
+    Returns a sorted list of {name, summary} dicts for commands that should
+    appear in the Prove Commands section of CLAUDE.md.
+    """
+    commands_dir = os.path.join(plugin_dir, "commands")
+    if not os.path.isdir(commands_dir):
+        return []
+
+    commands: list[dict] = []
+    for filename in sorted(os.listdir(commands_dir)):
+        if not filename.endswith(".md"):
+            continue
+
+        filepath = os.path.join(commands_dir, filename)
+        frontmatter = _parse_frontmatter(filepath)
+        if not frontmatter:
+            continue
+
+        if frontmatter.get("core") == "true":
+            name = filename.removesuffix(".md")
+            summary = frontmatter.get("summary", frontmatter.get("description", ""))
+            commands.append({"name": name, "summary": summary})
+
+    return commands
+
+
+def _parse_frontmatter(filepath: str) -> dict[str, str] | None:
+    """Extract YAML frontmatter as a flat key-value dict.
+
+    Only handles simple `key: value` pairs (no nesting). Returns None
+    if the file has no frontmatter.
+    """
+    try:
+        with open(filepath) as f:
+            first_line = f.readline().rstrip()
+            if first_line != "---":
+                return None
+
+            fields: dict[str, str] = {}
+            for line in f:
+                line = line.rstrip()
+                if line == "---":
+                    return fields
+                if ":" in line:
+                    key, _, value = line.partition(":")
+                    key = key.strip()
+                    value = value.strip().strip('"').strip("'")
+                    if key and value:
+                        fields[key] = value
+            return None  # No closing ---
+    except OSError:
+        return None
 
 
 def _scan_cafi(root: str) -> dict:
