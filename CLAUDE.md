@@ -77,3 +77,15 @@ After merging an orchestrator branch to main, sync with origin before pushing:
 - **NEVER ship new or modified LLM-fed text without review by `llm-prompt-engineer`**: this includes `agents/*.md`, `commands/*.md`, `skills/*/SKILL.md`, CLAUDE.md directives, and any other content consumed by a model
 - **Workflow**: finish drafting the text, then invoke the `llm-prompt-engineer` agent on the file before committing. Apply its recommendations or explicitly document why you rejected them.
 - **Applies to edits too** — changing even a single directive in an existing prompt triggers the gate
+
+## Schema Migration Checklist
+
+When adding/removing/renaming fields in `PROVE_SCHEMA`:
+
+1. Add the field to `PROVE_SCHEMA` in `tools/schema/schemas.py` with `description` and `default`
+2. Increment `CURRENT_SCHEMA_VERSION` (integer string: `"2"` -> `"3"`, etc.)
+3. Add `_migrate_vN_to_vM(config)` in `tools/schema/migrate.py` — hardcode the target version string, NEVER reference `CURRENT_SCHEMA_VERSION`
+4. Register it in `MIGRATIONS` dict as `"N_to_M": _migrate_vN_to_vM`
+5. Add tests in `tools/schema/test_migrate.py`: version bump, default values, preserves existing data, full chain from v0
+6. Update `.prove.json` at repo root to the new version
+7. Add `## vX.Y.Z` entry in `UPDATES.md` with migration instructions
