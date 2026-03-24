@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
 # Add this skill's directory to path for sibling imports
 _skill_dir = os.path.dirname(os.path.abspath(__file__))
@@ -102,6 +103,18 @@ def main(argv: list[str] | None = None) -> None:
     if not args.command:
         # Default to generate when no subcommand given
         args = parser.parse_args(["generate"] + (argv if argv else []))
+
+    # Guard: prevent running against plugin directory
+    project_root = Path(args.project_root).resolve()
+    claude_dir = Path.home() / ".claude"
+    if project_root == claude_dir or claude_dir in project_root.parents:
+        print(
+            "ERROR: --project-root is inside ~/.claude/ (the plugin install location).\n"
+            "Run this command targeting your project root, not the plugin directory.\n"
+            f"  project-root: {project_root}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     args.func(args)
 

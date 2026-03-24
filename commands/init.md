@@ -10,6 +10,15 @@ Detect the project tech stack and generate or update `.prove.json`. Operates sec
 
 ## Instructions
 
+### Step 0: Guard — verify target project
+
+**MUST check before proceeding:**
+
+1. Verify `$PLUGIN_DIR` is set (resolved from this plugin's root). If not, error: "Cannot resolve plugin directory."
+2. Verify `$(pwd)` is NOT inside `~/.claude/` (e.g., `~/.claude/plugins/prove`, `~/.claude/extensions/*/prove`). If it is, error: "You are inside the plugin directory. Run this command from your project root, not the plugin installation."
+
+Do NOT proceed if any check fails.
+
 ### Step 1: Detect tech stack
 
 ```bash
@@ -46,7 +55,7 @@ Write approved config to `.prove.json`.
 
 - Merge mode: output from `--merge` already contains all sections with updated validators
 - Fresh mode: write detection output directly
-- Run `python3 -m tools.schema migrate` after writing to ensure `schema_version` is set
+- Run `PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema migrate --file "$(pwd)/.prove.json"` after writing to ensure `schema_version` is set
 
 ### Step 5: Update .gitignore
 

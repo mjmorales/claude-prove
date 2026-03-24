@@ -8,12 +8,32 @@ Usage:
 """
 
 import argparse
+import os
 import sys
+from pathlib import Path
 
 from tools.schema.validate import validate_file
 from tools.schema.migrate import apply_migration, plan_migration, detect_version
 from tools.schema.diff import config_diff, summary
 from tools.schema.schemas import CURRENT_SCHEMA_VERSION
+
+
+def _guard_plugin_dir() -> None:
+    """Error if running against the plugin directory instead of a target project.
+
+    Detects when cwd is inside ~/.claude/ (the plugin install location).
+    This prevents accidentally validating/migrating the plugin's own .prove.json.
+    """
+    cwd = Path.cwd().resolve()
+    claude_dir = Path.home() / ".claude"
+    if cwd == claude_dir or claude_dir in cwd.parents:
+        print(
+            "ERROR: Working directory is inside ~/.claude/ (the plugin install location).\n"
+            "Run this command from your project root, not the plugin directory.\n"
+            f"  cwd: {cwd}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
@@ -118,6 +138,9 @@ def main() -> int:
     if not args.command:
         parser.print_help()
         return 1
+
+    # Guard: prevent running against plugin directory
+    _guard_plugin_dir()
 
     commands = {
         "validate": cmd_validate,

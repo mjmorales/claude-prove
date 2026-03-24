@@ -6,24 +6,38 @@ description: Validate configs, detect schema drift, and apply safe migrations
 
 Validate `.prove.json` and `.claude/settings.json` against current schema, detect drift, and apply migrations with user approval. See `UPDATES.md` at the plugin root for the human-readable migration guide.
 
+`$PLUGIN_DIR` refers to this plugin's root (parent of `commands/`).
+
+**CRITICAL**: All commands run against the **user's current working directory** (the project being updated), NOT the plugin directory. Every schema tool call MUST use `--file` with an absolute path to the project's config. Never rely on cwd resolution.
+
 ## Instructions
+
+### Step 0: Guard — verify target project
+
+**MUST check before proceeding:**
+
+1. Verify `$PLUGIN_DIR` is set (resolved from this plugin's root). If not, error: "Cannot resolve plugin directory."
+2. Verify `$(pwd)` is NOT inside `~/.claude/` (e.g., `~/.claude/plugins/prove`, `~/.claude/extensions/*/prove`). If it is, error: "You are inside the plugin directory. Run this command from your project root, not the plugin installation."
+3. Verify `$(pwd)/.prove.json` exists. If not, inform the user and suggest `/prove:init`.
+
+Do NOT proceed if any check fails.
 
 ### Step 1: Run validation
 
 ```bash
-python3 -m tools.schema summary
+PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema validate --file "$(pwd)/.prove.json"
 ```
 
 Present the output. Shows validation errors/warnings, migration changes needed, and target config.
 
 ### Step 2: Assess migration need
 
-If no migration needed and no validation errors: report "Configs are up to date and valid. Nothing to do." and skip to Step 7.
+If no migration needed and no validation errors: report "Configs are up to date and valid. Nothing to do." and skip to Step 8.
 
 ### Step 3: Present migration plan
 
 ```bash
-python3 -m tools.schema migrate --dry-run
+PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema migrate --file "$(pwd)/.prove.json" --dry-run
 ```
 
 Present changes, then `AskUserQuestion` with header "Migration" and options:
@@ -35,7 +49,7 @@ Present changes, then `AskUserQuestion` with header "Migration" and options:
 
 **Apply All:**
 ```bash
-python3 -m tools.schema migrate
+PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema migrate --file "$(pwd)/.prove.json"
 ```
 Creates `.prove.json.<timestamp>.bak` backup.
 
@@ -43,9 +57,9 @@ Creates `.prove.json.<timestamp>.bak` backup.
 
 ### Step 5: Discover new plugin features
 
-Check for plugin capabilities not yet configured in `.prove.json`:
+Check for plugin capabilities not yet configured in the project's `.prove.json`:
 
-1. **External references**: If `claude_md.references` is absent or empty in `.prove.json`, scan `$PLUGIN_DIR/references/` for bundled `.md` files. If found, present them:
+1. **External references**: If `claude_md.references` is absent or empty, scan `$PLUGIN_DIR/references/` for bundled `.md` files. If found, present them:
 
 ```
 New plugin feature: External References
@@ -56,7 +70,7 @@ Bundled references available:
 
 `AskUserQuestion` with header "New Features" and options: "Configure" / "Skip".
 
-On "Configure": follow the same flow as init Step 7 — offer bundled + global candidates, write to `claude_md.references` in `.prove.json`.
+On "Configure": follow the same flow as init Step 7 — offer bundled + global candidates, write to `claude_md.references` in the project's `.prove.json`.
 
 2. **Core commands**: If new commands with `core: true` have been added since the last CLAUDE.md generation, they'll be picked up automatically in Step 8 (CLAUDE.md regeneration). No user action needed — just note "New commands detected, will appear in CLAUDE.md after regeneration."
 
@@ -65,15 +79,15 @@ Skip this step entirely if all features are already configured.
 ### Step 6: Validate settings.json
 
 ```bash
-python3 -m tools.schema validate --file .claude/settings.json
+PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema validate --file "$(pwd)/.claude/settings.json"
 ```
 
-If issues found, present and offer to fix (missing hooks, structural problems).
+If the file does not exist, skip. If issues found, present and offer to fix.
 
 ### Step 7: Re-validate
 
 ```bash
-python3 -m tools.schema validate
+PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema validate --file "$(pwd)/.prove.json"
 ```
 
 Report: PASS/FAIL per config file, schema version, backup location (if applicable).
@@ -81,7 +95,7 @@ Report: PASS/FAIL per config file, schema version, backup location (if applicabl
 ### Step 8: Update CLAUDE.md
 
 ```bash
-python3 skills/claude-md/__main__.py generate
+python3 "$PLUGIN_DIR/skills/claude-md/__main__.py" generate --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"
 ```
 
 Replaces only the `<!-- prove:managed:start -->` / `<!-- prove:managed:end -->` block. Content outside markers is preserved. On first run, writes the full file with markers.
