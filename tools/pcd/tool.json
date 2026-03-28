@@ -1,0 +1,5 @@
+{
+  "name": "pcd",
+  "description": "Progressive Context Distillation pipeline tooling for multi-round code audits",
+  "version": "1.0.0"
+}
