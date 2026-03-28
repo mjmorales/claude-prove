@@ -158,6 +158,13 @@ _QUESTION_INDEX_ENTRY_SCHEMA: dict[str, Any] = {
         "question_type": {
             "type": "str",
             "required": True,
+            "enum": [
+                "error_handling",
+                "invariant",
+                "contract",
+                "side_effect",
+                "dependency",
+            ],
             "description": "Category of the question",
         },
         "routed_to_batch": {
