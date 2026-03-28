@@ -393,12 +393,12 @@ def _parse_python_imports(file_path: str, content: str) -> list[ImportEntry]:
 
 
 def _strip_python_comments(content: str) -> str:
-    """Remove ``#``-comments from each line (outside of strings, simplistic)."""
+    """Remove ``#``-comments from each line (simplistic — may strip ``#`` inside strings)."""
     lines: list[str] = []
     for line in content.splitlines():
-        stripped = line.lstrip()
-        if stripped.startswith("#"):
-            lines.append("")
+        idx = line.find("#")
+        if idx >= 0:
+            lines.append(line[:idx])
         else:
             lines.append(line)
     return "\n".join(lines)

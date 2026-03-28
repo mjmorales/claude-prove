@@ -420,6 +420,17 @@ class TestEdgeCases(unittest.TestCase):
         self.assertEqual(e.import_type, "stdlib")
         self.assertEqual(e.raw_line, "import os")
 
+    def test_inline_comment_not_parsed(self):
+        """Inline comments must not corrupt module names."""
+        code = "import os  # for path operations\nfrom collections import OrderedDict  # ordered\n"
+        entries = parse_imports("app.py", code)
+        modules = _modules(entries)
+        self.assertIn("os", modules)
+        self.assertIn("collections", modules)
+        # Verify classified correctly (not corrupted by comment text)
+        for e in entries:
+            self.assertIn(e.import_type, ("stdlib",))
+
     def test_file_isolation_with_tempdir(self):
         """Demonstrate tempdir usage for file-based tests."""
         with tempfile.TemporaryDirectory() as tmpdir:
