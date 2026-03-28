@@ -25,7 +25,7 @@
     },
     {
       "name": "python-tests",
-      "command": "docker run --rm -v \"$PWD\":/project prove-validators python -m pytest tools/cafi/ -v",
+      "command": "docker run --rm -v \"$PWD\":/project prove-validators python -m pytest tools/cafi/ tools/pcd/ -v",
       "phase": "test"
     }
   ],

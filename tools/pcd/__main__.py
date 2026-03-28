@@ -45,7 +45,12 @@ def cmd_map(args: argparse.Namespace) -> None:
     project_root = os.path.abspath(args.project_root)
     pcd_dir = _ensure_pcd_dir(project_root)
 
-    scope: str | None = getattr(args, "scope", None)
+    raw_scope: str | None = getattr(args, "scope", None)
+    scope: list[str] | None = (
+        [s.strip() for s in raw_scope.split(",") if s.strip()]
+        if raw_scope
+        else None
+    )
     structural_map = generate_structural_map(project_root, scope)
 
     out_path = os.path.join(pcd_dir, "structural-map.json")
