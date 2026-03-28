@@ -19,17 +19,111 @@ Orchestrate a comprehensive codebase audit across every source file. The goal: a
 3. Check `.prove/TASK_PLAN.md` or `.prove/plans/` for task context.
 4. Determine audit scope: use `$ARGUMENTS` if provided, otherwise audit the full codebase.
 
-## Phase 1: Deep Audit via Code Steward
+## Phase 1: Progressive Context Distillation (PCD)
 
-Launch the `code-steward` agent with this directive:
+Run the multi-round PCD audit pipeline. Produces the same artifacts as a direct
+code-steward audit (findings.md + fix-plan.md) but with better coverage through
+progressive compression and risk-targeted depth allocation.
 
-> Audit [scope] in document-only mode — do NOT fix anything yet.
-> Produce a comprehensive findings list organized by severity (Critical, Important, Improvement).
-> Include file:line references for every finding.
+### 1a. Round 0a: Structural Map (Deterministic)
 
-The agent's own prompt defines the audit methodology, focus areas, and test-exclusion rules. Do NOT restate them here — pass only scope and output expectations.
+Generate the structural map:
+
+```bash
+python3 $PLUGIN_DIR/tools/pcd/__main__.py --project-root "$PROJECT_ROOT" map [--scope <scope from Phase 0>]
+```
+
+This produces `.prove/steward/pcd/structural-map.json` with file metadata,
+dependency edges, and clusters. Review the summary output for file count and
+cluster formation.
+
+### 1b. Round 0b: Semantic Annotation (Optional)
+
+**Skip if the structural map has fewer than 20 files.**
+
+Launch the `pcd-annotator` agent:
+
+> Annotate the structural map at `.prove/steward/pcd/structural-map.json`.
+> Add semantic labels and module-purpose descriptions to each cluster.
+> Write the annotated map back to the same file.
+
+### 1c. Round 1: Parallel Triage (Sonnet)
+
+Read `.prove/steward/pcd/structural-map.json` to get the cluster list.
+
+For each cluster, launch a `pcd-triager` agent **in parallel** (use `run_in_background: true`):
+
+> Triage these files: [file list from cluster].
+> Structural context: [cluster metadata, dependency edges for these files].
+> Write your triage cards as JSON to `.prove/steward/pcd/triage-batch-{cluster_id}.json`.
+
+After all triagers complete, **merge** all triage-batch-*.json files into a single
+`.prove/steward/pcd/triage-manifest.json`:
+
+```json
+{
+  "version": 1,
+  "stats": { "files_reviewed": N, "high_risk": N, "medium_risk": N, "low_risk": N, "total_questions": N },
+  "cards": [... all cards from all batches ...],
+  "question_index": [... all questions extracted from cards ...]
+}
+```
+
+### 1d. Collapse (Deterministic)
+
+```bash
+python3 $PLUGIN_DIR/tools/pcd/__main__.py --project-root "$PROJECT_ROOT" collapse
+```
+
+This compresses low-risk triage cards and produces `.prove/steward/pcd/collapsed-manifest.json`.
+
+### 1e. Round 2: Deep Review (Opus, Targeted)
+
+```bash
+python3 $PLUGIN_DIR/tools/pcd/__main__.py --project-root "$PROJECT_ROOT" batch
+```
+
+This produces `.prove/steward/pcd/batch-definitions.json` with review batches.
+
+Read the batch definitions. For each batch, launch a `pcd-reviewer` agent (max 3 concurrent, use `run_in_background: true`):
+
+> Review batch {batch_id}.
+> Files: [file list].
+> Triage context: [triage cards for these files].
+> Routed questions: [questions targeting these files — present each question immediately before the file it references].
+> Cluster context: [cluster metadata].
+> Write findings to `.prove/steward/pcd/findings-batch-{batch_id}.json`.
+
+### 1f. Round 3: Synthesis
+
+Launch the `pcd-synthesizer` agent:
+
+> Synthesize all review artifacts in `.prove/steward/pcd/`:
+> - structural-map.json (codebase structure)
+> - collapsed-manifest.json (triage summary)
+> - findings-batch-*.json (detailed findings from each review batch)
+>
+> DO NOT read any source files directly.
+>
+> Produce:
+> - `.prove/steward/findings.md` — findings document in the standard steward format
+> - `.prove/steward/fix-plan.md` — parallelizable work packages
+
+### 1g. Fallback
+
+If any critical PCD round fails (Round 1 produces no output, Round 2 fails on all batches,
+or Round 3 fails to produce findings.md), **fall back** to the original single-pass approach:
+
+> Launch `code-steward` agent:
+> Audit [scope] in document-only mode. Produce findings and fix plan.
+
+Log the PCD failure reason in `.prove/steward/pcd/pipeline-status.json`.
 
 ## Phase 2: Create Findings Document
+
+> **Note**: If PCD (Phase 1) completed successfully, `findings.md` and `fix-plan.md`
+> already exist — skip to Phase 3. This phase only runs when using the single-pass
+> fallback.
 
 After the audit completes, create `.prove/steward/findings.md`:
 

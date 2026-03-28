@@ -49,13 +49,98 @@ Orchestrate an iterative code quality audit. Run the `code-steward` agent in a l
   - Run `git diff main...HEAD --name-only`, filter out test files
   - If no source files remain, inform the user and stop
 
-### 1b. Launch Code Steward Agent
+### 1b. Progressive Context Distillation (PCD)
 
-Launch `code-steward` in document-only mode:
+Run the multi-round PCD audit pipeline on the determined scope.
 
-> Audit [scope] — do NOT fix anything yet. Produce a comprehensive findings list organized by severity (Critical, Important, Improvement) with file:line references for every finding.
+#### Round 0a: Structural Map (Deterministic)
 
-The agent's own prompt defines audit methodology, focus areas, and test-exclusion rules. Do NOT restate them -- pass only scope and output expectations.
+```bash
+python3 $PLUGIN_DIR/tools/pcd/__main__.py --project-root "$PROJECT_ROOT" map [--scope <scope from 1a>]
+```
+
+This produces `.prove/steward/pcd/structural-map.json` with file metadata,
+dependency edges, and clusters.
+
+#### Round 0b: Semantic Annotation (Optional)
+
+**Skip if the structural map has fewer than 20 files.**
+
+Launch the `pcd-annotator` agent:
+
+> Annotate the structural map at `.prove/steward/pcd/structural-map.json`.
+> Add semantic labels and module-purpose descriptions to each cluster.
+> Write the annotated map back to the same file.
+
+#### Round 1: Parallel Triage (Sonnet)
+
+Read `.prove/steward/pcd/structural-map.json` to get the cluster list.
+
+For each cluster, launch a `pcd-triager` agent **in parallel** (use `run_in_background: true`):
+
+> Triage these files: [file list from cluster].
+> Structural context: [cluster metadata, dependency edges for these files].
+> Write your triage cards as JSON to `.prove/steward/pcd/triage-batch-{cluster_id}.json`.
+
+After all triagers complete, **merge** all triage-batch-*.json files into a single
+`.prove/steward/pcd/triage-manifest.json`:
+
+```json
+{
+  "version": 1,
+  "stats": { "files_reviewed": N, "high_risk": N, "medium_risk": N, "low_risk": N, "total_questions": N },
+  "cards": [... all cards from all batches ...],
+  "question_index": [... all questions extracted from cards ...]
+}
+```
+
+#### Collapse (Deterministic)
+
+```bash
+python3 $PLUGIN_DIR/tools/pcd/__main__.py --project-root "$PROJECT_ROOT" collapse
+```
+
+This compresses low-risk triage cards and produces `.prove/steward/pcd/collapsed-manifest.json`.
+
+#### Round 2: Deep Review (Opus, Targeted)
+
+```bash
+python3 $PLUGIN_DIR/tools/pcd/__main__.py --project-root "$PROJECT_ROOT" batch
+```
+
+Read the batch definitions. For each batch, launch a `pcd-reviewer` agent (max 3 concurrent, use `run_in_background: true`):
+
+> Review batch {batch_id}.
+> Files: [file list].
+> Triage context: [triage cards for these files].
+> Routed questions: [questions targeting these files — present each question immediately before the file it references].
+> Cluster context: [cluster metadata].
+> Write findings to `.prove/steward/pcd/findings-batch-{batch_id}.json`.
+
+#### Round 3: Synthesis
+
+Launch the `pcd-synthesizer` agent:
+
+> Synthesize all review artifacts in `.prove/steward/pcd/`:
+> - structural-map.json (codebase structure)
+> - collapsed-manifest.json (triage summary)
+> - findings-batch-*.json (detailed findings from each review batch)
+>
+> DO NOT read any source files directly.
+>
+> Produce:
+> - `.prove/steward/findings.md` — findings document in the standard steward format
+> - `.prove/steward/fix-plan.md` — parallelizable work packages
+
+#### Fallback
+
+If any critical PCD round fails (Round 1 produces no output, Round 2 fails on all batches,
+or Round 3 fails to produce findings.md), **fall back** to the original single-pass approach:
+
+> Launch `code-steward` agent:
+> Audit [scope] in document-only mode. Produce findings and fix plan.
+
+Log the PCD failure reason in `.prove/steward/pcd/pipeline-status.json`.
 
 ### 1c. Create Findings Document
 
@@ -109,9 +194,16 @@ Repeat until audit returns clean OR iteration cap is hit:
 
 Re-audit **only files modified in the previous pass** (excluding test files). If no source files were modified, the loop is done.
 
-### 2b. Re-Audit
+### 2b. Re-Audit via PCD
 
-Launch `code-steward` with a post-refactor focus:
+Run PCD pipeline scoped to the files modified in the previous pass:
+
+```bash
+python3 $PLUGIN_DIR/tools/pcd/__main__.py --project-root "$PROJECT_ROOT" map --scope <comma-separated modified files>
+```
+
+Then run Rounds 1-3 as described in Phase 1. For small re-audit scopes (< 5 files),
+skip PCD and launch `code-steward` directly for efficiency:
 
 > Re-audit ONLY these files modified in the previous pass: [list files].
 >

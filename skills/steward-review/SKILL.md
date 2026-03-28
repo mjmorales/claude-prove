@@ -51,11 +51,25 @@ Determine exactly what source files to review:
 
 ## Phase 2: Deep Review
 
-Launch the `code-steward` agent with this directive:
+### Small change sets (< 5 source files)
+
+Launch the `code-steward` agent directly (current behavior — PCD overhead not justified):
 
 > Audit ONLY these source files: [list the filtered source files].
 > Scope is read-only — produce findings, do NOT fix anything yet.
 > In addition to your standard audit dimensions, check cross-file integration: do the changed files work well together? Are there duplications or inconsistencies across them?
+
+### Larger change sets (5+ source files)
+
+Run the PCD pipeline scoped to the changed files:
+
+```bash
+python3 $PLUGIN_DIR/tools/pcd/__main__.py --project-root "$PROJECT_ROOT" map --scope <comma-separated changed files>
+```
+
+Then run Rounds 1-3 as described in the steward skill's Phase 1.
+The synthesizer should produce `.prove/steward/session-review.md` instead of
+`findings.md` — adapt the synthesis prompt accordingly.
 
 ## Phase 3: Findings
 
