@@ -33,7 +33,7 @@ You produce a JSON object with three arrays: `findings`, `answers`, and `new_que
   "question_id": "string — the Q-* id from the triage round",
   "status": "answered | deferred | not_applicable",
   "answer": "string — specific response referencing file paths and line numbers",
-  "evidence_lines": [{"file": "string", "lines": [start, end]}]
+  "spawned_finding": "string — optional F-* id if this answer led to a new finding"
 }
 ```
 
@@ -84,7 +84,7 @@ Output MUST be valid JSON. No markdown fences. No prose outside the JSON structu
 
 ```json
 {
-  "batch_id": "string",
+  "batch_id": 1,
   "findings": [...],
   "answers": [...],
   "new_questions": [...]
