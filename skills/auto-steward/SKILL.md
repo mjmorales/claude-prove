@@ -144,6 +144,10 @@ Log the PCD failure reason in `.prove/steward/pcd/pipeline-status.json`.
 
 ### 1c. Create Findings Document
 
+> **Note**: If PCD (Phase 1b) completed successfully, `findings.md` and `fix-plan.md`
+> already exist — skip to Phase 1d. This phase only runs when using the single-pass
+> fallback.
+
 Create `.prove/steward/findings.md` with the standard steward findings format:
 - Critical Issues (numbered, with file:line references)
 - Structural Refactors
