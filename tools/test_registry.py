@@ -68,16 +68,38 @@ SAMPLE_MANIFEST_CAFI = {
     "provides": {"commands": ["index"], "skills": ["index"]},
 }
 
+SAMPLE_MANIFEST_PACK = {
+    "name": "project-manager",
+    "version": "1.0.0",
+    "description": "Project management pack",
+    "requires": ["python3"],
+    "provides": {
+        "commands": ["project-manager"],
+        "skills": ["project-manager"],
+    },
+}
+
 
 def _make_env(
     tmp: str,
     manifests: dict[str, dict] | None = None,
     prove_tools: dict | None = None,
     settings_hooks: dict | None = None,
+    pack_content: dict[str, dict[str, list[str]]] | None = None,
 ) -> tuple[Path, Path]:
     """Create a minimal plugin + project layout inside *tmp*.
 
     Returns (plugin_root, project_root). For simplicity they are the same dir.
+
+    *pack_content* creates files/dirs inside tool directories to simulate packs::
+
+        pack_content={"my-pack": {
+            "skills": ["my-skill/SKILL.md"],
+            "agents": ["my-agent.md"],
+            "commands": ["my-command.md"],
+        }}
+
+    Paths with a ``/`` create intermediate directories automatically.
     """
     root = Path(tmp)
     plugin_root = root / "plugin"
@@ -90,6 +112,15 @@ def _make_env(
         d = plugin_root / "tools" / name
         d.mkdir(parents=True, exist_ok=True)
         (d / "tool.json").write_text(json.dumps(manifest, indent=2))
+
+    # Pack content: tools/<name>/<category>/<files>
+    if pack_content:
+        for name, categories in pack_content.items():
+            for category, files in categories.items():
+                for file_path in files:
+                    full_path = plugin_root / "tools" / name / category / file_path
+                    full_path.parent.mkdir(parents=True, exist_ok=True)
+                    full_path.write_text(f"# {file_path}\n")
 
     # Project: .claude/.prove.json
     prove: dict = {"schema_version": "3", "tools": prove_tools or {}}
@@ -480,6 +511,180 @@ class TestAvailable:
             ])
             data = json.loads(capsys.readouterr().out)
             assert len(data["available"]) == 0
+
+
+class TestSymlinks:
+    def test_install_pack_creates_skill_symlinks(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Install a pack with skills/ and verify symlinks are created."""
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root, project_root = _make_env(
+                tmp,
+                manifests={"project-manager": SAMPLE_MANIFEST_PACK},
+                pack_content={"project-manager": {
+                    "skills": ["project-manager/SKILL.md"],
+                }},
+            )
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "install", "project-manager",
+            ])
+            link = plugin_root / "skills" / "project-manager"
+            assert link.is_symlink()
+            assert link.is_dir()
+            assert (link / "SKILL.md").exists()
+            # Verify relative symlink target.
+            raw_target = os.readlink(str(link))
+            assert not os.path.isabs(raw_target)
+
+    def test_install_pack_creates_agent_symlinks(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Install a pack with agents/ and verify symlinks are created."""
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root, project_root = _make_env(
+                tmp,
+                manifests={"project-manager": SAMPLE_MANIFEST_PACK},
+                pack_content={"project-manager": {
+                    "agents": ["product-owner.md"],
+                }},
+            )
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "install", "project-manager",
+            ])
+            link = plugin_root / "agents" / "product-owner.md"
+            assert link.is_symlink()
+            assert link.is_file()
+            raw_target = os.readlink(str(link))
+            assert not os.path.isabs(raw_target)
+
+    def test_install_pack_creates_command_symlinks(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Install a pack with commands/ and verify symlinks are created."""
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root, project_root = _make_env(
+                tmp,
+                manifests={"project-manager": SAMPLE_MANIFEST_PACK},
+                pack_content={"project-manager": {
+                    "commands": ["project-manager.md"],
+                }},
+            )
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "install", "project-manager",
+            ])
+            link = plugin_root / "commands" / "project-manager.md"
+            assert link.is_symlink()
+            assert link.is_file()
+            raw_target = os.readlink(str(link))
+            assert not os.path.isabs(raw_target)
+
+    def test_install_tool_no_symlinks(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """A tool with no skills/agents/commands dirs produces zero symlinks."""
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root, project_root = _make_env(
+                tmp,
+                manifests={"cafi": SAMPLE_MANIFEST_CAFI},
+            )
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "install", "cafi",
+            ])
+            data = json.loads(capsys.readouterr().out)
+            assert data["symlinks_created"] == 0
+
+    def test_remove_pack_cleans_symlinks(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Install a pack, verify symlinks exist, remove it, verify symlinks gone."""
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root, project_root = _make_env(
+                tmp,
+                manifests={"project-manager": SAMPLE_MANIFEST_PACK},
+                pack_content={"project-manager": {
+                    "skills": ["project-manager/SKILL.md"],
+                    "agents": ["product-owner.md"],
+                    "commands": ["project-manager.md"],
+                }},
+            )
+            # Install.
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "install", "project-manager",
+            ])
+            capsys.readouterr()  # drain install output
+            assert (plugin_root / "skills" / "project-manager").is_symlink()
+            assert (plugin_root / "agents" / "product-owner.md").is_symlink()
+            assert (plugin_root / "commands" / "project-manager.md").is_symlink()
+
+            # Remove.
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "remove", "project-manager",
+            ])
+            assert not (plugin_root / "skills" / "project-manager").exists()
+            assert not (plugin_root / "agents" / "product-owner.md").exists()
+            assert not (plugin_root / "commands" / "project-manager.md").exists()
+
+            data = json.loads(capsys.readouterr().out)
+            assert data["symlinks_removed"] == 3
+
+    def test_remove_only_own_symlinks(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Remove should not touch symlinks pointing outside the tool dir."""
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root, project_root = _make_env(
+                tmp,
+                manifests={"project-manager": SAMPLE_MANIFEST_PACK},
+                pack_content={"project-manager": {
+                    "skills": ["project-manager/SKILL.md"],
+                }},
+            )
+            # Install the pack to create symlinks.
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "install", "project-manager",
+            ])
+            capsys.readouterr()
+
+            # Create a foreign symlink in skills/ that looks like a pack entry
+            # but points elsewhere.
+            foreign_target = Path(tmp) / "foreign-skill"
+            foreign_target.mkdir()
+            (foreign_target / "SKILL.md").write_text("# foreign\n")
+            foreign_link = plugin_root / "skills" / "foreign-skill"
+            os.symlink(str(foreign_target), str(foreign_link))
+
+            # Remove the pack.
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "remove", "project-manager",
+            ])
+
+            # Foreign symlink must survive.
+            assert foreign_link.is_symlink()
+            assert (foreign_link / "SKILL.md").exists()
+
+    def test_install_reports_symlinks_created(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """JSON output includes symlinks_created count."""
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root, project_root = _make_env(
+                tmp,
+                manifests={"project-manager": SAMPLE_MANIFEST_PACK},
+                pack_content={"project-manager": {
+                    "skills": ["project-manager/SKILL.md"],
+                    "agents": ["product-owner.md"],
+                }},
+            )
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "install", "project-manager",
+            ])
+            data = json.loads(capsys.readouterr().out)
+            assert data["symlinks_created"] == 2
 
 
 class TestMissingProveJson:

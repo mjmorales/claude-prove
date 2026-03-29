@@ -55,6 +55,63 @@ def _settings_json_path(project_root: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Symlink management
+# ---------------------------------------------------------------------------
+
+SYMLINK_CATEGORIES = ("skills", "agents", "commands")
+
+
+def _create_symlinks(plugin_root: Path, tool_dir: Path) -> int:
+    """Create relative symlinks from plugin-root categories into tool subdirectories.
+
+    Scans tool_dir/skills/, tool_dir/agents/, tool_dir/commands/ and creates
+    symlinks at plugin_root/<category>/<child.name> pointing to the tool's copy.
+    Returns the number of symlinks created.
+    """
+    count = 0
+    for category in SYMLINK_CATEGORIES:
+        source_dir = tool_dir / category
+        if not source_dir.is_dir():
+            continue
+        target_parent = plugin_root / category
+        target_parent.mkdir(parents=True, exist_ok=True)
+        for child in sorted(source_dir.iterdir()):
+            link_path = target_parent / child.name
+            rel_target = os.path.relpath(child, target_parent)
+            if link_path.exists() or link_path.is_symlink():
+                if link_path.is_symlink() and os.readlink(str(link_path)) == rel_target:
+                    continue  # idempotent — already points to the same target
+                raise RuntimeError(f"Conflict: {link_path} already exists")
+            os.symlink(rel_target, str(link_path))
+            count += 1
+    return count
+
+
+def _remove_symlinks(plugin_root: Path, tool_dir: Path) -> int:
+    """Remove symlinks from plugin-root categories that point into tool_dir.
+
+    Only removes symlinks whose resolved target is inside tool_dir.
+    Returns the number of symlinks removed.
+    """
+    count = 0
+    for category in SYMLINK_CATEGORIES:
+        source_dir = tool_dir / category
+        if not source_dir.is_dir():
+            continue
+        target_parent = plugin_root / category
+        if not target_parent.is_dir():
+            continue
+        for child in sorted(source_dir.iterdir()):
+            link_path = target_parent / child.name
+            if link_path.is_symlink():
+                resolved = link_path.resolve()
+                if str(resolved).startswith(str(tool_dir.resolve())):
+                    link_path.unlink()
+                    count += 1
+    return count
+
+
+# ---------------------------------------------------------------------------
 # Hook variable expansion
 # ---------------------------------------------------------------------------
 
@@ -254,6 +311,10 @@ def cmd_install(args: argparse.Namespace) -> None:
             dir_path.mkdir(parents=True, exist_ok=True)
             dirs_created += 1
 
+    # --- symlinks (packs with skills/agents/commands) ---
+    tool_dir = _tools_dir(plugin_root) / tool_name
+    symlinks_created = _create_symlinks(plugin_root, tool_dir)
+
     # --- lifecycle ---
     lifecycle = manifest.get("lifecycle", {})
     if "post_install" in lifecycle:
@@ -267,6 +328,7 @@ def cmd_install(args: argparse.Namespace) -> None:
         "version": manifest.get("version", "0.0.0"),
         "hooks_added": hooks_added,
         "dirs_created": dirs_created,
+        "symlinks_created": symlinks_created,
     }
     json.dump(result, sys.stdout, indent=2)
     print()
@@ -287,6 +349,10 @@ def cmd_remove(args: argparse.Namespace) -> None:
     manifest: dict = {}
     if manifest_path.exists():
         manifest = _read_json(manifest_path)
+
+    # --- symlinks (remove before lifecycle and config cleanup) ---
+    tool_dir = _tools_dir(plugin_root) / tool_name
+    symlinks_removed = _remove_symlinks(plugin_root, tool_dir)
 
     # --- lifecycle pre_uninstall ---
     lifecycle = manifest.get("lifecycle", {})
@@ -316,7 +382,11 @@ def cmd_remove(args: argparse.Namespace) -> None:
     tools_section.pop(tool_name, None)
     _write_json(_prove_json_path(project_root), prove)
 
-    result = {"removed": tool_name, "hooks_removed": hooks_removed}
+    result = {
+        "removed": tool_name,
+        "hooks_removed": hooks_removed,
+        "symlinks_removed": symlinks_removed,
+    }
     json.dump(result, sys.stdout, indent=2)
     print()
     print(f"Removed {tool_name} ({hooks_removed} hooks removed)", file=sys.stderr)
