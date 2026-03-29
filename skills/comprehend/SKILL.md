@@ -3,139 +3,100 @@ name: comprehend
 description: >
   Post-diff Socratic quiz that builds deep comprehension of agent-generated code.
   Analyzes recent changes, generates causal/design questions, quizzes the developer
-  interactively, and logs comprehension gaps. Use when the developer wants to understand
-  code they didn't write. Triggers on "comprehend", "quiz me", "understand this code",
-  "what did that change do", "explain the diff", "test my understanding".
+  interactively, and logs comprehension gaps.
+argument-hint: "[commit SHA, range, or file path]"
 ---
 
-# Comprehend
+# Comprehend: $ARGUMENTS
 
-Quiz the developer on a recent diff to build comprehension of code they didn't write. Generates causal/design questions, evaluates answers interactively, and logs gaps.
+Generate 3-5 questions about a recent diff, quiz the developer interactively, and log comprehension gaps. Tone is collaborative, not evaluative. Max 5 questions (target 2-5 minutes).
 
-## When to Use
+## Phase 1: Gather Diff
 
-After an agent writes a significant chunk of code and you want to make sure you can debug, extend, and explain it — not just read it.
+1. **Scope**: Use `$ARGUMENTS` if provided (SHA, range, or path). Otherwise detect:
+   - Unstaged/staged changes: `git diff`
+   - Clean tree: `git diff HEAD~1`
+   - Initial commit: `git show HEAD`
+2. **Validate**: `git diff --stat` on chosen scope. Empty diff -- inform and stop.
+3. **Large diffs** (>500 lines): Focus on structurally significant files (new files, new functions, modified control flow). If >5 files, use AskUserQuestion to let user pick focus files.
+4. Show file list and line count. Proceed without confirmation unless scope seems wrong.
 
-## Workflow
+## Phase 2: Generate Questions
 
-### Phase 1: Gather Diff
-
-Determine the scope of code to quiz on.
-
-1. **Check arguments**: If the user provided a commit SHA, range, or file path via `$ARGUMENTS`, use that as the diff scope.
-2. **Default scope**: If no arguments, detect the most recent meaningful change:
-   - If there are unstaged/staged changes: use `git diff` (working tree)
-   - If the working tree is clean: use `git diff HEAD~1` (last commit)
-   - If HEAD has no parent (initial commit): use `git show HEAD`
-3. **Validate scope**: Run `git diff --stat` for the chosen scope. If the diff is empty, inform the user and stop.
-4. **Large diff handling**: If the diff exceeds ~500 lines, inform the user and focus on the most structurally significant files (new files, files with new functions or modified control flow). Use AskUserQuestion to let the user pick which files to focus on if there are more than 5 changed files.
-5. **Confirm scope**: Show the user the file list and line count. Proceed directly — do not ask for confirmation unless the scope seems wrong.
-
-### Phase 2: Analyze & Generate Questions
-
-Read the diff and generate 3-5 targeted questions.
-
-1. **Read the full diff** using `git diff` (or `git show` for commits)
-2. **Read surrounding context** for each changed file — at minimum, read the full file to understand where changes fit
-3. **Generate exactly 5 questions** (drop to 3 if the diff touches fewer than 3 functions or ~50 lines). Each question MUST target one of these categories:
+1. Read the full diff and each changed file for surrounding context.
+2. Generate **5 questions** (drop to 3 if <3 functions or ~50 lines). Each targets one category:
 
    | Category | Example |
    |----------|---------|
    | **Causality** | "What happens if this error handler is removed?" |
    | **Design rationale** | "Why was a Map used here instead of a plain object?" |
-   | **Data flow** | "Where does this config value originate and what consumes it downstream?" |
+   | **Data flow** | "Where does this config value originate and what consumes it?" |
    | **Edge cases** | "What happens when this list is empty?" |
-   | **Integration** | "How does this change affect the existing callers of this function?" |
+   | **Integration** | "How does this change affect existing callers?" |
 
-4. **Question quality rules**:
-   - Every question MUST reference a specific line, function, or code pattern from the diff
-   - NEVER ask syntax trivia ("What type does X return?", "What does this import do?")
-   - NEVER ask questions answerable by reading a single line — questions should require understanding the relationship between multiple parts
-   - Prefer questions where getting it wrong would lead to a real bug or misunderstanding during debugging
-   - Vary categories — don't ask 5 causality questions
+3. **Quality requirements**:
+   - Reference a specific line, function, or pattern from the diff
+   - Require understanding relationships between multiple parts (not single-line reads, not syntax trivia)
+   - Prefer questions where a wrong answer would cause a real bug
+   - Vary categories across questions
 
-5. **Generate answer options** for each question:
-   - One correct answer (concise, specific)
-   - One plausible-but-wrong answer (a common misconception or superficial reading)
-   - "I'm not sure" (always the last option)
-   - Randomize whether the correct answer is the first or second option
+4. **Answer options per question**: One correct answer, one plausible-but-wrong answer, "I'm not sure" (last). Randomize correct/wrong position.
 
-### Phase 3: Interactive Quiz
+## Phase 3: Interactive Quiz
 
-Present questions one at a time.
+For each question:
 
-For each question (1 through N):
+1. **Present** via AskUserQuestion: header `"Q{n}/{total}"`, question prefixed with `[Category]`, three options.
 
-1. **Present the question** using AskUserQuestion:
-   - Header: `"Q{n}/{total}"`
-   - Question text includes the category tag in brackets, e.g., `"[Causality] What happens if..."`
-   - Options: the two answers + "I'm not sure"
+2. **Respond**:
+   - Correct: Brief acknowledgment + one sentence explaining *why*, referencing specific code.
+   - Wrong/unsure: 2-4 sentence explanation with file/line references. Describe what bug the wrong answer would cause if relevant.
 
-2. **After the user answers**:
-   - If **correct**: Acknowledge briefly ("Right.") then add one sentence of reinforcement explaining *why* it's correct, referencing the specific code.
-   - If **wrong or unsure**: Explain the correct answer in 2-4 sentences. Reference the specific file and line/function. If relevant, describe what bug or misunderstanding the wrong answer would lead to.
+3. Track: category, question, answer, correct/incorrect.
 
-3. **Track results** internally: for each question, record: category, question text, user's answer, whether correct.
+## Phase 4: Session Summary
 
-### Phase 4: Session Summary
+1. `Score: X/{total}`
+2. **Rating**:
+   - All correct: **Strong** -- you own this code
+   - 1 wrong: **Solid** -- minor gap, noted below
+   - 2 wrong: **Moderate** -- review gaps before extending this code
+   - 3+ wrong: **Needs Review** -- read through changed files before proceeding
+3. **Gaps** (missed questions only): category, one-line gap description, file/function to re-read
+4. **Key takeaway**: one sentence on the most important thing about this diff.
 
-After all questions are answered:
+## Phase 5: Log
 
-1. **Score**: Display `"Score: X/{total}"`
-2. **Comprehension rating**:
-   - All correct → "**Strong** — you own this code"
-   - 1 wrong → "**Solid** — minor gap, noted below"
-   - 2 wrong → "**Moderate** — review the gaps before extending this code"
-   - 3+ wrong → "**Needs Review** — spend time reading through the changed files before proceeding"
-3. **Gap analysis**: For each missed question, show:
-   - The category (e.g., "Data flow")
-   - One-line description of the gap (e.g., "Unclear on how config propagates to middleware")
-   - The file/function to re-read
-4. **Key takeaway**: One sentence summarizing the most important thing to understand about this diff.
+Skip if `.prove/` directory does not exist.
 
-### Phase 5: Log (Optional)
+AskUserQuestion (header "Log"):
+- "Save to .prove/learning/" -- log for future reference
+- "Skip"
 
-1. **Check for `.prove/` directory**. If it doesn't exist, skip this phase entirely.
-2. **Ask the user** via AskUserQuestion with header "Log" and options:
-   - "Save to .prove/learning/" — log this session for future reference
-   - "Skip" — don't log
-3. **If saving**, write to `.prove/learning/YYYY-MM-DD-<topic-slug>.md`:
+If saving, write to `.prove/learning/YYYY-MM-DD-<topic-slug>.md`:
 
 ```markdown
 # Comprehension Log: <topic>
-
 **Date**: YYYY-MM-DD
-**Scope**: <git diff description, e.g., "commit abc1234 — add auth middleware">
+**Scope**: <diff description>
 **Score**: X/{total}
 **Rating**: Strong | Solid | Moderate | Needs Review
 
 ## Questions
-
-### Q1: [Category] <question text>
+### Q1: [Category] <question>
 - **Answer**: <user's answer>
 - **Correct**: Yes | No
-- **Explanation**: <brief explanation if wrong>
-
-### Q2: ...
+- **Explanation**: <if wrong>
 
 ## Gaps
-- <category>: <one-line gap description> → re-read `<file>:<function>`
-- ...
+- <category>: <gap> -- re-read `<file>:<function>`
 
 ## Takeaway
 <one sentence>
 ```
 
-4. Inform the user where the log was saved.
-
-## Rules
-
-- NEVER ask more than 5 questions — target 2-5 minutes per session
-- NEVER judge the user for wrong answers — tone is collaborative, not evaluative
-- NEVER skip the explanation step, even for correct answers (reinforcement matters)
+Inform user where the log was saved.
 
 ## Committing
 
-This skill does not create or modify project code. No commits are generated. If learning logs need to be committed, delegate to the `commit` skill.
-
-**Interaction patterns**: Follow `references/interaction-patterns.md` for `AskUserQuestion` usage.
+This skill does not modify project code. Delegate learning log commits to the `commit` skill.
