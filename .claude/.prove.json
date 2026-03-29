@@ -2,7 +2,9 @@
   "schema_version": "3",
   "scopes": {
     "agents": "agents/",
+    "cache": "cache/",
     "commands": "commands/",
+    "references": "references/",
     "skills": "skills/",
     "tools": "tools/",
     "scripts": "scripts/"
