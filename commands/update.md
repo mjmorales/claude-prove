@@ -17,10 +17,19 @@ Validate `.claude/.prove.json` and `.claude/settings.json` against current schem
 **MUST check before proceeding:**
 
 1. Verify `$PLUGIN_DIR` is set (resolved from this plugin's root). If not, error: "Cannot resolve plugin directory."
-2. Verify `$(pwd)` is NOT inside `~/.claude/` (e.g., `~/.claude/plugins/prove`, `~/.claude/extensions/*/prove`). If it is, error: "You are inside the plugin directory. Run this command from your project root, not the plugin installation."
-3. Verify `$(pwd)/.claude/.prove.json` exists. If not, inform the user and suggest `/prove:init`.
+2. Verify `$(pwd)` is NOT inside `~/.claude/` (e.g., `~/.claude/plugins/prove`, `~/.claude/extensions/*/prove`). **Exception:** if `$(pwd)` equals `$PLUGIN_DIR` and `$(pwd)/.claude/.prove.json` exists, this is dogfooding mode — allow it and set both `$PLUGIN_DIR` and project root to `$(pwd)`.
+3. Verify `$(pwd)/.claude/.prove.json` exists. If not, proceed to Step 0b (bootstrap) instead of failing.
 
-Do NOT proceed if any check fails.
+### Step 0b: Bootstrap (if .prove.json missing)
+
+If `$(pwd)/.claude/.prove.json` does not exist, offer to create a minimal config so the migration chain can run:
+
+`AskUserQuestion` with header "Bootstrap" and options:
+- "Create minimal config" — write `{"schema_version": "0"}` to `.claude/.prove.json` and continue to Step 1
+- "Run /prove:init instead" — suggest the full init flow and stop
+- "Cancel" — stop
+
+On "Create minimal config": write the file and proceed. The v0 → current migration will add all default fields.
 
 ### Step 1: Run validation
 
@@ -59,18 +68,25 @@ Creates `.claude/.prove.json.<timestamp>.bak` backup.
 
 Check for plugin capabilities not yet configured in the project's `.claude/.prove.json`:
 
-1. **External references**: If `claude_md.references` is absent or empty, scan `$PLUGIN_DIR/references/` for bundled `.md` files. If found, present them:
+1. **External references**: If `claude_md.references` is absent or empty, scan `$PLUGIN_DIR/references/` for bundled `.md` files. For each `.md` file, extract the label from the first `# Heading` line (fall back to the filename without extension if no heading found). Present them:
 
 ```
 New plugin feature: External References
 
 Bundled references available:
-  1. $PLUGIN_DIR/references/llm-coding-standards.md — LLM Coding Standards
+  1. references/llm-coding-standards.md — LLM-Optimized Coding Standards
+  2. references/interaction-patterns.md — Interaction Patterns
 ```
 
-`AskUserQuestion` with header "New Features" and options: "Configure" / "Skip".
+`AskUserQuestion` with header "References" and options: "Add All" / "Pick individually" / "Skip".
 
-On "Configure": follow the same flow as init Step 7 — offer bundled + global candidates, write to `claude_md.references` in the project's `.claude/.prove.json`.
+On "Add All" or per-item approval: write each as a `{path, label}` object to `claude_md.references`. The schema requires objects, NOT plain strings:
+
+```json
+{"path": "references/llm-coding-standards.md", "label": "LLM-Optimized Coding Standards"}
+```
+
+Paths are relative to the plugin root. Labels come from the H1 heading in the file.
 
 2. **Core commands**: If new commands with `core: true` have been added since the last CLAUDE.md generation, they'll be picked up automatically in Step 8 (CLAUDE.md regeneration). No user action needed — just note "New commands detected, will appear in CLAUDE.md after regeneration."
 
