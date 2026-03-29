@@ -1,0 +1,13 @@
+{
+  "name": "project-manager",
+  "version": "1.0.0",
+  "kind": "pack",
+  "description": "Project management pipeline: vision, roadmap, backlog, and shipping workflow",
+  "requires": [],
+  "provides": {
+    "commands": ["project-manager"],
+    "skills": ["project-manager"],
+    "agents": ["product-owner"]
+  },
+  "directories": ["planning"]
+}
