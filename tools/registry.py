@@ -53,15 +53,17 @@ def _settings_json_path(project_root: Path) -> Path:
 
 def _expand_hook_vars(entry: dict, plugin_root: Path, project_root: Path) -> dict:
     """Expand $PLUGIN_DIR and $PROJECT_ROOT in hook command strings."""
-    result = dict(entry)
-    for key in ("command",):
-        if key in result and isinstance(result[key], str):
-            result[key] = (
-                result[key]
-                .replace("$PLUGIN_DIR", str(plugin_root))
-                .replace("$PROJECT_ROOT", str(project_root))
-            )
-    return result
+
+    def _expand(obj):
+        if isinstance(obj, dict):
+            return {k: _expand(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_expand(item) for item in obj]
+        if isinstance(obj, str) and ("$PLUGIN_DIR" in obj or "$PROJECT_ROOT" in obj):
+            return obj.replace("$PLUGIN_DIR", str(plugin_root)).replace("$PROJECT_ROOT", str(project_root))
+        return obj
+
+    return _expand(entry)
 
 
 # ---------------------------------------------------------------------------

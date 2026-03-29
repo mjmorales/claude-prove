@@ -248,6 +248,33 @@ class TestInstall:
                 ])
                 mock_lc.assert_called_once_with(plugin_root, "fake_mod:do_install")
 
+    def test_install_expands_plugin_dir_in_nested_hooks(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """$PLUGIN_DIR in nested hook commands is expanded to the actual path."""
+        manifest = dict(SAMPLE_MANIFEST_ACB)
+        manifest["hooks"] = {
+            "PostToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [
+                        {"type": "command", "command": "python3 $PLUGIN_DIR/tools/acb/hook.py"}
+                    ],
+                }
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root, project_root = _make_env(tmp, manifests={"acb": manifest})
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "install", "acb",
+            ])
+            settings = json.loads(
+                (project_root / ".claude" / "settings.json").read_text()
+            )
+            hook_cmd = settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
+            assert "$PLUGIN_DIR" not in hook_cmd
+            assert str(plugin_root) in hook_cmd
+
     def test_install_unknown_tool_exits(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             plugin_root, project_root = _make_env(tmp)
