@@ -1,40 +1,38 @@
 # Interaction Patterns
 
-Canonical reference for how prove skills and commands collect user input. All binary choices, multiple-choice decisions, and approval gates **must** use the `AskUserQuestion` tool. Open-ended clarification questions remain free-form.
+Canonical reference for user input collection. All discrete choices **must** use `AskUserQuestion`. Open-ended questions remain free-form.
 
 ## Rules
 
 1. **Binary choices** (yes/no, approve/reject, proceed/cancel) → `AskUserQuestion` with 2 options
-2. **Multiple-choice decisions** (2-4 discrete options) → `AskUserQuestion` with 2-4 options
-3. **Approval gates** (PRD, plan, permissions, cleanup) → `AskUserQuestion` with Approve + alternative option
-4. **Open-ended clarification** (no discrete options) → free-form text, no `AskUserQuestion`
-5. **Delegation** (user wants Claude to research and decide) → `AskUserQuestion` with "Research & proceed" option
+2. **Multiple-choice** (2-4 discrete options) → `AskUserQuestion` with 2-4 options
+3. **Approval gates** (PRD, plan, permissions, cleanup) → `AskUserQuestion` with Approve + alternative
+4. **Open-ended clarification** → free-form text, no `AskUserQuestion`
+5. **Delegation** → `AskUserQuestion` with "Research & proceed" option
 
-The built-in "Other" option is automatically added by `AskUserQuestion` — do not add a manual escape-hatch option.
+The built-in "Other" option is added automatically -- never add a manual escape-hatch.
 
 ## When to Use AskUserQuestion
 
-| Situation | Use AskUserQuestion? | Example |
-|-----------|---------------------|---------|
-| Confirm before proceeding | Yes — 2 options | "Approve / Request Changes" |
-| Choose between approaches | Yes — 2-4 options | "Option A / Option B / Option C" |
-| Resume vs fresh start | Yes — 2 options | "Resume / Start Fresh" |
-| Deadlock resolution | Yes — 3 options | "Force Approve / Fix Manually / Abort" |
-| "What problem are you solving?" | No — open-ended | Free-form discussion |
-| "What should happen when [edge case]?" | No — open-ended | Free-form discussion |
-| Delegate research + decision | Yes — include "Research & proceed" | "Option A / Option B / Research & proceed" |
-| Design tradeoff discussion | No — nuanced | Free-form, then AskUserQuestion to finalize |
+| Situation | Use? | Example |
+|-----------|------|---------|
+| Confirm before proceeding | Yes, 2 options | "Approve / Request Changes" |
+| Choose between approaches | Yes, 2-4 options | "Option A / Option B / Option C" |
+| Resume vs fresh start | Yes, 2 options | "Resume / Start Fresh" |
+| Deadlock resolution | Yes, 3 options | "Force Approve / Fix Manually / Abort" |
+| Requirements gathering | No | Free-form discussion |
+| Edge case exploration | No | Free-form discussion |
+| Delegate research + decision | Yes | "Option A / Option B / Research & proceed" |
+| Design tradeoff discussion | No | Free-form, then AskUserQuestion to finalize |
 
 ## Patterns
 
 ### Approval Gate
 
-Used for PRD approval, plan approval, permission confirmation, cleanup confirmation, decision confirmation.
-
 ```
 AskUserQuestion:
-  question: "<Describe what is being approved and where to review it>"
-  header: "Approval"  (or context-specific: "PRD", "Plan", "Permissions")
+  question: "<What is being approved and where to review it>"
+  header: "Approval"  # or context-specific: "PRD", "Plan", "Permissions"
   options:
     - label: "Approve"
       description: "<What happens if approved>"
@@ -44,12 +42,10 @@ AskUserQuestion:
 
 ### Binary Confirmation
 
-Used for proceed/cancel, overwrite/keep, ready/review.
-
 ```
 AskUserQuestion:
   question: "<What will happen and why confirmation is needed>"
-  header: "<Context>"  (e.g., "Overwrite", "Cleanup", "Ready")
+  header: "<Context>"  # e.g., "Overwrite", "Cleanup", "Ready"
   options:
     - label: "<Positive action>"
       description: "<What happens>"
@@ -59,14 +55,12 @@ AskUserQuestion:
 
 ### Multiple-Choice Decision
 
-Used for design approach selection, branch resolution, deadlock resolution.
-
 ```
 AskUserQuestion:
   question: "<Describe the decision and context>"
-  header: "<Context>"  (e.g., "Approach", "Branch", "Resolution")
+  header: "<Context>"  # e.g., "Approach", "Branch", "Resolution"
   options:
-    - label: "<Option 1> (Recommended)"  # add (Recommended) if there's a clear best choice
+    - label: "<Option 1> (Recommended)"  # add suffix if clear best choice
       description: "<Tradeoffs>"
     - label: "<Option 2>"
       description: "<Tradeoffs>"
@@ -75,8 +69,6 @@ AskUserQuestion:
 ```
 
 ### Dynamic Options (Brainstorm)
-
-When presenting options generated during discussion (e.g., brainstorm approaches):
 
 ```
 AskUserQuestion:
@@ -89,8 +81,6 @@ AskUserQuestion:
 ```
 
 ### Delegation
-
-Used when the user may want Claude to research options, choose the best one, and proceed autonomously instead of picking manually.
 
 ```
 AskUserQuestion:
@@ -105,25 +95,21 @@ AskUserQuestion:
       description: "I'll investigate, choose the best option, and proceed autonomously"
 ```
 
-**When to offer "Research & proceed":** Only when there are ≤3 substantive options (to stay within the 4-option cap, since the built-in "Other" is always added). Do not add it to approval gates — those are intentionally human-in-the-loop.
+**"Research & proceed" constraints:** Only when <=3 substantive options (4-option cap includes built-in "Other"). Never on approval gates -- those are human-in-the-loop.
 
 **Delegation protocol** (blast-radius aware):
 
-- **Low-stakes** (code style, utility choices, config, naming): Research silently → choose → act → report "I went with X because Y"
-- **High-stakes** (architecture, data models, public APIs, approval gates): Research → present 2-3 sentence summary + recommendation → proceed without confirmation gate
+- **Low-stakes** (style, utility, config, naming): Research -> choose -> act -> report "I went with X because Y"
+- **High-stakes** (architecture, data models, public APIs): Research -> 2-3 sentence summary + recommendation -> proceed
 
 ## Writing Good Options
 
 - **Labels**: 1-5 words, action-oriented ("Approve", "Start Fresh", "Fix Manually")
-- **Descriptions**: One sentence explaining what happens or the tradeoff
-- **Recommended**: Add `(Recommended)` suffix to the label if there's a clear best choice — make it the first option
-- **Headers**: Max 12 characters, context chip ("Approval", "Branch", "Approach")
-- **2-4 options only**: If more than 4 options exist, group or narrow first through discussion
+- **Descriptions**: one sentence on what happens or the tradeoff
+- **Recommended**: `(Recommended)` suffix on label, make it first option
+- **Headers**: max 12 chars ("Approval", "Branch", "Approach")
+- **2-4 options only**: narrow through discussion first if more exist
 
-## What NOT to Use AskUserQuestion For
+## Exclusions
 
-- Requirements gathering (open-ended questions about what the user needs)
-- Edge case exploration ("What should happen when...?")
-- Nuanced tradeoff discussion (use free-form, then AskUserQuestion to finalize)
-- Agent-to-agent communication (principal-architect verdicts, validation-agent output)
-- Iterative refinement where the user needs to explain context
+Do not use `AskUserQuestion` for: requirements gathering, edge case exploration, nuanced tradeoff discussion (free-form first, then finalize), agent-to-agent communication, iterative refinement.

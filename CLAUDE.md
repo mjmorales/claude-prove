@@ -30,16 +30,8 @@ Before broad Glob/Grep searches, check the file index first:
 Only fall back to Glob/Grep when the index doesn't cover what you need.
 ## References
 
-### LLM-Optimized Coding Standards
-
 @references/llm-coding-standards.md
-
-### Interaction Patterns
-
 @references/interaction-patterns.md
-
-### Validation Configuration
-
 @references/validation-config.md
 
 ## Prove Commands
@@ -55,30 +47,30 @@ Only fall back to Glob/Grep when the index doesn't cover what you need.
 
 ## Release Tracking
 
-- **UPDATES.md is mandatory for user-facing features**: any new command, config field, reference, or behavior change that requires user action gets a `## vX.Y.Z` section in `UPDATES.md` before the PR merges. Include: what changed, migration steps (manual + `/prove:update` path), and whether new projects get it automatically.
-- **Feature discovery stays in sync**: when adding a discoverable feature (new bundled reference in `references/`, new config field in `tools/schema/schemas.py`), update `commands/update.md` Step 5 to detect and offer it. If the feature is auto-detected (like `core: true` commands), document that explicitly in the UPDATES.md entry.
-- **Schema version bump on config shape changes**: adding/removing/renaming fields in `PROVE_SCHEMA` or `SETTINGS_SCHEMA` requires incrementing `CURRENT_SCHEMA_VERSION` in `tools/schema/schemas.py` and adding a migration path.
-- **CHANGELOG.md is auto-generated** — NEVER edit it manually. Conventional commit messages are the only input.
-- **Release artifact checklist** (verify before tagging):
-  - `UPDATES.md` has a section for the new version (if user-facing changes exist)
+- **UPDATES.md mandatory for user-facing changes**: new commands, config fields, references, behavior changes get a `## vX.Y.Z` section before PR merge. Include: what changed, migration steps (manual + `/prove:update`), auto-adoption status.
+- **Feature discovery in sync**: new discoverable features (references, config fields) require `commands/update.md` Step 5 update. Auto-detected features (`core: true` commands) documented in UPDATES.md entry.
+- **Schema version bump on config shape changes**: field changes in `PROVE_SCHEMA`/`SETTINGS_SCHEMA` require `CURRENT_SCHEMA_VERSION` increment + migration path.
+- **CHANGELOG.md is auto-generated** -- NEVER edit manually. Conventional commits are the only input.
+- **Release checklist** (verify before tagging):
+  - `UPDATES.md` section for new version (if user-facing)
   - `CURRENT_SCHEMA_VERSION` matches if schema changed
-  - `commands/update.md` Step 5 covers any new discoverable features
+  - `commands/update.md` Step 5 covers new discoverable features
   - New `core: true` commands have `summary:` frontmatter
 
 ## Prompt Quality Gate
 
-- **NEVER ship new or modified LLM-fed text without review by `llm-prompt-engineer`**: this includes `agents/*.md`, `commands/*.md`, `skills/*/SKILL.md`, CLAUDE.md directives, and any other content consumed by a model
-- **Workflow**: finish drafting the text, then invoke the `llm-prompt-engineer` agent on the file before committing. Apply its recommendations or explicitly document why you rejected them.
-- **Applies to edits too** — changing even a single directive in an existing prompt triggers the gate
+- **All LLM-fed text requires `llm-prompt-engineer` review before commit**: `agents/*.md`, `commands/*.md`, `skills/*/SKILL.md`, CLAUDE.md, any model-consumed content.
+- **Workflow**: draft -> invoke `llm-prompt-engineer` -> apply or document rejections.
+- **Applies to edits** -- any directive change triggers the gate.
 
 ## Schema Migration Checklist
 
-When adding/removing/renaming fields in `PROVE_SCHEMA`:
+When adding/removing/renaming `PROVE_SCHEMA` fields:
 
-1. Add the field to `PROVE_SCHEMA` in `tools/schema/schemas.py` with `description` and `default`
-2. Increment `CURRENT_SCHEMA_VERSION` (integer string: `"2"` -> `"3"`, etc.)
-3. Add `_migrate_vN_to_vM(config)` in `tools/schema/migrate.py` — hardcode the target version string, NEVER reference `CURRENT_SCHEMA_VERSION`
-4. Register it in `MIGRATIONS` dict as `"N_to_M": _migrate_vN_to_vM`
-5. Add tests in `tools/schema/test_migrate.py`: version bump, default values, preserves existing data, full chain from v0
-6. Update `.claude/.prove.json` at repo root to the new version
+1. Add field to `PROVE_SCHEMA` in `tools/schema/schemas.py` with `description` and `default`
+2. Increment `CURRENT_SCHEMA_VERSION` (integer string: `"2"` -> `"3"`)
+3. Add `_migrate_vN_to_vM(config)` in `tools/schema/migrate.py` -- hardcode target version, NEVER reference `CURRENT_SCHEMA_VERSION`
+4. Register in `MIGRATIONS` dict as `"N_to_M": _migrate_vN_to_vM`
+5. Add tests in `tools/schema/test_migrate.py`: version bump, defaults, data preservation, full chain from v0
+6. Update `.claude/.prove.json` at repo root
 7. Add `## vX.Y.Z` entry in `UPDATES.md` with migration instructions

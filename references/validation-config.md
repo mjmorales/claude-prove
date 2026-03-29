@@ -1,10 +1,10 @@
 # Validation Configuration
 
-Canonical specification for project validation in prove. All skills that produce, plan, or execute code reference this document.
+Canonical specification for project validation. All skills that produce, plan, or execute code reference this document.
 
-## Configuration File: `.claude/.prove.json`
+## Configuration: `.claude/.prove.json`
 
-A single JSON file in the project root that defines validators and reporters. If present, it is the **source of truth** — auto-detection is skipped entirely.
+Source of truth for validators and reporters. If present, auto-detection is skipped.
 
 ### Schema
 
@@ -25,22 +25,22 @@ A single JSON file in the project root that defines validators and reporters. If
 
 ### Schema Version
 
-The `schema_version` field tracks the config format version for migration. Configs without this field are treated as v0 (pre-schema). Run `/prove:update` to detect and apply migrations.
+Tracks config format for migration. Missing field = v0 (pre-schema). Run `/prove:update` to migrate.
 
 | Version | Changes |
 |---------|---------|
-| `"1"` | Initial versioned schema — adds `schema_version` field |
+| `"1"` | Initial versioned schema |
 
 ### Validator Fields
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | Human-readable name (appears in run-log) |
-| `command` | string | conditional | Shell command to execute. Required if `prompt` is not set |
-| `prompt` | string | conditional | Path to markdown file containing the validation prompt (relative to project root). Required if `command` is not set |
-| `phase` | string | yes | `build`, `lint`, `test`, `custom`, or `llm` — determines execution order |
+| `command` | string | conditional | Shell command. Required if `prompt` is not set |
+| `prompt` | string | conditional | Path to validation prompt markdown (relative to project root). Required if `command` is not set |
+| `phase` | string | yes | `build`, `lint`, `test`, `custom`, or `llm` -- determines execution order |
 
-Each validator must have exactly one of `command` or `prompt`. Command validators run shell commands; prompt validators run LLM-based evaluation using the `validation-agent`.
+Each validator has exactly one of `command` or `prompt`.
 
 ### Reporter Fields
 
@@ -48,42 +48,33 @@ Each validator must have exactly one of `command` or `prompt`. Command validator
 |-------|------|----------|-------------|
 | `name` | string | yes | Human-readable name |
 | `command` | string | yes | Shell command to execute |
-| `events` | string[] | yes | Events that trigger the reporter (see Event Types below) |
+| `events` | string[] | yes | Events that trigger the reporter |
 
-The `reporters` key is optional. If omitted, no custom reporters run.
+The `reporters` key is optional.
 
 ## Execution Sequence
 
 Validators run in phase order after each implementation step:
 
-1. **build** — Does the project still compile?
-2. **lint** — No new warnings/errors introduced?
-3. **test** — All existing + new tests pass?
-4. **custom** — Any user-defined checks
-5. **llm** — LLM-based validation against user-supplied prompts
+1. **build** -- compiles?
+2. **lint** -- no new warnings?
+3. **test** -- all tests pass?
+4. **custom** -- user-defined checks
+5. **llm** -- LLM validation against prompts
 
-Within the same phase, validators run in array order.
-
-If ANY validator fails, the step enters the retry cycle (one auto-fix attempt, then halt).
+Within a phase, validators run in array order. Any failure triggers one auto-fix attempt, then halt.
 
 ## Prompt Validators
 
-Prompt validators delegate evaluation to the `validation-agent`, which runs on the haiku model.
+Prompt validators delegate to the `validation-agent` (haiku model).
 
-**What the agent receives:**
-- The full content of the referenced prompt file
-- The diff of all file changes made in the current step
-- Read-file access to retrieve additional context from the project
+**Agent receives:** prompt file content, step diff, read-file access for project context.
 
-**What the agent returns:**
-- A structured PASS or FAIL verdict
-- Findings that reference specific files and line numbers
+**Agent returns:** structured PASS/FAIL verdict with findings referencing files and line numbers.
 
-**Behaviour:**
-- Same retry semantics as command validators: one auto-fix attempt on failure, then halt
-- Prompt files are standard markdown — no special DSL or syntax is required
+Same retry semantics as command validators. Prompt files are standard markdown -- no special DSL.
 
-**Example prompt file** (`.prove/prompts/doc-quality.md`):
+**Example** (`.prove/prompts/doc-quality.md`):
 
 ```markdown
 # Documentation Quality Check
@@ -94,11 +85,6 @@ Verify that all new or modified public functions have doc comments that:
 3. Document return values
 4. Include at least one usage example for non-trivial functions
 ```
-
-## Resolution Order
-
-1. **`.claude/.prove.json`** — If present in project root, use it exclusively
-2. **Auto-detection** — If no config file, detect from project files (see table below)
 
 ## Auto-Detection Fallback
 
@@ -113,11 +99,11 @@ When no `.claude/.prove.json` exists, the orchestrator scans the project root:
 | Node/TypeScript | `package.json` | `npm test` (test), `tsc --noEmit` (build, if tsconfig exists), `eslint` (lint, if config exists) |
 | Makefile | `Makefile` | `make test` (test), `make lint` (lint) — if targets exist |
 
-LLM validators (`phase: "llm"`) are never auto-detected. They must be explicitly configured in `.claude/.prove.json`.
+LLM validators (`phase: "llm"`) are never auto-detected -- must be configured in `.claude/.prove.json`.
 
 ## Validator Output Format
 
-Each validator reports results in this format, appended to the run-log:
+Appended to the run-log per validator:
 
 ```markdown
 ### <Validator Name>
@@ -131,17 +117,12 @@ Each validator reports results in this format, appended to the run-log:
 
 ## Reporter Event Types
 
-### Lifecycle Events (orchestrator)
 | Event | Fires When |
 |-------|-----------|
-| `step-complete` | A step passes all validators and is committed |
-| `step-halted` | A step fails validation after retry and execution stops |
-| `wave-complete` | All tasks in a parallel wave are merged (full mode) |
+| `step-complete` | Step passes all validators and is committed |
+| `step-halted` | Step fails validation after retry, execution stops |
+| `wave-complete` | All tasks in a parallel wave merged (full mode) |
 | `execution-complete` | Orchestrator run finishes (success or halted) |
-
-### Agent Events (orchestrator dispatches on behalf of agents)
-| Event | Fires When |
-|-------|-----------|
 | `review-approved` | Principal architect approves a task |
 | `review-rejected` | Principal architect requests changes |
 | `validation-pass` | LLM validation agent returns PASS |
@@ -149,14 +130,13 @@ Each validator reports results in this format, appended to the run-log:
 
 ## Reporter Environment Variables
 
-Reporter commands receive event data via environment variables:
-- `PROVE_EVENT`: event name (one of the event types above)
+- `PROVE_EVENT`: event name
 - `PROVE_TASK`: task slug
 - `PROVE_STEP`: step number (if applicable)
 - `PROVE_STATUS`: current status
 - `PROVE_BRANCH`: branch name
-- `PROVE_DETAIL`: one-line summary extracted from agent output (e.g., "3 findings in 2 files", "APPROVED after 2 rounds"). Empty for lifecycle events without agent context
+- `PROVE_DETAIL`: one-line summary from agent output (e.g., "3 findings in 2 files"). Empty for lifecycle events without agent context.
 
 ## Bootstrapping
 
-Run `/prove:init` to auto-detect your project's tech stack and generate a `.claude/.prove.json`. See `commands/init.md`.
+Run `/prove:init` to auto-detect and generate `.claude/.prove.json`.
