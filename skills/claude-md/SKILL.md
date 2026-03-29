@@ -8,35 +8,24 @@ description: >
   to re-run, always produces deterministic output.
 ---
 
-# CLAUDE.md Generator Skill
+# claude-md
 
-## Behavior
-
-1. Parse the user's argument (if any) to determine which subcommand to run
-2. Determine the absolute path to `skills/claude-md/__main__.py` — resolve relative to the directory this SKILL.md was loaded from
-3. Run the command from the **user's current working directory** (the target project, NOT the plugin directory)
-4. Display the CLI output in a human-friendly format
+1. Parse argument to determine subcommand (default: `generate`)
+2. Resolve absolute path to `skills/claude-md/__main__.py` relative to this SKILL.md
+3. Run from the user's cwd (the target project, not the plugin directory)
+4. Display output in human-friendly format
 
 ## Subcommands
 
-Replace `$PLUGIN` below with the absolute path to this plugin's root directory.
+`$PLUGIN` = absolute path to this plugin's root directory.
 
-- **`generate [--project-root DIR] [--plugin-dir DIR]`** — Scan project and write CLAUDE.md
-  ```bash
-  python3 $PLUGIN/skills/claude-md/__main__.py generate --project-root /path/to/project --plugin-dir $PLUGIN
-  ```
-- **`scan [--project-root DIR] [--plugin-dir DIR]`** — Run scanner only, output JSON (no file written)
-  ```bash
-  python3 $PLUGIN/skills/claude-md/__main__.py scan --project-root /path/to/project --plugin-dir $PLUGIN
-  ```
-- **`subagent-context [--project-root DIR] [--plugin-dir DIR]`** — Output compact context block for subagent prompt injection
-  ```bash
-  python3 $PLUGIN/skills/claude-md/__main__.py subagent-context --project-root /path/to/project --plugin-dir $PLUGIN
-  ```
+| Subcommand | Purpose | Command |
+|------------|---------|---------|
+| `generate` (default) | Scan project, write CLAUDE.md | `python3 $PLUGIN/skills/claude-md/__main__.py generate --project-root $CWD --plugin-dir $PLUGIN` |
+| `scan` | Scanner only, output JSON | `python3 $PLUGIN/skills/claude-md/__main__.py scan --project-root $CWD --plugin-dir $PLUGIN` |
+| `subagent-context` | Compact context for subagent injection | `python3 $PLUGIN/skills/claude-md/__main__.py subagent-context --project-root $CWD --plugin-dir $PLUGIN` |
 
-**Default**: `generate` — runs when no subcommand is given.
+### Flag Defaults
 
-### Flag defaults
-
-- `--project-root` — pass the user's current working directory (the target project, NOT the plugin directory)
-- `--plugin-dir` — pass `$PLUGIN` (the absolute path to this plugin's root)
+- `--project-root` -- user's cwd (target project)
+- `--plugin-dir` -- `$PLUGIN`
