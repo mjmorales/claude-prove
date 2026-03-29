@@ -44,7 +44,7 @@ Use `assets/agent-template.md` as the scaffold. Fill in all placeholder fields b
 
 Refer to `references/subagents-best-practices.md` for tool permission patterns by agent type, example agents, and pipeline composition patterns.
 
-If adding to a plugin, ensure the `agents` scope exists in `.prove.json`:
+If adding to a plugin, ensure the `agents` scope exists in `.claude/.prove.json`:
 ```json
 "scopes": { "agents": "agents/" }
 ```
@@ -65,7 +65,7 @@ Use `AskUserQuestion` with header "Review" to confirm: "Create Agent" (write the
 
 ## Committing
 
-When the user asks to commit new agents, delegate to the `commit` skill. The commit skill reads `.prove.json` scopes for valid commit scopes.
+When the user asks to commit new agents, delegate to the `commit` skill. The commit skill reads `.claude/.prove.json` scopes for valid commit scopes.
 
 Example: `feat(subagent-creator): add security-auditor agent`
 

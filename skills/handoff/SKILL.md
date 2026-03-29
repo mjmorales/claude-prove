@@ -70,7 +70,7 @@ Write `.prove/handoff.md` using this exact structure:
 ## Instructions
 1. Read the files listed in "Files to Read First" before starting
 2. <specific resume point from the pickup note>
-3. Run validation before committing: <extract validator commands from .prove.json or Discovery section>
+3. Run validation before committing: <extract validator commands from .claude/.prove.json or Discovery section>
 4. When done with this handoff, delete the prompt file: `rm .prove/handoff.md`
 ```
 

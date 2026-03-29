@@ -1,5 +1,5 @@
 {
-  "schema_version": "2",
+  "schema_version": "3",
   "scopes": {
     "skills": "skills/",
     "commands": "commands/",
@@ -24,7 +24,7 @@
     },
     {
       "name": "python-tests",
-      "command": "docker run --rm -v \"$PWD\":/project prove-validators python -m pytest tools/cafi/ tools/pcd/ tools/acb/ -v",
+      "command": "docker run --rm -v \"$PWD\":/project prove-validators python -m pytest tools/cafi/ tools/pcd/ tools/acb/ tools/schema/ -v",
       "phase": "test"
     }
   ],
@@ -39,9 +39,23 @@
       ]
     }
   ],
-  "index": {
-    "excludes": [],
-    "max_file_size": 102400,
-    "concurrency": 3
+  "tools": {
+    "cafi": {
+      "enabled": true,
+      "config": {
+        "excludes": [],
+        "max_file_size": 102400,
+        "concurrency": 3
+      }
+    },
+    "acb": {
+      "enabled": true
+    },
+    "pcd": {
+      "enabled": true
+    },
+    "schema": {
+      "enabled": true
+    }
   }
 }

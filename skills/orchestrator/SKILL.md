@@ -67,7 +67,7 @@ If neither exists, suggest `/plan-task`.
    **Mode**: Simple | Full
    **Started**: <ISO timestamp>
    **Status**: In Progress
-   **Validators**: <loaded from .prove.json or auto-detected>
+   **Validators**: <loaded from .claude/.prove.json or auto-detected>
    **Steps**: <total count>
 
    ## Step Log
@@ -75,9 +75,9 @@ If neither exists, suggest `/plan-task`.
    |---|------|--------|--------|-------|
    ```
 
-7. **Load validators** from `.prove.json` or auto-detect per `references/validation-config.md`
+7. **Load validators** from `.claude/.prove.json` or auto-detect per `references/validation-config.md`
 
-8. **Load reporters** from `.prove.json`
+8. **Load reporters** from `.claude/.prove.json`
    - Read the `reporters` array (may be empty or absent)
    - Log loaded reporters to run-log: `Reporters: <name1>, <name2>` (or `Reporters: none`)
 
@@ -270,7 +270,7 @@ Repeat 2a-2e for each subsequent wave.
 
 Called from: **Simple mode** step 4 | **Full mode** step 2c (per task, before architect review).
 
-Validators loaded per `references/validation-config.md` — from `.prove.json` if present, otherwise auto-detected.
+Validators loaded per `references/validation-config.md` — from `.claude/.prove.json` if present, otherwise auto-detected.
 
 Run ALL applicable validators in phase order (build → lint → test → custom → llm):
 
@@ -283,7 +283,7 @@ Run ALL applicable validators in phase order (build → lint → test → custom
 
 #### LLM Validator Execution
 
-For each prompt validator configured in `.prove.json`:
+For each prompt validator configured in `.claude/.prove.json`:
 
 1. Read the prompt file specified in the validator's `prompt` field
 2. Generate the diff: `git diff HEAD~1` (simple mode) or `git diff <base-branch>...HEAD` (full mode, captures all task commits)
@@ -552,4 +552,4 @@ Helper scripts live in `scripts/`:
 
 ## Committing
 
-Follow the `commit` skill conventions: read `scopes` from `.prove.json` (fall back to directory-based), use `<type>(<scope>): <description>` format. Each step gets one atomic commit — never bundle steps.
+Follow the `commit` skill conventions: read `scopes` from `.claude/.prove.json` (fall back to directory-based), use `<type>(<scope>): <description>` format. Each step gets one atomic commit — never bundle steps.

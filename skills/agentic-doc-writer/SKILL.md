@@ -88,7 +88,7 @@ When documenting prove plugin components, follow these conventions:
 - **Commands**: Document frontmatter fields, argument handling, and which skill they delegate to
 - **Scripts**: Document usage, flags, and output format
 
-Reference the `scopes` section of `.prove.json` for the canonical list of plugin components.
+Reference the `scopes` section of `.claude/.prove.json` for the canonical list of plugin components.
 
 ## Output Validation
 
@@ -110,6 +110,6 @@ Use `AskUserQuestion` with header "Quality" to confirm: "Approve" (documentation
 
 ## Committing
 
-When the user asks to commit documentation, delegate to the `commit` skill. The commit skill reads `.prove.json` scopes for valid commit scopes.
+When the user asks to commit documentation, delegate to the `commit` skill. The commit skill reads `.claude/.prove.json` scopes for valid commit scopes.
 
 Example: `docs(agentic-doc-writer): document validation-agent interface`

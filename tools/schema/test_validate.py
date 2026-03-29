@@ -98,15 +98,14 @@ class TestProveSchema:
         errors = validate_config(config, PROVE_SCHEMA)
         assert "scopes.plugin" in _error_paths(errors)
 
-    def test_index_wrong_types(self):
+    def test_tools_wrong_enabled_type(self):
         config = {
-            "schema_version": "1",
-            "index": {"excludes": "not-a-list", "max_file_size": "big"},
+            "schema_version": "3",
+            "tools": {"cafi": {"enabled": "yes"}},
         }
         errors = validate_config(config, PROVE_SCHEMA)
         paths = _error_paths(errors)
-        assert "index.excludes" in paths
-        assert "index.max_file_size" in paths
+        assert "tools.cafi.enabled" in paths
 
 
 class TestSettingsSchema:

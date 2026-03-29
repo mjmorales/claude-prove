@@ -6,7 +6,7 @@ A content-addressable file index that maps SHA256 hashes of project files to age
 
 The recommended way is via `/prove:init`, which auto-configures CAFI using `tool.json`.
 
-Add index config to `.prove.json`:
+Add index config to `.claude/.prove.json`:
 
 ```json
 {

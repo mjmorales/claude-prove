@@ -1,7 +1,7 @@
 ---
 name: prep-permissions
 description: >
-  Analyze the active task plan and .prove.json to configure .claude/settings.local.json
+  Analyze the active task plan and .claude/.prove.json to configure .claude/settings.local.json
   with scoped permission rules. Use before orchestrator, autopilot, or implementation.
   Triggers on "prep permissions", "setup permissions", "configure permissions",
   "allow tools", "stop asking me".
@@ -17,7 +17,7 @@ Read these files (skip missing ones):
 
 1. `.prove/TASK_PLAN.md` — extract implementation steps, languages, tools
 2. `.prove/plans/plan_*/05_implementation_plan.md` — file paths, commands
-3. `.prove.json` — validator and reporter commands
+3. `.claude/.prove.json` — validator and reporter commands
 4. `.claude/settings.local.json` — preserve existing rules
 5. Project root — check for `go.mod`, `package.json`, `Cargo.toml`, `pyproject.toml`, `Makefile`, `project.godot`
 
@@ -34,13 +34,13 @@ Edit
 Write
 ```
 
-### From .prove.json
+### From .claude/.prove.json
 
 Add each validator/reporter command as a Bash rule:
 - `"command": "go build ./..."` -> `Bash(go build *)`
 - `"command": "./.prove/notify.sh"` -> `Bash(./.prove/notify.sh *)`
 
-### From auto-detected toolchain (when no .prove.json)
+### From auto-detected toolchain (when no .claude/.prove.json)
 
 | Indicator | Rules to add |
 |-----------|-------------|

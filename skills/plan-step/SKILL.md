@@ -27,7 +27,7 @@ This creates `.prove/plans/plan_<step_number>/` with 8 template files: task over
 
 If the script is unavailable, create the directory manually and populate files following the same structure. Read the script source for template content.
 
-After initialization, populate `06_test_strategy.md` with the project's configured validators from `.prove.json` (build, lint, test commands). See `references/validation-config.md` for the spec.
+After initialization, populate `06_test_strategy.md` with the project's configured validators from `.claude/.prove.json` (build, lint, test commands). See `references/validation-config.md` for the spec.
 
 ### 3. Interactive Planning Process
 

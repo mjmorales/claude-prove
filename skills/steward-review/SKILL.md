@@ -13,7 +13,7 @@ You are running a **focused** code quality audit scoped to the current session's
 ## Phase 0: Prerequisites
 
 1. Read the project's `CLAUDE.md` for conventions.
-2. Check for `.prove.json` — if it exists, read it for validators and project structure.
+2. Check for `.claude/.prove.json` — if it exists, read it for validators and project structure.
 3. Check for `.prove/TASK_PLAN.md` or `.prove/plans/` to understand the intent behind the changes.
 
 ## Phase 1: Scope Discovery
@@ -123,7 +123,7 @@ If you discover additional issues while fixing, note them in the findings doc bu
 
 ## Phase 6: Verification
 
-1. Run validators from `.prove.json` (lint phase first, then test phase).
+1. Run validators from `.claude/.prove.json` (lint phase first, then test phase).
 2. **If tests fail** (expected after source refactors), append a test remediation section to `.prove/steward/session-review.md`:
 
 ```markdown

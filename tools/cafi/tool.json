@@ -1,11 +1,27 @@
 {
   "name": "cafi",
+  "version": "1.0.0",
   "description": "Content-addressable file index with routing-hint descriptions",
-  "config_key": "index",
-  "config_defaults": {
-    "excludes": [],
-    "max_file_size": 102400,
-    "concurrency": 3
+  "requires": ["python3"],
+  "config_schema": {
+    "excludes": {
+      "type": "list",
+      "default": [],
+      "description": "Glob patterns to exclude from indexing"
+    },
+    "max_file_size": {
+      "type": "int",
+      "default": 102400,
+      "description": "Max file size in bytes for indexing"
+    },
+    "concurrency": {
+      "type": "int",
+      "default": 3,
+      "description": "Number of concurrent indexing workers"
+    }
   },
-  "requires": ["python3"]
+  "provides": {
+    "commands": ["index"],
+    "skills": ["index"]
+  }
 }

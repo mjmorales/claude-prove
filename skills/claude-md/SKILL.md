@@ -2,7 +2,7 @@
 name: claude-md
 description: >
   Generate and maintain an LLM-optimized CLAUDE.md for the target project.
-  Scans the codebase (tech stack, conventions, structure), reads .prove.json
+  Scans the codebase (tech stack, conventions, structure), reads .claude/.prove.json
   config, and composes a concise CLAUDE.md with behavioral directives that
   Claude Code follows during the session. Full ownership of the file — safe
   to re-run, always produces deterministic output.

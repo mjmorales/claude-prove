@@ -274,8 +274,8 @@ def _detect_naming(filenames: list[str]) -> str:
 
 
 def _scan_prove_config(root: str) -> dict:
-    """Read .prove.json configuration."""
-    config_path = os.path.join(root, ".prove.json")
+    """Read .claude/.prove.json configuration."""
+    config_path = os.path.join(root, ".claude", ".prove.json")
     if not os.path.isfile(config_path):
         return {"exists": False, "validators": [], "has_index": False, "references": []}
 

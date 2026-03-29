@@ -27,11 +27,13 @@ from cafi.indexer import (  # noqa: E402
 
 
 def _write_prove_json(tmpdir: str, index_cfg: dict | None = None) -> None:
-    """Write a minimal .prove.json to tmpdir."""
+    """Write a minimal .claude/.prove.json to tmpdir."""
     config: dict = {}
     if index_cfg:
         config["index"] = index_cfg
-    with open(os.path.join(tmpdir, ".prove.json"), "w") as fh:
+    claude_dir = os.path.join(tmpdir, ".claude")
+    os.makedirs(claude_dir, exist_ok=True)
+    with open(os.path.join(claude_dir, ".prove.json"), "w") as fh:
         json.dump(config, fh)
 
 
@@ -53,10 +55,11 @@ class TestLoadConfig(unittest.TestCase):
             self.assertEqual(cfg["concurrency"], 3)
 
     def test_load_config_from_file(self):
-        """Reads index key from .prove.json and merges with defaults."""
+        """Reads index key from .claude/.prove.json and merges with defaults."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            prove_json = os.path.join(tmpdir, ".prove.json")
-            with open(prove_json, "w") as fh:
+            claude_dir = os.path.join(tmpdir, ".claude")
+            os.makedirs(claude_dir, exist_ok=True)
+            with open(os.path.join(claude_dir, ".prove.json"), "w") as fh:
                 json.dump(
                     {"index": {"excludes": ["dist"], "concurrency": 5}},
                     fh,

@@ -71,9 +71,9 @@ After every implementation step — in both modes — the orchestrator runs all 
 | `custom` | User-defined shell checks |
 | `llm` | Prompt-based review by a `validation-agent` (haiku model) |
 
-Validators are loaded from `.prove.json` if it exists, otherwise auto-detected from project files (Go, Rust, Python, Node, Godot, Makefile). LLM validators are never auto-detected — they must be explicitly configured.
+Validators are loaded from `.claude/.prove.json` if it exists, otherwise auto-detected from project files (Go, Rust, Python, Node, Godot, Makefile). LLM validators are never auto-detected — they must be explicitly configured.
 
-### Example `.prove.json`
+### Example `.claude/.prove.json`
 
 ```json
 {
@@ -177,7 +177,7 @@ Reports overall status, current wave, task statuses, review verdicts, and blocke
 
 Reporters are dispatched automatically by Claude Code hooks on tool events, not invoked manually by the orchestrator.
 
-Configure reporters in `.prove.json`:
+Configure reporters in `.claude/.prove.json`:
 
 ```json
 {

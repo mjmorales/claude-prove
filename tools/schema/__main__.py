@@ -22,7 +22,7 @@ def _guard_plugin_dir() -> None:
     """Error if running against the plugin directory instead of a target project.
 
     Detects when cwd is inside ~/.claude/ (the plugin install location).
-    This prevents accidentally validating/migrating the plugin's own .prove.json.
+    This prevents accidentally validating/migrating the plugin's own .claude/.prove.json.
     """
     cwd = Path.cwd().resolve()
     claude_dir = Path.home() / ".claude"
@@ -37,7 +37,7 @@ def _guard_plugin_dir() -> None:
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
-    path = args.file or ".prove.json"
+    path = args.file or ".claude/.prove.json"
     config, errors = validate_file(path, strict=args.strict)
 
     if config is None:
@@ -63,7 +63,7 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 
 def cmd_migrate(args: argparse.Namespace) -> int:
-    path = args.file or ".prove.json"
+    path = args.file or ".claude/.prove.json"
 
     if args.dry_run:
         import json
@@ -96,7 +96,7 @@ def cmd_migrate(args: argparse.Namespace) -> int:
 
 
 def cmd_diff(args: argparse.Namespace) -> int:
-    path = args.file or ".prove.json"
+    path = args.file or ".claude/.prove.json"
     print(config_diff(path))
     return 0
 
@@ -114,21 +114,21 @@ def main() -> int:
 
     # validate
     p_val = sub.add_parser("validate", help="Validate a config file against schema")
-    p_val.add_argument("--file", "-f", help="Config file path (default: .prove.json)")
+    p_val.add_argument("--file", "-f", help="Config file path (default: .claude/.prove.json)")
     p_val.add_argument(
         "--strict", action="store_true", help="Treat warnings as errors"
     )
 
     # migrate
     p_mig = sub.add_parser("migrate", help="Migrate config to latest schema version")
-    p_mig.add_argument("--file", "-f", help="Config file path (default: .prove.json)")
+    p_mig.add_argument("--file", "-f", help="Config file path (default: .claude/.prove.json)")
     p_mig.add_argument(
         "--dry-run", action="store_true", help="Show plan without applying"
     )
 
     # diff
     p_diff = sub.add_parser("diff", help="Show diff between current and target config")
-    p_diff.add_argument("--file", "-f", help="Config file path (default: .prove.json)")
+    p_diff.add_argument("--file", "-f", help="Config file path (default: .claude/.prove.json)")
 
     # summary
     sub.add_parser("summary", help="Show combined summary for all config files")
