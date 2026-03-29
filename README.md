@@ -25,7 +25,7 @@ Takes you from idea to merged code through a structured pipeline:
 - **Auto-scaling orchestrator**: Small tasks (≤3 steps) run sequentially. Larger tasks use parallel git worktrees with mandatory architect review. Three execution modes: `/prove:orchestrator`, `/prove:autopilot`, and `/prove:full-auto`.
 - **Structured code review**: Intent-manifest-driven code review. Agents declare *why* they made each change via Claude Code hooks. Changes are grouped by intent for structured review in a browser-based UI. Run `/prove:review` to start.
 - **Code quality steward**: Deep line-by-line audits (`/prove:steward`), iterative audit-fix loops (`/prove:steward:auto-steward`), and lightweight session-scoped reviews (`/prove:steward:steward-review`). See [docs/code-quality.md](docs/code-quality.md).
-- **Stack-agnostic validation**: Auto-detects your project type (Go, Rust, Python, Node, Godot, Makefile) and runs appropriate build/lint/test checks. Supports LLM-based prompt validators for higher-level checks. Configure with `.prove.json` or let auto-detection handle it.
+- **Stack-agnostic validation**: Auto-detects your project type (Go, Rust, Python, Node, Godot, Makefile) and runs appropriate build/lint/test checks. Supports LLM-based prompt validators for higher-level checks. Configure with `.claude/.prove.json` or let auto-detection handle it.
 - **Session management**: Create handoff prompts (`/prove:handoff`) to preserve context across Claude Code sessions. Resume with `/prove:pickup` in a fresh session.
 - **Documentation generation**: Human-readable docs (`/prove:docs`), LLM-optimized agent docs (`/prove:docs:agentic-docs`), or both at once (`/prove:docs:auto-docs`).
 - **Git-based rollback**: Every step is committed individually. Revert any step, reset to any point.
@@ -120,7 +120,7 @@ If Claude Code is already running, restart it for the plugin to take effect.
 | `/prove:handoff` | Create a handoff prompt for clean context transfer between sessions |
 | `/prove:pickup` | Resume work from a handoff prompt in a fresh session |
 | `/prove:comprehend` | Socratic quiz on agent-generated diffs to build code comprehension |
-| `/prove:commit` | Semantic commit assistant — reads `.prove.json` scopes for valid scopes |
+| `/prove:commit` | Semantic commit assistant — reads `.claude/.prove.json` scopes for valid scopes |
 | `/prove:cleanup [task]` | Archive artifacts, remove working files, delete branches |
 | `/prove:complete-task` | Merge a task branch to main and run cleanup |
 
@@ -128,7 +128,7 @@ If Claude Code is already running, restart it for the plugin to take effect.
 
 | Command | Description |
 |---------|-------------|
-| `/prove:init` | Detect tech stack and generate `.prove.json` |
+| `/prove:init` | Detect tech stack and generate `.claude/.prove.json` |
 | `/prove:doctor` | Diagnose installation health — configs, tooling, drift |
 | `/prove:update` | Validate configs, detect schema drift, apply migrations |
 | `/prove:index` | Build or update the content-addressable file index |
@@ -153,7 +153,7 @@ Detailed documentation for major feature areas:
 specs/
 └── ...                         # Protocol specifications
 references/
-├── validation-config.md        # Canonical validation spec (.prove.json schema)
+├── validation-config.md        # Canonical validation spec (.claude/.prove.json schema)
 └── interaction-patterns.md     # UX interaction patterns
 skills/
 ├── brainstorm/                 # Interactive brainstorming → .prove/decisions/
@@ -178,7 +178,7 @@ skills/
 ├── slash-command-creator/      # Slash command scaffolding
 └── subagent-creator/           # Subagent scaffolding
 scripts/
-├── init-config.sh              # Tech stack detection → .prove.json
+├── init-config.sh              # Tech stack detection → .claude/.prove.json
 ├── setup-tools.sh              # Auto-configure tools
 ├── cleanup.sh                  # Task artifact cleanup
 ├── cleanup-worktrees.sh        # Stale worktree removal
@@ -220,13 +220,13 @@ Add `.prove/` to your `.gitignore` to keep artifacts out of version control:
 echo '.prove/' >> .gitignore
 ```
 
-The `.prove.json` config file stays at the repo root — it's project configuration, not a working artifact.
+The `.claude/.prove.json` config file lives under `.claude/` alongside other Claude Code configuration.
 
 ## LLM Validators
 
 In addition to shell-command validators (build, lint, test), prove supports **prompt-based LLM validators** for higher-level checks that can't be captured in a script — such as documentation quality, naming conventions, or domain-specific patterns.
 
-Configure them in `.prove.json`:
+Configure them in `.claude/.prove.json`:
 
 ```json
 {

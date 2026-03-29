@@ -34,7 +34,7 @@ Before using Glob or Grep for broad exploration:
 
 ## Validation
 
-If the project has a `.prove.json` file, read it and use the configured validators — do not guess commands.
+If the project has a `.claude/.prove.json` file, read it and use the configured validators — do not guess commands.
 
 ## When Invoked
 

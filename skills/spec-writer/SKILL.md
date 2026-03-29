@@ -124,7 +124,7 @@ After the agent completes:
 
 ## Committing
 
-When the user asks to commit specs, delegate to the `commit` skill. The commit skill reads `.prove.json` scopes for valid commit scopes.
+When the user asks to commit specs, delegate to the `commit` skill. The commit skill reads `.claude/.prove.json` scopes for valid commit scopes.
 
 Examples:
 

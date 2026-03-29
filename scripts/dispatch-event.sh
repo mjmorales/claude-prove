@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # dispatch-event.sh — Core event dispatcher for prove orchestrator
 #
-# Reads .prove.json reporters, fires matching ones for the given event,
+# Reads .claude/.prove.json reporters, fires matching ones for the given event,
 # and deduplicates via .prove/runs/<slug>/dispatch-state.json.
 #
 # Usage:
@@ -21,14 +21,14 @@ if [[ -z "$EVENT_TYPE" ]]; then
 fi
 
 # Resolve project root.
-# CLAUDE_PROJECT_DIR or cwd may be a worktree, which has .prove.json (tracked)
+# CLAUDE_PROJECT_DIR or cwd may be a worktree, which has .claude/.prove.json (tracked)
 # but NOT .prove/ (gitignored). Use git to find the main worktree for .prove/ artifacts.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORK_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 MAIN_ROOT=$(git -C "$WORK_DIR" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print substr($0,10); exit}')
 MAIN_ROOT="${MAIN_ROOT:-$WORK_DIR}"
-# Config (.prove.json) is tracked — read from current worktree (guaranteed up-to-date)
-CONFIG_FILE="${WORK_DIR}/.prove.json"
+# Config (.claude/.prove.json) is tracked — read from current worktree (guaranteed up-to-date)
+CONFIG_FILE="${WORK_DIR}/.claude/.prove.json"
 # Reporter scripts live in .prove/ (gitignored) — always in main worktree
 REPORTER_ROOT="${MAIN_ROOT}"
 

@@ -50,15 +50,15 @@ ACCEPTANCE=$(awk '/^## Acceptance Criteria/,/^## [^A]/' "$PRD" | head -30)
 # Extract test strategy from PRD
 TEST_STRATEGY=$(awk '/^## Test Strategy/,/^## /' "$PRD" | head -20)
 
-# Load validator commands from .prove.json, fall back to CLAUDE.md
+# Load validator commands from .claude/.prove.json, fall back to CLAUDE.md
 BUILD_CMD=""
 LINT_CMD=""
 TEST_CMD=""
 CUSTOM_CMDS=""
 LLM_VALIDATORS=""
 
-if [[ -f "$PROJECT_ROOT/.prove.json" ]]; then
-  PROVE_CONFIG="$PROJECT_ROOT/.prove.json"
+if [[ -f "$PROJECT_ROOT/.claude/.prove.json" ]]; then
+  PROVE_CONFIG="$PROJECT_ROOT/.claude/.prove.json"
 
   # Single Python call to extract all validator phases at once (avoids parsing JSON five times)
   _VALIDATOR_OUTPUT=$(python3 -c "
@@ -136,7 +136,7 @@ $TEST_STRATEGY
 4. **Verify before committing**:
 $(if [[ -n "$BUILD_CMD" ]]; then echo "   - Build: \`$BUILD_CMD\`"; fi)
 $(if [[ -n "$LINT_CMD" ]]; then echo "   - Lint: \`$LINT_CMD\`"; fi)
-$(if [[ -n "$TEST_CMD" ]]; then echo "   - Tests: \`$TEST_CMD\`"; else echo "   - Run the project's test suite (check CLAUDE.md or .prove.json for the command)"; fi)
+$(if [[ -n "$TEST_CMD" ]]; then echo "   - Tests: \`$TEST_CMD\`"; else echo "   - Run the project's test suite (check CLAUDE.md or .claude/.prove.json for the command)"; fi)
 $(if [[ -n "$CUSTOM_CMDS" ]]; then echo "   - Custom: \`$CUSTOM_CMDS\`"; fi)
 $(if [[ -n "$LLM_VALIDATORS" ]]; then
   echo "   - LLM validators (your code will be evaluated against these prompt criteria):"

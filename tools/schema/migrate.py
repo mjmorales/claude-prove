@@ -1,4 +1,4 @@
-"""Migration engine for .prove.json schema evolution.
+"""Migration engine for .claude/.prove.json schema evolution.
 
 Detects current schema version, plans migrations, and applies them safely
 with backup.
@@ -220,7 +220,7 @@ def apply_migration(path: str, dry_run: bool = False) -> tuple[str | None, list[
     """Run migration on a config file.
 
     Args:
-        path: Path to .prove.json
+        path: Path to .claude/.prove.json
         dry_run: If True, return plan without modifying files
 
     Returns:

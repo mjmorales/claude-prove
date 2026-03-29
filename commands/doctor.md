@@ -32,10 +32,10 @@ Do NOT proceed if any check fails.
 
 Core checks must pass for prove to function. If any fail, skip Tooling and Health tiers and go to Step 5.
 
-#### 1.1: .prove.json exists and is valid JSON
+#### 1.1: .claude/.prove.json exists and is valid JSON
 
 ```bash
-PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema validate --file "$(pwd)/.prove.json" 2>&1
+PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema validate --file "$(pwd)/.claude/.prove.json" 2>&1
 ```
 
 - **Pass**: valid JSON, no schema errors
@@ -58,7 +58,7 @@ PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema validate --file "$(pwd)/.prove.
 On core failure, print results and skip to Step 5:
 ```
 ── Core ──
-[✗] .prove.json — file not found
+[✗] .claude/.prove.json — file not found
 [✗] CLAUDE.md — missing
 [–] .prove/ directory — skipped (core dependency failed)
 
@@ -67,11 +67,11 @@ Core checks failed. Fix these before other checks can run.
 
 ### Step 2: Tooling Checks
 
-Only check tools relevant to this project. Read `.prove.json` to determine which are configured.
+Only check tools relevant to this project. Read `.claude/.prove.json` to determine which are configured.
 
 #### 2.1: CAFI (Content-Addressable File Index)
 
-Skip unless `.prove.json` has an `index` section.
+Skip unless `.claude/.prove.json` has an `index` section.
 
 - Run `python3 $PLUGIN_DIR/tools/cafi/__main__.py status 2>&1`
 - **Pass**: reports indexed files
@@ -80,7 +80,7 @@ Skip unless `.prove.json` has an `index` section.
 
 #### 2.2: Validators (Docker)
 
-Skip unless `.prove.json` has a `validators` section.
+Skip unless `.claude/.prove.json` has a `validators` section.
 
 - Run `docker info >/dev/null 2>&1`
 - **Pass**: Docker daemon running
@@ -97,7 +97,7 @@ Skip unless `.prove.json` has a `validators` section.
 
 #### 2.4: Reporters
 
-Skip unless `.prove.json` has a `reporters` section.
+Skip unless `.claude/.prove.json` has a `reporters` section.
 
 - Check each reporter's `run` command exists and is executable
 - **Pass**: script exists
@@ -126,14 +126,14 @@ Skip unless CAFI configured and index exists.
 
 #### 3.3: CLAUDE.md Staleness
 
-- Compare `.prove.json` mtime vs `CLAUDE.md` mtime
+- Compare `.claude/.prove.json` mtime vs `CLAUDE.md` mtime
 - **Pass**: CLAUDE.md newer
-- **Warn**: .prove.json modified after CLAUDE.md
+- **Warn**: .claude/.prove.json modified after CLAUDE.md
 - **Fix**: `python3 "$PLUGIN_DIR/skills/claude-md/__main__.py" generate --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"`
 
 #### 3.4: Schema Version
 
-- Run `PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema migrate --file "$(pwd)/.prove.json" --dry-run 2>&1`
+- Run `PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema migrate --file "$(pwd)/.claude/.prove.json" --dry-run 2>&1`
 - **Pass**: latest schema version
 - **Warn**: migration available
 - **Fix**: `/prove:update`
@@ -144,7 +144,7 @@ Print all results grouped by tier:
 
 ```
 ── Core ──
-[✓] .prove.json valid
+[✓] .claude/.prove.json valid
 [✓] CLAUDE.md exists
 [✓] .prove/ directory exists
 

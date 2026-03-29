@@ -140,6 +140,6 @@ Use `AskUserQuestion` with header "Review":
 
 ## Committing
 
-Delegate to the `commit` skill. The commit skill reads `.prove.json` scopes for valid commit scopes.
+Delegate to the `commit` skill. The commit skill reads `.claude/.prove.json` scopes for valid commit scopes.
 
 Example: `docs(auto-docs): generate human and agent docs for cafi`

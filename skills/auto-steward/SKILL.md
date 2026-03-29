@@ -12,7 +12,7 @@ Orchestrate an iterative code quality audit. Run the `code-steward` agent in a l
 
 - **Clean breaks only.** Backwards compatibility is NOT required. Rename, restructure, delete freely.
 - **Skip all test files.** `test_*`, `*_test.*`, `tests/`, `__tests__/`, `*.spec.*`, `*.test.*`, test fixtures. Source first — tests adapt second.
-- **Use `.prove.json` validators.** Never guess test/lint commands.
+- **Use `.claude/.prove.json` validators.** Never guess test/lint commands.
 - **Artifacts in `.prove/steward/`**, reports in `.prove/reports/steward/`.
 - **Loop on audit findings, NOT validator failures.** Test/lint failures are noted but never trigger additional passes.
 - **Never exceed max-passes.** If issues persist at cap, report them and stop.
@@ -20,7 +20,7 @@ Orchestrate an iterative code quality audit. Run the `code-steward` agent in a l
 ## Phase 0: Prerequisites & Configuration
 
 1. Read the project's `CLAUDE.md` for conventions and validation commands.
-2. Read `.prove.json` for validators and project structure.
+2. Read `.claude/.prove.json` for validators and project structure.
 3. Check `.prove/TASK_PLAN.md` or `.prove/plans/` for task context.
 
 4. **Parse arguments** from `$ARGUMENTS`:
@@ -173,7 +173,7 @@ Launch parallel `code-steward` subagents for approved work packages. Each agent 
 
 ### 1f. Run Validators & Record Pass
 
-Run `.prove.json` validators (lint first, then tests). Note failures but do NOT stop the loop.
+Run `.claude/.prove.json` validators (lint first, then tests). Note failures but do NOT stop the loop.
 
 Append pass record to `.prove/steward/auto-report.md`:
 

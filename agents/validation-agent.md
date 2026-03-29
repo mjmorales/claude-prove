@@ -1,6 +1,6 @@
 ---
 name: validation-agent
-description: Lightweight LLM validator that evaluates code changes against user-supplied prompt criteria. Used by the orchestrator validation gate for non-scriptable checks. Runs prompt-based validators defined in .prove.json.
+description: Lightweight LLM validator that evaluates code changes against user-supplied prompt criteria. Used by the orchestrator validation gate for non-scriptable checks. Runs prompt-based validators defined in .claude/.prove.json.
 tools: Read, Glob, Grep
 model: haiku
 ---

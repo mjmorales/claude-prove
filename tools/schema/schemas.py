@@ -1,4 +1,4 @@
-"""Schema definitions for .prove.json and .claude/settings.json.
+"""Schema definitions for .claude/.prove.json and .claude/settings.json.
 
 Schemas are plain Python dicts describing expected structure.
 Each field spec is a dict with:
@@ -13,7 +13,7 @@ Each field spec is a dict with:
 
 CURRENT_SCHEMA_VERSION = "3"
 
-# --- .prove.json schema ---
+# --- .claude/.prove.json schema ---
 
 PROVE_SCHEMA = {
     "version": CURRENT_SCHEMA_VERSION,

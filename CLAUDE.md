@@ -87,5 +87,5 @@ When adding/removing/renaming fields in `PROVE_SCHEMA`:
 3. Add `_migrate_vN_to_vM(config)` in `tools/schema/migrate.py` — hardcode the target version string, NEVER reference `CURRENT_SCHEMA_VERSION`
 4. Register it in `MIGRATIONS` dict as `"N_to_M": _migrate_vN_to_vM`
 5. Add tests in `tools/schema/test_migrate.py`: version bump, default values, preserves existing data, full chain from v0
-6. Update `.prove.json` at repo root to the new version
+6. Update `.claude/.prove.json` at repo root to the new version
 7. Add `## vX.Y.Z` entry in `UPDATES.md` with migration instructions

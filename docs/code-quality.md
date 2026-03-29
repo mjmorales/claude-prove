@@ -98,7 +98,7 @@ After approval, one `code-steward` subagent spawns per work package, running ind
 
 ### 5. Verification
 
-After all fix agents complete, validators from `.prove.json` run (lint first, then tests). Test failures caused by source refactors are expected and captured in a test remediation table rather than treated as blocking failures. A final report lands at `.prove/reports/steward/report.md`.
+After all fix agents complete, validators from `.claude/.prove.json` run (lint first, then tests). Test failures caused by source refactors are expected and captured in a test remediation table rather than treated as blocking failures. A final report lands at `.prove/reports/steward/report.md`.
 
 ## When to Use What
 

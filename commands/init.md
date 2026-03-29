@@ -1,10 +1,10 @@
 ---
-description: Detect project tech stack and generate .prove.json configuration
+description: Detect project tech stack and generate .claude/.prove.json configuration
 ---
 
-# Initialize .prove.json
+# Initialize .claude/.prove.json
 
-Detect the project tech stack and generate or update `.prove.json`. Operates section-by-section — never overwrites `reporters`, `scopes`, or `index`.
+Detect the project tech stack and generate or update `.claude/.prove.json`. Operates section-by-section — never overwrites `reporters`, `scopes`, or `index`.
 
 `$PLUGIN_DIR` refers to this plugin's root (parent of `commands/`).
 
@@ -22,19 +22,19 @@ Do NOT proceed if any check fails.
 ### Step 1: Detect tech stack
 
 ```bash
-# If .prove.json exists — merge detected validators, preserve everything else
+# If .claude/.prove.json exists — merge detected validators, preserve everything else
 bash "$PLUGIN_DIR/scripts/init-config.sh" --merge "$(pwd)"
 
-# If no .prove.json — generate fresh
+# If no .claude/.prove.json — generate fresh
 bash "$PLUGIN_DIR/scripts/init-config.sh" "$(pwd)"
 ```
 
 ### Step 2: Show existing config context
 
-If `.prove.json` exists, summarize current sections:
+If `.claude/.prove.json` exists, summarize current sections:
 
 ```
-Existing .prove.json sections:
+Existing .claude/.prove.json sections:
   - validators: 3 entries (updated with detected config)
   - scopes: 6 entries (preserved)
   - reporters: 1 entry (preserved)
@@ -51,11 +51,11 @@ Present detected validators, then `AskUserQuestion`:
 
 ### Step 4: Write configuration
 
-Write approved config to `.prove.json`.
+Write approved config to `.claude/.prove.json`.
 
 - Merge mode: output from `--merge` already contains all sections with updated validators
 - Fresh mode: write detection output directly
-- Run `PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema migrate --file "$(pwd)/.prove.json"` after writing to ensure `schema_version` is set
+- Run `PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema migrate --file "$(pwd)/.claude/.prove.json"` after writing to ensure `schema_version` is set
 
 ### Step 5: Update .gitignore
 
@@ -111,12 +111,12 @@ Already configured: (none)
 
 `AskUserQuestion` with header "External References" and options: "Include All (Recommended)" / "Select" / "Add Custom" / "Skip".
 
-- **Include All**: add all candidates to `.prove.json` under `claude_md.references`
+- **Include All**: add all candidates to `.claude/.prove.json` under `claude_md.references`
 - **Select**: let user pick which to include
 - **Add Custom**: let user type additional paths (then confirm)
 - **Skip**: no changes
 
-Write selected references to `.prove.json` under `claude_md.references`. Use `$PLUGIN_DIR` prefix for bundled references, literal paths for user-specified ones:
+Write selected references to `.claude/.prove.json` under `claude_md.references`. Use `$PLUGIN_DIR` prefix for bundled references, literal paths for user-specified ones:
 ```json
 {
   "claude_md": {
@@ -127,7 +127,7 @@ Write selected references to `.prove.json` under `claude_md.references`. Use `$P
 }
 ```
 
-Merge into existing `.prove.json` — preserve all other sections.
+Merge into existing `.claude/.prove.json` — preserve all other sections.
 
 ### Step 8: Generate CLAUDE.md
 
@@ -156,5 +156,5 @@ bash "$PLUGIN_DIR/scripts/install-skills.sh"
 
 Report what was created/updated. Suggest next steps:
 - Review and customize validators
-- Commit `.prove.json` and `.gitignore`
+- Commit `.claude/.prove.json` and `.gitignore`
 - Run `/prove:task-planner` or `/prove:orchestrator`

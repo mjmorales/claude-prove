@@ -128,7 +128,7 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     abs_root = os.path.abspath(args.project_root)
-    config_path = os.path.join(abs_root, ".prove.json")
+    config_path = os.path.join(abs_root, ".claude", ".prove.json")
     print(f"CAFI: project_root={abs_root}", file=sys.stderr)
     print(f"CAFI: config={config_path}", file=sys.stderr)
 

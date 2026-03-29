@@ -15,7 +15,7 @@ Orchestrate a comprehensive codebase audit across every source file. The goal: a
 ## Phase 0: Prerequisites
 
 1. Read the project's `CLAUDE.md` for conventions and validation commands.
-2. Read `.prove.json` if it exists — use its configured validators and scopes. Never guess test/lint commands.
+2. Read `.claude/.prove.json` if it exists — use its configured validators and scopes. Never guess test/lint commands.
 3. Check `.prove/TASK_PLAN.md` or `.prove/plans/` for task context.
 4. Determine audit scope: use `$ARGUMENTS` if provided, otherwise audit the full codebase.
 
@@ -187,7 +187,7 @@ The agent's own prompt already covers: test exclusion, clean-break policy, valid
 
 After all fix agents complete:
 
-1. Run `.prove.json` validators: lint first, then tests.
+1. Run `.claude/.prove.json` validators: lint first, then tests.
 2. Scan for conflicts between parallel agents' changes (duplicate edits, import collisions).
 3. If tests fail, append a remediation table to `.prove/steward/findings.md`:
 

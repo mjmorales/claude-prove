@@ -1,6 +1,6 @@
 # claude-md
 
-Generates and maintains an LLM-optimized `CLAUDE.md` for a target project. Scans the codebase statically (no LLM calls), reads `.prove.json` configuration, and composes a `CLAUDE.md` with behavioral directives that Claude Code follows during a session. Safe to re-run — output is deterministic and only the managed block is replaced on regeneration.
+Generates and maintains an LLM-optimized `CLAUDE.md` for a target project. Scans the codebase statically (no LLM calls), reads `.claude/.prove.json` configuration, and composes a `CLAUDE.md` with behavioral directives that Claude Code follows during a session. Safe to re-run — output is deterministic and only the managed block is replaced on regeneration.
 
 ## Architecture
 
@@ -86,7 +86,7 @@ python3 skills/claude-md/__main__.py subagent-context --project-root /home/user/
 | `tech_stack` | `dict` | `languages`, `frameworks`, `build_systems` — detected from marker files and `package.json` deps |
 | `key_dirs` | `dict[str, str]` | Known directory names found at project root, mapped to purpose strings |
 | `conventions` | `dict` | `naming` (dominant file-naming style), `test_patterns`, `primary_extensions` |
-| `prove_config` | `dict` | Parsed `.prove.json` — validators, index presence, external references |
+| `prove_config` | `dict` | Parsed `.claude/.prove.json` — validators, index presence, external references |
 | `cafi` | `dict` | Whether `.prove/file-index.json` exists and the file count it contains |
 | `plugin_dir` | `str` | The resolved plugin path (passed through for use in composer templates) |
 
@@ -127,7 +127,7 @@ Sections are conditionally included based on the scan dict:
 | `## References` | `prove_config.references` is non-empty |
 | `## Prove Commands` | `prove_config.exists` is true (commands auto-detected from `core: true` frontmatter) |
 
-A minimal project with no `.prove.json` and no CAFI index produces only the header line and tech stack.
+A minimal project with no `.claude/.prove.json` and no CAFI index produces only the header line and tech stack.
 
 ### Subagent context
 
@@ -135,7 +135,7 @@ A minimal project with no `.prove.json` and no CAFI index produces only the head
 
 ## External References
 
-External files can be included in the generated `CLAUDE.md` as `@path` inclusions, configured per-repo in `.prove.json` under `claude_md.references`. See [AGENTS.md](AGENTS.md) for the full schema, data flow contract, and rendered output format.
+External files can be included in the generated `CLAUDE.md` as `@path` inclusions, configured per-repo in `.claude/.prove.json` under `claude_md.references`. See [AGENTS.md](AGENTS.md) for the full schema, data flow contract, and rendered output format.
 
 Quick setup: run `/prove:init` — Step 7 detects candidate references from `~/.claude/CLAUDE.md` and offers to include them.
 

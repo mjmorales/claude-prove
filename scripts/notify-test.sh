@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# notify-test.sh — Test the notification pipeline configured in .prove.json
+# notify-test.sh — Test the notification pipeline configured in .claude/.prove.json
 #
 # Usage:
 #   notify-test.sh [event-type]
@@ -18,7 +18,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DISPATCH="${SCRIPT_DIR}/dispatch-event.sh"
 EVENT_TYPE="${1:-step-complete}"
-CONFIG_FILE=".prove.json"
+CONFIG_FILE=".claude/.prove.json"
 
 # --- Check configuration ---
 

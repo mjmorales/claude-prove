@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# init-config.sh — Detect project tech stack and output .prove.json
+# init-config.sh — Detect project tech stack and output .claude/.prove.json
 #
 # Usage: init-config.sh [--merge] [project-root]
 #
 # Outputs JSON to stdout.
-#   --merge: If .prove.json exists in project-root, replace only the
+#   --merge: If .claude/.prove.json exists in project-root, replace only the
 #            validators section and preserve all other sections (scopes,
 #            reporters, index, etc.)
 
@@ -90,7 +90,7 @@ if [[ -f "$PROJECT_ROOT/Makefile" ]]; then
 fi
 
 # Output final JSON
-PROVE_JSON="$PROJECT_ROOT/.prove.json"
+PROVE_JSON="$PROJECT_ROOT/.claude/.prove.json"
 
 if $MERGE && [[ -f "$PROVE_JSON" ]]; then
   # Merge: replace validators in existing config, preserve everything else

@@ -52,7 +52,7 @@ fi
 
 # === Clone or update ===
 # Use sparse-checkout so only plugin-runtime files are on disk.
-# This prevents files like CLAUDE.md and .prove.json (which
+# This prevents files like CLAUDE.md and .claude/.prove.json (which
 # belong to the plugin's own development) from appearing in the install
 # directory where they could confuse the LLM.
 

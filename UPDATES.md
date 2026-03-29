@@ -10,7 +10,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ### External References for CLAUDE.md
 
-Projects can now include external files (coding standards, security policies, etc.) in their generated CLAUDE.md via `@` inclusions. References are configured per-repo in `.prove.json` and rendered inside the managed block.
+Projects can now include external files (coding standards, security policies, etc.) in their generated CLAUDE.md via `@` inclusions. References are configured per-repo in `.claude/.prove.json` and rendered inside the managed block.
 
 **What ships with the plugin**: `references/llm-coding-standards.md` — LLM-optimized coding standards applied across all projects.
 
@@ -19,7 +19,7 @@ Projects can now include external files (coding standards, security policies, et
 ```bash
 # Option 1: Automatic — run /prove:update, Step 5 will detect and offer bundled references
 
-# Option 2: Manual — add to .prove.json:
+# Option 2: Manual — add to .claude/.prove.json:
 ```
 
 ```json
