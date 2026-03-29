@@ -6,9 +6,9 @@ updated: 2026-03-24
 
 # External References in CLAUDE.md
 
-Declare external files in `.prove.json` that get injected into the managed CLAUDE.md as `@path` inclusions. Claude Code resolves `@path` at session load time.
+Declare external files in `.claude/.prove.json` that get injected into the managed CLAUDE.md as `@path` inclusions. Claude Code resolves `@path` at session load time.
 
-## .prove.json Schema
+## .claude/.prove.json Schema
 
 Add under `claude_md.references` (ordered array):
 
@@ -34,7 +34,7 @@ Omitting `claude_md` is equivalent to `"references": []`.
 ## Data Flow
 
 ```
-.prove.json  ->  scanner._scan_prove_config()  ->  composer._section_references()  ->  CLAUDE.md
+.claude/.prove.json  ->  scanner._scan_prove_config()  ->  composer._section_references()  ->  CLAUDE.md
                  (drops entries missing "path")     (renders in declaration order)
 ```
 
@@ -63,6 +63,6 @@ Omitting `claude_md` is equivalent to `"references": []`.
 - `$PLUGIN_DIR` in paths is resolved by the composer to the actual plugin directory at generation time
 - Paths are NOT validated at generation time -- missing files are silently skipped by Claude Code at load time
 - `~` expansion is handled by Claude Code, not by prove
-- Order is preserved from `.prove.json` declaration order
+- Order is preserved from `.claude/.prove.json` declaration order
 - References section appears between Discovery Protocol and Prove Commands in the managed block
 - Bundled references (in `$PLUGIN_DIR/references/`) ship with the plugin and are preferred over user-global equivalents

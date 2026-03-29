@@ -71,9 +71,9 @@ After every implementation step — in both modes — the orchestrator runs all 
 | `custom` | User-defined shell checks |
 | `llm` | Prompt-based review by a `validation-agent` (haiku model) |
 
-Validators are loaded from `.prove.json` if it exists, otherwise auto-detected from project files (Go, Rust, Python, Node, Godot, Makefile). LLM validators are never auto-detected — they must be explicitly configured.
+Validators are loaded from `.claude/.prove.json` if it exists, otherwise auto-detected from project files (Go, Rust, Python, Node, Godot, Makefile). LLM validators are never auto-detected — they must be explicitly configured.
 
-### Example `.prove.json`
+### Example `.claude/.prove.json`
 
 ```json
 {
@@ -177,7 +177,7 @@ Reports overall status, current wave, task statuses, review verdicts, and blocke
 
 Reporters are dispatched automatically by Claude Code hooks on tool events, not invoked manually by the orchestrator.
 
-Configure reporters in `.prove.json`:
+Configure reporters in `.claude/.prove.json`:
 
 ```json
 {
@@ -193,7 +193,7 @@ Configure reporters in `.prove.json`:
 
 Reporter commands receive event context via environment variables: `PROVE_EVENT`, `PROVE_TASK`, `PROVE_STEP`, `PROVE_STATUS`, `PROVE_BRANCH`, `PROVE_DETAIL`.
 
-Run `/prove:notify-setup` to configure reporters interactively.
+Run `/prove:notify:notify-setup` to configure reporters interactively.
 
 See `skills/orchestrator/references/reporter-protocol.md` for the full reporter interface.
 

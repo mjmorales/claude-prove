@@ -1,5 +1,11 @@
 {
   "name": "pcd",
-  "description": "Progressive Context Distillation pipeline tooling for multi-round code audits",
-  "version": "1.0.0"
+  "version": "1.0.0",
+  "description": "Progressive Context Distillation pipeline for multi-round code audits",
+  "requires": ["python3"],
+  "provides": {
+    "commands": ["steward", "steward/auto-steward", "steward/steward-review"],
+    "skills": ["steward", "auto-steward", "steward-review"],
+    "agents": ["pcd/*", "code-steward"]
+  }
 }

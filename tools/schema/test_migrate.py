@@ -46,7 +46,9 @@ class TestPlanMigration:
         assert target["scopes"] == config["scopes"]
         assert target["validators"] == config["validators"]
         assert target["reporters"] == config["reporters"]
-        assert target["index"] == config["index"]
+        # v3 migration moves index -> tools.cafi.config
+        assert "index" not in target
+        assert target["tools"]["cafi"]["config"] == config["index"]
         assert target["schema_version"] == CURRENT_SCHEMA_VERSION
 
     def test_already_current_no_changes(self):
@@ -67,7 +69,7 @@ class TestPlanMigration:
         config = {"schema_version": "1", "validators": []}
         target, changes = plan_migration(config)
 
-        assert target["schema_version"] == "2"
+        assert target["schema_version"] == CURRENT_SCHEMA_VERSION
         assert target["claude_md"] == {"references": []}
         assert any(c.path == "claude_md" for c in changes)
 
@@ -82,7 +84,7 @@ class TestPlanMigration:
         }
         target, changes = plan_migration(config)
 
-        assert target["schema_version"] == "2"
+        assert target["schema_version"] == CURRENT_SCHEMA_VERSION
         assert target["claude_md"]["references"][0]["path"] == "~/.claude/standards.md"
         assert not any(c.path == "claude_md" for c in changes)
 
@@ -96,7 +98,7 @@ class TestPlanMigration:
         }
         target, changes = plan_migration(config)
 
-        assert target["schema_version"] == "2"
+        assert target["schema_version"] == CURRENT_SCHEMA_VERSION
         for v in target["validators"]:
             assert "phase" in v
             assert "stage" not in v
@@ -134,6 +136,52 @@ class TestPlanMigration:
 
         assert target["schema_version"] == CURRENT_SCHEMA_VERSION
         assert "claude_md" in target
+
+
+    def test_v2_to_v3_moves_index_to_tools_cafi(self):
+        config = {
+            "schema_version": "2",
+            "index": {"excludes": [], "max_file_size": 102400, "concurrency": 3},
+        }
+        target, changes = plan_migration(config)
+
+        assert target["schema_version"] == "3"
+        assert "index" not in target
+        assert target["tools"]["cafi"]["enabled"] is True
+        assert target["tools"]["cafi"]["config"]["max_file_size"] == 102400
+        assert any("index" in c.path for c in changes)
+
+    def test_v2_to_v3_no_index_adds_cafi_disabled(self):
+        config = {"schema_version": "2", "validators": []}
+        target, changes = plan_migration(config)
+
+        assert target["schema_version"] == "3"
+        assert target["tools"]["cafi"]["enabled"] is False
+
+    def test_v2_to_v3_preserves_existing_tools(self):
+        config = {
+            "schema_version": "2",
+            "tools": {"acb": {"enabled": True}},
+            "index": {"excludes": ["*.log"]},
+        }
+        target, changes = plan_migration(config)
+
+        assert target["tools"]["acb"]["enabled"] is True
+        assert target["tools"]["cafi"]["config"]["excludes"] == ["*.log"]
+
+    def test_v0_migrates_through_to_v3(self):
+        config = {
+            "validators": [],
+            "scopes": {"plugin": "."},
+            "index": {"excludes": [], "max_file_size": 50000, "concurrency": 2},
+        }
+        target, changes = plan_migration(config)
+
+        assert target["schema_version"] == CURRENT_SCHEMA_VERSION
+        assert "claude_md" in target
+        assert "tools" in target
+        assert target["tools"]["cafi"]["config"]["max_file_size"] == 50000
+        assert "index" not in target
 
 
 class TestApplyMigration:

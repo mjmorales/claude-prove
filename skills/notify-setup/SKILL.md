@@ -2,7 +2,7 @@
 name: notify-setup
 description: >
   Configure orchestrator notification reporters (Slack, Discord, MCP, custom).
-  Generates bash scripts and updates .prove.json. Triggers on "notify setup",
+  Generates bash scripts and updates .claude/.prove.json. Triggers on "notify setup",
   "set up notifications", "configure alerts".
 ---
 
@@ -20,7 +20,7 @@ Scan for existing integrations before asking the user to configure anything.
 
 1. Read `.claude/settings.json` and `~/.claude/settings.json` for MCP servers with messaging capabilities (Slack MCP, Discord MCP, etc.)
 2. Check the environment for `SLACK_WEBHOOK_URL`, `DISCORD_WEBHOOK_URL`
-3. Check `.prove.json` for existing reporters
+3. Check `.claude/.prove.json` for existing reporters
 4. Report findings. If an existing reporter covers the user's needs, say so and confirm before proceeding.
 
 ### Phase 2: Platform Selection
@@ -37,7 +37,7 @@ Annotate options with discovery results (e.g., "Slack (Webhook) -- SLACK_WEBHOOK
 ### Phase 3: Configuration
 
 **Scope** — `AskUserQuestion`, header "Scope":
-- "Project" — scripts in `./.prove/`, config in `.prove.json`
+- "Project" — scripts in `./.prove/`, config in `.claude/.prove.json`
 - "Global" — scripts in `~/.claude/scripts/`
 
 **Events** — `AskUserQuestion`, header "Events" (multiSelect: true):
@@ -74,9 +74,9 @@ After generation:
 1. Write to `./.prove/notify-<platform>.sh` (project) or `~/.claude/scripts/notify-<platform>.sh` (global)
 2. `chmod +x` the script
 
-### Phase 5: .prove.json Update
+### Phase 5: .claude/.prove.json Update
 
-1. Read `.prove.json` (create if missing)
+1. Read `.claude/.prove.json` (create if missing)
 2. Add or update entry in the `reporters` array — preserve all other config:
    ```json
    {
@@ -91,7 +91,7 @@ After generation:
 
 1. Run the script with `--test`
 2. Report success or failure
-3. Summarize: platform, scope, script path, subscribed events, `.prove.json` entry
+3. Summarize: platform, scope, script path, subscribed events, `.claude/.prove.json` entry
 
 ## Committing
 

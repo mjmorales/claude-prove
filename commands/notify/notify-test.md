@@ -1,5 +1,5 @@
 ---
-description: Send a test notification through configured reporters in .prove.json
+description: Send a test notification through configured reporters in .claude/.prove.json
 argument-hint: "[event-type]"
 ---
 
@@ -13,6 +13,6 @@ bash "$PLUGIN_DIR/scripts/notify-test.sh" $ARGUMENTS
 
 If `$ARGUMENTS` is empty, defaults to `step-complete`.
 
-If `.prove.json` has no `reporters` entries, inform the user and suggest `/prove:notify-setup`. Do not run the script.
+If `.claude/.prove.json` has no `reporters` entries, inform the user and suggest `/prove:notify:notify-setup`. Do not run the script.
 
 Reporter scripts live in `.prove/` (project scope) or `~/.claude/scripts/` (global scope).

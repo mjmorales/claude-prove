@@ -150,10 +150,10 @@ Reporter dispatch is handled **automatically by Claude Code hooks** — the orch
 
 ### How It Works
 
-Claude Code hooks fire deterministically on tool events. Hook scripts in `scripts/hooks/` detect orchestrator actions and call `scripts/dispatch-event.sh` to fire matching reporters from `.prove.json`.
+Claude Code hooks fire deterministically on tool events. Hook scripts in `scripts/hooks/` detect orchestrator actions and call `scripts/dispatch-event.sh` to fire matching reporters from `.claude/.prove.json`.
 
 ```
-Claude Code Hook Event → Hook Script → dispatch-event.sh → .prove.json reporters
+Claude Code Hook Event → Hook Script → dispatch-event.sh → .claude/.prove.json reporters
 ```
 
 ### Hook → Event Mapping
@@ -212,14 +212,14 @@ Hooks are configured in `.claude/settings.json` (project-level, committed to git
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/dispatch-event.sh` | Core dispatcher — reads `.prove.json`, fires matching reporters, deduplicates |
+| `scripts/dispatch-event.sh` | Core dispatcher — reads `.claude/.prove.json`, fires matching reporters, deduplicates |
 | `scripts/hooks/post-tool-use.sh` | Detects orchestrator git commits/merges from Bash tool calls |
 | `scripts/hooks/subagent-stop.sh` | Detects review/validation verdicts from subagent completions |
 | `scripts/hooks/session-stop.sh` | Dispatches execution-complete when session ends |
 
 ## Reporter Configuration
 
-Add reporters to `.prove.json`:
+Add reporters to `.claude/.prove.json`:
 
 ```json
 {
@@ -251,7 +251,7 @@ Reporter commands receive event data via environment variables:
 Use the notify-setup skill to configure reporters interactively:
 
 ```
-/prove:notify-setup
+/prove:notify:notify-setup
 ```
 
 This guides you through platform selection (Slack, Discord, custom), generates notification scripts, and configures the reporters section automatically.

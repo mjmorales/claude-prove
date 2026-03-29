@@ -178,10 +178,10 @@ def walk_project(
         candidates = [c for c in candidates if c not in ignored]
 
     for rel_path in candidates:
-        # Skip .prove directory and .prove.json config
+        # Skip .prove directory and .claude/.prove.json config
         if rel_path.startswith(".prove") or rel_path.startswith(os.sep + ".prove"):
             continue
-        if rel_path == ".prove.json":
+        if rel_path == os.path.join(".claude", ".prove.json"):
             continue
 
         # Skip if matches exclude patterns

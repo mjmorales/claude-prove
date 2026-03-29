@@ -10,7 +10,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ### External References for CLAUDE.md
 
-Projects can now include external files (coding standards, security policies, etc.) in their generated CLAUDE.md via `@` inclusions. References are configured per-repo in `.prove.json` and rendered inside the managed block.
+Projects can now include external files (coding standards, security policies, etc.) in their generated CLAUDE.md via `@` inclusions. References are configured per-repo in `.claude/.prove.json` and rendered inside the managed block.
 
 **What ships with the plugin**: `references/llm-coding-standards.md` — LLM-optimized coding standards applied across all projects.
 
@@ -19,7 +19,7 @@ Projects can now include external files (coding standards, security policies, et
 ```bash
 # Option 1: Automatic — run /prove:update, Step 5 will detect and offer bundled references
 
-# Option 2: Manual — add to .prove.json:
+# Option 2: Manual — add to .claude/.prove.json:
 ```
 
 ```json
@@ -32,7 +32,7 @@ Projects can now include external files (coding standards, security policies, et
 }
 ```
 
-Then regenerate: `/prove:claude-md`
+Then regenerate: `/prove:docs:claude-md`
 
 `$PLUGIN_DIR` is resolved at generation time to the actual plugin install path.
 
@@ -42,7 +42,7 @@ Then regenerate: `/prove:claude-md`
 
 The `## Prove Commands` section in generated CLAUDE.md is no longer hardcoded. Commands with `core: true` in their frontmatter are auto-detected and rendered.
 
-**Migration**: No action needed. Run `/prove:claude-md` to regenerate — new commands appear automatically.
+**Migration**: No action needed. Run `/prove:docs:claude-md` to regenerate — new commands appear automatically.
 
 **Adding your own**: Any command file in `commands/` with `core: true` and `summary:` in its frontmatter will appear in generated CLAUDE.md files:
 

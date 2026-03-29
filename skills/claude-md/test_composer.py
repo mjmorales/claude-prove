@@ -123,7 +123,7 @@ class TestCompose:
         result = compose(full_scan)
         assert "## Prove Commands" in result
         assert "/prove:index" in result
-        assert "/prove:claude-md" in result
+        assert "/prove:docs:claude-md" in result
 
     def test_tools_from_core_commands(self, full_scan):
         full_scan["core_commands"] = [
@@ -137,7 +137,7 @@ class TestCompose:
         full_scan["core_commands"] = []
         result = compose(full_scan)
         assert "## Prove Commands" in result
-        assert "/prove:claude-md" in result
+        assert "/prove:docs:claude-md" in result
 
     def test_minimal_project_no_extra_sections(self, minimal_scan):
         result = compose(minimal_scan)

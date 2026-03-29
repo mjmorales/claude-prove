@@ -1,15 +1,15 @@
 ---
 name: commit
-description: Semantic commit assistant that reads .prove.json scopes for valid commit scopes. Analyzes changes, groups into logical units, and creates conventional commits. Use when committing changes to any project that installs this plugin.
+description: Semantic commit assistant that reads .claude/.prove.json scopes for valid commit scopes. Analyzes changes, groups into logical units, and creates conventional commits. Use when committing changes to any project that installs this plugin.
 ---
 
 # Semantic Commit Assistant
 
-Analyze all staged and unstaged changes, group them into logical units, and create semantic commits with scopes derived from `.prove.json` or the directory structure.
+Analyze all staged and unstaged changes, group them into logical units, and create semantic commits with scopes derived from `.claude/.prove.json` or the directory structure.
 
 ## Phase 1: Gather Context
 
-1. Check for `.prove.json` at the project root and read the `"scopes"` key if present
+1. Check for `.claude/.prove.json` at the project root and read the `"scopes"` key if present
 2. Run `git status` to see all modified, added, and deleted files
 3. Run `git diff` to see unstaged changes
 4. Run `git diff --cached` to see staged changes
@@ -17,7 +17,7 @@ Analyze all staged and unstaged changes, group them into logical units, and crea
 
 ## Phase 2: Derive Scopes
 
-**If `.prove.json` has a `"scopes"` key**, use it to build the scope list. The scopes object maps scope names to path prefixes:
+**If `.claude/.prove.json` has a `"scopes"` key**, use it to build the scope list. The scopes object maps scope names to path prefixes:
 
 ```json
 {
@@ -37,7 +37,7 @@ Additionally, these built-in scopes are always available regardless of configura
 
 - `docs` — README, LICENSE, or other top-level documentation
 - `repo` — `.gitignore`, CI/CD, or other repo infrastructure
-- `config` — `.prove.json`, project configuration files
+- `config` — `.claude/.prove.json`, project configuration files
 
 ## Phase 3: Analyze, Group, and Order Changes
 
@@ -75,4 +75,4 @@ After all commits, run `git log --oneline -n <count>` and report any remaining u
 ## Rules
 
 - Never force push or amend existing commits without explicit permission
-- Never hardcode scopes — always derive from `.prove.json` or directory structure
+- Never hardcode scopes — always derive from `.claude/.prove.json` or directory structure

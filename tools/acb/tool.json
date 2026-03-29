@@ -1,5 +1,36 @@
 {
   "name": "acb",
+  "version": "0.2.0",
   "description": "Intent-based code review: manifest assembly, web review UI, CC hook",
-  "requires": ["python3", "git", "jinja2"]
+  "requires": ["python3", "git", "jinja2"],
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $PLUGIN_DIR/tools/acb/hook.py"
+          }
+        ]
+      }
+    ]
+  },
+  "directories": [".prove/intents", ".prove/reviews"],
+  "config_schema": {
+    "base_branch": {
+      "type": "str",
+      "default": "main",
+      "description": "Base branch for diffs"
+    }
+  },
+  "provides": {
+    "commands": ["review", "review/fix", "review/discuss", "review/resolve"],
+    "skills": ["review"],
+    "agents": ["pcd/*"]
+  },
+  "lifecycle": {
+    "post_install": "tools/acb/lifecycle.py:install",
+    "pre_uninstall": "tools/acb/lifecycle.py:uninstall"
+  }
 }

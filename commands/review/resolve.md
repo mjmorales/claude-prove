@@ -23,4 +23,4 @@ Show the approval summary for the current review.
    ```
 
 4. Present the summary to the user. If approved, suggest next steps (merge, cleanup).
-   If not fully approved, suggest `/prove:fix` or `/prove:discuss`.
+   If not fully approved, suggest `/prove:review:fix` or `/prove:review:discuss`.

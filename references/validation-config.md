@@ -2,7 +2,7 @@
 
 Canonical specification for project validation in prove. All skills that produce, plan, or execute code reference this document.
 
-## Configuration File: `.prove.json`
+## Configuration File: `.claude/.prove.json`
 
 A single JSON file in the project root that defines validators and reporters. If present, it is the **source of truth** — auto-detection is skipped entirely.
 
@@ -97,12 +97,12 @@ Verify that all new or modified public functions have doc comments that:
 
 ## Resolution Order
 
-1. **`.prove.json`** — If present in project root, use it exclusively
+1. **`.claude/.prove.json`** — If present in project root, use it exclusively
 2. **Auto-detection** — If no config file, detect from project files (see table below)
 
 ## Auto-Detection Fallback
 
-When no `.prove.json` exists, the orchestrator scans the project root:
+When no `.claude/.prove.json` exists, the orchestrator scans the project root:
 
 | Detector | Files Checked | Validators Added |
 |----------|--------------|-----------------|
@@ -113,7 +113,7 @@ When no `.prove.json` exists, the orchestrator scans the project root:
 | Node/TypeScript | `package.json` | `npm test` (test), `tsc --noEmit` (build, if tsconfig exists), `eslint` (lint, if config exists) |
 | Makefile | `Makefile` | `make test` (test), `make lint` (lint) — if targets exist |
 
-LLM validators (`phase: "llm"`) are never auto-detected. They must be explicitly configured in `.prove.json`.
+LLM validators (`phase: "llm"`) are never auto-detected. They must be explicitly configured in `.claude/.prove.json`.
 
 ## Validator Output Format
 
@@ -159,4 +159,4 @@ Reporter commands receive event data via environment variables:
 
 ## Bootstrapping
 
-Run `/prove:init` to auto-detect your project's tech stack and generate a `.prove.json`. See `commands/init.md`.
+Run `/prove:init` to auto-detect your project's tech stack and generate a `.claude/.prove.json`. See `commands/init.md`.

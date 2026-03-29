@@ -27,9 +27,9 @@ def config_diff(path: str) -> str:
     lines: list[str] = []
 
     # Auto-detect schema
-    if filepath.name == ".prove.json":
+    if filepath.name == ".prove.json" or str(filepath).endswith(".claude/.prove.json"):
         schema = PROVE_SCHEMA
-        label = ".prove.json"
+        label = ".claude/.prove.json"
     elif filepath.name == "settings.json" and ".claude" in str(filepath):
         schema = SETTINGS_SCHEMA
         label = ".claude/settings.json"
@@ -47,8 +47,8 @@ def config_diff(path: str) -> str:
             lines.append(str(e))
         lines.append("")
 
-    # Migration plan (only for .prove.json)
-    if filepath.name == ".prove.json":
+    # Migration plan (only for .claude/.prove.json)
+    if filepath.name == ".prove.json" or str(filepath).endswith(".claude/.prove.json"):
         target, changes = plan_migration(config)
 
         if changes:
@@ -69,7 +69,7 @@ def config_diff(path: str) -> str:
     return "\n".join(lines)
 
 
-def summary(prove_path: str = ".prove.json",
+def summary(prove_path: str = ".claude/.prove.json",
             settings_path: str = ".claude/settings.json") -> str:
     """Generate a combined summary for both config files."""
     parts: list[str] = []

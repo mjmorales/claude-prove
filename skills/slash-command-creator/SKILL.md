@@ -85,10 +85,10 @@ Load and follow the skill (`skills/<name>/SKILL.md` from the workflow plugin).
 |----------|------|-------|
 | Project | `.claude/commands/<name>.md` | Versioned with repo |
 | User | `~/.claude/commands/<name>.md` | Available across projects |
-| Plugin | `commands/<name>.md` | Add scope to `.prove.json` |
+| Plugin | `commands/<name>.md` | Add scope to `.claude/.prove.json` |
 | Namespaced | `.claude/commands/<ns>/<name>.md` | Invoked as `/<ns>:<name>` |
 
-If adding to a plugin, ensure the `commands` scope exists in `.prove.json`:
+If adding to a plugin, ensure the `commands` scope exists in `.claude/.prove.json`:
 ```json
 "scopes": { "commands": "commands/" }
 ```
@@ -108,7 +108,7 @@ Use `AskUserQuestion` with header "Review" to confirm: "Create Command" (write t
 
 ## Committing
 
-When the user asks to commit new commands, delegate to the `commit` skill. The commit skill reads `.prove.json` scopes for valid commit scopes.
+When the user asks to commit new commands, delegate to the `commit` skill. The commit skill reads `.claude/.prove.json` scopes for valid commit scopes.
 
 Example: `feat(slash-command-creator): add review command`
 

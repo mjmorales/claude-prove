@@ -47,7 +47,7 @@ Be concrete: "Fix the failing test in auth/middleware.test.ts caused by the new 
 If `agents/` exists, read all `.md` files and parse each YAML frontmatter `description`. Match against the pickup note's work domain:
 
 - **Agent matches**: `claude --agent agents/<name>.md --prompt-file .prove/handoff.md` — explain the match briefly
-- **No agent matches, specialized work**: suggest creating one first with `/prove:create-agent`
+- **No agent matches, specialized work**: suggest creating one first with `/prove:create:create-agent`
 - **No agents dir OR general-purpose work**: `claude --prompt-file .prove/handoff.md`
 
 ## Phase 4: Write & Output
@@ -70,7 +70,7 @@ Write `.prove/handoff.md` using this exact structure:
 ## Instructions
 1. Read the files listed in "Files to Read First" before starting
 2. <specific resume point from the pickup note>
-3. Run validation before committing: <extract validator commands from .prove.json or Discovery section>
+3. Run validation before committing: <extract validator commands from .claude/.prove.json or Discovery section>
 4. When done with this handoff, delete the prompt file: `rm .prove/handoff.md`
 ```
 

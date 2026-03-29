@@ -30,34 +30,34 @@ DEFAULT_CONFIG = {
 
 
 class MissingConfigError(Exception):
-    """Raised when .prove.json is not found and CAFI cannot proceed."""
+    """Raised when .claude/.prove.json is not found and CAFI cannot proceed."""
 
 
 def load_config(project_root: str, require: bool = True) -> dict:
-    """Read index config from ``.prove.json`` under the ``"index"`` key.
+    """Read index config from ``.claude/.prove.json`` under the ``"index"`` key.
 
     Args:
         project_root: The project root directory.
         require: If True (default), raise ``MissingConfigError`` when
-            ``.prove.json`` is absent. If False, fall back to defaults.
+            ``.claude/.prove.json`` is absent. If False, fall back to defaults.
 
     Returns:
         Config dict with keys ``excludes``, ``max_file_size``, ``concurrency``.
         Falls back to defaults for any missing keys.
 
     Raises:
-        MissingConfigError: If ``require`` is True and ``.prove.json`` is absent.
+        MissingConfigError: If ``require`` is True and ``.claude/.prove.json`` is absent.
     """
-    config_path = os.path.join(project_root, ".prove.json")
+    config_path = os.path.join(project_root, ".claude", ".prove.json")
     result = dict(DEFAULT_CONFIG)
 
     if not os.path.isfile(config_path):
         if require:
             raise MissingConfigError(
-                f"No .prove.json found.\n"
+                f"No .claude/.prove.json found.\n"
                 f"  Project root: {os.path.abspath(project_root)}\n"
                 f"  Expected config: {os.path.abspath(config_path)}\n"
-                f"CAFI requires a .prove.json config to run."
+                f"CAFI requires a .claude/.prove.json config to run."
             )
         return result
 
@@ -82,7 +82,7 @@ def _cache_path(project_root: str) -> str:
 def build_index(project_root: str, force: bool = False) -> dict:
     """Run a full or incremental index build.
 
-    1. Load config from ``.prove.json``
+    1. Load config from ``.claude/.prove.json``
     2. Walk the project to discover files
     3. Compute SHA-256 hashes for each file
     4. Diff against the existing cache

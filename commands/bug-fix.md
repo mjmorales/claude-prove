@@ -112,7 +112,7 @@ After 3+ exhausted branches, STOP and ask user:
 ## Phase 6: Verify Fix
 
 1. Run exact reproduction steps. Confirm bug is gone.
-2. Run related tests (project test suite or `.prove.json` validators).
+2. Run related tests (project test suite or `.claude/.prove.json` validators).
 3. Check for regressions.
 4. Add `## Resolution` to debug log: root cause, fix (file:line), tests passed.
 

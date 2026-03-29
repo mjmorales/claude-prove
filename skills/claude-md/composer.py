@@ -54,7 +54,7 @@ def compose(project_scan: dict, plugin_dir: str | None = None) -> str:
     if conventions.get("naming") and conventions["naming"] != "unknown":
         parts.append(_section_conventions(project_scan))
 
-    # Validation (if .prove.json has validators)
+    # Validation (if .claude/.prove.json has validators)
     if prove.get("validators"):
         parts.append(_section_validation(project_scan))
 
@@ -63,7 +63,7 @@ def compose(project_scan: dict, plugin_dir: str | None = None) -> str:
     if cafi.get("available") or prove.get("has_index"):
         parts.append(_section_discovery(project_scan, plugin_dir))
 
-    # External references (if configured in .prove.json)
+    # External references (if configured in .claude/.prove.json)
     references = prove.get("references", [])
     if references:
         parts.append(_section_references(references, plugin_dir))
@@ -226,7 +226,7 @@ def _section_tools(core_commands: list[dict]) -> str:
         for cmd in core_commands:
             lines.append(f"- `/prove:{cmd['name']}` — {cmd['summary']}")
     else:
-        lines.append("- `/prove:claude-md` — Regenerate this file")
+        lines.append("- `/prove:docs:claude-md` — Regenerate this file")
     lines.append("")
     return "\n".join(lines)
 
@@ -235,7 +235,7 @@ def _section_references(references: list[dict], plugin_dir: str) -> str:
     """Render @ file references for external standards/guidelines.
 
     Each reference becomes a labeled @ inclusion that Claude Code resolves
-    at load time. Stored in .prove.json under claude_md.references.
+    at load time. Stored in .claude/.prove.json under claude_md.references.
 
     Paths containing $PLUGIN_DIR are resolved to the actual plugin directory,
     enabling bundled references that ship with the plugin.

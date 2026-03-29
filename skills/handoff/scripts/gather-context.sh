@@ -159,13 +159,13 @@ print(compose_subagent_context(scan, '$PLUGIN_DIR'))
     echo ""
     echo "$DISCOVERY"
   fi
-elif [[ -f .prove.json ]]; then
-  # Fallback: extract validators directly from .prove.json
+elif [[ -f .claude/.prove.json ]]; then
+  # Fallback: extract validators directly from .claude/.prove.json
   echo "## Discovery"
   echo ""
   VALIDATORS=$(python3 -c "
 import json
-with open('.prove.json') as f:
+with open('.claude/.prove.json') as f:
     cfg = json.load(f)
 for v in cfg.get('validators', []):
     print(f\"- {v['phase']}: \`{v['command']}\`\")

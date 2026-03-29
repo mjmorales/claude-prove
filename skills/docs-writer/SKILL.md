@@ -81,7 +81,7 @@ When documenting prove plugin components:
 | **Commands** | What it does, arguments, which skill it delegates to |
 | **Scripts** | Usage, flags, output format, examples |
 
-Reference `.prove.json` `scopes` for the canonical component list.
+Reference `.claude/.prove.json` `scopes` for the canonical component list.
 
 ## Output Validation Checklist
 
@@ -111,6 +111,6 @@ These are anti-patterns for **this skill's workflow** (context gathering and del
 
 ## Committing
 
-Delegate to the `commit` skill. It reads `.prove.json` scopes for valid commit scopes.
+Delegate to the `commit` skill. It reads `.claude/.prove.json` scopes for valid commit scopes.
 
 Example: `docs(docs-writer): add README for cafi tool`

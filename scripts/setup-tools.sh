@@ -35,7 +35,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 TOOLS_DIR="$PLUGIN_DIR/tools"
-PROVE_JSON="$PROJECT_ROOT/.prove.json"
+PROVE_JSON="$PROJECT_ROOT/.claude/.prove.json"
 
 # === Helper: read tool manifest ===
 
@@ -49,7 +49,7 @@ read_tool_manifest() {
     fi
 }
 
-# === Helper: check if config key exists in .prove.json ===
+# === Helper: check if config key exists in .claude/.prove.json ===
 
 config_key_exists() {
     local key="$1"
@@ -173,7 +173,7 @@ with open(prove_path, 'w') as f:
     json.dump(data, f, indent=2)
     f.write('\n')
 
-print(f'  Added \"{key}\" section to .prove.json')
+print(f'  Added \"{key}\" section to .claude/.prove.json')
 " "$PROVE_JSON" "$config_key" "$config_defaults"
         setup_count=$((setup_count + 1))
     fi

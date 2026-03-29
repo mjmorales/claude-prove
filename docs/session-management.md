@@ -30,7 +30,7 @@ The pickup note is the only LLM-generated part. Everything else is assembled det
 After gathering context, `/prove:handoff` reads your `agents/` directory and recommends the right agent for the next session:
 
 - If an existing agent matches the remaining work, it recommends `claude --agent agents/<name>.md --prompt-file .prove/handoff.md`
-- If the work is specialized but no agent fits, it suggests creating one with `/prove:create-agent` first
+- If the work is specialized but no agent fits, it suggests creating one with `/prove:create:create-agent` first
 - If general-purpose is sufficient, it recommends `claude --prompt-file .prove/handoff.md`
 
 ### Usage
@@ -128,7 +128,7 @@ Session 2: Execute
 Session 3: Review and Learn
    /prove:pickup
    /prove:comprehend HEAD~5..HEAD
-   /prove:steward-review
+   /prove:steward:steward-review
    /prove:review
    /prove:cleanup rate-limiting
 ```

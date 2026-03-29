@@ -164,7 +164,7 @@ def validate_file(
 
     # Auto-detect schema
     if schema is None:
-        if filepath.name == ".prove.json":
+        if filepath.name == ".prove.json" or str(filepath).endswith(".claude/.prove.json"):
             schema = PROVE_SCHEMA
         elif filepath.name == "settings.json" and ".claude" in str(filepath):
             schema = SETTINGS_SCHEMA
