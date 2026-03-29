@@ -127,6 +127,42 @@ class TestList:
             names = {t["name"] for t in data["tools"]}
             assert names == {"acb", "cafi"}
 
+    def test_list_includes_kind_field(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Manifest with kind: 'pack' appears in output with correct kind."""
+        pack_manifest = {
+            "name": "project-manager",
+            "version": "1.0.0",
+            "kind": "pack",
+            "description": "Project management pack",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root, project_root = _make_env(
+                tmp,
+                manifests={"acb": SAMPLE_MANIFEST_ACB, "project-manager": pack_manifest},
+            )
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "list",
+            ])
+            data = json.loads(capsys.readouterr().out)
+            by_name = {t["name"]: t for t in data["tools"]}
+            assert by_name["project-manager"]["kind"] == "pack"
+            assert by_name["acb"]["kind"] == "tool"
+
+    def test_list_defaults_kind_to_tool(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Manifest without kind field defaults to 'tool'."""
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root, project_root = _make_env(tmp)
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "list",
+            ])
+            data = json.loads(capsys.readouterr().out)
+            for tool in data["tools"]:
+                assert tool["kind"] == "tool"
+
     def test_list_shows_enabled_status(self, capsys: pytest.CaptureFixture[str]) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             plugin_root, project_root = _make_env(

@@ -21,6 +21,13 @@ from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+KIND_LABELS: dict[str, str] = {"tool": "Infrastructure", "pack": "Workflow Packs"}
+
+
+# ---------------------------------------------------------------------------
 # Path resolution
 # ---------------------------------------------------------------------------
 
@@ -142,6 +149,7 @@ def cmd_list(args: argparse.Namespace) -> None:
         rows.append({
             "name": name,
             "version": manifest.get("version", "0.0.0"),
+            "kind": manifest.get("kind", "tool"),
             "enabled": enabled,
             "hooks": hooks_count,
             "commands": commands_count,
@@ -152,19 +160,27 @@ def cmd_list(args: argparse.Namespace) -> None:
     json.dump({"tools": rows}, sys.stdout, indent=2)
     print()
 
-    # Human-readable table to stderr.
+    # Human-readable table to stderr, grouped by kind.
     if not rows:
         print("No tools found.", file=sys.stderr)
         return
-    header = f"{'Name':<16} {'Version':<10} {'Enabled':<9} {'Hooks':<7} {'Cmds':<6} Description"
-    print(header, file=sys.stderr)
-    print("-" * len(header), file=sys.stderr)
+    header = f"  {'Name':<16} {'Version':<10} {'Enabled':<9} {'Hooks':<7} {'Cmds':<6} Description"
+    grouped: dict[str, list[dict]] = {}
     for r in rows:
-        en = "yes" if r["enabled"] else "no"
-        print(
-            f"{r['name']:<16} {r['version']:<10} {en:<9} {r['hooks']:<7} {r['commands']:<6} {r['description']}",
-            file=sys.stderr,
-        )
+        grouped.setdefault(r["kind"], []).append(r)
+    for kind in ("tool", "pack"):
+        group = grouped.get(kind)
+        if not group:
+            continue
+        print(f"\n{KIND_LABELS.get(kind, kind)}:", file=sys.stderr)
+        print(header, file=sys.stderr)
+        print("  " + "-" * (len(header) - 2), file=sys.stderr)
+        for r in group:
+            en = "yes" if r["enabled"] else "no"
+            print(
+                f"  {r['name']:<16} {r['version']:<10} {en:<9} {r['hooks']:<7} {r['commands']:<6} {r['description']}",
+                file=sys.stderr,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -336,6 +352,7 @@ def cmd_status(args: argparse.Namespace) -> None:
         return {
             "name": name,
             "version": manifest.get("version", "unknown"),
+            "kind": manifest.get("kind", "tool"),
             "enabled": enabled,
             "config": prove_entry.get("config", {}),
             "active_hooks": active_hooks,
@@ -394,6 +411,7 @@ def cmd_available(args: argparse.Namespace) -> None:
             available.append({
                 "name": name,
                 "version": manifest.get("version", "0.0.0"),
+                "kind": manifest.get("kind", "tool"),
                 "description": manifest.get("description", ""),
             })
 
@@ -403,8 +421,16 @@ def cmd_available(args: argparse.Namespace) -> None:
     if not available:
         print("All tools are already enabled.", file=sys.stderr)
     else:
+        grouped: dict[str, list[dict]] = {}
         for t in available:
-            print(f"  {t['name']} v{t['version']} — {t['description']}", file=sys.stderr)
+            grouped.setdefault(t["kind"], []).append(t)
+        for kind in ("tool", "pack"):
+            group = grouped.get(kind)
+            if not group:
+                continue
+            print(f"\n{KIND_LABELS.get(kind, kind)}:", file=sys.stderr)
+            for t in group:
+                print(f"  {t['name']} v{t['version']} — {t['description']}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
