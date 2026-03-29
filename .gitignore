@@ -10,5 +10,3 @@ __pycache__/
 node_modules/
 dist/
 *.tsbuildinfo
-packages/acb-vscode/acb-vscode-*.vsix
-.acb/

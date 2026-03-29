@@ -1,13 +1,26 @@
 ---
-description: Show ACB approval summary — accepted groups, annotation responses, and merge readiness
+description: Show review approval summary and merge readiness
 ---
 
-# ACB Resolve
+# Review Resolution
 
-```bash
-node "$CLAUDE_PROJECT_DIR/packages/acb-core/dist/cli/index.js" resolve
-```
+Show the approval summary for the current review.
 
-**On success**: Present the approval summary to the user.
+`$PLUGIN_DIR` refers to this plugin's root (parent of `commands/`).
 
-**On failure**: Inform the user they need to complete the review in the ACB VS Code extension first.
+## Instructions
+
+1. Find the most recent ACB review file:
+   ```bash
+   ls -t .prove/reviews/*.acb.json 2>/dev/null | head -1
+   ```
+
+2. If no review file exists, tell the user to run `/prove:review` first and stop.
+
+3. Run the resolve summary generator:
+   ```bash
+   PYTHONPATH="$PLUGIN_DIR" python3 -m tools.acb resolve --acb <path>
+   ```
+
+4. Present the summary to the user. If approved, suggest next steps (merge, cleanup).
+   If not fully approved, suggest `/prove:fix` or `/prove:discuss`.

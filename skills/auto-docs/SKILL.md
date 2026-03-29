@@ -24,8 +24,8 @@ Determine what to document based on user input:
 | Input | Resolution |
 |-------|------------|
 | No argument | Session context: files read, written, edited, or discussed in this conversation |
-| Topic name (e.g., "auth", "acb-core") | Grep/Glob for matching files, packages, or modules |
-| Directory path (e.g., `packages/acb-core/`) | All exported/public code in that directory |
+| Topic name (e.g., "auth", "cafi") | Grep/Glob for matching files, packages, or modules |
+| Directory path (e.g., `tools/cafi/`) | All exported/public code in that directory |
 | File path(s) | Document those specific files |
 
 If scope is ambiguous, use `AskUserQuestion` with header "Scope":
@@ -142,4 +142,4 @@ Use `AskUserQuestion` with header "Review":
 
 Delegate to the `commit` skill. The commit skill reads `.prove.json` scopes for valid commit scopes.
 
-Example: `docs(auto-docs): generate human and agent docs for acb-core`
+Example: `docs(auto-docs): generate human and agent docs for cafi`

@@ -1,13 +1,25 @@
 ---
-description: Surface ACB review groups needing discussion — reviewer questions and open items for interactive dialog
+description: Surface review groups needing discussion
 ---
 
-# ACB Discuss
+# Review Discussion
 
-```bash
-node "$CLAUDE_PROJECT_DIR/packages/acb-core/dist/cli/index.js" discuss
-```
+Read the review state and surface groups that need discussion.
 
-**On success**: Engage in discussion about the surfaced groups and questions. Help the user understand the agent's reasoning and explore alternatives.
+`$PLUGIN_DIR` refers to this plugin's root (parent of `commands/`).
 
-**On failure**: Inform the user no groups need discussion.
+## Instructions
+
+1. Find the most recent ACB review file:
+   ```bash
+   ls -t .prove/reviews/*.acb.json 2>/dev/null | head -1
+   ```
+
+2. If no review file exists, tell the user to run `/prove:review` first and stop.
+
+3. Run the discuss prompt generator:
+   ```bash
+   PYTHONPATH="$PLUGIN_DIR" python3 -m tools.acb discuss --acb <path>
+   ```
+
+4. Present the output and facilitate discussion with the user about the flagged items.

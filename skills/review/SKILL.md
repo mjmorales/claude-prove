@@ -1,15 +1,17 @@
 ---
 name: review
 description: >
-  Generate an Agent Change Brief (ACB) from the current branch diff. Assembles per-commit
-  intent manifests when available, falls back to LLM analysis for uncovered changes.
-  Produces a .acb.json document for review in the ACB VS Code extension.
+  Assemble per-commit intent manifests into a review document. Launch the
+  browser-based review UI for structured accept/reject per intent group.
+  Falls back to LLM reconstruction when manifests are missing.
 argument-hint: "[base-branch (default: main)]"
 ---
 
-# ACB Branch Review: $ARGUMENTS
+# Review: $ARGUMENTS
 
-Generate an Agent Change Brief from the current branch. Assemble from per-commit intent manifests when available; fall back to reconstruction for uncovered changes.
+Assemble intent manifests and launch the review UI. When manifests are missing, reconstruct intent groups from the diff.
+
+`$PLUGIN_DIR` refers to this plugin's root.
 
 ## Phase 1: Extract Diff Context
 
@@ -19,150 +21,132 @@ Generate an Agent Change Brief from the current branch. Assemble from per-commit
    - Verify the base branch exists: `git rev-parse --verify <base>`
    - If not found, try `master`, then halt with an error
 
-2. **Gather diff data** — run these in parallel:
+2. **Gather diff data** (run in parallel):
    ```bash
-   # File-level summary
    git diff --stat <base>...HEAD
-
-   # Change types per file
    git diff --name-status <base>...HEAD
-
-   # Changed line ranges per file (unified=0 for precise ranges)
-   git diff --unified=0 <base>...HEAD
-
-   # Commit log on this branch
    git log --oneline <base>..HEAD
-
-   # Resolve refs for change_set_ref
    git rev-parse <base>
    git rev-parse HEAD
    ```
 
 3. **Handle edge cases**:
    - **Empty diff**: Print "No changes between current branch and `<base>`." and stop
-   - **Binary files**: Add to `negative_space` as `out_of_scope`
-   - **Generated files** (dist/, build/, lock files): Exclude from intent groups, add to `negative_space`
+   - **Binary files**: Exclude from intent groups
+   - **Generated files** (dist/, build/, lock files): Exclude from intent groups
 
-## Phase 2: Check for Intent Manifests
+## Phase 2: Assemble or Reconstruct
 
-Look for per-commit intent manifests in `.acb/intents/`:
+Check for per-commit intent manifests:
 
 ```bash
-ls .acb/intents/*.json 2>/dev/null
+ls .prove/intents/*.json 2>/dev/null
 ```
 
-**If manifests exist**, proceed to Phase 2a (assembly path).
-**If no manifests exist**, proceed to Phase 2b (reconstruction fallback).
+### Path A: Manifests exist
 
-### Phase 2a: Assemble from Manifests
+Run the assembler:
 
-Merge intent manifests declared at commit time.
+```bash
+PYTHONPATH="$PLUGIN_DIR" python3 -m tools.acb assemble \
+  --intents-dir .prove/intents \
+  --base <base> \
+  --output-dir .prove/reviews
+```
 
-1. Read all `.acb/intents/*.json` files
-2. Parse each as an IntentManifest (skip files with parse errors, warn the user)
-3. Identify which changed files are **covered** by manifests and which are **uncovered**:
-   - For each changed file+range from the diff, check if any manifest's intent groups reference it
-   - Uncovered files need reconstruction (Phase 2b) for just those files
+The assembler merges manifests, detects uncovered files, and writes the ACB to `.prove/reviews/<branch-slug>.acb.json`.
 
-4. If all files are covered:
-   - The manifests are the complete source of truth
-   - Skip Phase 2b entirely
-   - Merge manifests: groups with the same `id` across commits get their file_refs combined
+If there are **uncovered files** (changed but not declared in any manifest), proceed to Path B for just those files and merge the results.
 
-5. If some files are uncovered:
-   - Assemble covered files from manifests
-   - Run Phase 2b reconstruction **only for uncovered files**
-   - Merge both sets of intent groups into the final ACB
+### Path B: Reconstruction fallback
 
-### Phase 2b: Reconstruct Intent Groups (Fallback)
+When no manifests exist, or for files not covered by manifests, reconstruct intent groups from the diff.
 
-Reconstruct intent groups from the diff when no manifests exist, or for files not covered by any manifest.
-
-**Grouping criteria** (in priority order):
-1. **Shared purpose** — files that implement the same feature or fix the same bug
-2. **Layer alignment** — files at the same architectural layer (data, logic, presentation, config)
-3. **Change coupling** — files whose changes reference each other (imports, function calls)
+**Grouping criteria** (priority order):
+1. Shared purpose — files implementing the same feature or fix
+2. Layer alignment — files at the same architectural layer
+3. Change coupling — files whose changes reference each other
 
 **For each intent group, determine:**
+- `id`: Unique slug (e.g., `auth-middleware`)
+- `title`: Short descriptive name
+- `classification`: `explicit` | `inferred` | `speculative`
+- `ambiguity_tags`: From `underspecified`, `conflicting_signals`, `assumption`, `scope_creep`, `convention`
+- `task_grounding`: One sentence connecting this group to the task
+- `file_refs`: Files with `path`, `ranges`, `view_hint`
+- `annotations`: `judgment_call`, `note`, or `flag` entries
 
-- **`id`**: Unique slug (e.g., `auth-middleware`, `schema-changes`)
-- **`title`**: Short, descriptive name
-- **`classification`**: One of `explicit`, `inferred`, `speculative`
-- **`ambiguity_tags`**: Any applicable tags from: `underspecified`, `conflicting_signals`, `assumption`, `scope_creep`, `convention`
-- **`task_grounding`**: One sentence explaining how this group connects to the task/branch purpose
-- **`file_refs`**: List of files with `path`, `ranges`, and `view_hint`
-- **`annotations`** (optional): `judgment_call`, `note`, or `flag`
-- **`causal_links`** (optional): References to other groups this depends on
-
-**Mark reconstructed groups**: When generating groups via reconstruction (not from manifests), add an annotation with type `note` and body: "This intent group was reconstructed post-hoc, not declared by the implementing agent."
-
-**Group ordering**: Order groups from foundational to dependent — infrastructure and data first, tests last.
+**Mark reconstructed groups** with an annotation: type `note`, body `"Reconstructed post-hoc, not declared by the implementing agent."`
 
 **Rules:**
-- A file belongs to exactly one intent group (no duplicates)
-- Every changed line must be covered by exactly one group's file_refs
-- Groups with a single file are fine — don't force-merge unrelated files
-- If the diff is small (<=3 files), use a single group
-- Maximum ~8 groups — merge the least important ones if needed
+- Each file belongs to exactly one group
+- Every changed line must be covered
+- Maximum ~8 groups — merge least important if needed
+- If diff is small (<=3 files), use a single group
 
-## Phase 3: Build Task Statement
-
-Construct the `task_statement` from available context:
-
-1. Read commit messages from `git log <base>..HEAD`
-2. Check for `.prove/PRD.md` or `.prove/TASK_PLAN.md` for task context
-3. Build `turns` array:
-   - If PRD exists: one turn with role `user` containing the PRD summary
-   - Otherwise: one turn with role `user` containing the branch name + commit summary
-
-## Phase 4: Generate ACB Document
-
-Construct the full `.acb.json` document:
+Write the ACB document to `.prove/reviews/<branch-slug>.acb.json`:
 
 ```json
 {
-  "acb_version": "0.1",
+  "acb_version": "0.2",
   "id": "<uuid>",
-  "change_set_ref": {
-    "base_ref": "<resolved base SHA>",
-    "head_ref": "<resolved HEAD SHA>"
-  },
+  "change_set_ref": { "base_ref": "<sha>", "head_ref": "<sha>" },
   "task_statement": { "turns": [...] },
   "intent_groups": [...],
-  "open_questions": [...],
   "negative_space": [...],
+  "open_questions": [...],
+  "uncovered_files": [],
   "generated_at": "<ISO timestamp>",
-  "agent_id": "prove-review"
+  "agent_id": "prove-review",
+  "manifest_count": 0
 }
 ```
 
-**Open questions**: Add ambiguities or decisions the reviewer should weigh in on.
+## Phase 3: Build Task Statement
 
-**Negative space**: Add entries for:
-- Files that look related but were intentionally not changed (with reason)
-- Binary/generated files excluded from grouping
+Construct `task_statement` from available context:
+1. Check for `.prove/PRD.md` or `.prove/TASK_PLAN.md`
+2. Fall back to `git log <base>..HEAD`
+3. Build `turns` array with role `user` and the context
 
-Write the document to `.prove/reviews/<branch-slug>.acb.json` (overwrite if exists).
+## Phase 4: Launch Review UI
 
-Validate before writing: every changed file must appear in exactly one intent group, all required fields present.
+Start the review server:
 
-## Phase 5: Present Results
+```bash
+PYTHONPATH="$PLUGIN_DIR" python3 -m tools.acb serve \
+  --acb .prove/reviews/<branch-slug>.acb.json \
+  --base <base> \
+  --port 0
+```
 
-1. Output a compact summary:
-   - Total files, insertions/deletions
-   - Number of intent groups
-   - How many groups came from manifests vs reconstruction
-   - List of group titles in review order with classification badges
-   - Any open questions or flags
+The server prints the URL to stdout. Open it in the user's browser:
 
-2. Print the output path:
-   ```
-   ACB written to: .prove/reviews/<branch-slug>.acb.json
-   ```
+```bash
+open <url>  # macOS
+```
+
+Tell the user the review is available at the URL. The UI supports:
+- Expanding intent groups to see files, annotations, and classifications
+- Clicking file refs to view diffs
+- Accepting, rejecting, or marking groups for discussion
+- Adding comments per group
+- Progress tracking and overall verdict
+
+Review state is auto-saved to `.prove/reviews/<branch-slug>.review.json`.
+
+## Phase 5: Present Summary
+
+After launching, output a compact summary:
+- Total files changed, insertions/deletions
+- Number of intent groups
+- How many from manifests vs reconstruction
+- Group titles with classification badges
+- Any uncovered files or open questions
+- The review URL
 
 ## Rules
 
-- **Read-only** — only read diffs and write the ACB; never modify project code
-- **Deterministic grouping** — same diff + manifests must produce consistent output
+- **Read-only** — only read diffs and write the ACB/review; never modify project code
 - **No validation** — this is review organization, not testing or linting
-- **Respect .gitignore** — exclude ignored files even if they appear in diff
+- **Respect .gitignore** — exclude ignored files

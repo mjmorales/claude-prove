@@ -9,7 +9,7 @@ Takes you from idea to merged code through a structured pipeline:
 ```
 /prove:brainstorm  →  /prove:task-planner  →  /prove:plan-step  →  /prove:orchestrator  →  /prove:review  →  /prove:comprehend  →  /prove:cleanup
       │                        │                         │                        │                        │                        │                        │
-.prove/decisions/       .prove/TASK_PLAN.md     .prove/plans/plan_X/    .prove/reports/         .acb/review.acb.json    .prove/learning/         .prove/archive/
+.prove/decisions/       .prove/TASK_PLAN.md     .prove/plans/plan_X/    .prove/reports/         .prove/reviews/         .prove/learning/         .prove/archive/
 ```
 
 1. **Brainstorm** — Explore options, weigh trade-offs, record decisions
@@ -23,7 +23,7 @@ Takes you from idea to merged code through a structured pipeline:
 ## Key Features
 
 - **Auto-scaling orchestrator**: Small tasks (≤3 steps) run sequentially. Larger tasks use parallel git worktrees with mandatory architect review. Three execution modes: `/prove:orchestrator`, `/prove:autopilot`, and `/prove:full-auto`.
-- **Agent Change Brief (ACB)**: Intent-manifest-driven code review. Agents declare *why* they made each change at commit time via git hooks. Changes are grouped by intent for structured review in the ACB VS Code extension. See [docs/agent-change-brief.md](docs/agent-change-brief.md).
+- **Structured code review**: Intent-manifest-driven code review. Agents declare *why* they made each change via Claude Code hooks. Changes are grouped by intent for structured review in a browser-based UI. Run `/prove:review` to start.
 - **Code quality steward**: Deep line-by-line audits (`/prove:steward`), iterative audit-fix loops (`/prove:auto-steward`), and lightweight session-scoped reviews (`/prove:steward-review`). See [docs/code-quality.md](docs/code-quality.md).
 - **Stack-agnostic validation**: Auto-detects your project type (Go, Rust, Python, Node, Godot, Makefile) and runs appropriate build/lint/test checks. Supports LLM-based prompt validators for higher-level checks. Configure with `.prove.json` or let auto-detection handle it.
 - **Session management**: Create handoff prompts (`/prove:handoff`) to preserve context across Claude Code sessions. Resume with `/prove:pickup` in a fresh session.
@@ -91,11 +91,10 @@ If Claude Code is already running, restart it for the plugin to take effect.
 
 | Command | Description |
 |---------|-------------|
-| `/prove:review` | Generate an Agent Change Brief from the current branch diff |
-| `/prove:resolve` | Generate approval summary after ACB review |
-| `/prove:fix` | Generate fix prompts from rejected ACB review groups |
-| `/prove:discuss` | Surface groups needing discussion from ACB review |
-| `/prove:acb-setup` | Install, migrate, or diagnose ACB intent hooks |
+| `/prove:review` | Assemble intent manifests and launch the review UI |
+| `/prove:resolve` | Show approval summary — accepted groups and merge readiness |
+| `/prove:fix` | Generate fix prompts from rejected review groups |
+| `/prove:discuss` | Surface groups needing discussion from review |
 
 ### Code Quality
 
@@ -141,7 +140,7 @@ If Claude Code is already running, restart it for the plugin to take effect.
 
 Detailed documentation for major feature areas:
 
-- **[Agent Change Brief (ACB)](docs/agent-change-brief.md)** — Intent-manifest-driven code review system with git hooks and VS Code extension
+- **[Code Review](docs/code-review.md)** — Intent-manifest-driven code review with browser-based UI
 - **[Orchestrator](docs/orchestrator.md)** — Execution modes, validation gates, worktrees, and reporting
 - **[Code Quality](docs/code-quality.md)** — Steward, auto-steward, and steward-review audit system
 - **[Session Management](docs/session-management.md)** — Handoff/pickup workflow for context preservation
@@ -151,17 +150,8 @@ Detailed documentation for major feature areas:
 ```
 .claude-plugin/
 └── plugin.json                 # Plugin metadata (v0.14.1)
-packages/
-├── acb-core/                   # ACB CLI, git hooks, intent manifest system
-│   ├── src/                    # TypeScript source
-│   ├── hooks/                  # Git hook scripts
-│   └── docs/                   # Hook guide, agent contract, setup
-└── acb-vscode/                 # VS Code extension for ACB review
-    ├── src/                    # Extension host
-    ├── webview/                # Review UI
-    └── shared/                 # Shared types
 specs/
-└── agent-change-brief.spec.md  # ACB protocol specification (v0.3)
+└── ...                         # Protocol specifications
 references/
 ├── validation-config.md        # Canonical validation spec (.prove.json schema)
 └── interaction-patterns.md     # UX interaction patterns
@@ -170,8 +160,7 @@ skills/
 ├── task-planner/               # Discovery & planning → .prove/TASK_PLAN.md
 ├── plan-step/                  # Step-level requirements → .prove/plans/
 ├── orchestrator/               # Autonomous execution with validation gates
-├── review/                     # ACB-based code review generation
-├── acb-setup/                  # ACB hook installation and migration
+├── review/                     # Intent-based code review
 ├── steward/                    # Deep codebase quality audit
 ├── auto-steward/               # Iterative audit-fix loop
 ├── steward-review/             # Session-scoped quality review
@@ -193,9 +182,9 @@ scripts/
 ├── setup-tools.sh              # Auto-configure tools
 ├── cleanup.sh                  # Task artifact cleanup
 ├── cleanup-worktrees.sh        # Stale worktree removal
-├── build-extension.sh          # Build ACB VS Code extension
 └── hooks/                      # Git hook templates
 tools/
+├── acb/                        # Intent-based code review (assembler, server, hook)
 └── cafi/                       # Content-addressable file index
 agents/
 ├── principal-architect.md      # Architect review for orchestrator full mode
@@ -273,7 +262,6 @@ Hashes all project files, generates routing-hint descriptions via Claude CLI ("R
 
 The system is built on extensible protocols:
 
-- **ACB Spec** — The Agent Change Brief protocol for structured code review. See `specs/agent-change-brief.spec.md`
 - **Handoff Protocol** — How agents pass context between steps. See `skills/orchestrator/references/handoff-protocol.md`
 - **Validation Config** — How project-specific checks are configured and run. See `references/validation-config.md`
 - **Reporter Protocol** — How progress is tracked and reported. See `skills/orchestrator/references/reporter-protocol.md`

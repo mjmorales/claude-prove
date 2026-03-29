@@ -113,4 +113,4 @@ These are anti-patterns for **this skill's workflow** (context gathering and del
 
 Delegate to the `commit` skill. It reads `.prove.json` scopes for valid commit scopes.
 
-Example: `docs(docs-writer): add README for acb-core package`
+Example: `docs(docs-writer): add README for cafi tool`

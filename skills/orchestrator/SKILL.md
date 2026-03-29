@@ -374,7 +374,7 @@ Generate `.prove/runs/<slug>/reports/report.md` with these sections:
 <output of: git diff --stat main...HEAD>
 
 ## How to Review
-Run `/prove:review` to generate an ACB, or use git commands:
+Run `/prove:review` to start a review, or use git commands:
 - `git diff main...orchestrator/<slug>` — all changes
 - `git log --oneline main..orchestrator/<slug>` — step-by-step
 - `git show <commit-sha>` — inspect individual step

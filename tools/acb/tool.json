@@ -1,0 +1,5 @@
+{
+  "name": "acb",
+  "description": "Intent-based code review: manifest assembly, web review UI, CC hook",
+  "requires": ["python3", "git", "jinja2"]
+}

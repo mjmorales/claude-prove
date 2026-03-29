@@ -9,8 +9,7 @@
     "plugin": ".",
     "cafi": "tools/cafi/",
     "specs": "specs/",
-    "acb-core": "packages/acb-core/",
-    "acb-vscode": "packages/acb-vscode/"
+    "acb": "tools/acb/"
   },
   "validators": [
     {
@@ -25,7 +24,7 @@
     },
     {
       "name": "python-tests",
-      "command": "docker run --rm -v \"$PWD\":/project prove-validators python -m pytest tools/cafi/ tools/pcd/ -v",
+      "command": "docker run --rm -v \"$PWD\":/project prove-validators python -m pytest tools/cafi/ tools/pcd/ tools/acb/ -v",
       "phase": "test"
     }
   ],

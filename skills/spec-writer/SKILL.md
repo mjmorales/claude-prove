@@ -128,8 +128,8 @@ When the user asks to commit specs, delegate to the `commit` skill. The commit s
 
 Examples:
 
-- `docs(spec-writer): draft ACB v0.2 specification`
-- `docs(spec-writer): revise ACB spec — add review state schema`
+- `docs(spec-writer): draft validation config v2 specification`
+- `docs(spec-writer): revise handoff protocol — add context fields`
 
 ## Rules
 

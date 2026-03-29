@@ -1,4 +1,0 @@
-#!/usr/bin/env bash
-# ACB pre-commit hook — delegates to acb-review CLI
-HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
-exec node "$HOOK_DIR/../dist/cli/index.js" check-manifest

@@ -78,22 +78,7 @@ Skip unless `.prove.json` has an `index` section.
 - **Fail**: errors or index missing
 - **Fix**: `python3 $PLUGIN_DIR/tools/cafi/__main__.py index`
 
-#### 2.2: ACB CLI
-
-Skip unless `.acb/` directory or `packages/acb-core/` exists.
-
-1. `npx acb-review --version 2>&1`
-2. Verify `.git/hooks/pre-commit` and `.git/hooks/post-commit` reference acb-review
-3. Verify `.claude/commands/acb-resolve.md`, `acb-fix.md`, `acb-discuss.md` exist
-
-- **Pass**: CLI available, hooks installed, commands present
-- **Warn**: CLI available but hooks or commands missing
-- **Fail**: CLI not found
-- **Fix (CLI)**: `npm install @acb/core`
-- **Fix (hooks)**: `npx acb-review install`
-- **Fix (commands)**: create per `packages/acb-core/docs/claude-code-setup.md`
-
-#### 2.3: Validators (Docker)
+#### 2.2: Validators (Docker)
 
 Skip unless `.prove.json` has a `validators` section.
 
@@ -103,14 +88,14 @@ Skip unless `.prove.json` has a `validators` section.
 - **Fail**: not found
 - **Fix**: not auto-fixable — report "Docker required. Install from https://docker.com"
 
-#### 2.4: Schema Validator
+#### 2.3: Schema Validator
 
 - Run `PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema validate --help 2>&1`
 - **Pass**: module loads
 - **Fail**: import errors
 - **Fix**: not auto-fixable — report the error
 
-#### 2.5: Reporters
+#### 2.4: Reporters
 
 Skip unless `.prove.json` has a `reporters` section.
 

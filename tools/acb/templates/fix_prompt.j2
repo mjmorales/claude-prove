@@ -1,0 +1,37 @@
+# Fix Rejected Changes
+
+Fix each rejected group below based on reviewer feedback, then commit. Do not modify accepted groups ({{ accepted | length }} groups already accepted).
+{% if rejected %}
+
+## Rejected Groups
+
+{% for group, verdict in rejected %}
+{{ _format_group(group, verdict) }}
+{% endfor %}
+{% endif %}
+{% if discuss %}
+
+## Groups Needing Discussion
+
+{% for group, verdict in discuss %}
+{{ _format_group(group, verdict) }}
+{% endfor %}
+{% endif %}
+{% if unanswered %}
+
+## Unanswered Questions
+
+{% for q in unanswered %}
+- **{{ q.question }}**
+{% if q.context %}  Context: {{ q.context }}{% endif %}
+{% if q.default_behavior %}  Current default: {{ q.default_behavior }}{% endif %}
+{% endfor %}
+{% endif %}
+{% if pending %}
+
+## Pending Review
+
+{% for group, _ in pending %}
+- **{{ group.title }}** (`{{ group.id }}`)
+{% endfor %}
+{% endif %}

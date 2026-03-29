@@ -1,4 +1,0 @@
-#!/usr/bin/env bash
-# ACB post-commit hook — delegates to acb-review CLI
-HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
-node "$HOOK_DIR/../dist/cli/index.js" post-commit
