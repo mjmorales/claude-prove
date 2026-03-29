@@ -69,16 +69,30 @@ Core checks failed. Fix these before other checks can run.
 
 Only check tools relevant to this project. Read `.claude/.prove.json` to determine which are configured.
 
-#### 2.1: CAFI (Content-Addressable File Index)
+#### 2.1: Tool Registry Health
 
-Skip unless `.claude/.prove.json` has an `index` section.
+Run the registry status check:
+
+```bash
+PYTHONPATH="$PLUGIN_DIR" python3 "$PLUGIN_DIR/tools/registry.py" \
+  --plugin-root "$PLUGIN_DIR" --project-root "$(pwd)" status
+```
+
+- **Pass**: all enabled tools have requirements met and hooks in sync
+- **Warn**: available tools not yet installed (suggest `/prove:tools available`)
+- **Fail**: enabled tool missing requirements or hooks out of sync
+- **Fix**: `/prove:tools install <tool>` for missing tools, or re-install for hook sync
+
+#### 2.2: CAFI (Content-Addressable File Index)
+
+Skip unless `tools.cafi.enabled` is true in `.claude/.prove.json`.
 
 - Run `python3 $PLUGIN_DIR/tools/cafi/__main__.py status 2>&1`
 - **Pass**: reports indexed files
 - **Fail**: errors or index missing
 - **Fix**: `python3 $PLUGIN_DIR/tools/cafi/__main__.py index`
 
-#### 2.2: Validators (Docker)
+#### 2.3: Validators (Docker)
 
 Skip unless `.claude/.prove.json` has a `validators` section.
 
@@ -88,14 +102,14 @@ Skip unless `.claude/.prove.json` has a `validators` section.
 - **Fail**: not found
 - **Fix**: not auto-fixable — report "Docker required. Install from https://docker.com"
 
-#### 2.3: Schema Validator
+#### 2.4: Schema Validator
 
 - Run `PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema validate --help 2>&1`
 - **Pass**: module loads
 - **Fail**: import errors
 - **Fix**: not auto-fixable — report the error
 
-#### 2.4: Reporters
+#### 2.5: Reporters
 
 Skip unless `.claude/.prove.json` has a `reporters` section.
 

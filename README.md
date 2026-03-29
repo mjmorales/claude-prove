@@ -131,6 +131,7 @@ If Claude Code is already running, restart it for the plugin to take effect.
 | `/prove:init` | Detect tech stack and generate `.claude/.prove.json` |
 | `/prove:doctor` | Diagnose installation health — configs, tooling, drift |
 | `/prove:update` | Validate configs, detect schema drift, apply migrations |
+| `/prove:tools` | List, install, or remove prove tools |
 | `/prove:index` | Build or update the content-addressable file index |
 | `/prove:progress` | Show orchestrator execution status and blockers |
 | `/prove:notify:notify-setup` | Configure notification integrations (Slack, Discord, custom) |

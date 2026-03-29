@@ -74,6 +74,17 @@ On "Configure": follow the same flow as init Step 7 — offer bundled + global c
 
 2. **Core commands**: If new commands with `core: true` have been added since the last CLAUDE.md generation, they'll be picked up automatically in Step 8 (CLAUDE.md regeneration). No user action needed — just note "New commands detected, will appear in CLAUDE.md after regeneration."
 
+3. **New tools**: Run the registry to detect tools not yet enabled:
+
+```bash
+PYTHONPATH="$PLUGIN_DIR" python3 "$PLUGIN_DIR/tools/registry.py" \
+  --plugin-root "$PLUGIN_DIR" --project-root "$(pwd)" available
+```
+
+If any tools are available but not enabled, present each with its description. `AskUserQuestion` with header "New Tool" and options: "Install" / "Skip" for each.
+
+On "Install": run `python3 "$PLUGIN_DIR/tools/registry.py" --plugin-root "$PLUGIN_DIR" --project-root "$(pwd)" install <tool>`.
+
 Skip this step entirely if all features are already configured.
 
 ### Step 6: Validate settings.json
