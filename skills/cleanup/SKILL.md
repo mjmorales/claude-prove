@@ -6,35 +6,31 @@ argument-hint: "[task-slug or plan-number]"
 
 # Task Cleanup: $ARGUMENTS
 
-Archive and remove artifacts from a completed task lifecycle. The script handles all file operations (archive-before-delete, branch merge checks, directory cleanup). This skill handles user interaction and SUMMARY.md generation.
-
 ## Phase 1: Dry Run
+
+If `$ARGUMENTS` is provided, pass it as task-slug; otherwise use `--all`:
 
 ```bash
 bash "$PLUGIN_DIR/scripts/cleanup.sh" --dry-run [task-slug]
-# Or to scan everything:
 bash "$PLUGIN_DIR/scripts/cleanup.sh" --dry-run --all
 ```
 
-If `$ARGUMENTS` is provided, pass it as the task-slug. Otherwise, use `--all`.
-
-Present the dry-run output, then use AskUserQuestion with header "Cleanup" and options: "Proceed" / "Cancel".
+Present the dry-run output. `AskUserQuestion`, header "Cleanup", options: "Proceed" / "Cancel".
 
 ## Phase 2: Execute
 
-On user approval, run without `--dry-run`:
+Run without `--dry-run`:
 
 ```bash
 bash "$PLUGIN_DIR/scripts/cleanup.sh" [task-slug]
-# Or:
 bash "$PLUGIN_DIR/scripts/cleanup.sh" --all
 ```
 
-Report the script output: what was archived, removed, and skipped.
+Report what was archived, removed, and skipped.
 
 ## Phase 3: Generate SUMMARY.md
 
-Read the archived files in `.prove/archive/<YYYY-MM-DD>_<task-slug>/` and write a `SUMMARY.md` there:
+Read archived files in `.prove/archive/<YYYY-MM-DD>_<task-slug>/` and write `SUMMARY.md` there:
 
 ```markdown
 # Task Summary: <Task Name>
@@ -55,8 +51,6 @@ Read the archived files in `.prove/archive/<YYYY-MM-DD>_<task-slug>/` and write 
 
 ## Committing
 
-Delegate to the `commit` skill. Do not create ad-hoc commits.
+Delegate to the `commit` skill.
 
 Example: `chore(cleanup): archive and remove api-refactor artifacts`
-
-**Interaction patterns**: See `references/interaction-patterns.md` for when to use `AskUserQuestion` vs free-form discussion.

@@ -8,47 +8,33 @@ description: >
 
 # Notify Setup
 
-Set up notification reporters so the orchestrator can report progress, failures, and permission needs to external platforms.
+Follow `references/interaction-patterns.md` for all `AskUserQuestion` usage.
 
-**Interaction patterns**: See `references/interaction-patterns.md` for `AskUserQuestion` usage.
+## Phase 1: Discovery
 
-## Workflow
+Scan existing integrations before prompting the user:
 
-### Phase 1: Discovery
-
-Scan for existing integrations before asking the user to configure anything.
-
-1. Read `.claude/settings.json` and `~/.claude/settings.json` for MCP servers with messaging capabilities (Slack MCP, Discord MCP, etc.)
-2. Check the environment for `SLACK_WEBHOOK_URL`, `DISCORD_WEBHOOK_URL`
+1. Read `.claude/settings.json` and `~/.claude/settings.json` for MCP servers with messaging capabilities
+2. Check environment for `SLACK_WEBHOOK_URL`, `DISCORD_WEBHOOK_URL`
 3. Check `.claude/.prove.json` for existing reporters
-4. Report findings. If an existing reporter covers the user's needs, say so and confirm before proceeding.
+4. Report findings. If an existing reporter suffices, confirm before proceeding.
 
-### Phase 2: Platform Selection
+## Phase 2: Platform Selection
 
-Use `AskUserQuestion` with header "Platform". When presenting 3 or fewer choices, include a "Research & proceed" option per `references/interaction-patterns.md`:
+`AskUserQuestion`, header "Platform". Annotate options with discovery results (e.g., "Slack (Webhook) -- SLACK_WEBHOOK_URL detected"):
 
-- "Slack (Webhook)" — posts via `SLACK_WEBHOOK_URL` and curl
-- "Discord (Webhook)" — posts via `DISCORD_WEBHOOK_URL` and curl
-- "MCP Integration" — reuses a detected MCP server's messaging tool
-- "Custom Command" — user-provided notification command
+- "Slack (Webhook)" -- posts via `SLACK_WEBHOOK_URL` and curl
+- "Discord (Webhook)" -- posts via `DISCORD_WEBHOOK_URL` and curl
+- "MCP Integration" -- reuses a detected MCP server's messaging tool
+- "Custom Command" -- user-provided notification command
 
-Annotate options with discovery results (e.g., "Slack (Webhook) -- SLACK_WEBHOOK_URL detected").
+## Phase 3: Configuration
 
-### Phase 3: Configuration
+**Scope** -- `AskUserQuestion`, header "Scope":
+- "Project" -- scripts in `./.prove/`, config in `.claude/.prove.json`
+- "Global" -- scripts in `~/.claude/scripts/`
 
-**Scope** — `AskUserQuestion`, header "Scope":
-- "Project" — scripts in `./.prove/`, config in `.claude/.prove.json`
-- "Global" — scripts in `~/.claude/scripts/`
-
-**Events** — `AskUserQuestion`, header "Events" (multiSelect: true):
-- "Step Complete" — orchestrator step finishes successfully
-- "Step Halted" — step fails or gets stuck
-- "Wave Complete" — parallel wave finishes (full mode only)
-- "Execution Complete" — full run finishes
-- "Review Approved" — principal architect approves
-- "Review Rejected" — principal architect requests changes
-- "Validation Pass" — LLM validation passes
-- "Validation Fail" — LLM validation fails
+**Events** -- `AskUserQuestion`, header "Events" (multiSelect: true). Offer all reporter event types from `references/validation-config.md`: `step-complete`, `step-halted`, `wave-complete`, `execution-complete`, `review-approved`, `review-rejected`, `validation-pass`, `validation-fail`.
 
 **Platform-specific details** (free-form):
 - **Slack**: Webhook URL env var name (default `SLACK_WEBHOOK_URL`), channel override, mention preferences
@@ -56,28 +42,26 @@ Annotate options with discovery results (e.g., "Slack (Webhook) -- SLACK_WEBHOOK
 - **MCP**: Which MCP server and tool, channel/recipient
 - **Custom**: Command to run, any env vars it needs
 
-### Phase 4: Script Generation
+## Phase 4: Script Generation
 
-Generate a bash notification script tailored to the user's platform and preferences. Do NOT use static templates.
+Generate a bash script tailored to the user's platform and preferences.
 
 Requirements:
 - `#!/usr/bin/env bash`, POSIX-compatible
-- Read `PROVE_EVENT`, `PROVE_TASK`, `PROVE_STEP`, `PROVE_STATUS`, `PROVE_BRANCH`, `PROVE_DETAIL` from the environment (see `references/reporter-protocol.md` for full variable documentation)
+- Read reporter env vars (`PROVE_EVENT`, `PROVE_TASK`, `PROVE_STEP`, `PROVE_STATUS`, `PROVE_BRANCH`, `PROVE_DETAIL`) per `references/reporter-protocol.md`
 - Format a human-readable message from those vars
 - Support `--test` flag with dummy data
-- Handle errors gracefully — never crash the orchestrator (`|| true`, trap)
-- Reference env vars for secrets — NEVER embed webhook URLs or tokens
+- Fail gracefully -- use `|| true` and trap so the orchestrator is never blocked
+- Reference env vars for secrets; embed no URLs or tokens in the script
 
-See `references/platforms.md` for platform-specific payload formats, curl patterns, and MCP invocation guidance.
+See `references/platforms.md` for platform-specific payload formats, curl patterns, and MCP invocation.
 
-After generation:
-1. Write to `./.prove/notify-<platform>.sh` (project) or `~/.claude/scripts/notify-<platform>.sh` (global)
-2. `chmod +x` the script
+Write to `./.prove/notify-<platform>.sh` (project) or `~/.claude/scripts/notify-<platform>.sh` (global), then `chmod +x`.
 
-### Phase 5: .claude/.prove.json Update
+## Phase 5: Config Update
 
 1. Read `.claude/.prove.json` (create if missing)
-2. Add or update entry in the `reporters` array — preserve all other config:
+2. Add/update a `reporters` entry, preserving all other config:
    ```json
    {
      "name": "<platform>-notify",
@@ -85,16 +69,16 @@ After generation:
      "events": ["step-complete", "step-halted", "execution-complete"]
    }
    ```
-3. Convert event selections to kebab-case slugs for the `events` array (e.g., "Step Complete" becomes `step-complete`)
+3. Convert event selections to kebab-case slugs (e.g., "Step Complete" -> `step-complete`)
 
-### Phase 6: Verification
+## Phase 6: Verification
 
 1. Run the script with `--test`
 2. Report success or failure
-3. Summarize: platform, scope, script path, subscribed events, `.claude/.prove.json` entry
+3. Summarize: platform, scope, script path, subscribed events, config entry
 
 ## Committing
 
-Delegate to the `commit` skill. Do not create ad-hoc commits.
+Delegate to the `commit` skill.
 
 Example: `feat(notify-setup): add Slack webhook notification script`
