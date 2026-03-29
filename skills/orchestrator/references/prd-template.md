@@ -1,7 +1,5 @@
 # PRD Template
 
-Use this template when generating PRDs in Phase 1.
-
 ```markdown
 # PRD: {Feature Name}
 
@@ -10,24 +8,21 @@ Use this template when generating PRDs in Phase 1.
 **Author**: Claude (Full Auto)
 
 ## Summary
-One paragraph describing what this feature does and why it matters.
+One paragraph: what this feature does and why it matters.
 
 ## User Stories
 - As a {role}, I want {capability} so that {benefit}
-- ...
 
 ## Acceptance Criteria
 - [ ] Criterion with measurable outcome
-- [ ] ...
 
 ## Non-Goals
 - What this feature explicitly does NOT do
-- Boundaries to prevent scope creep
 
 ## Technical Constraints
 - Required frameworks, patterns, or APIs
-- Performance requirements (if any)
-- Compatibility requirements (if any)
+- Performance requirements
+- Compatibility requirements
 - Existing code patterns to follow
 
 ## Dependencies
