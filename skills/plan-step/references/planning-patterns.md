@@ -1,185 +1,97 @@
 # Planning Patterns Reference
 
-## Advanced Planning Techniques
+## Risk Assessment Matrix
 
-### Risk Assessment Matrix
+| Impact / Likelihood | Low | Medium | High |
+|---------------------|-----|--------|------|
+| **High**            | Medium | High | Critical |
+| **Medium**          | Low | Medium | High |
+| **Low**             | Minimal | Low | Medium |
 
-When evaluating potential issues, use this matrix to prioritize:
+## Requirement Gathering
 
-| Impact ↓ / Likelihood → | Low | Medium | High |
-|--------------------------|-----|---------|------|
-| **High**                 | Medium Risk | High Risk | Critical |
-| **Medium**               | Low Risk | Medium Risk | High Risk |
-| **Low**                  | Minimal | Low Risk | Medium Risk |
+### Five Whys
+Ask "why" repeatedly to find root requirements:
+1. "We need a user dashboard" -- Why? To see system status -- Why? To identify issues -- Why? To minimize downtime -- Why? SLA compliance (root requirement).
 
-### Requirement Gathering Patterns
+### MoSCoW Prioritization
+- **Must**: core functionality, project fails without it
+- **Should**: important, not vital for initial release
+- **Could**: nice to have if time permits
+- **Won't**: explicitly out of scope this iteration
 
-#### The Five Whys
-When a requirement seems vague, ask "why" repeatedly:
-1. "We need a user dashboard" → Why?
-2. "To see system status" → Why?
-3. "To identify issues quickly" → Why?
-4. "To minimize downtime" → Why?
-5. "To maintain SLA compliance" → Root requirement identified
+## Design Decision Frameworks
 
-#### MoSCoW Prioritization
-Categorize requirements as:
-- **Must have**: Core functionality, project fails without it
-- **Should have**: Important but not vital for initial release
-- **Could have**: Nice to have if time permits
-- **Won't have**: Explicitly out of scope for this iteration
-
-### Design Decision Frameworks
-
-#### ADR (Architecture Decision Record) Format
+### ADR Format
 ```markdown
 ## Title: [Short name]
-
-### Status
-[Proposed | Accepted | Deprecated]
-
-### Context
-[What is the issue that we're seeing that is motivating this decision?]
-
-### Decision
-[What is the change that we're proposing/doing?]
-
-### Consequences
-[What becomes easier or more difficult because of this change?]
+### Status: [Proposed | Accepted | Deprecated]
+### Context: [Issue motivating this decision]
+### Decision: [Change proposed/made]
+### Consequences: [What becomes easier/harder]
 ```
 
-#### Trade-off Analysis Template
-When comparing options:
-1. **Performance** - Speed, resource usage
-2. **Complexity** - Implementation difficulty, maintenance burden
-3. **Flexibility** - Extensibility, future changes
-4. **Cost** - Development time, licensing, operations
-5. **Risk** - Technical debt, vendor lock-in
+### Trade-off Axes
+1. **Performance** -- speed, resource usage
+2. **Complexity** -- implementation difficulty, maintenance burden
+3. **Flexibility** -- extensibility, future changes
+4. **Cost** -- development time, licensing, operations
+5. **Risk** -- technical debt, vendor lock-in
 
-### Edge Case Discovery Techniques
+## Edge Case Techniques
 
-#### Boundary Analysis
-For any input or constraint:
-- **Lower bound**: Minimum valid value
-- **Upper bound**: Maximum valid value
-- **Just below lower**: Invalid case
-- **Just above upper**: Invalid case
-- **Empty/null**: Missing input
-- **Type mismatch**: Wrong data type
+### Boundary Analysis
+For any input/constraint: lower bound, upper bound, just below lower, just above upper, empty/null, type mismatch.
 
-#### State Transition Mapping
-For stateful components:
+### State Transition Mapping
 1. List all possible states
-2. Map valid transitions between states
+2. Map valid transitions
 3. Identify invalid transitions
 4. Consider concurrent state changes
-5. Plan for state recovery after errors
+5. Plan error state recovery
 
-### Integration Planning Patterns
+## Integration Planning
 
-#### Contract-First Design
-When depending on external systems:
-1. Define the interface contract explicitly
+### Contract-First Design
+1. Define interface contract explicitly
 2. Create mock implementations
 3. Document assumptions
 4. Plan for contract changes
 5. Define fallback behavior
 
-#### Dependency Injection Planning
-Structure dependencies to be:
-- Explicit (not hidden)
-- Mockable (for testing)
-- Configurable (for different environments)
-- Versioned (for compatibility)
+## Test Planning
 
-### Test Planning Strategies
+### Test Pyramid
+Few slow UI tests > some integration tests > many fast unit tests.
 
-#### Test Pyramid
-Balance test types:
-```
-         /\
-        /  \  UI Tests (few, slow, brittle)
-       /    \
-      /------\  Integration Tests (some, moderate)
-     /        \
-    /----------\  Unit Tests (many, fast, stable)
-```
+### Given-When-Then
+- **Given**: initial context/state
+- **When**: action performed
+- **Then**: expected outcome
 
-#### Given-When-Then Format
-Structure test scenarios:
-- **Given**: Initial context/state
-- **When**: Action performed
-- **Then**: Expected outcome
-- **And**: Additional conditions
+## Complexity Estimation
 
-### Complexity Estimation Techniques
+| Size | Points | Time | Description |
+|------|--------|------|-------------|
+| XS | 1 | < 2h | trivial change |
+| S | 2 | 2-4h | simple feature |
+| M | 5 | 1-2d | moderate complexity |
+| L | 8 | 3-5d | complex feature |
+| XL | 13 | 1-2w | very complex |
+| XXL | 20+ | > 2w | needs decomposition |
 
-#### T-Shirt Sizing with Points
-- **XS** (1 point): < 2 hours, trivial change
-- **S** (2 points): 2-4 hours, simple feature
-- **M** (5 points): 1-2 days, moderate complexity
-- **L** (8 points): 3-5 days, complex feature
-- **XL** (13 points): 1-2 weeks, very complex
-- **XXL** (20+ points): > 2 weeks, needs breaking down
+**Uncertainty multipliers**: 1.5x (some unknowns), 2x (significant unknowns), 3x (new tech/domain), 4x (research required).
 
-#### Uncertainty Factors
-Multiply estimates by:
-- **1.5x**: Some unknowns
-- **2x**: Significant unknowns
-- **3x**: New technology/domain
-- **4x**: Research required
+## Anti-Patterns
 
-### Communication Patterns
+**Planning**: analysis paralysis, big design up front, assumption-driven design, gold plating, scope creep.
 
-#### Stakeholder Mapping
-Identify for each stakeholder:
-- Interest level (High/Medium/Low)
-- Influence level (High/Medium/Low)
-- Communication needs
-- Decision authority
+**Implementation planning**: underestimating integration complexity, ignoring error handling until end, happy-path-only planning, no rollback scenarios, forgetting monitoring/observability.
 
-#### Documentation Levels
-1. **Code comments**: Why, not what
-2. **README**: How to use
-3. **Design docs**: Why built this way
-4. **User docs**: How to accomplish tasks
-5. **API docs**: Contract and examples
+## Resolution Strategies
 
-### Common Anti-Patterns to Avoid
+**Conflicting requirements**: identify conflict explicitly, understand priorities, propose compromise, document trade-offs, get sign-off.
 
-#### Planning Anti-Patterns
-- **Analysis Paralysis**: Over-planning without progress
-- **Big Design Up Front**: Trying to predict everything
-- **Assumption-Driven Design**: Not validating with users
-- **Gold Plating**: Adding unnecessary features
-- **Scope Creep**: Gradual requirement expansion
+**Technical uncertainty**: identify unknowns, create proof-of-concept, time-box investigation, document findings, adjust plan.
 
-#### Implementation Planning Pitfalls
-- Underestimating integration complexity
-- Ignoring error handling until the end
-- Planning for happy path only
-- Not considering rollback scenarios
-- Forgetting about monitoring/observability
-
-### Resolution Strategies
-
-#### For Conflicting Requirements
-1. Identify the conflict explicitly
-2. Understand stakeholder priorities
-3. Propose compromise solutions
-4. Document trade-offs
-5. Get explicit sign-off
-
-#### For Technical Uncertainty
-1. Identify specific unknowns
-2. Create proof-of-concept
-3. Time-box investigation
-4. Document findings
-5. Adjust plan based on results
-
-#### For Scope Issues
-1. List all requested features
-2. Map to original requirements
-3. Identify core vs. nice-to-have
-4. Propose phased delivery
-5. Get stakeholder agreement
+**Scope issues**: list all features, map to original requirements, core vs nice-to-have, propose phased delivery, get agreement.

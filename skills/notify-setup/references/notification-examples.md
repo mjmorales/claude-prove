@@ -1,6 +1,6 @@
 # Notification Script Examples
 
-Reference examples for generating notification scripts during the notify-setup skill workflow. Each script is complete and copy-paste-ready.
+Complete, copy-paste-ready scripts for each platform.
 
 ## Slack Webhook
 
@@ -9,10 +9,7 @@ Reference examples for generating notification scripts during the notify-setup s
 set -uo pipefail
 
 # Slack notification reporter for prove orchestrator events.
-# Reads event data from PROVE_* environment variables and posts to Slack.
-#
 # Required env: SLACK_WEBHOOK_URL
-# Set via: export SLACK_WEBHOOK_URL="https://hooks.slack.com/services/T.../B.../..."
 
 # --- Test mode ---
 if [[ "${1:-}" == "--test" ]]; then
@@ -70,10 +67,7 @@ fi
 set -uo pipefail
 
 # Discord notification reporter for prove orchestrator events.
-# Posts rich embeds to a Discord webhook.
-#
 # Required env: DISCORD_WEBHOOK_URL
-# Set via: export DISCORD_WEBHOOK_URL="https://discord.com/api/webhooks/..."
 
 # --- Test mode ---
 if [[ "${1:-}" == "--test" ]]; then
@@ -142,9 +136,6 @@ fi
 set -uo pipefail
 
 # Custom command notification reporter for prove orchestrator events.
-# Delegates to a user-provided command ($NOTIFY_COMMAND), passing a
-# formatted message as the first argument.
-#
 # Optional env: NOTIFY_COMMAND (falls back to echo)
 
 # --- Test mode ---
