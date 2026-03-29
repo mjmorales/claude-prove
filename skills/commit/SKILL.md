@@ -1,53 +1,98 @@
 ---
 name: commit
-description: Semantic commit assistant that reads .claude/.prove.json scopes for valid commit scopes. Analyzes changes, groups into logical units, and creates conventional commits. Use when committing changes to any project that installs this plugin.
+description: >
+  Semantic commit assistant. Reads scopes from .claude/.prove.json, detects scope
+  gaps and offers to register new ones, groups changes into logical units, and
+  creates conventional commits.
 ---
 
 # Semantic Commit Assistant
 
-Analyze all staged and unstaged changes, group them into logical units, and create semantic commits with scopes derived from `.claude/.prove.json` or the directory structure.
+## Rules
 
-## Phase 1: Gather Context
+- Never force push or amend existing commits. Instead, create new commits.
+- Never hardcode scopes. Instead, derive from `.claude/.prove.json` or directory structure.
+- Never ask about a scope the user previously declined. Instead, silently use directory-derived scope.
+- Delegate all user decisions through `AskUserQuestion` per `references/interaction-patterns.md`.
 
-1. Check for `.claude/.prove.json` at the project root and read the `"scopes"` key if present
-2. Run `git status` to see all modified, added, and deleted files
-3. Run `git diff` to see unstaged changes
-4. Run `git diff --cached` to see staged changes
-5. If there are no changes, inform the user and stop
+## 1. Gather Context
 
-## Phase 2: Derive Scopes
+Run in parallel:
 
-**If `.claude/.prove.json` has a `"scopes"` key**, use it to build the scope list. The scopes object maps scope names to path prefixes:
+1. Read `.claude/.prove.json` -- extract the `"scopes"` key if present
+2. `git status`, `git diff`, `git diff --cached`
+
+If no changes exist, inform the user and stop.
+
+## 2. Derive Scopes
+
+**With configured scopes** (`.claude/.prove.json` has `"scopes"`):
+Match each changed file to the scope whose path prefix is the longest match.
 
 ```json
-{
-  "scopes": {
-    "api": "src/api/",
-    "auth": "src/auth/",
-    "db": "src/models/"
-  }
-}
+{ "scopes": { "api": "src/api/", "auth": "src/auth/", "db": "src/models/" } }
 ```
 
-When a change spans files under a scope's path prefix, use that scope name. A file matches the scope with the longest matching prefix.
+**Without configured scopes**: derive from the most meaningful path segment (e.g., `src/api/handler.go` -> `api`).
 
-**If no scopes are configured**, derive scopes from the top-level directory of each changed file (e.g., changes in `src/api/handler.go` → scope `api`, changes in `cmd/server/main.go` → scope `server`). Use your best judgment to pick meaningful, concise scope names from the path structure.
+**Built-in scopes** (always available, override nothing):
 
-Additionally, these built-in scopes are always available regardless of configuration:
+| Scope | Matches |
+|-------|---------|
+| `docs` | README, LICENSE, top-level documentation |
+| `repo` | `.gitignore`, CI/CD, repo infrastructure |
+| `config` | `.claude/.prove.json`, project config files |
 
-- `docs` — README, LICENSE, or other top-level documentation
-- `repo` — `.gitignore`, CI/CD, or other repo infrastructure
-- `config` — `.claude/.prove.json`, project configuration files
+## 3. Detect Scope Gaps
 
-## Phase 3: Analyze, Group, and Order Changes
+Skip if `.claude/.prove.json` has no `"scopes"` key.
 
-Review all changed files and group them into logical commit units — one per coherent change. Each group maps to one conventional commit type. When a single file belongs to multiple logical changes, assign it to the primary purpose.
+If changed files fall outside ALL configured scope prefixes AND do not match a built-in scope:
 
-When grouping is ambiguous and there are 2-4 discrete options, use `AskUserQuestion` to present the choices; use free-form if the ambiguity needs open-ended explanation. See `references/interaction-patterns.md` for guidance.
+1. Determine an appropriate scope name and path prefix for the unmatched files
+2. Check `~/.claude/projects/*/memory/` for `declined_scope_<name>.md` for this project
+3. **Previously declined**: use directory-derived scope silently, proceed to step 4
+4. **Not declined**: use `AskUserQuestion`:
 
-## Phase 4: Create Semantic Commits
+```
+AskUserQuestion:
+  question: "Files under `<path>` don't match any configured scope. Add `<name>: <prefix>` to .claude/.prove.json?"
+  header: "New Scope"
+  options:
+    - label: "Add Scope"
+      description: "Register in .claude/.prove.json and use it now"
+    - label: "Skip"
+      description: "Use directory-derived scope; never ask about this scope again"
+```
 
-For each logical group, create a commit using conventional commit format:
+**Add Scope**: add the entry to `.claude/.prove.json` `"scopes"` and use it for the current commit.
+
+**Skip**: save a memory file at `~/.claude/projects/<project-dir>/memory/declined_scope_<name>.md`:
+
+```markdown
+---
+name: declined-scope-<name>
+description: User declined adding scope "<name>" (<prefix>) to .claude/.prove.json
+type: feedback
+---
+
+Do not suggest adding scope "<name>" with prefix "<prefix>" to .claude/.prove.json. Declined on <date>.
+```
+
+Update `MEMORY.md` in the same directory to include the new entry.
+
+## 4. Group Changes
+
+Group changed files into logical commit units -- one per coherent change. Each group maps to one conventional commit type.
+
+When grouping is ambiguous with 2-4 discrete options, use `AskUserQuestion`. Use free-form for ambiguity that needs open-ended discussion.
+
+## 5. Commit
+
+For each group:
+
+1. `git add <files>` -- stage only files for that group
+2. Commit with conventional format:
 
 ```
 <type>(<scope>): <description>
@@ -57,22 +102,8 @@ For each logical group, create a commit using conventional commit format:
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 
-Use standard conventional commit types (`feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `style`, `perf`, `ci`), plus:
-- `migrate`: Content migrated from an external source
+3. `git status` -- verify before next group
 
-**Scope:** Derived from Phase 2.
+**Types**: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `style`, `perf`, `ci`, `migrate`
 
-## Phase 5: Execute Commits
-
-For each group:
-
-1. Stage only the files for that logical unit: `git add <files>`
-2. Create the commit with the semantic message
-3. Verify with `git status` before moving to the next group
-
-After all commits, run `git log --oneline -n <count>` and report any remaining uncommitted changes.
-
-## Rules
-
-- Never force push or amend existing commits without explicit permission
-- Never hardcode scopes — always derive from `.claude/.prove.json` or directory structure
+After all commits: `git log --oneline -n <count>` and report any remaining uncommitted changes.
