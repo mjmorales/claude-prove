@@ -74,3 +74,9 @@ When adding/removing/renaming `PROVE_SCHEMA` fields:
 5. Add tests in `tools/schema/test_migrate.py`: version bump, defaults, data preservation, full chain from v0
 6. Update `.claude/.prove.json` at repo root
 7. Add `## vX.Y.Z` entry in `UPDATES.md` with migration instructions
+
+## Tool vs Pack Boundary
+
+- **Infrastructure tools** (CAFI, ACB, PCD, schema): `kind: "tool"` (default); skills/agents/commands live at plugin top level. Do NOT refactor these to pack model.
+- **Workflow packs** (project-manager, etc.): `kind: "pack"` in `tool.json`; bundle skills/agents/commands/assets inside `tools/<name>/`. Registry symlinks on install.
+- Decision record: `.prove/decisions/2026-03-29-optional-packs-via-tools.md`

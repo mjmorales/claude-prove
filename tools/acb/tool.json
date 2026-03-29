@@ -26,6 +26,5 @@
   },
   "provides": {
     "commands": ["review", "review/fix", "review/discuss", "review/resolve"],
-    "skills": ["review"],
-    "agents": ["pcd/*"]
+    "skills": ["review"]
   }}

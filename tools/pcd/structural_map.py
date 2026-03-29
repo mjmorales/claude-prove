@@ -11,14 +11,15 @@ import os
 import sys
 from datetime import datetime, timezone
 
-# Add the tools directory to sys.path so we can import cafi as a package.
+# Add the tools directory to sys.path so we can import shared _lib and pcd packages.
 _pcd_dir = os.path.dirname(os.path.abspath(__file__))
 _tools_dir = os.path.dirname(_pcd_dir)
 if _tools_dir not in sys.path:
     sys.path.insert(0, _tools_dir)
 
-from cafi.hasher import load_cache, walk_project  # noqa: E402
-from cafi.indexer import load_config  # noqa: E402
+from _lib.cache import load_cache  # noqa: E402
+from _lib.config import load_config  # noqa: E402
+from _lib.file_walker import walk_project  # noqa: E402
 from pcd.import_parser import (  # noqa: E402
     ImportEntry,
     detect_language,

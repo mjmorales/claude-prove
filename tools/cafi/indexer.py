@@ -1,77 +1,23 @@
-"""Index manager — ties hasher and describer together."""
+"""Index manager — ties hasher and describer together.
+
+Config loading and error types live in ``_lib`` (shared with PCD).
+This module re-exports them for backwards compatibility.
+"""
 
 from __future__ import annotations
 
-import json
-import logging
 import os
 import sys
 
 from cafi.describer import describe_files, triage_files
-from cafi.hasher import (
-    compute_hash,
-    diff_cache,
-    load_cache,
-    save_cache,
-    walk_project,
-)
+from cafi.hasher import compute_hash, diff_cache
+from _lib.cache import load_cache, save_cache  # noqa: F401
+from _lib.config import DEFAULT_CONFIG, MissingConfigError, load_config  # noqa: F401
+from _lib.file_walker import walk_project  # noqa: F401
 
-logger = logging.getLogger(__name__)
+logger = __import__("logging").getLogger(__name__)
 
 CACHE_FILENAME = "file-index.json"
-
-DEFAULT_CONFIG = {
-    "excludes": [],
-    "max_file_size": 102400,
-    "concurrency": 3,
-    "batch_size": 25,
-    "triage": True,
-}
-
-
-class MissingConfigError(Exception):
-    """Raised when .claude/.prove.json is not found and CAFI cannot proceed."""
-
-
-def load_config(project_root: str, require: bool = True) -> dict:
-    """Read index config from ``.claude/.prove.json`` under the ``"index"`` key.
-
-    Args:
-        project_root: The project root directory.
-        require: If True (default), raise ``MissingConfigError`` when
-            ``.claude/.prove.json`` is absent. If False, fall back to defaults.
-
-    Returns:
-        Config dict with keys ``excludes``, ``max_file_size``, ``concurrency``.
-        Falls back to defaults for any missing keys.
-
-    Raises:
-        MissingConfigError: If ``require`` is True and ``.claude/.prove.json`` is absent.
-    """
-    config_path = os.path.join(project_root, ".claude", ".prove.json")
-    result = dict(DEFAULT_CONFIG)
-
-    if not os.path.isfile(config_path):
-        if require:
-            raise MissingConfigError(
-                f"No .claude/.prove.json found.\n"
-                f"  Project root: {os.path.abspath(project_root)}\n"
-                f"  Expected config: {os.path.abspath(config_path)}\n"
-                f"CAFI requires a .claude/.prove.json config to run."
-            )
-        return result
-
-    try:
-        with open(config_path, "r") as fh:
-            data = json.load(fh)
-        index_cfg = data.get("index", {})
-        for key in DEFAULT_CONFIG:
-            if key in index_cfg:
-                result[key] = index_cfg[key]
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("Could not read config from %s: %s", config_path, exc)
-
-    return result
 
 
 def _cache_path(project_root: str) -> str:
