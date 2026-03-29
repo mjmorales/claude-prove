@@ -226,7 +226,7 @@ def _section_tools(core_commands: list[dict]) -> str:
         for cmd in core_commands:
             lines.append(f"- `/prove:{cmd['name']}` — {cmd['summary']}")
     else:
-        lines.append("- `/prove:claude-md` — Regenerate this file")
+        lines.append("- `/prove:docs:claude-md` — Regenerate this file")
     lines.append("")
     return "\n".join(lines)
 

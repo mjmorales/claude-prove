@@ -20,7 +20,7 @@ Reads every source file in the codebase (or a scoped directory), produces a stru
 
 **Arguments:** `[directory or module]` to scope to a subtree, or none for the full codebase.
 
-### `/prove:auto-steward` -- Iterative Audit-Fix Loop
+### `/prove:steward:auto-steward` -- Iterative Audit-Fix Loop
 
 Runs the same audit-fix cycle as `/prove:steward`, but keeps going. After the first pass (which requires human approval), it re-audits only the files it just modified, fixes anything new, and repeats until the audit returns clean or the iteration cap is hit. Subsequent passes are autonomous — no human gate.
 
@@ -36,7 +36,7 @@ Runs the same audit-fix cycle as `/prove:steward`, but keeps going. After the fi
 - `--max-passes N` — set iteration cap (default: 3)
 - `[directory or module]` — scope to a subtree
 
-### `/prove:steward-review` -- Current Branch Review
+### `/prove:steward:steward-review` -- Current Branch Review
 
 Audits only the source files changed on the current branch relative to `main` (or a specified base). Same quality standards as a full audit, but the blast radius is limited to what you've already touched.
 
@@ -106,10 +106,10 @@ After all fix agents complete, validators from `.prove.json` run (lint first, th
 | --- | --- |
 | After a major feature branch lands | `/prove:steward` |
 | Periodic codebase health pass | `/prove:steward` |
-| Want hands-off cleanup with convergence guarantee | `/prove:auto-steward` |
-| Several agent tasks have accumulated | `/prove:auto-steward` |
-| Mid-development quality check on current branch | `/prove:steward-review` |
-| Before opening a PR | `/prove:steward-review` |
-| Quick check that new code follows existing patterns | `/prove:steward-review` |
+| Want hands-off cleanup with convergence guarantee | `/prove:steward:auto-steward` |
+| Several agent tasks have accumulated | `/prove:steward:auto-steward` |
+| Mid-development quality check on current branch | `/prove:steward:steward-review` |
+| Before opening a PR | `/prove:steward:steward-review` |
+| Quick check that new code follows existing patterns | `/prove:steward:steward-review` |
 
 **Scoping tip:** All three commands accept a directory argument. `/prove:steward skills/` audits only the `skills/` subtree — useful for large codebases where you want to focus on a specific area.

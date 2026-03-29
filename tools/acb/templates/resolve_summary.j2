@@ -8,7 +8,7 @@
 {% if overall == "approved" %}
 Branch is ready to merge.
 {% elif rejected or discuss %}
-**Next step:** Run `/prove:fix` to address rejected groups.
+**Next step:** Run `/prove:review:fix` to address rejected groups.
 {% else %}
 Review is still in progress. Await remaining verdicts.
 {% endif %}

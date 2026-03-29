@@ -102,7 +102,7 @@ Skip unless `.prove.json` has a `reporters` section.
 - Check each reporter's `run` command exists and is executable
 - **Pass**: script exists
 - **Warn**: configured but script not found
-- **Fix**: `/prove:notify-setup`
+- **Fix**: `/prove:notify:notify-setup`
 
 ### Step 3: Health Checks
 

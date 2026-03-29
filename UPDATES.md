@@ -32,7 +32,7 @@ Projects can now include external files (coding standards, security policies, et
 }
 ```
 
-Then regenerate: `/prove:claude-md`
+Then regenerate: `/prove:docs:claude-md`
 
 `$PLUGIN_DIR` is resolved at generation time to the actual plugin install path.
 
@@ -42,7 +42,7 @@ Then regenerate: `/prove:claude-md`
 
 The `## Prove Commands` section in generated CLAUDE.md is no longer hardcoded. Commands with `core: true` in their frontmatter are auto-detected and rendered.
 
-**Migration**: No action needed. Run `/prove:claude-md` to regenerate — new commands appear automatically.
+**Migration**: No action needed. Run `/prove:docs:claude-md` to regenerate — new commands appear automatically.
 
 **Adding your own**: Any command file in `commands/` with `core: true` and `summary:` in its frontmatter will appear in generated CLAUDE.md files:
 

@@ -193,7 +193,7 @@ Configure reporters in `.prove.json`:
 
 Reporter commands receive event context via environment variables: `PROVE_EVENT`, `PROVE_TASK`, `PROVE_STEP`, `PROVE_STATUS`, `PROVE_BRANCH`, `PROVE_DETAIL`.
 
-Run `/prove:notify-setup` to configure reporters interactively.
+Run `/prove:notify:notify-setup` to configure reporters interactively.
 
 See `skills/orchestrator/references/reporter-protocol.md` for the full reporter interface.
 

@@ -251,7 +251,7 @@ Reporter commands receive event data via environment variables:
 Use the notify-setup skill to configure reporters interactively:
 
 ```
-/prove:notify-setup
+/prove:notify:notify-setup
 ```
 
 This guides you through platform selection (Slack, Discord, custom), generates notification scripts, and configures the reporters section automatically.

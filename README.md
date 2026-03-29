@@ -24,10 +24,10 @@ Takes you from idea to merged code through a structured pipeline:
 
 - **Auto-scaling orchestrator**: Small tasks (≤3 steps) run sequentially. Larger tasks use parallel git worktrees with mandatory architect review. Three execution modes: `/prove:orchestrator`, `/prove:autopilot`, and `/prove:full-auto`.
 - **Structured code review**: Intent-manifest-driven code review. Agents declare *why* they made each change via Claude Code hooks. Changes are grouped by intent for structured review in a browser-based UI. Run `/prove:review` to start.
-- **Code quality steward**: Deep line-by-line audits (`/prove:steward`), iterative audit-fix loops (`/prove:auto-steward`), and lightweight session-scoped reviews (`/prove:steward-review`). See [docs/code-quality.md](docs/code-quality.md).
+- **Code quality steward**: Deep line-by-line audits (`/prove:steward`), iterative audit-fix loops (`/prove:steward:auto-steward`), and lightweight session-scoped reviews (`/prove:steward:steward-review`). See [docs/code-quality.md](docs/code-quality.md).
 - **Stack-agnostic validation**: Auto-detects your project type (Go, Rust, Python, Node, Godot, Makefile) and runs appropriate build/lint/test checks. Supports LLM-based prompt validators for higher-level checks. Configure with `.prove.json` or let auto-detection handle it.
 - **Session management**: Create handoff prompts (`/prove:handoff`) to preserve context across Claude Code sessions. Resume with `/prove:pickup` in a fresh session.
-- **Documentation generation**: Human-readable docs (`/prove:docs`), LLM-optimized agent docs (`/prove:agentic-docs`), or both at once (`/prove:auto-docs`).
+- **Documentation generation**: Human-readable docs (`/prove:docs`), LLM-optimized agent docs (`/prove:docs:agentic-docs`), or both at once (`/prove:docs:auto-docs`).
 - **Git-based rollback**: Every step is committed individually. Revert any step, reset to any point.
 
 ## Installation
@@ -92,26 +92,26 @@ If Claude Code is already running, restart it for the plugin to take effect.
 | Command | Description |
 |---------|-------------|
 | `/prove:review` | Assemble intent manifests and launch the review UI |
-| `/prove:resolve` | Show approval summary — accepted groups and merge readiness |
-| `/prove:fix` | Generate fix prompts from rejected review groups |
-| `/prove:discuss` | Surface groups needing discussion from review |
+| `/prove:review:resolve` | Show approval summary — accepted groups and merge readiness |
+| `/prove:review:fix` | Generate fix prompts from rejected review groups |
+| `/prove:review:discuss` | Surface groups needing discussion from review |
 
 ### Code Quality
 
 | Command | Description |
 |---------|-------------|
 | `/prove:steward` | Deep line-by-line codebase audit with automated fixes |
-| `/prove:auto-steward` | Iterative audit-fix loop — runs until clean or cap is hit |
-| `/prove:steward-review` | Lightweight review of current branch changes only |
+| `/prove:steward:auto-steward` | Iterative audit-fix loop — runs until clean or cap is hit |
+| `/prove:steward:steward-review` | Lightweight review of current branch changes only |
 
 ### Documentation
 
 | Command | Description |
 |---------|-------------|
 | `/prove:docs` | Generate human-readable documentation |
-| `/prove:agentic-docs` | Generate LLM-optimized documentation for agents |
-| `/prove:auto-docs` | Analyze scope and generate both doc types in one pass |
-| `/prove:claude-md` | Generate or update the project's CLAUDE.md |
+| `/prove:docs:agentic-docs` | Generate LLM-optimized documentation for agents |
+| `/prove:docs:auto-docs` | Analyze scope and generate both doc types in one pass |
+| `/prove:docs:claude-md` | Generate or update the project's CLAUDE.md |
 
 ### Session & Lifecycle
 
@@ -133,8 +133,8 @@ If Claude Code is already running, restart it for the plugin to take effect.
 | `/prove:update` | Validate configs, detect schema drift, apply migrations |
 | `/prove:index` | Build or update the content-addressable file index |
 | `/prove:progress` | Show orchestrator execution status and blockers |
-| `/prove:notify-setup` | Configure notification integrations (Slack, Discord, custom) |
-| `/prove:notify-test` | Send a test notification through configured reporters |
+| `/prove:notify:notify-setup` | Configure notification integrations (Slack, Discord, custom) |
+| `/prove:notify:notify-test` | Send a test notification through configured reporters |
 
 ## Deep Dives
 

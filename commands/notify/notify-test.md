@@ -13,6 +13,6 @@ bash "$PLUGIN_DIR/scripts/notify-test.sh" $ARGUMENTS
 
 If `$ARGUMENTS` is empty, defaults to `step-complete`.
 
-If `.prove.json` has no `reporters` entries, inform the user and suggest `/prove:notify-setup`. Do not run the script.
+If `.prove.json` has no `reporters` entries, inform the user and suggest `/prove:notify:notify-setup`. Do not run the script.
 
 Reporter scripts live in `.prove/` (project scope) or `~/.claude/scripts/` (global scope).

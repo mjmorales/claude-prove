@@ -37,7 +37,7 @@ The index describes *when* to read each file, not just what it contains.
 ## Prove Commands
 
 - `/prove:index` — Update the file index (run after significant changes)
-- `/prove:claude-md` — Regenerate this file
+- `/prove:docs:claude-md` — Regenerate this file
 - `/prove:task-planner` — Plan implementation for a task
 - `/prove:orchestrator` — Autonomous execution with validation gates
 - `/prove:brainstorm` — Explore options and record decisions

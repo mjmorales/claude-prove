@@ -47,7 +47,7 @@ Be concrete: "Fix the failing test in auth/middleware.test.ts caused by the new 
 If `agents/` exists, read all `.md` files and parse each YAML frontmatter `description`. Match against the pickup note's work domain:
 
 - **Agent matches**: `claude --agent agents/<name>.md --prompt-file .prove/handoff.md` — explain the match briefly
-- **No agent matches, specialized work**: suggest creating one first with `/prove:create-agent`
+- **No agent matches, specialized work**: suggest creating one first with `/prove:create:create-agent`
 - **No agents dir OR general-purpose work**: `claude --prompt-file .prove/handoff.md`
 
 ## Phase 4: Write & Output
