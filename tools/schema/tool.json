@@ -1,5 +1,9 @@
 {
   "name": "schema",
-  "description": "Config schema validation and migration for .prove.json and .claude/settings.json",
-  "requires": ["python3"]
+  "version": "1.0.0",
+  "description": "Config schema validation and migration for .claude/.prove.json",
+  "requires": ["python3"],
+  "provides": {
+    "commands": ["init", "update", "doctor"]
+  }
 }

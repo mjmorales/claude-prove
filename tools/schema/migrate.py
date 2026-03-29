@@ -103,10 +103,68 @@ def _migrate_v1_to_v2(config: dict) -> tuple[dict, list[MigrationChange]]:
     return result, changes
 
 
+def _migrate_v2_to_v3(config: dict) -> tuple[dict, list[MigrationChange]]:
+    """Migrate from v2 to v3.
+
+    Changes:
+    - Bumps schema_version to "3"
+    - Moves top-level ``index`` config into ``tools.cafi.config``
+    - Adds ``tools`` section with cafi enabled if index config existed
+    - Removes top-level ``index`` key
+    """
+    changes: list[MigrationChange] = []
+    result = dict(config)
+
+    result["schema_version"] = "3"
+    changes.append(
+        MigrationChange("change", "schema_version", '"2" -> "3"')
+    )
+
+    # Move index -> tools.cafi.config
+    tools: dict[str, Any] = result.get("tools", {})
+    index_config = result.pop("index", None)
+
+    if index_config is not None:
+        tools.setdefault("cafi", {})["enabled"] = True
+        tools["cafi"]["config"] = index_config
+        changes.append(
+            MigrationChange(
+                "rename",
+                "index",
+                'moved to tools.cafi.config',
+            )
+        )
+    elif "cafi" not in tools:
+        # No index config existed — add cafi as disabled
+        tools["cafi"] = {"enabled": False}
+        changes.append(
+            MigrationChange(
+                "add",
+                "tools.cafi",
+                "added (disabled — no prior index config)",
+                {"enabled": False},
+            )
+        )
+
+    if "tools" not in result or result.get("tools") != tools:
+        result["tools"] = tools
+        if not any(c.path == "tools.cafi" for c in changes):
+            changes.append(
+                MigrationChange(
+                    "add",
+                    "tools",
+                    "added tool registry section",
+                )
+            )
+
+    return result, changes
+
+
 # Migration registry: maps "from_to" version pairs to functions
 MIGRATIONS: dict[str, Any] = {
     "0_to_1": _migrate_v0_to_v1,
     "1_to_2": _migrate_v1_to_v2,
+    "2_to_3": _migrate_v2_to_v3,
 }
 
 

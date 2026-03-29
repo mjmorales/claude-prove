@@ -11,7 +11,7 @@ Each field spec is a dict with:
   - default: default value for migrations
 """
 
-CURRENT_SCHEMA_VERSION = "2"
+CURRENT_SCHEMA_VERSION = "3"
 
 # --- .prove.json schema ---
 
@@ -115,31 +115,26 @@ PROVE_SCHEMA = {
             },
             "description": "CLAUDE.md generation settings",
         },
-        "index": {
+        "tools": {
             "type": "dict",
             "required": False,
-            "fields": {
-                "excludes": {
-                    "type": "list",
-                    "required": False,
-                    "items": {"type": "str"},
-                    "description": "Glob patterns to exclude from indexing",
-                    "default": [],
-                },
-                "max_file_size": {
-                    "type": "int",
-                    "required": False,
-                    "description": "Max file size in bytes for indexing",
-                    "default": 102400,
-                },
-                "concurrency": {
-                    "type": "int",
-                    "required": False,
-                    "description": "Number of concurrent indexing workers",
-                    "default": 3,
+            "values": {
+                "type": "dict",
+                "fields": {
+                    "enabled": {
+                        "type": "bool",
+                        "required": True,
+                        "description": "Whether this tool is active in the project",
+                        "default": True,
+                    },
+                    "config": {
+                        "type": "dict",
+                        "required": False,
+                        "description": "Tool-specific configuration overrides",
+                    },
                 },
             },
-            "description": "CAFI file index configuration",
+            "description": "Tool activation state and configuration overrides",
         },
     },
 }
