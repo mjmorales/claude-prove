@@ -4,32 +4,26 @@ description: Detect project tech stack and generate .claude/.prove.json configur
 
 # Initialize .claude/.prove.json
 
-Detect the project tech stack and generate or update `.claude/.prove.json`. Operates section-by-section — never overwrites `reporters`, `scopes`, or `index`.
+Detect tech stack, generate or update `.claude/.prove.json`. Operates section-by-section — only `validators` is updated; `reporters`, `scopes`, and `index` are preserved.
 
-`$PLUGIN_DIR` refers to this plugin's root (parent of `commands/`).
+## Step 0: Guard
 
-## Instructions
+1. Verify `$PLUGIN_DIR` is set. If not, error: "Cannot resolve plugin directory."
+2. Verify `$(pwd)` is NOT inside `~/.claude/`. If it is, error: "You are inside the plugin directory. Run this command from your project root."
 
-### Step 0: Guard — verify target project
+Stop on any failure.
 
-**MUST check before proceeding:**
-
-1. Verify `$PLUGIN_DIR` is set (resolved from this plugin's root). If not, error: "Cannot resolve plugin directory."
-2. Verify `$(pwd)` is NOT inside `~/.claude/` (e.g., `~/.claude/plugins/prove`, `~/.claude/extensions/*/prove`). If it is, error: "You are inside the plugin directory. Run this command from your project root, not the plugin installation."
-
-Do NOT proceed if any check fails.
-
-### Step 1: Detect tech stack
+## Step 1: Detect tech stack
 
 ```bash
-# If .claude/.prove.json exists — merge detected validators, preserve everything else
+# Existing config — merge detected validators, preserve everything else
 bash "$PLUGIN_DIR/scripts/init-config.sh" --merge "$(pwd)"
 
-# If no .claude/.prove.json — generate fresh
+# No config — generate fresh
 bash "$PLUGIN_DIR/scripts/init-config.sh" "$(pwd)"
 ```
 
-### Step 2: Show existing config context
+## Step 2: Show existing config context
 
 If `.claude/.prove.json` exists, summarize current sections:
 
@@ -41,15 +35,12 @@ Existing .claude/.prove.json sections:
   - index: configured (preserved)
 ```
 
-Only `validators` is updated. All other sections are preserved.
+## Step 3: Confirm detected validators
 
-### Step 3: Confirm detected validators
+Present detected validators, then `AskUserQuestion` (header: "Validators"):
+- "Approve" / "Modify" / "Keep Current" (last option only when existing validators present)
 
-Present detected validators, then `AskUserQuestion`:
-- Header: "Validators"
-- Options: "Approve" / "Modify" / "Keep Current" (only when existing validators present)
-
-### Step 4: Write configuration
+## Step 4: Write configuration
 
 Write approved config to `.claude/.prove.json`.
 
@@ -57,45 +48,38 @@ Write approved config to `.claude/.prove.json`.
 - Fresh mode: write detection output directly
 - Run `PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema migrate --file "$(pwd)/.claude/.prove.json"` after writing to ensure `schema_version` is set
 
-### Step 5: Update .gitignore
+## Step 5: Update .gitignore
 
 ```bash
 grep -qxF '.prove/' .gitignore 2>/dev/null || echo '.prove/' >> .gitignore
 ```
 
-### Step 6: Set up plugin tools
+## Step 6: Set up plugin tools
 
 ```bash
 bash "$PLUGIN_DIR/scripts/setup-tools.sh" --list --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"
 ```
 
-If any tools are "not configured", `AskUserQuestion` with header "Tools" and options: "Setup" / "Skip".
+If any tools are "not configured", `AskUserQuestion` (header: "Tools"): "Setup" / "Skip".
 
 On "Setup":
 ```bash
 bash "$PLUGIN_DIR/scripts/setup-tools.sh" --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"
 ```
 
-### Step 7: External references for CLAUDE.md
+## Step 7: External references for CLAUDE.md
 
-Collect candidate references from two sources: bundled plugin references and user's global CLAUDE.md.
+Collect candidate references from two sources.
 
-#### Source 1: Bundled references (from the plugin)
+#### Source 1: Bundled references
 
-Scan `$PLUGIN_DIR/references/` for `.md` files. These ship with the plugin and are available to all projects. Use `$PLUGIN_DIR` as a path variable so the reference resolves to the correct location regardless of where the plugin is installed.
-
-Bundled references found:
-```
-$PLUGIN_DIR/references/llm-coding-standards.md — LLM Coding Standards
-```
+Scan `$PLUGIN_DIR/references/` for `.md` files. Use `$PLUGIN_DIR` as path variable so references resolve regardless of install location.
 
 #### Source 2: User's global CLAUDE.md
 
-Read `~/.claude/CLAUDE.md` — if the file does not exist, skip this source. Parse for lines starting with `@` — extract the file path after `@`.
+Read `~/.claude/CLAUDE.md` (skip if missing). Parse lines starting with `@` — extract the file path. Derive labels from filenames: strip extension, replace hyphens/underscores with spaces, title-case.
 
-For each found reference, derive a label from the filename: strip extension, replace hyphens/underscores with spaces, title-case (e.g., `llm-coding-standards.md` -> "Llm Coding Standards" -> user confirms/edits).
-
-**Deduplication**: if a global reference points to the same filename as a bundled reference, prefer the bundled version (uses `$PLUGIN_DIR` — portable across machines).
+**Deduplication**: if a global reference matches a bundled filename, prefer the bundled version (`$PLUGIN_DIR` path is portable).
 
 #### Present candidates
 
@@ -109,14 +93,14 @@ Global references (from ~/.claude/CLAUDE.md):
 Already configured: (none)
 ```
 
-`AskUserQuestion` with header "External References" and options: "Include All (Recommended)" / "Select" / "Add Custom" / "Skip".
+`AskUserQuestion` (header: "External References"): "Include All (Recommended)" / "Select" / "Add Custom" / "Skip".
 
-- **Include All**: add all candidates to `.claude/.prove.json` under `claude_md.references`
-- **Select**: let user pick which to include
-- **Add Custom**: let user type additional paths (then confirm)
+- **Include All**: add all candidates to `claude_md.references`
+- **Select**: user picks which to include
+- **Add Custom**: user types additional paths, then confirm
 - **Skip**: no changes
 
-Write selected references to `.claude/.prove.json` under `claude_md.references`. Use `$PLUGIN_DIR` prefix for bundled references, literal paths for user-specified ones:
+Write to `.claude/.prove.json` under `claude_md.references`. Use `$PLUGIN_DIR` prefix for bundled, literal paths for user-specified:
 ```json
 {
   "claude_md": {
@@ -127,11 +111,11 @@ Write selected references to `.claude/.prove.json` under `claude_md.references`.
 }
 ```
 
-Merge into existing `.claude/.prove.json` — preserve all other sections.
+Merge into existing config — preserve all other sections.
 
-### Step 8: Generate CLAUDE.md
+## Step 8: Generate CLAUDE.md
 
-If `CLAUDE.md` exists, `AskUserQuestion` with header "CLAUDE.md" and options: "Regenerate" / "Keep Existing". Skip generation on "Keep Existing".
+If `CLAUDE.md` exists, `AskUserQuestion` (header: "CLAUDE.md"): "Regenerate" / "Keep Existing". Skip generation on "Keep Existing".
 
 ```bash
 python3 "$PLUGIN_DIR/skills/claude-md/__main__.py" generate --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"
@@ -139,20 +123,20 @@ python3 "$PLUGIN_DIR/skills/claude-md/__main__.py" generate --project-root "$(pw
 
 Show summary of generated sections.
 
-### Step 9: Install community skills
+## Step 9: Install community skills
 
 ```bash
 bash "$PLUGIN_DIR/scripts/install-skills.sh" --list
 ```
 
-`AskUserQuestion` with header "Skills" and options: "Install" / "Skip".
+`AskUserQuestion` (header: "Skills"): "Install" / "Skip".
 
 On "Install":
 ```bash
 bash "$PLUGIN_DIR/scripts/install-skills.sh"
 ```
 
-### Step 10: Summary
+## Step 10: Summary
 
 Report what was created/updated. Suggest next steps:
 - Review and customize validators

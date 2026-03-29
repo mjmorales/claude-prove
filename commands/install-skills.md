@@ -2,16 +2,16 @@
 description: Install recommended community skills from external repos into ~/.claude/skills/
 ---
 
-# Install Recommended Skills
+# Install Community Skills
 
 1. Show available skills and install status:
    ```bash
    bash "$PLUGIN_DIR/scripts/install-skills.sh" --list
    ```
 
-2. Use `AskUserQuestion` to confirm — header: "Install", options: "Install All" / "Skip"
+2. `AskUserQuestion` (header: "Install"): "Install All" / "Skip"
 
-3. On approval, run:
+3. On approval:
    ```bash
    bash "$PLUGIN_DIR/scripts/install-skills.sh"
    ```

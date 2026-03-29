@@ -25,11 +25,11 @@ rm .prove/handoff.md
 
 ## Step 4: Begin Work
 
-Follow the "Instructions" section from the handoff file. Start immediately -- do not ask the user to repeat the task.
+Follow the "Instructions" section from the handoff file. Start immediately — do not ask the user to repeat the task.
 
 ## Rules
 
-- Read everything before acting -- load all referenced files before making changes
-- Delete the handoff file after loading -- it is ephemeral
-- Never ask the user what to do -- the handoff file already tells you
+- Load all referenced files before making changes
+- Delete the handoff file after loading — it is ephemeral
+- The handoff file tells you what to do — do not ask the user to repeat it
 - If the handoff recommends a specific agent, inform the user: "This handoff targets the `<agent>` agent. Consider: `claude --agent agents/<name>.md --prompt-file .prove/handoff.md`"

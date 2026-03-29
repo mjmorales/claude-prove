@@ -5,59 +5,44 @@ argument-hint: "[bug description or feature request]"
 
 # Report Issue: $ARGUMENTS
 
-File a well-formatted GitHub issue against the prove plugin repository using the `gh` CLI.
+File a GitHub issue against the prove plugin using `gh` CLI.
 
-`$PLUGIN_DIR` refers to this plugin's root (parent of `commands/`).
-
-## Instructions
-
-### Step 0: Verify gh CLI
+## Step 0: Verify gh CLI
 
 ```bash
 gh auth status 2>&1
 ```
 
-If `gh` is not installed or not authenticated:
-- Not installed: "Install the GitHub CLI: https://cli.github.com/ then run `gh auth login`"
-- Not authenticated: "Run `gh auth login` to authenticate"
+If not installed: "Install the GitHub CLI: https://cli.github.com/ then run `gh auth login`"
+If not authenticated: "Run `gh auth login` to authenticate"
 
-If auth fails, show the appropriate message above and stop. Do not proceed to subsequent steps.
+Stop on auth failure.
 
-### Step 1: Determine issue type
+## Step 1: Determine issue type
 
-If `$ARGUMENTS` is provided, infer the type from context. Otherwise, `AskUserQuestion` with header "Issue Type" and options:
+If `$ARGUMENTS` is provided, infer type from context. Otherwise, `AskUserQuestion` (header: "Issue Type"):
 - "Bug Report" — something is broken or behaving unexpectedly
 - "Feature Request" — a new capability or improvement
 - "Documentation" — missing, unclear, or incorrect docs
 
-### Step 2: Gather context
+## Step 2: Gather context
 
 Read the plugin version:
 ```bash
 cat "$PLUGIN_DIR/.claude-plugin/plugin.json" 2>/dev/null | grep version
 ```
 
-For **bug reports**, collect:
-- Plugin version (from Step above)
-- What happened vs what was expected
-- Steps to reproduce (ask the user if not clear from `$ARGUMENTS`)
-- Relevant error output or logs (ask the user)
-- Which command/skill was involved
+**Bug reports**: plugin version, actual vs expected behavior, reproduction steps, error output, which command/skill. Ask user for anything not clear from `$ARGUMENTS`.
 
-For **feature requests**, collect:
-- What the user wants
-- Why (the motivation / use case)
-- Any ideas for implementation
+**Feature requests**: what the user wants, motivation/use case, implementation ideas.
 
-For **documentation**, collect:
-- What is missing or wrong
-- Where the user expected to find it
+**Documentation**: what is missing or wrong, where the user expected to find it.
 
-### Step 3: Draft the issue
+## Step 3: Draft the issue
 
-Compose a GitHub issue using the appropriate template below. Use `AskUserQuestion` with header "Draft" to present it.
+Compose using the appropriate template. Present via `AskUserQuestion` (header: "Draft").
 
-**Bug Report template:**
+**Bug Report:**
 
 ~~~
 ## Bug Report
@@ -73,7 +58,6 @@ Compose a GitHub issue using the appropriate template below. Use `AskUserQuestio
 
 ### Steps to reproduce
 1. ...
-2. ...
 
 ### Error output
 ```
@@ -85,7 +69,7 @@ Compose a GitHub issue using the appropriate template below. Use `AskUserQuestio
 - Claude Code version: <if known>
 ~~~
 
-**Feature Request template:**
+**Feature Request:**
 
 ~~~
 ## Feature Request
@@ -102,7 +86,7 @@ Compose a GitHub issue using the appropriate template below. Use `AskUserQuestio
 <ideas, if any>
 ~~~
 
-**Documentation template:**
+**Documentation:**
 
 ~~~
 ## Documentation Issue
@@ -118,17 +102,16 @@ Compose a GitHub issue using the appropriate template below. Use `AskUserQuestio
 
 Options: "Submit" / "Edit" / "Cancel"
 
-On "Edit": let the user modify the draft, then re-present.
+On "Edit": let user modify, then re-present.
 On "Cancel": stop.
 
-### Step 4: Determine labels
+## Step 4: Determine labels
 
-Map the issue type to GitHub labels:
-- Bug Report → `bug`
-- Feature Request → `enhancement`
-- Documentation → `documentation`
+- Bug Report -> `bug`
+- Feature Request -> `enhancement`
+- Documentation -> `documentation`
 
-### Step 5: Submit
+## Step 5: Submit
 
 ```bash
 gh issue create --repo mjmorales/claude-prove \
@@ -143,4 +126,4 @@ EOF
   --label "<label from Step 4>"
 ```
 
-If submission succeeds, present the issue URL and number to the user. If it fails, show the error and suggest checking `gh auth status`.
+On success, present the issue URL and number. On failure, show the error and suggest `gh auth status`.

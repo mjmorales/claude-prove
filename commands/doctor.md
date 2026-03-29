@@ -4,9 +4,7 @@ description: Diagnose prove installation health — checks core config, tooling,
 
 # Prove Doctor
 
-Diagnose project health: validate configs, check tool installation, detect drift. Report issues by severity tier, then offer fixes.
-
-`$PLUGIN_DIR` refers to this plugin's root (parent of `commands/`).
+Validate configs, check tool installation, detect drift. Report by severity tier, then offer fixes.
 
 ## Output Format
 
@@ -17,43 +15,34 @@ Diagnose project health: validate configs, check tool installation, detect drift
 [–] Check description — skipped (reason)
 ```
 
-## Instructions
+## Step 0: Guard
 
-### Step 0: Guard — verify target project
+1. Verify `$PLUGIN_DIR` is set. If not, error: "Cannot resolve plugin directory."
+2. Verify `$(pwd)` is NOT inside `~/.claude/`. If it is, error: "You are inside the plugin directory. Run this command from your project root."
 
-**MUST check before proceeding:**
+Stop on any failure.
 
-1. Verify `$PLUGIN_DIR` is set (resolved from this plugin's root). If not, error: "Cannot resolve plugin directory."
-2. Verify `$(pwd)` is NOT inside `~/.claude/` (e.g., `~/.claude/plugins/prove`, `~/.claude/extensions/*/prove`). If it is, error: "You are inside the plugin directory. Run this command from your project root, not the plugin installation."
+## Step 1: Core Checks
 
-Do NOT proceed if any check fails.
+Core checks gate all subsequent tiers. On any failure, skip Steps 2-3 and go to Step 5.
 
-### Step 1: Core Checks
-
-Core checks must pass for prove to function. If any fail, skip Tooling and Health tiers and go to Step 5.
-
-#### 1.1: .claude/.prove.json exists and is valid JSON
+#### 1.1: .claude/.prove.json
 
 ```bash
 PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema validate --file "$(pwd)/.claude/.prove.json" 2>&1
 ```
 
-- **Pass**: valid JSON, no schema errors
-- **Warn**: schema warnings (unknown fields)
-- **Fail**: missing, invalid JSON, or schema errors
-- **Fix**: `/prove:init`
+- Pass: valid JSON, no schema errors
+- Warn: schema warnings (unknown fields)
+- Fail: missing, invalid JSON, or schema errors — fix: `/prove:init`
 
 #### 1.2: CLAUDE.md exists
 
-- **Pass**: file exists
-- **Fail**: missing
-- **Fix**: `python3 "$PLUGIN_DIR/skills/claude-md/__main__.py" generate --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"`
+- Fail fix: `python3 "$PLUGIN_DIR/skills/claude-md/__main__.py" generate --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"`
 
 #### 1.3: .prove/ directory exists
 
-- **Pass**: exists
-- **Fail**: missing
-- **Fix**: `mkdir -p .prove`
+- Fail fix: `mkdir -p .prove`
 
 On core failure, print results and skip to Step 5:
 ```
@@ -65,96 +54,99 @@ On core failure, print results and skip to Step 5:
 Core checks failed. Fix these before other checks can run.
 ```
 
-### Step 2: Tooling Checks
+## Step 2: Tooling Checks
 
-Only check tools relevant to this project. Read `.claude/.prove.json` to determine which are configured.
+Only check tools relevant to this project's `.claude/.prove.json`.
 
 #### 2.1: Tool Registry Health
-
-Run the registry status check:
 
 ```bash
 PYTHONPATH="$PLUGIN_DIR" python3 "$PLUGIN_DIR/tools/registry.py" \
   --plugin-root "$PLUGIN_DIR" --project-root "$(pwd)" status
 ```
 
-- **Pass**: all enabled tools have requirements met and hooks in sync
-- **Warn**: available tools not yet installed (suggest `/prove:tools available`)
-- **Fail**: enabled tool missing requirements or hooks out of sync
-- **Fix**: `/prove:tools install <tool>` for missing tools, or re-install for hook sync
+- Pass: all enabled tools healthy, hooks in sync
+- Warn: available tools not installed — suggest `/prove:tools available`
+- Fail: enabled tool missing requirements or hooks out of sync — fix: `/prove:tools install <tool>`
 
-#### 2.2: CAFI (Content-Addressable File Index)
+#### 2.2: CAFI
 
-Skip unless `tools.cafi.enabled` is true in `.claude/.prove.json`.
+Skip unless `tools.cafi.enabled` is true.
 
-- Run `python3 $PLUGIN_DIR/tools/cafi/__main__.py status 2>&1`
-- **Pass**: reports indexed files
-- **Fail**: errors or index missing
-- **Fix**: `python3 $PLUGIN_DIR/tools/cafi/__main__.py index`
+```bash
+python3 $PLUGIN_DIR/tools/cafi/__main__.py status 2>&1
+```
 
-#### 2.3: Validators (Docker)
+- Pass: reports indexed files
+- Fail: errors or index missing — fix: `python3 $PLUGIN_DIR/tools/cafi/__main__.py index`
+
+#### 2.3: Docker
 
 Skip unless `.claude/.prove.json` has a `validators` section.
 
-- Run `docker info >/dev/null 2>&1`
-- **Pass**: Docker daemon running
-- **Warn**: installed but daemon not running
-- **Fail**: not found
-- **Fix**: not auto-fixable — report "Docker required. Install from https://docker.com"
+```bash
+docker info >/dev/null 2>&1
+```
+
+- Pass: daemon running
+- Warn: installed but daemon not running
+- Fail: not found — not auto-fixable, report "Docker required: https://docker.com"
 
 #### 2.4: Schema Validator
 
-- Run `PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema validate --help 2>&1`
-- **Pass**: module loads
-- **Fail**: import errors
-- **Fix**: not auto-fixable — report the error
+```bash
+PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema validate --help 2>&1
+```
+
+- Pass: module loads
+- Fail: import errors — not auto-fixable, report the error
 
 #### 2.5: Reporters
 
-Skip unless `.claude/.prove.json` has a `reporters` section.
+Skip unless `.claude/.prove.json` has a `reporters` section. Check each reporter's `run` command exists and is executable.
 
-- Check each reporter's `run` command exists and is executable
-- **Pass**: script exists
-- **Warn**: configured but script not found
-- **Fix**: `/prove:notify:notify-setup`
+- Pass: script exists
+- Warn: configured but script not found — fix: `/prove:notify:notify-setup`
 
-### Step 3: Health Checks
-
-Detect drift and staleness.
+## Step 3: Health Checks
 
 #### 3.1: CAFI Index Freshness
 
 Skip unless CAFI configured and index exists.
 
-- Run `python3 $PLUGIN_DIR/tools/cafi/__main__.py status 2>&1`
-- **Pass**: up to date
-- **Warn**: N files changed since last index
-- **Fix**: `python3 $PLUGIN_DIR/tools/cafi/__main__.py index`
+```bash
+python3 $PLUGIN_DIR/tools/cafi/__main__.py status 2>&1
+```
+
+- Pass: up to date
+- Warn: N files changed — fix: `python3 $PLUGIN_DIR/tools/cafi/__main__.py index`
 
 #### 3.2: Orphaned Worktrees
 
-- Check `.claude/worktrees/` for entries, cross-reference with `git worktree list 2>&1`
-- **Pass**: none (or no worktree directory)
-- **Warn**: N orphaned worktrees
-- **Fix**: `bash "$PLUGIN_DIR/scripts/cleanup-worktrees.sh"`
+Check `.claude/worktrees/` entries against `git worktree list 2>&1`.
+
+- Pass: none (or no worktree directory)
+- Warn: N orphaned — fix: `bash "$PLUGIN_DIR/scripts/cleanup-worktrees.sh"`
 
 #### 3.3: CLAUDE.md Staleness
 
-- Compare `.claude/.prove.json` mtime vs `CLAUDE.md` mtime
-- **Pass**: CLAUDE.md newer
-- **Warn**: .claude/.prove.json modified after CLAUDE.md
-- **Fix**: `python3 "$PLUGIN_DIR/skills/claude-md/__main__.py" generate --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"`
+Compare `.claude/.prove.json` mtime vs `CLAUDE.md` mtime.
+
+- Pass: CLAUDE.md newer
+- Warn: .prove.json modified after CLAUDE.md — fix: `python3 "$PLUGIN_DIR/skills/claude-md/__main__.py" generate --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"`
 
 #### 3.4: Schema Version
 
-- Run `PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema migrate --file "$(pwd)/.claude/.prove.json" --dry-run 2>&1`
-- **Pass**: latest schema version
-- **Warn**: migration available
-- **Fix**: `/prove:update`
+```bash
+PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema migrate --file "$(pwd)/.claude/.prove.json" --dry-run 2>&1
+```
 
-### Step 4: Present Results
+- Pass: latest schema version
+- Warn: migration available — fix: `/prove:update`
 
-Print all results grouped by tier:
+## Step 4: Present Results
+
+Group by tier:
 
 ```
 ── Core ──
@@ -178,14 +170,11 @@ Print all results grouped by tier:
 Summary: 8 passed, 2 warnings, 0 failures
 ```
 
-### Step 5: Offer Fixes
+## Step 5: Offer Fixes
 
-If all checks passed:
-```
-All checks passed. Your prove installation is healthy.
-```
+If all checks passed: "All checks passed. Your prove installation is healthy."
 
-If failures or warnings have known fixes, `AskUserQuestion` with header "Fix" and options:
+If failures or warnings have known fixes, `AskUserQuestion` with header "Fix":
 - "Fix all" — apply all fixes
 - "Fix failures only" — fix [✗] items only
 - "Skip" — report only

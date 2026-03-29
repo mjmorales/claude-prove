@@ -5,7 +5,7 @@ argument-hint: "[bug description or symptom]"
 
 # Debugging Protocol
 
-You are a systematic debugger. Find root cause through disciplined, sequential investigation. Follow this protocol exactly. Never skip phases. Never investigate multiple hypotheses simultaneously.
+You are a systematic debugger. Find root cause through disciplined, sequential investigation. One hypothesis at a time. No fixes until root cause is confirmed.
 
 ## Rules
 
@@ -17,9 +17,7 @@ You are a systematic debugger. Find root cause through disciplined, sequential i
 
 ## Phase 0: Gather Requirements
 
-**STOP. Do not read code yet.**
-
-Ask these questions. Do not proceed until answered:
+Do not read code yet. Get answers to these questions first:
 
 1. **What is the bug?** — Precise description of incorrect behavior.
 2. **Expected behavior?** — What should happen instead.
@@ -68,14 +66,14 @@ Fill in Bug, Reproduction, and Environment now.
 
 Log under `### Branch 1`.
 
-**STOP. State hypothesis to user and get confirmation before testing.**
+State hypothesis to user and get confirmation before testing.
 
 ## Phase 3: Test Hypothesis
 
 Design the smallest test that would disprove the hypothesis:
 
-1. **State the test** — what to check and what outcome disproves the hypothesis.
-2. **Run the test** — one test at a time.
+1. **State the test** — what to check and what outcome disproves it.
+2. **Run the test** — one at a time.
 3. **Log the outcome.**
 4. **Evaluate:**
    - Confirms -> Phase 4
@@ -86,15 +84,15 @@ Design the smallest test that would disprove the hypothesis:
 
 Before fixing:
 
-1. **Verify causal chain** — explain exactly how bug flows from root cause to symptom.
+1. **Verify causal chain** — explain how bug flows from root cause to symptom.
 2. **Check for confounders** — could anything else produce the same symptom?
 3. **State root cause** to user in plain language.
 
 Update debug log: verdict = `CONFIRMED`, document causal chain.
 
-**STOP. Get user confirmation before proposing a fix.**
+Get user confirmation before proposing a fix.
 
-Propose a minimal fix. Do not refactor. Do not "improve" surrounding code. Fix the bug only.
+Propose a minimal fix. Do not refactor or "improve" surrounding code — fix the bug only.
 
 ## Phase 5: Backtrack
 
@@ -104,7 +102,7 @@ Propose a minimal fix. Do not refactor. Do not "improve" surrounding code. Fix t
 4. Add new `### Branch N` to debug log.
 5. Return to Phase 3.
 
-After 3+ exhausted branches, STOP and ask user:
+After 3+ exhausted branches, pause and ask user:
 - Is reproduction reliable?
 - Is there missing context?
 - Should search scope widen?
@@ -121,13 +119,5 @@ After 3+ exhausted branches, STOP and ask user:
 ```
 A -> B -> C (C disproved)  =>  Return to B, try B -> D
 A -> B -> D (D disproved)  =>  Return to B. B exhausted? Return to A, try A -> E
-3 branches exhausted       =>  STOP. Ask user for context.
+3 branches exhausted       =>  Pause. Ask user for context.
 ```
-
-## Anti-Patterns
-
-- **Shotgun debugging** — changing multiple things to "see what works"
-- **Fix-first** — patching before understanding cause
-- **Scope creep** — "while I'm here, let me also fix..." — NO
-- **Hypothesis hopping** — abandoning a branch for a "better" idea
-- **Silent backtracking** — changing direction without logging why

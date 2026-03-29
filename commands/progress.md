@@ -4,24 +4,24 @@ description: Show orchestrator execution status — current wave, task statuses,
 
 # Progress Report
 
-Read-only status check across all active orchestrator runs. Never modify any files.
+Read-only status check across active orchestrator runs. Never modify files.
 
 ## Steps
 
 1. Scan `.prove/runs/*/PROGRESS.md` for active runs.
-   - If none exist: "No active orchestrator run found. Start one with `/prove:orchestrator` or `/prove:full-auto`."
+   - If none: "No active orchestrator run found. Start one with `/prove:orchestrator` or `/prove:full-auto`."
 
 2. For each run, read `PROGRESS.md` and `reports/run-log.md`. Extract:
    - Overall status, current wave/total waves, per-task status
    - Review verdicts (last 5), issues/blockers, test results
-   - Any WIP or failed steps from the Step Log
+   - WIP or failed steps from the Step Log
 
-3. If multiple runs exist, show a summary table first:
+3. If multiple runs, show summary table first:
 
    | Slug | Status | Branch | Tasks |
    |------|--------|--------|-------|
 
-4. Present a compact summary per run:
+4. Present compact summary per run:
 
 ```
 ## Orchestrator Status: [Feature Name]
