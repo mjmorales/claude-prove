@@ -17,15 +17,15 @@ PYTHONPATH="$PLUGIN_DIR" python3 "$PLUGIN_DIR/tools/registry.py" \
 
 ### list (default)
 
-Run with `list`. Present JSON output as a formatted table.
+Run with `list`. Present JSON output as a formatted table. Output is grouped by kind: "Infrastructure" for tools and "Workflow Packs" for packs. Packs are optional workflow bundles (skills + agents + commands) that users opt into.
 
 ### install `<tool>`
 
-Run with `install <tool>`. Summarize what was done: hooks added, directories created, config defaults applied.
+Run with `install <tool>`. Summarize what was done: hooks added, directories created, config defaults applied. For packs, also report symlinks created (skills, agents, commands linked into the plugin root).
 
 ### remove `<tool>`
 
-Run with `remove <tool>`. Summarize what was cleaned up.
+Run with `remove <tool>`. Summarize what was cleaned up, including symlinks removed for packs.
 
 ### status `[tool]`
 

@@ -108,6 +108,24 @@ Skip unless `.claude/.prove.json` has a `reporters` section. Check each reporter
 - Pass: script exists
 - Warn: configured but script not found — fix: `/prove:notify:notify-setup`
 
+#### 2.6: Pack Symlink Health
+
+For each enabled tool with `kind: "pack"` in its `tool.json`, verify expected symlinks exist and resolve correctly.
+
+```bash
+PYTHONPATH="$PLUGIN_DIR" python3 "$PLUGIN_DIR/tools/registry.py" \
+  --plugin-root "$PLUGIN_DIR" --project-root "$(pwd)" status
+```
+
+For each enabled pack (check `kind` field in the status output), verify symlinks:
+- For each entry in `provides.skills`: check `$PLUGIN_DIR/skills/<name>` is a symlink resolving into `$PLUGIN_DIR/tools/<pack>/skills/`
+- For each entry in `provides.agents`: check `$PLUGIN_DIR/agents/<name>.md` is a symlink resolving into `$PLUGIN_DIR/tools/<pack>/agents/`
+- For each entry in `provides.commands`: check `$PLUGIN_DIR/commands/<name>.md` is a symlink resolving into `$PLUGIN_DIR/tools/<pack>/commands/`
+
+- Pass: all expected symlinks exist and resolve correctly
+- Warn: pack enabled but no symlinks found — fix: `/prove:tools remove <pack> && /prove:tools install <pack>`
+- Fail: broken symlinks (exist but don't resolve) — fix: `/prove:tools remove <pack> && /prove:tools install <pack>`
+
 ## Step 3: Health Checks
 
 #### 3.1: CAFI Index Freshness
