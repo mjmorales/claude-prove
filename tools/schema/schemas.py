@@ -184,6 +184,11 @@ _HOOK_MATCHER_SCHEMA = {
             "items": _HOOK_ENTRY_SCHEMA,
             "description": "Hook handlers to run on match",
         },
+        "_tool": {
+            "type": "str",
+            "required": False,
+            "description": "Tool registry tag — identifies which prove tool owns this hook entry",
+        },
     },
 }
 

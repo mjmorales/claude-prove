@@ -28,9 +28,4 @@
     "commands": ["review", "review/fix", "review/discuss", "review/resolve"],
     "skills": ["review"],
     "agents": ["pcd/*"]
-  },
-  "lifecycle": {
-    "post_install": "tools/acb/lifecycle.py:install",
-    "pre_uninstall": "tools/acb/lifecycle.py:uninstall"
-  }
-}
+  }}

@@ -48,6 +48,23 @@ def _settings_json_path(project_root: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
+# Hook variable expansion
+# ---------------------------------------------------------------------------
+
+def _expand_hook_vars(entry: dict, plugin_root: Path, project_root: Path) -> dict:
+    """Expand $PLUGIN_DIR and $PROJECT_ROOT in hook command strings."""
+    result = dict(entry)
+    for key in ("command",):
+        if key in result and isinstance(result[key], str):
+            result[key] = (
+                result[key]
+                .replace("$PLUGIN_DIR", str(plugin_root))
+                .replace("$PROJECT_ROOT", str(project_root))
+            )
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Low-level I/O helpers
 # ---------------------------------------------------------------------------
 
@@ -205,7 +222,7 @@ def cmd_install(args: argparse.Namespace) -> None:
         for event_name, entries in manifest_hooks.items():
             event_list = settings_hooks.setdefault(event_name, [])
             for entry in entries:
-                tagged = dict(entry)
+                tagged = _expand_hook_vars(entry, plugin_root, project_root)
                 tagged["_tool"] = tool_name
                 event_list.append(tagged)
                 hooks_added += 1
