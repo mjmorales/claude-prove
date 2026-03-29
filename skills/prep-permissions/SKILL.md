@@ -9,23 +9,23 @@ description: >
 
 # Prep Permissions
 
-Configure `.claude/settings.local.json` with scoped tool permissions so the user can work without constant approval prompts or `--dangerously-skip-permissions`.
+Configure `.claude/settings.local.json` with scoped tool permissions for the active task.
 
 ## Phase 1: Gather Context
 
 Read these files (skip missing ones):
 
-1. `.prove/TASK_PLAN.md` — extract implementation steps, languages, tools
+1. `.prove/TASK_PLAN.md` — implementation steps, languages, tools
 2. `.prove/plans/plan_*/05_implementation_plan.md` — file paths, commands
 3. `.claude/.prove.json` — validator and reporter commands
-4. `.claude/settings.local.json` — preserve existing rules
+4. `.claude/settings.local.json` — existing rules to preserve
 5. Project root — check for `go.mod`, `package.json`, `Cargo.toml`, `pyproject.toml`, `Makefile`, `project.godot`
 
 ## Phase 2: Build Permission Rules
 
-Generate `permissions.allow` rules. Use the **most specific patterns possible**.
+Generate `permissions.allow` rules with the most specific patterns possible.
 
-### Baseline (always include)
+### Baseline
 
 ```
 Bash(git *)
@@ -36,14 +36,14 @@ Write
 
 ### From .claude/.prove.json
 
-Add each validator/reporter command as a Bash rule:
+Each validator/reporter command becomes a Bash rule:
 - `"command": "go build ./..."` -> `Bash(go build *)`
 - `"command": "./.prove/notify.sh"` -> `Bash(./.prove/notify.sh *)`
 
-### From auto-detected toolchain (when no .claude/.prove.json)
+### From auto-detected toolchain (when no .prove.json)
 
-| Indicator | Rules to add |
-|-----------|-------------|
+| Indicator | Rules |
+|-----------|-------|
 | `go.mod` | `Bash(go build *)`, `Bash(go test *)`, `Bash(go vet *)`, `Bash(go mod *)`, `Bash(go run *)` |
 | `package.json` | `Bash(npm *)`, `Bash(npx *)` |
 | `Cargo.toml` | `Bash(cargo *)` |
@@ -53,34 +53,31 @@ Add each validator/reporter command as a Bash rule:
 
 ### From task plan
 
-Scan for mentioned tools and add specific rules:
+Scan for mentioned tools:
 - Database migrations -> `Bash(migrate *)`, `Bash(goose *)`, etc.
-- Docker usage -> `Bash(docker *)`, `Bash(docker-compose *)`
-- Script references -> `Bash(bash scripts/*)`, `Bash(./scripts/*)`
+- Docker -> `Bash(docker *)`, `Bash(docker-compose *)`
+- Scripts -> `Bash(bash scripts/*)`, `Bash(./scripts/*)`
 
-### Orchestrator/full-auto mode (additional)
+### Orchestrator/full-auto mode
 
 - `Bash(bash $PLUGIN_DIR/scripts/*)` — prove helper scripts
 - `Agent(principal-architect)`, `Agent(general-purpose)`, `Agent(Explore)`, `Agent(Plan)`
 
-### Never allow
+### Require user approval (do not add to allow)
 
-These must always require user approval:
-- `Bash(rm *)`, `Bash(git push *)`, `Bash(git reset *)` — destructive operations
+- `Bash(rm *)`, `Bash(git push *)`, `Bash(git reset *)` — destructive ops
 - `Bash(curl *)`, `Bash(wget *)` — network calls
 - `Bash(sudo *)` — elevated privileges
 - Anything touching `.env`, credentials, or secrets
 
 ## Phase 3: Confirm with User
 
-Present rules grouped by category (git, build/test, file ops, orchestrator, still-requires-approval). Use `AskUserQuestion` with header "Permissions" and options: "Approve" / "Modify".
+Present rules grouped by category (git, build/test, file ops, orchestrator, still-requires-approval). Use AskUserQuestion with header "Permissions": "Approve" / "Modify".
 
 ## Phase 4: Write Configuration
 
 1. Read existing `.claude/settings.local.json` if present
 2. Merge new `permissions.allow` with existing rules (deduplicate)
-3. Preserve any existing `permissions.deny` or `permissions.ask` rules
-4. Write the file. Create `.claude/` directory if needed.
-5. **Never modify `.claude/settings.json`** — that file is shared team settings.
-
-After writing, remind the user to restart Claude Code and note that `.claude/settings.local.json` should be in `.gitignore`.
+3. Preserve existing `permissions.deny` or `permissions.ask` rules
+4. Write the file (create `.claude/` if needed). Only modify `settings.local.json`, not the shared `settings.json`.
+5. Remind the user to restart Claude Code and confirm `.claude/settings.local.json` is in `.gitignore`
