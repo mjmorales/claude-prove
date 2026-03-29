@@ -687,6 +687,151 @@ class TestSymlinks:
             assert data["symlinks_created"] == 2
 
 
+class TestSync:
+    def test_sync_refreshes_stale_hooks(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Sync replaces stale hook commands with fresh manifest-derived ones."""
+        stale_hooks = {
+            "PostToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [{"type": "command", "command": "python3 /OLD/PATH/hook.py"}],
+                    "_tool": "acb",
+                },
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root, project_root = _make_env(
+                tmp,
+                prove_tools={"acb": {"enabled": True}},
+                settings_hooks=stale_hooks,
+            )
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "sync",
+            ])
+            settings = json.loads(
+                (project_root / ".claude" / "settings.json").read_text()
+            )
+            hook_cmd = settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
+            # Must NOT contain the old path
+            assert "/OLD/PATH/" not in hook_cmd
+            assert settings["hooks"]["PostToolUse"][0]["_tool"] == "acb"
+
+            data = json.loads(capsys.readouterr().out)
+            assert data["hooks_removed"] == 1
+            assert data["hooks_added"] == 1
+
+    def test_sync_preserves_non_tool_hooks(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Non-tool hooks (no _tool tag) survive sync unchanged."""
+        mixed_hooks = {
+            "PostToolUse": [
+                {"matcher": "Write", "hooks": [{"type": "command", "command": "echo user-hook"}]},
+                {"matcher": "Bash", "hooks": [{"type": "command", "command": "old"}], "_tool": "acb"},
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root, project_root = _make_env(
+                tmp,
+                prove_tools={"acb": {"enabled": True}},
+                settings_hooks=mixed_hooks,
+            )
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "sync",
+            ])
+            settings = json.loads(
+                (project_root / ".claude" / "settings.json").read_text()
+            )
+            post_hooks = settings["hooks"]["PostToolUse"]
+            # User hook preserved + acb hook re-added = 2
+            assert len(post_hooks) == 2
+            user_hook = [h for h in post_hooks if "_tool" not in h]
+            assert len(user_hook) == 1
+            assert user_hook[0]["hooks"][0]["command"] == "echo user-hook"
+
+    def test_sync_disabled_tool_hooks_removed(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Hooks for disabled tools are removed and not re-added."""
+        stale_hooks = {
+            "PostToolUse": [
+                {"matcher": "Bash", "hooks": [{"type": "command", "command": "old"}], "_tool": "acb"},
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root, project_root = _make_env(
+                tmp,
+                prove_tools={"acb": {"enabled": False}},
+                settings_hooks=stale_hooks,
+            )
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "sync",
+            ])
+            settings = json.loads(
+                (project_root / ".claude" / "settings.json").read_text()
+            )
+            # PostToolUse event should be gone entirely
+            assert "PostToolUse" not in settings.get("hooks", {})
+
+            data = json.loads(capsys.readouterr().out)
+            assert data["hooks_removed"] == 1
+            assert data["hooks_added"] == 0
+
+    def test_sync_reconciles_pack_symlinks(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Sync re-creates symlinks for enabled packs."""
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root, project_root = _make_env(
+                tmp,
+                manifests={"project-manager": SAMPLE_MANIFEST_PACK},
+                prove_tools={"project-manager": {"enabled": True}},
+                pack_content={"project-manager": {
+                    "skills": ["project-manager/SKILL.md"],
+                }},
+            )
+            # No symlinks exist yet (tool was enabled in config but not installed via CLI)
+            assert not (plugin_root / "skills" / "project-manager").exists()
+
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "sync",
+            ])
+            # Symlink should now exist
+            assert (plugin_root / "skills" / "project-manager").is_symlink()
+
+            data = json.loads(capsys.readouterr().out)
+            assert data["symlinks_created"] == 1
+
+    def test_sync_already_in_sync(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """When nothing has drifted, sync reports no changes."""
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root, project_root = _make_env(
+                tmp,
+                manifests={"cafi": SAMPLE_MANIFEST_CAFI},
+                prove_tools={"cafi": {"enabled": True}},
+            )
+            # Install first to get correct state
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "install", "cafi",
+            ])
+            capsys.readouterr()
+
+            # Now sync — should be a no-op
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "sync",
+            ])
+            data = json.loads(capsys.readouterr().out)
+            # cafi has no hooks, so removed+added should both be 0
+            assert data["hooks_removed"] == 0
+            assert data["hooks_added"] == 0
+
+
 class TestMissingProveJson:
     def test_errors_without_prove_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

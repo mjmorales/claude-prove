@@ -1,6 +1,6 @@
 ---
 description: List, install, or remove prove tools
-argument-hint: "[list|install <tool>|remove <tool>|status|available]"
+argument-hint: "[list|install <tool>|remove <tool>|status|available|sync]"
 core: true
 summary: Manage prove tools — list, install, remove, status
 ---
@@ -34,3 +34,7 @@ Run with `status [tool]`.
 ### available
 
 Run with `available`. Show tools that exist in the plugin but aren't enabled in this project. Suggest `install` for any the user might want.
+
+### sync
+
+Run with `sync`. Reconciles hooks and symlinks for all enabled tools against their manifests. Fixes drift caused by plugin updates, path changes, or manual edits to settings.json. Report what changed.

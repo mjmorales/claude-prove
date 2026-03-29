@@ -504,6 +504,102 @@ def cmd_available(args: argparse.Namespace) -> None:
 
 
 # ---------------------------------------------------------------------------
+# sync
+# ---------------------------------------------------------------------------
+
+def cmd_sync(args: argparse.Namespace) -> None:
+    """Reconcile hooks and symlinks for all enabled tools against their manifests.
+
+    For each enabled tool:
+    1. Remove all hooks tagged with ``_tool: <name>`` from settings.json
+    2. Re-add hooks from the manifest with fresh $PLUGIN_DIR expansion
+    3. Reconcile symlinks for packs (remove stale, create missing)
+
+    This fixes drift caused by plugin relocation, manifest changes, or
+    manual settings.json edits.
+    """
+    plugin_root = Path(args.plugin_root)
+    project_root = Path(args.project_root)
+
+    manifests = scan_tool_manifests(plugin_root)
+    prove = _read_prove_json(project_root)
+    tools_section = prove.get("tools", {})
+    settings = _read_settings_json(project_root)
+
+    hooks_removed = 0
+    hooks_added = 0
+    symlinks_removed = 0
+    symlinks_created = 0
+
+    # --- Phase 1: Strip ALL tool-tagged hooks ---
+    if "hooks" in settings:
+        for event_name in list(settings["hooks"]):
+            original = settings["hooks"][event_name]
+            filtered = [e for e in original if "_tool" not in e]
+            hooks_removed += len(original) - len(filtered)
+            if filtered:
+                settings["hooks"][event_name] = filtered
+            else:
+                del settings["hooks"][event_name]
+
+    # --- Phase 2: Re-add hooks for enabled tools from manifests ---
+    for name, prove_entry in tools_section.items():
+        if not prove_entry.get("enabled", False):
+            continue
+        manifest = manifests.get(name, {})
+        manifest_hooks = manifest.get("hooks", {})
+        if not manifest_hooks:
+            continue
+        settings_hooks = settings.setdefault("hooks", {})
+        for event_name, entries in manifest_hooks.items():
+            event_list = settings_hooks.setdefault(event_name, [])
+            for entry in entries:
+                tagged = _expand_hook_vars(entry, plugin_root, project_root)
+                tagged["_tool"] = name
+                event_list.append(tagged)
+                hooks_added += 1
+
+    _write_json(_settings_json_path(project_root), settings)
+
+    # --- Phase 3: Reconcile symlinks for packs ---
+    for name, prove_entry in tools_section.items():
+        if not prove_entry.get("enabled", False):
+            continue
+        manifest = manifests.get(name, {})
+        tool_dir = _tools_dir(plugin_root) / name
+        if not tool_dir.is_dir():
+            continue
+
+        # Remove stale symlinks, then re-create
+        removed = _remove_symlinks(plugin_root, tool_dir)
+        symlinks_removed += removed
+        try:
+            created = _create_symlinks(plugin_root, tool_dir)
+            symlinks_created += created
+        except RuntimeError as exc:
+            print(f"Warning: symlink conflict for {name}: {exc}", file=sys.stderr)
+
+    result = {
+        "hooks_removed": hooks_removed,
+        "hooks_added": hooks_added,
+        "symlinks_removed": symlinks_removed,
+        "symlinks_created": symlinks_created,
+    }
+    json.dump(result, sys.stdout, indent=2)
+    print()
+
+    changes = hooks_removed + hooks_added + symlinks_removed + symlinks_created
+    if changes == 0:
+        print("Already in sync.", file=sys.stderr)
+    else:
+        print(
+            f"Synced: {hooks_removed} hooks removed, {hooks_added} added, "
+            f"{symlinks_removed} symlinks removed, {symlinks_created} created",
+            file=sys.stderr,
+        )
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -550,6 +646,10 @@ def main(argv: list[str] | None = None) -> None:
     # available
     p_available = sub.add_parser("available", help="Show tools not yet enabled.")
     p_available.set_defaults(func=cmd_available)
+
+    # sync
+    p_sync = sub.add_parser("sync", help="Reconcile hooks and symlinks for enabled tools.")
+    p_sync.set_defaults(func=cmd_sync)
 
     args = parser.parse_args(argv)
     if not args.command:
