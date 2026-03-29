@@ -5,7 +5,7 @@ description: Discovery-driven planning for tasks in existing codebases. Explores
 
 # Task Planner Skill
 
-Guide the user through iterative discovery and planning for a specific task in an existing codebase. Output: `.prove/TASK_PLAN.md`.
+Iterative discovery and planning for a task in an existing codebase. Output: `.prove/TASK_PLAN.md`.
 
 ## Discovery Phases
 
@@ -18,39 +18,38 @@ Gather from the user:
 
 ### Phase 2: Code Discovery
 
-Explore the codebase systematically:
-1. **Locate relevant code** -- related files, execution paths, entry points
-2. **Map the territory** -- architecture, dependencies, integration points
-3. **Understand data flow** -- ingress, transformations, storage/output
-
-Use `scripts/code_explorer.py` for structured exploration (find, imports, usages, structure, tests, history, todos, analyze).
+Explore the codebase using `scripts/code_explorer.py` (find, imports, usages, structure, tests, history, todos, analyze):
+1. Locate relevant files, execution paths, entry points
+2. Map architecture, dependencies, integration points
+3. Trace data flow -- ingress, transformations, storage/output
 
 ### Phase 3: Research & Investigation
 
-1. **Technical research** -- possible approaches, trade-offs, relevant libraries/patterns
-2. **Code archaeology** -- git history, related PRs, explanatory comments
-3. **Dependency analysis** -- what depends on this code, blast radius of changes
+1. Technical research -- approaches, trade-offs, relevant libraries/patterns
+2. Code archaeology -- git history, related PRs, explanatory comments
+3. Dependency analysis -- what depends on this code, blast radius of changes
 
 ### Phase 4: Edge Case Discovery
 
-Systematically identify edge cases across input boundaries, state conditions, and error scenarios. Use `references/edge-cases-checklist.md` for a comprehensive checklist by domain.
+Identify edge cases across input boundaries, state conditions, and error scenarios. Use `references/edge-cases-checklist.md` by domain.
 
 ### Phase 5: Requirements Refinement
 
-Through iterative discussion:
-1. **Clarify ambiguities** -- when 2-3 discrete interpretations exist, use AskUserQuestion with those options plus a "Research & proceed" option (see `references/interaction-patterns.md`). When open-ended, use free-form discussion.
-2. **Uncover hidden requirements** -- scaling, audit/compliance, logging needs
+1. **Clarify ambiguities** -- discrete interpretations: AskUserQuestion with options + "Research & proceed" (see `references/interaction-patterns.md`). Open-ended: free-form discussion.
+2. **Uncover hidden requirements** -- scaling, audit/compliance, logging
 3. **Define boundaries** -- explicit in/out of scope, stated assumptions
 
 ### Phase 6: Solution Design
 
-1. **High-level approach** -- strategy, key design decisions, architecture changes
-2. **Implementation strategy** -- where to change, order of operations, testing approach
-3. **Risk mitigation** -- rollback plan, feature flags, gradual rollout
+1. High-level approach -- strategy, key design decisions, architecture changes
+2. Implementation strategy -- where to change, order of operations, testing
+3. Risk mitigation -- rollback plan, feature flags, gradual rollout
 
-## Creating the Task Plan
+## Task Plan Output
 
-After discovery, create `.prove/TASK_PLAN.md`:
+After discovery, create `.prove/TASK_PLAN.md`. Full template at `assets/templates/TASK_PLAN_template.md`.
+
+### Required Structure
 
 ```markdown
 # Task Plan: [Task Name]
@@ -60,97 +59,48 @@ After discovery, create `.prove/TASK_PLAN.md`:
 **Risk Level**: Low | Medium | High
 
 ## Summary
-[1-2 sentences describing what we're doing and why]
+[1-2 sentences: what and why]
 
-## Current State
-[What the code/system does now, based on our discovery]
-
-## Desired State
-[What it should do after our changes]
-
-## Technical Approach
-[High-level strategy based on our research]
+## Current State / ## Desired State / ## Technical Approach
+[Based on discovery findings]
 
 ## Implementation Steps
-
-> **Header format (mandatory)**: Use `### Task {wave}.{seq}: {name}` -- e.g., `### Task 1.1:`, `### Task 2.1:`. The wave number groups parallelizable tasks; the seq number orders within a wave. The orchestrator's shell scripts parse these headers by exact pattern -- any other format will break execution.
-
-### Task 1.1: [Preparation/Setup]
-**Size**: XS/S/M/L/XL
-**Description**: [What we're doing]
-**Changes**:
-- File: `path/to/file.py`
-  - Action: [Add/Modify/Delete]
-  - Details: [Specific changes]
-**Verification**:
-- [ ] [How to verify this task worked]
-- [ ] [Another verification]
-**Tests**:
-- Unit test: [Test to write/update]
-- Manual test: [Steps to verify]
-
-### Task 1.2: [Core Implementation]
-**Size**: XS/S/M/L/XL
-**Description**: [What we're doing]
-**Changes**:
-- File: `path/to/another.py`
-  - Action: [Specific changes]
-**Dependencies**: Task 1.1 must be complete
-**Verification**:
-- [ ] [How to verify]
-**Tests**:
-- [Specific test cases]
-
-### Task 1.3: [Edge Case Handling]
-[Continue pattern...]
-
-### Task 2.1: [Testing & Validation]
-[Continue pattern...]
+[Tasks using header format below]
 
 ## Edge Cases to Handle
-Based on our discovery:
-- [Edge case 1]: [How we'll handle it]
-- [Edge case 2]: [How we'll handle it]
+- [Edge case]: [Handling strategy]
 
 ## Rollback Plan
-If issues arise:
-1. [Rollback step 1]
-2. [Rollback step 2]
-
 ## Monitoring
-After deployment, monitor:
-- [Metric/log to watch]
-- [Alert to set up]
-
 ## Notes from Discovery
-- [Important finding from code exploration]
-- [Assumption we're making]
-- [Technical debt noted for future]
 ```
 
-A more detailed template with additional sections is available at `assets/templates/TASK_PLAN_template.md`.
+### Task Header Format
+
+Headers use `### Task {wave}.{seq}: {name}` -- e.g., `### Task 1.1: Setup`, `### Task 2.1: Tests`. Wave groups parallelizable tasks; seq orders within a wave. The orchestrator parses this exact pattern.
+
+### Task Fields
+
+Each task includes:
+- **Size**: XS/S/M/L/XL
+- **Description**: what this task accomplishes
+- **Changes**: file paths with Add/Modify/Delete actions and details
+- **Dependencies**: (if any) which tasks must complete first
+- **Verification**: checklist of how to verify success
+- **Tests**: unit and manual test cases
 
 ## Validation Awareness
 
-When building verification criteria, check for `.claude/.prove.json` in the project root. If present, use its validators for concrete verification commands. If absent, note that the orchestrator will auto-detect validators at runtime. See `references/validation-config.md` for the full spec.
+Check `.claude/.prove.json` for configured validators -- use those commands in verification criteria. If absent, the orchestrator auto-detects at runtime. See `references/validation-config.md`.
 
-## Output Integration
+## Resources
 
-The `.prove/TASK_PLAN.md` feeds into the orchestrator skill. Each task becomes a planning item with numbered references, explicit dependencies, and verification criteria.
-
-## Bundled Resources
-
-### Scripts
-- `scripts/code_explorer.py` -- systematic code exploration (find, imports, usages, structure, tests, history, todos, analyze)
-
-### Assets
-- `assets/task-planning-prompts.md` -- prompt templates for planning sessions (bug fixes, features, performance, refactoring)
+- `scripts/code_explorer.py` -- structured code exploration
+- `assets/task-planning-prompts.md` -- prompt templates for planning sessions
 - `assets/templates/TASK_PLAN_template.md` -- detailed output template with all optional sections
-
-### References
-- `references/edge-cases-checklist.md` -- edge case discovery checklist by domain (web, database, files, distributed systems)
-- `references/interaction-patterns.md` -- when to use AskUserQuestion vs free-form discussion
+- `references/edge-cases-checklist.md` -- edge case checklist by domain
+- `references/interaction-patterns.md` -- AskUserQuestion vs free-form patterns
 
 ## Committing
 
-When the user asks to commit planning artifacts, delegate to the `commit` skill. Do not create ad-hoc commits. The commit skill reads `.claude/.prove.json` scopes for valid commit scopes and uses conventional commit format.
+Delegate to the `commit` skill. Do not create ad-hoc commits.
