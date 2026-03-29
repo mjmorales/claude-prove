@@ -1,11 +1,16 @@
 <!-- prove:managed:start -->
 # claude-prove
 
+<!-- prove:plugin-version:0.22.0 -->
+**Prove plugin v0.22.0** — if the installed plugin version (`cat /Users/manuelmorales/dev/claude-prove/.claude-plugin/plugin.json | grep version`) does not match v0.22.0, run `/prove:update` to sync.
+
+JavaScript/TypeScript (npm)
 
 ## Structure
 
 - `agents/` — Agent definitions
 - `commands/` — Slash commands
+- `docs/` — Documentation
 - `scripts/` — Build/utility scripts
 - `skills/` — Plugin skills
 - `tools/` — Development tools
@@ -15,48 +20,36 @@
 - File naming: snake_case
 - Test files: test_*.ext (prefix)
 
-## Validation
-
-Run before committing:
-
-- **lint**: `docker run --rm -v "$PWD":/project prove-validators ruff check .`
-- **lint**: `docker run --rm -v "$PWD":/project prove-validators mypy --ignore-missing-imports tools/`
-- **test**: `docker run --rm -v "$PWD":/project prove-validators python -m pytest tools/cafi/ -v`
-
 ## Discovery Protocol
 
-Before using Glob or Grep for broad codebase exploration:
+Before broad Glob/Grep searches, check the file index first:
 
-1. Check the file index first — it has routing hints for every file
-2. Run `python3 tools/cafi/__main__.py context` for the full index
-3. Run `python3 tools/cafi/__main__.py lookup <keyword>` to search by keyword
-4. Only fall back to Glob/Grep when the index doesn't cover what you need
+- `python3 /Users/manuelmorales/dev/claude-prove/tools/cafi/__main__.py context` — full index with routing hints
+- `python3 /Users/manuelmorales/dev/claude-prove/tools/cafi/__main__.py lookup <keyword>` — search by keyword
 
-The index describes *when* to read each file, not just what it contains.
+Only fall back to Glob/Grep when the index doesn't cover what you need.
+## References
+
+### LLM-Optimized Coding Standards
+
+@references/llm-coding-standards.md
+
+### Interaction Patterns
+
+@references/interaction-patterns.md
+
+### Validation Configuration
+
+@references/validation-config.md
 
 ## Prove Commands
 
-- `/prove:index` — Update the file index (run after significant changes)
-- `/prove:docs:claude-md` — Regenerate this file
-- `/prove:task-planner` — Plan implementation for a task
-- `/prove:orchestrator` — Autonomous execution with validation gates
+- `/prove:autopilot` — Autonomous execution with validation gates
 - `/prove:brainstorm` — Explore options and record decisions
 - `/prove:comprehend` — Socratic quiz on recent diffs to build code comprehension
-
-## Scripts
-
-- **Worktree cleanup**: `bash scripts/cleanup-worktrees.sh` — removes all stale worktrees under `.claude/worktrees/`. Use `--dry-run` to preview.
-- **Task cleanup**: `PROJECT_ROOT="." bash scripts/cleanup.sh --auto <task-slug>` — archives `.prove/` artifacts for a completed task.
-
-## Completing a Task Branch
-
-After merging an orchestrator branch to main, sync with origin before pushing:
-
-1. `git checkout main`
-2. `git merge --no-ff orchestrator/<slug> -m "merge: <slug>"`
-3. If origin/main has diverged, `git merge origin/main` (avoid rebase — too many conflicts across long branch histories)
-4. `git push origin main`
-5. `bash scripts/cleanup-worktrees.sh` to remove any leftover worktrees
+- `/prove:index` — Update the file index (run after significant changes)
+- `/prove:plan-task` — Plan implementation for a task
+- `/prove:tools` — Manage prove tools — list, install, remove, status
 
 <!-- prove:managed:end -->
 

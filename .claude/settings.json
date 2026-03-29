@@ -11,6 +11,16 @@
             "timeout": 30
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/manuelmorales/dev/claude-prove/tools/acb/hook.py"
+          }
+        ],
+        "_tool": "acb"
       }
     ],
     "SubagentStop": [
