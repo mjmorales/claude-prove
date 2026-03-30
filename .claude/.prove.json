@@ -11,14 +11,37 @@
   },
   "claude_md": {
     "references": [
-      {"path": "references/llm-coding-standards.md", "label": "LLM-Optimized Coding Standards"},
-      {"path": "references/interaction-patterns.md", "label": "Interaction Patterns"},
-      {"path": "references/validation-config.md", "label": "Validation Configuration"}
+      {
+        "path": "references/llm-coding-standards.md",
+        "label": "LLM-Optimized Coding Standards"
+      },
+      {
+        "path": "references/interaction-patterns.md",
+        "label": "Interaction Patterns"
+      },
+      {
+        "path": "references/validation-config.md",
+        "label": "Validation Configuration"
+      },
+      {
+        "path": "references/creator-conventions.md",
+        "label": "Creator Conventions"
+      },
+      {
+        "path": "references/prompt-engineering-guide.md",
+        "label": "Prompt Engineering Guide"
+      }
     ]
   },
   "tools": {
     "cafi": {
-      "enabled": false
+      "enabled": true,
+      "scope": "user",
+      "config": {
+        "excludes": ["*.lock", "node_modules/**", "vendor/**", "dist/**", "*.min.js", "*.map", "cache/**"],
+        "max_file_size": 102400,
+        "concurrency": 3
+      }
     },
     "acb": {
       "enabled": true,

@@ -8,6 +8,7 @@ Usage::
     python3 tools/registry.py remove acb
     python3 tools/registry.py status [tool]
     python3 tools/registry.py available
+    python3 tools/registry.py settings [tool] [--apply|--strip]
 """
 
 from __future__ import annotations
@@ -61,11 +62,13 @@ def _settings_json_path(project_root: Path) -> Path:
 SYMLINK_CATEGORIES = ("skills", "agents", "commands")
 
 
-def _create_symlinks(plugin_root: Path, tool_dir: Path) -> int:
-    """Create relative symlinks from plugin-root categories into tool subdirectories.
+def _create_symlinks(target_root: Path, tool_dir: Path) -> int:
+    """Create relative symlinks from target_root categories into tool subdirectories.
 
     Scans tool_dir/skills/, tool_dir/agents/, tool_dir/commands/ and creates
-    symlinks at plugin_root/<category>/<child.name> pointing to the tool's copy.
+    symlinks at target_root/<category>/<child.name> pointing to the tool's copy.
+    target_root is plugin_root for user-scoped installs, project_root for
+    project-scoped installs.
     Returns the number of symlinks created.
     """
     count = 0
@@ -73,39 +76,47 @@ def _create_symlinks(plugin_root: Path, tool_dir: Path) -> int:
         source_dir = tool_dir / category
         if not source_dir.is_dir():
             continue
-        target_parent = plugin_root / category
+        target_parent = target_root / category
         target_parent.mkdir(parents=True, exist_ok=True)
+        # Resolve real paths to handle filesystem symlinks (e.g. /tmp -> /private/tmp on macOS)
+        real_target_parent = Path(os.path.realpath(target_parent))
         for child in sorted(source_dir.iterdir()):
             link_path = target_parent / child.name
-            rel_target = os.path.relpath(child, target_parent)
+            real_child = Path(os.path.realpath(child))
+            rel_target = os.path.relpath(real_child, real_target_parent)
             if link_path.exists() or link_path.is_symlink():
-                if link_path.is_symlink() and os.readlink(str(link_path)) == rel_target:
-                    continue  # idempotent — already points to the same target
+                if link_path.is_symlink():
+                    existing = os.readlink(str(link_path))
+                    if existing == rel_target:
+                        continue  # idempotent — already points to the same target
                 raise RuntimeError(f"Conflict: {link_path} already exists")
             os.symlink(rel_target, str(link_path))
             count += 1
     return count
 
 
-def _remove_symlinks(plugin_root: Path, tool_dir: Path) -> int:
-    """Remove symlinks from plugin-root categories that point into tool_dir.
+def _remove_symlinks(target_root: Path, tool_dir: Path) -> int:
+    """Remove symlinks from target_root categories that point into tool_dir.
 
     Only removes symlinks whose resolved target is inside tool_dir.
+    target_root is plugin_root for user-scoped installs, project_root for
+    project-scoped installs.
     Returns the number of symlinks removed.
     """
+    real_tool_dir = os.path.realpath(tool_dir)
     count = 0
     for category in SYMLINK_CATEGORIES:
         source_dir = tool_dir / category
         if not source_dir.is_dir():
             continue
-        target_parent = plugin_root / category
+        target_parent = target_root / category
         if not target_parent.is_dir():
             continue
         for child in sorted(source_dir.iterdir()):
             link_path = target_parent / child.name
             if link_path.is_symlink():
-                resolved = link_path.resolve()
-                if str(resolved).startswith(str(tool_dir.resolve())):
+                real_target = os.path.realpath(link_path)
+                if real_target.startswith(real_tool_dir + os.sep) or real_target.startswith(real_tool_dir):
                     link_path.unlink()
                     count += 1
     return count
@@ -259,10 +270,18 @@ def _call_lifecycle(plugin_root: Path, spec: str) -> None:
         sys.path[:] = old_path
 
 
+def _resolve_symlink_root(scope: str, plugin_root: Path, project_root: Path) -> Path:
+    """Return the root directory where symlinks should be created/removed."""
+    if scope == "project":
+        return project_root
+    return plugin_root
+
+
 def cmd_install(args: argparse.Namespace) -> None:
     plugin_root = Path(args.plugin_root)
     project_root = Path(args.project_root)
     tool_name = args.tool
+    scope = getattr(args, "scope", "user")
 
     # Load manifest.
     manifest_path = _tools_dir(plugin_root) / tool_name / "tool.json"
@@ -281,7 +300,7 @@ def cmd_install(args: argparse.Namespace) -> None:
         if "default" in schema:
             config_defaults[key] = schema["default"]
 
-    tool_entry: dict = {"enabled": True}
+    tool_entry: dict = {"enabled": True, "scope": scope}
     if config_defaults:
         tool_entry["config"] = config_defaults
     tools_section[tool_name] = tool_entry
@@ -313,7 +332,8 @@ def cmd_install(args: argparse.Namespace) -> None:
 
     # --- symlinks (packs with skills/agents/commands) ---
     tool_dir = _tools_dir(plugin_root) / tool_name
-    symlinks_created = _create_symlinks(plugin_root, tool_dir)
+    symlink_root = _resolve_symlink_root(scope, plugin_root, project_root)
+    symlinks_created = _create_symlinks(symlink_root, tool_dir)
 
     # --- lifecycle ---
     lifecycle = manifest.get("lifecycle", {})
@@ -326,13 +346,14 @@ def cmd_install(args: argparse.Namespace) -> None:
     result = {
         "installed": tool_name,
         "version": manifest.get("version", "0.0.0"),
+        "scope": scope,
         "hooks_added": hooks_added,
         "dirs_created": dirs_created,
         "symlinks_created": symlinks_created,
     }
     json.dump(result, sys.stdout, indent=2)
     print()
-    print(f"Installed {tool_name} v{result['version']}", file=sys.stderr)
+    print(f"Installed {tool_name} v{result['version']} (scope: {scope})", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -350,9 +371,14 @@ def cmd_remove(args: argparse.Namespace) -> None:
     if manifest_path.exists():
         manifest = _read_json(manifest_path)
 
+    # Read scope from .prove.json to know where symlinks live.
+    prove = _read_prove_json(project_root)
+    scope = prove.get("tools", {}).get(tool_name, {}).get("scope", "user")
+
     # --- symlinks (remove before lifecycle and config cleanup) ---
     tool_dir = _tools_dir(plugin_root) / tool_name
-    symlinks_removed = _remove_symlinks(plugin_root, tool_dir)
+    symlink_root = _resolve_symlink_root(scope, plugin_root, project_root)
+    symlinks_removed = _remove_symlinks(symlink_root, tool_dir)
 
     # --- lifecycle pre_uninstall ---
     lifecycle = manifest.get("lifecycle", {})
@@ -424,6 +450,7 @@ def cmd_status(args: argparse.Namespace) -> None:
             "version": manifest.get("version", "unknown"),
             "kind": manifest.get("kind", "tool"),
             "enabled": enabled,
+            "scope": prove_entry.get("scope", "user"),
             "config": prove_entry.get("config", {}),
             "active_hooks": active_hooks,
             "provides": provides,
@@ -451,7 +478,8 @@ def cmd_status(args: argparse.Namespace) -> None:
 def _print_status_table(statuses: list[dict]) -> None:
     for s in statuses:
         en = "enabled" if s["enabled"] else "disabled"
-        print(f"  {s['name']} v{s['version']} [{en}]", file=sys.stderr)
+        scope = s.get("scope", "user")
+        print(f"  {s['name']} v{s['version']} [{en}, {scope}]", file=sys.stderr)
         if s["config"]:
             print(f"    config: {json.dumps(s['config'])}", file=sys.stderr)
         if s["active_hooks"]:
@@ -570,11 +598,14 @@ def cmd_sync(args: argparse.Namespace) -> None:
         if not tool_dir.is_dir():
             continue
 
+        scope = prove_entry.get("scope", "user")
+        symlink_root = _resolve_symlink_root(scope, plugin_root, project_root)
+
         # Remove stale symlinks, then re-create
-        removed = _remove_symlinks(plugin_root, tool_dir)
+        removed = _remove_symlinks(symlink_root, tool_dir)
         symlinks_removed += removed
         try:
-            created = _create_symlinks(plugin_root, tool_dir)
+            created = _create_symlinks(symlink_root, tool_dir)
             symlinks_created += created
         except RuntimeError as exc:
             print(f"Warning: symlink conflict for {name}: {exc}", file=sys.stderr)
@@ -597,6 +628,164 @@ def cmd_sync(args: argparse.Namespace) -> None:
             f"{symlinks_removed} symlinks removed, {symlinks_created} created",
             file=sys.stderr,
         )
+
+
+# ---------------------------------------------------------------------------
+# settings
+# ---------------------------------------------------------------------------
+
+def cmd_settings(args: argparse.Namespace) -> None:
+    """Show and manage Claude settings.json hook entries for tools/packs."""
+    plugin_root = Path(args.plugin_root)
+    project_root = Path(args.project_root)
+    tool_name: str | None = args.tool
+    do_apply = getattr(args, "apply", False)
+    do_strip = getattr(args, "strip", False)
+
+    manifests = scan_tool_manifests(plugin_root)
+    prove = _read_prove_json(project_root)
+    tools_section = prove.get("tools", {})
+    settings = _read_settings_json(project_root)
+
+    def _count_active(name: str) -> int:
+        count = 0
+        for entries in settings.get("hooks", {}).values():
+            for entry in entries:
+                if entry.get("_tool") == name:
+                    count += 1
+        return count
+
+    def _strip(name: str) -> int:
+        removed = 0
+        if "hooks" not in settings:
+            return removed
+        for event_name in list(settings["hooks"]):
+            original = settings["hooks"][event_name]
+            filtered = [e for e in original if e.get("_tool") != name]
+            removed += len(original) - len(filtered)
+            if filtered:
+                settings["hooks"][event_name] = filtered
+            else:
+                del settings["hooks"][event_name]
+        return removed
+
+    def _apply(name: str, manifest_hooks: dict) -> int:
+        added = 0
+        if not manifest_hooks:
+            return added
+        settings_hooks = settings.setdefault("hooks", {})
+        for event_name, entries in manifest_hooks.items():
+            event_list = settings_hooks.setdefault(event_name, [])
+            for entry in entries:
+                tagged = _expand_hook_vars(entry, plugin_root, project_root)
+                tagged["_tool"] = name
+                event_list.append(tagged)
+                added += 1
+        return added
+
+    if tool_name:
+        if tool_name not in manifests:
+            print(f"Error: unknown tool '{tool_name}'", file=sys.stderr)
+            sys.exit(1)
+
+        manifest = manifests[tool_name]
+        manifest_hooks = manifest.get("hooks", {})
+
+        if do_apply:
+            _strip(tool_name)
+            added = _apply(tool_name, manifest_hooks)
+            _write_json(_settings_json_path(project_root), settings)
+            result = {"tool": tool_name, "action": "apply", "hooks_added": added}
+            json.dump(result, sys.stdout, indent=2)
+            print()
+            print(f"Applied {added} hooks for {tool_name}", file=sys.stderr)
+            return
+
+        if do_strip:
+            removed = _strip(tool_name)
+            _write_json(_settings_json_path(project_root), settings)
+            result = {"tool": tool_name, "action": "strip", "hooks_removed": removed}
+            json.dump(result, sys.stdout, indent=2)
+            print()
+            print(f"Stripped {removed} hooks for {tool_name}", file=sys.stderr)
+            return
+
+        # Show mode — detail for one tool
+        manifest_count = sum(len(v) for v in manifest_hooks.values())
+        active_count = _count_active(tool_name)
+        active_hooks = []
+        for event_name, entries in settings.get("hooks", {}).items():
+            for entry in entries:
+                if entry.get("_tool") == tool_name:
+                    active_hooks.append({"event": event_name, **entry})
+
+        result = {
+            "tool": tool_name,
+            "manifest_hooks": manifest_hooks,
+            "active_hooks": active_hooks,
+            "in_sync": active_count == manifest_count,
+        }
+        json.dump(result, sys.stdout, indent=2)
+        print()
+
+        if manifest_hooks:
+            print(f"\n{tool_name} manifest hooks:", file=sys.stderr)
+            for event, entries in manifest_hooks.items():
+                for e in entries:
+                    for h in e.get("hooks", []):
+                        print(f"  {event}: {h.get('command', '<no command>')}", file=sys.stderr)
+        else:
+            print(f"\n{tool_name}: no hooks in manifest", file=sys.stderr)
+
+        if active_hooks:
+            print(f"\nActive in settings.json:", file=sys.stderr)
+            for h in active_hooks:
+                event = h["event"]
+                for hk in h.get("hooks", []):
+                    print(f"  {event}: {hk.get('command', '<no command>')}", file=sys.stderr)
+        else:
+            print("No active hooks in settings.json", file=sys.stderr)
+
+        if active_count != manifest_count:
+            print(
+                f"\nOut of sync: {manifest_count} in manifest, {active_count} active. "
+                f"Run with --apply to fix.",
+                file=sys.stderr,
+            )
+    else:
+        # Overview mode — all tools
+        rows = []
+        for name in sorted(manifests):
+            manifest = manifests[name]
+            manifest_hooks = manifest.get("hooks", {})
+            manifest_count = sum(len(v) for v in manifest_hooks.values())
+            active_count = _count_active(name)
+            enabled = name in tools_section and tools_section[name].get("enabled", False)
+            rows.append({
+                "name": name,
+                "enabled": enabled,
+                "kind": manifest.get("kind", "tool"),
+                "manifest_hooks": manifest_count,
+                "active_hooks": active_count,
+                "in_sync": (not enabled and active_count == 0)
+                    or (enabled and active_count == manifest_count),
+                "events": list(manifest_hooks.keys()),
+            })
+
+        json.dump({"tools": rows}, sys.stdout, indent=2)
+        print()
+
+        header = f"  {'Name':<16} {'Enabled':<9} {'Manifest':<10} {'Active':<8} {'Sync':<6} Events"
+        print(header, file=sys.stderr)
+        print("  " + "-" * (len(header) - 2), file=sys.stderr)
+        for r in rows:
+            en = "yes" if r["enabled"] else "no"
+            sync_label = "ok" if r["in_sync"] else "DRIFT"
+            events = ", ".join(r["events"]) if r["events"] else "-"
+            print(
+                f"  {r['name']:<16} {en:<9} {r['manifest_hooks']:<10} {r['active_hooks']:<8} {sync_label:<6} {events}",
+                file=sys.stderr,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -631,6 +820,13 @@ def main(argv: list[str] | None = None) -> None:
     # install
     p_install = sub.add_parser("install", help="Install (activate) a tool.")
     p_install.add_argument("tool", help="Tool name (directory under tools/).")
+    p_install.add_argument(
+        "--scope",
+        choices=["user", "project"],
+        default="user",
+        help="Install scope: 'user' symlinks into plugin dir (all projects), "
+             "'project' symlinks into project dir (this project only).",
+    )
     p_install.set_defaults(func=cmd_install)
 
     # remove
@@ -650,6 +846,20 @@ def main(argv: list[str] | None = None) -> None:
     # sync
     p_sync = sub.add_parser("sync", help="Reconcile hooks and symlinks for enabled tools.")
     p_sync.set_defaults(func=cmd_sync)
+
+    # settings
+    p_settings = sub.add_parser("settings", help="Show and manage settings.json hooks for tools.")
+    p_settings.add_argument("tool", nargs="?", default=None, help="Tool name (optional).")
+    p_settings_action = p_settings.add_mutually_exclusive_group()
+    p_settings_action.add_argument(
+        "--apply", action="store_true",
+        help="Write hooks from manifest to settings.json (strips existing first).",
+    )
+    p_settings_action.add_argument(
+        "--strip", action="store_true",
+        help="Remove this tool's hooks from settings.json.",
+    )
+    p_settings.set_defaults(func=cmd_settings)
 
     args = parser.parse_args(argv)
     if not args.command:

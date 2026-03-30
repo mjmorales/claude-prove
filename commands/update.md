@@ -87,7 +87,15 @@ Check for plugin capabilities not yet configured in `.claude/.prove.json`:
    ```
    If tools are available but not enabled, present each with description. `AskUserQuestion` (header: "New Tool"): "Install" / "Skip" per tool.
 
-   On "Install": `python3 "$PLUGIN_DIR/tools/registry.py" --plugin-root "$PLUGIN_DIR" --project-root "$(pwd)" install <tool>`.
+   On "Install" for packs (`kind: "pack"`): if `$PLUGIN_DIR` != `$(pwd)` (not dogfooding), ask install scope via `AskUserQuestion` (header: "Scope"):
+   - "User (Recommended)" — symlinks in plugin dir, available to all projects
+   - "Project" — symlinks in project dir, this project only
+
+   If dogfooding (`$PLUGIN_DIR` == `$(pwd)`), default to `--scope user` without asking.
+
+   On "Install": `python3 "$PLUGIN_DIR/tools/registry.py" --plugin-root "$PLUGIN_DIR" --project-root "$(pwd)" install <tool> --scope <user|project>`.
+
+   Infrastructure tools (`kind: "tool"`) always use `--scope user` — no scope question needed.
 
 Skip this step entirely if all features are already configured.
 

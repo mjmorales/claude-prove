@@ -1,8 +1,8 @@
 <!-- prove:managed:start -->
 # claude-prove
 
-<!-- prove:plugin-version:0.22.0 -->
-**Prove plugin v0.22.0** — if the installed plugin version (`cat /Users/manuelmorales/dev/claude-prove/.claude-plugin/plugin.json | grep version`) does not match v0.22.0, run `/prove:update` to sync.
+<!-- prove:plugin-version:0.26.0 -->
+**Prove plugin v0.26.0** — if the installed plugin version (`cat /Users/manuelmorales/dev/claude-prove/.claude-plugin/plugin.json | grep version`) does not match v0.26.0, run `/prove:update` to sync.
 
 JavaScript/TypeScript (npm)
 
@@ -30,9 +30,25 @@ Before broad Glob/Grep searches, check the file index first:
 Only fall back to Glob/Grep when the index doesn't cover what you need.
 ## References
 
+### LLM-Optimized Coding Standards
+
 @references/llm-coding-standards.md
+
+### Interaction Patterns
+
 @references/interaction-patterns.md
+
+### Validation Configuration
+
 @references/validation-config.md
+
+### Creator Conventions
+
+@references/creator-conventions.md
+
+### Prompt Engineering Guide
+
+@references/prompt-engineering-guide.md
 
 ## Prove Commands
 
