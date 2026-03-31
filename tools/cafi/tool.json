@@ -3,6 +3,20 @@
   "version": "1.0.0",
   "description": "Content-addressable file index with routing-hint descriptions",
   "requires": ["python3"],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Glob|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 $PLUGIN_DIR/tools/cafi/cafi_gate.py",
+            "timeout": 10000
+          }
+        ]
+      }
+    ]
+  },
   "config_schema": {
     "excludes": {
       "type": "list",
