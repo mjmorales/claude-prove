@@ -33,7 +33,7 @@ def scan_project(project_root: str, plugin_dir: str | None = None) -> dict:
         "tech_stack": _scan_tech_stack(project_root),
         "key_dirs": _scan_key_dirs(project_root),
         "conventions": _scan_conventions(project_root),
-        "prove_config": _scan_prove_config(project_root),
+        "prove_config": _scan_prove_config(project_root, plugin_dir),
         "cafi": _scan_cafi(project_root),
         "core_commands": _scan_core_commands(plugin_dir),
         "plugin_version": _scan_plugin_version(plugin_dir),
@@ -273,21 +273,25 @@ def _detect_naming(filenames: list[str]) -> str:
     return winner
 
 
-def _scan_prove_config(root: str) -> dict:
+def _scan_prove_config(root: str, plugin_dir: str | None = None) -> dict:
     """Read .claude/.prove.json configuration."""
     config_path = os.path.join(root, ".claude", ".prove.json")
     if not os.path.isfile(config_path):
-        return {"exists": False, "validators": [], "has_index": False, "references": []}
+        return {"exists": False, "validators": [], "has_index": False, "references": [], "tool_directives": []}
 
     try:
         with open(config_path) as f:
             data = json.load(f)
     except (json.JSONDecodeError, OSError):
-        return {"exists": False, "validators": [], "has_index": False, "references": []}
+        return {"exists": False, "validators": [], "has_index": False, "references": [], "tool_directives": []}
 
     validators = data.get("validators", [])
     claude_md = data.get("claude_md", {})
     references = claude_md.get("references", [])
+
+    # Collect directives from enabled tools.
+    tool_directives = _scan_tool_directives(data.get("tools", {}), root, plugin_dir)
+
     return {
         "exists": True,
         "validators": [
@@ -300,7 +304,42 @@ def _scan_prove_config(root: str) -> dict:
             for r in references
             if r.get("path")
         ],
+        "tool_directives": tool_directives,
     }
+
+
+def _scan_tool_directives(
+    tools_section: dict, project_root: str, plugin_dir: str | None = None,
+) -> list[dict]:
+    """Collect directives from enabled tools by reading their tool.json manifests.
+
+    Returns a list of {name, directive} dicts for tools that declare a directive.
+    """
+    if plugin_dir is None:
+        return []
+
+    directives: list[dict] = []
+    tools_dir = os.path.join(plugin_dir, "tools")
+
+    for name, entry in sorted(tools_section.items()):
+        if not isinstance(entry, dict) or not entry.get("enabled"):
+            continue
+
+        manifest_path = os.path.join(tools_dir, name, "tool.json")
+        if not os.path.isfile(manifest_path):
+            continue
+
+        try:
+            with open(manifest_path) as f:
+                manifest = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        directive = manifest.get("directive", "")
+        if directive:
+            directives.append({"name": name, "directive": directive})
+
+    return directives
 
 
 def _scan_plugin_version(plugin_dir: str) -> str:

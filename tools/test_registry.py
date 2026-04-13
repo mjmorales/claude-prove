@@ -30,7 +30,7 @@ SAMPLE_MANIFEST_ACB = {
     "description": "Intent-based code review",
     "requires": ["python3", "git"],
     "hooks": {
-        "PostToolUse": [
+        "PreToolUse": [
             {
                 "matcher": "Bash",
                 "hooks": [
@@ -237,10 +237,10 @@ class TestInstall:
             settings = json.loads(
                 (project_root / ".claude" / "settings.json").read_text()
             )
-            post_hooks = settings["hooks"]["PostToolUse"]
-            assert len(post_hooks) == 1
-            assert post_hooks[0]["_tool"] == "acb"
-            assert post_hooks[0]["matcher"] == "Bash"
+            pre_hooks = settings["hooks"]["PreToolUse"]
+            assert len(pre_hooks) == 1
+            assert pre_hooks[0]["_tool"] == "acb"
+            assert pre_hooks[0]["matcher"] == "Bash"
 
             # Verify JSON output.
             data = json.loads(capsys.readouterr().out)
@@ -278,7 +278,7 @@ class TestInstall:
     def test_install_appends_to_existing_hooks(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Installing a tool should not clobber pre-existing hooks."""
         existing_hook = {
-            "PostToolUse": [
+            "PreToolUse": [
                 {"matcher": "Write", "hooks": [{"type": "command", "command": "echo existing"}]}
             ]
         }
@@ -294,8 +294,8 @@ class TestInstall:
             settings = json.loads(
                 (project_root / ".claude" / "settings.json").read_text()
             )
-            post_hooks = settings["hooks"]["PostToolUse"]
-            assert len(post_hooks) == 2  # existing + new
+            pre_hooks = settings["hooks"]["PreToolUse"]
+            assert len(pre_hooks) == 2  # existing + new
 
     def test_install_calls_post_install_lifecycle(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Lifecycle post_install function is called."""
@@ -319,7 +319,7 @@ class TestInstall:
         """$PLUGIN_DIR in nested hook commands is expanded to the actual path."""
         manifest = dict(SAMPLE_MANIFEST_ACB)
         manifest["hooks"] = {
-            "PostToolUse": [
+            "PreToolUse": [
                 {
                     "matcher": "Bash",
                     "hooks": [
@@ -338,7 +338,7 @@ class TestInstall:
             settings = json.loads(
                 (project_root / ".claude" / "settings.json").read_text()
             )
-            hook_cmd = settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
+            hook_cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
             assert "$PLUGIN_DIR" not in hook_cmd
             assert str(plugin_root) in hook_cmd
 
@@ -352,12 +352,47 @@ class TestInstall:
                     "install", "nonexistent",
                 ])
 
+    def test_install_fails_on_missing_dep(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Install should fail if a required dependency is missing."""
+        manifest = dict(SAMPLE_MANIFEST_ACB)
+        manifest["requires"] = ["python3", "nonexistent_binary_xyz_999"]
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root, project_root = _make_env(
+                tmp, manifests={"acb": manifest}
+            )
+            with pytest.raises(SystemExit):
+                registry.main([
+                    "--plugin-root", str(plugin_root),
+                    "--project-root", str(project_root),
+                    "install", "acb",
+                ])
+            out = capsys.readouterr()
+            data = json.loads(out.out)
+            assert data["error"] == "missing_dependencies"
+            assert "nonexistent_binary_xyz_999" in data["missing"]
+
+    def test_install_succeeds_with_satisfied_deps(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Install should succeed when all deps are available."""
+        manifest = dict(SAMPLE_MANIFEST_ACB)
+        manifest["requires"] = ["python3", "git"]  # both should exist
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root, project_root = _make_env(
+                tmp, manifests={"acb": manifest}
+            )
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "install", "acb",
+            ])
+            data = json.loads(capsys.readouterr().out)
+            assert data["installed"] == "acb"
+
 
 class TestRemove:
     def test_remove_strips_hooks(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Verify tagged hooks removed from settings.json."""
         existing_hooks = {
-            "PostToolUse": [
+            "PreToolUse": [
                 {"matcher": "Bash", "_tool": "acb", "hooks": [{"type": "command", "command": "hook.py"}]},
                 {"matcher": "Write", "hooks": [{"type": "command", "command": "other.py"}]},
             ]
@@ -376,9 +411,9 @@ class TestRemove:
             settings = json.loads(
                 (project_root / ".claude" / "settings.json").read_text()
             )
-            post_hooks = settings["hooks"]["PostToolUse"]
-            assert len(post_hooks) == 1
-            assert "_tool" not in post_hooks[0]  # the untagged one remains
+            pre_hooks = settings["hooks"]["PreToolUse"]
+            assert len(pre_hooks) == 1
+            assert "_tool" not in pre_hooks[0]  # the untagged one remains
 
             data = json.loads(capsys.readouterr().out)
             assert data["removed"] == "acb"
@@ -403,7 +438,7 @@ class TestRemove:
     def test_remove_cleans_empty_event(self, capsys: pytest.CaptureFixture[str]) -> None:
         """If all hooks for an event are removed, the event key is deleted."""
         existing_hooks = {
-            "PostToolUse": [
+            "PreToolUse": [
                 {"matcher": "Bash", "_tool": "acb", "hooks": []},
             ]
         }
@@ -421,7 +456,7 @@ class TestRemove:
             settings = json.loads(
                 (project_root / ".claude" / "settings.json").read_text()
             )
-            assert "PostToolUse" not in settings.get("hooks", {})
+            assert "PreToolUse" not in settings.get("hooks", {})
 
     def test_remove_calls_pre_uninstall_lifecycle(self, capsys: pytest.CaptureFixture[str]) -> None:
         manifest = dict(SAMPLE_MANIFEST_ACB)
@@ -691,7 +726,7 @@ class TestSync:
     def test_sync_refreshes_stale_hooks(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Sync replaces stale hook commands with fresh manifest-derived ones."""
         stale_hooks = {
-            "PostToolUse": [
+            "PreToolUse": [
                 {
                     "matcher": "Bash",
                     "hooks": [{"type": "command", "command": "python3 /OLD/PATH/hook.py"}],
@@ -713,10 +748,10 @@ class TestSync:
             settings = json.loads(
                 (project_root / ".claude" / "settings.json").read_text()
             )
-            hook_cmd = settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"]
+            hook_cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
             # Must NOT contain the old path
             assert "/OLD/PATH/" not in hook_cmd
-            assert settings["hooks"]["PostToolUse"][0]["_tool"] == "acb"
+            assert settings["hooks"]["PreToolUse"][0]["_tool"] == "acb"
 
             data = json.loads(capsys.readouterr().out)
             assert data["hooks_removed"] == 1
@@ -725,7 +760,7 @@ class TestSync:
     def test_sync_preserves_non_tool_hooks(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Non-tool hooks (no _tool tag) survive sync unchanged."""
         mixed_hooks = {
-            "PostToolUse": [
+            "PreToolUse": [
                 {"matcher": "Write", "hooks": [{"type": "command", "command": "echo user-hook"}]},
                 {"matcher": "Bash", "hooks": [{"type": "command", "command": "old"}], "_tool": "acb"},
             ]
@@ -744,17 +779,17 @@ class TestSync:
             settings = json.loads(
                 (project_root / ".claude" / "settings.json").read_text()
             )
-            post_hooks = settings["hooks"]["PostToolUse"]
+            pre_hooks = settings["hooks"]["PreToolUse"]
             # User hook preserved + acb hook re-added = 2
-            assert len(post_hooks) == 2
-            user_hook = [h for h in post_hooks if "_tool" not in h]
+            assert len(pre_hooks) == 2
+            user_hook = [h for h in pre_hooks if "_tool" not in h]
             assert len(user_hook) == 1
             assert user_hook[0]["hooks"][0]["command"] == "echo user-hook"
 
     def test_sync_disabled_tool_hooks_removed(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Hooks for disabled tools are removed and not re-added."""
         stale_hooks = {
-            "PostToolUse": [
+            "PreToolUse": [
                 {"matcher": "Bash", "hooks": [{"type": "command", "command": "old"}], "_tool": "acb"},
             ]
         }
@@ -772,8 +807,8 @@ class TestSync:
             settings = json.loads(
                 (project_root / ".claude" / "settings.json").read_text()
             )
-            # PostToolUse event should be gone entirely
-            assert "PostToolUse" not in settings.get("hooks", {})
+            # PreToolUse event should be gone entirely
+            assert "PreToolUse" not in settings.get("hooks", {})
 
             data = json.loads(capsys.readouterr().out)
             assert data["hooks_removed"] == 1

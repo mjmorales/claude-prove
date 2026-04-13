@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Claude Code PostToolUse hook for ACB intent capture.
+"""Claude Code PreToolUse hook for ACB intent capture.
 
-Detects ``git commit`` commands in Bash tool results and returns a
-message prompting the agent to write an intent manifest.
-
-Skips when the active branch is main or master.
+Intercepts ``git commit`` Bash commands BEFORE they execute and checks
+whether an intent manifest already exists for the staged changes.  If
+not, it blocks the commit and instructs the agent to write the manifest
+first.
 
 Install in ``.claude/settings.json``::
 
     {
       "hooks": {
-        "PostToolUse": [
+        "PreToolUse": [
           {
             "matcher": "Bash",
             "hooks": [
@@ -28,9 +28,16 @@ Install in ``.claude/settings.json``::
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
+
+# Set up import path for acb package.
+_hook_dir = os.path.dirname(os.path.abspath(__file__))
+_tools_dir = os.path.dirname(_hook_dir)
+if _tools_dir not in sys.path:
+    sys.path.insert(0, _tools_dir)
 
 
 def _current_branch() -> str | None:
@@ -44,19 +51,77 @@ def _current_branch() -> str | None:
         return None
 
 
-def _head_short_sha() -> str | None:
+def _staged_diff_stat() -> str:
+    """Return ``git diff --cached --stat`` output for the staged changes."""
     try:
         return subprocess.check_output(
-            ["git", "rev-parse", "--short", "HEAD"],
+            ["git", "diff", "--cached", "--stat"],
             text=True,
             stderr=subprocess.DEVNULL,
         ).strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
+        return ""
+
+
+def _manifest_exists(project_root: str, branch: str) -> bool:
+    """Check if any pending intent manifest exists for *branch* in the store."""
+    try:
+        from acb.store import open_store
+        store = open_store(project_root)
+        result = store.has_manifest(branch)
+        store.close()
+        return result
+    except Exception:
+        return False
 
 
 _COMMIT_RE = re.compile(r"\bgit\s+commit\b")
 _SKIP_BRANCHES = {"main", "master"}
+
+
+# -- Inline prompt template ---------------------------------------------------
+
+_MANIFEST_PROMPT = """\
+Write the intent manifest before committing.
+
+**Staged changes ({branch}):**
+```
+{diff_stat}
+```
+
+**Save via CLI:**
+```bash
+PYTHONPATH="$PLUGIN_DIR" python3 -m tools.acb save-manifest --branch {branch} --sha pending <<'MANIFEST'
+{{
+  "acb_manifest_version": "0.2",
+  "commit_sha": "pending",
+  "timestamp": "<ISO-8601>",
+  "intent_groups": [
+    {{
+      "id": "short-slug",
+      "title": "What this group of changes does",
+      "classification": "explicit",
+      "file_refs": [
+        {{"path": "src/example.py", "ranges": ["10-25", "40-42"]}}
+      ],
+      "annotations": [
+        {{"id": "ann-1", "type": "judgment_call", "body": "Why you made a non-obvious decision"}}
+      ]
+    }}
+  ]
+}}
+MANIFEST
+```
+
+**Classification values:** `explicit` (directly requested), `inferred` (logically required), `speculative` (beyond requested).
+
+**Rules:**
+1. One intent group per logical unit of change. Group related file edits together.
+2. Every changed file must appear in at least one group's `file_refs`.
+3. Add a `judgment_call` annotation for any non-trivial design decision or deviation from instructions.
+4. Use `ranges` to specify affected line ranges. Omit `ranges` for whole-file changes.
+
+Save the manifest via the CLI command above, then re-run your commit."""
 
 
 def main() -> None:
@@ -73,25 +138,33 @@ def main() -> None:
     if not _COMMIT_RE.search(command):
         return
 
-    # Detect failed commits — no point prompting.
-    stdout = hook_input.get("tool_result", {}).get("stdout", "")
-    stderr = hook_input.get("tool_result", {}).get("stderr", "")
-    combined = stdout + stderr
-    if "nothing to commit" in combined or "no changes added" in combined:
-        return
-
     branch = _current_branch()
     if branch is None or branch in _SKIP_BRANCHES:
         return
 
-    sha = _head_short_sha()
-    if sha is None:
+    project_root = hook_input.get("cwd", os.getcwd())
+
+    # If a manifest already exists for this branch, allow the commit through.
+    if _manifest_exists(project_root, branch):
         return
 
-    from acb.templates import render
+    diff_stat = _staged_diff_stat()
+    if not diff_stat:
+        # Nothing staged — let git commit fail naturally.
+        return
 
-    message = render("hook_prompt.j2", sha=sha, branch=branch)
-    json.dump({"systemMessage": message}, sys.stdout)
+    message = _MANIFEST_PROMPT.format(branch=branch, diff_stat=diff_stat)
+
+    json.dump(
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": message,
+            }
+        },
+        sys.stdout,
+    )
 
 
 if __name__ == "__main__":

@@ -2,21 +2,23 @@
   "name": "acb",
   "version": "0.2.0",
   "description": "Intent-based code review: manifest assembly, web review UI, CC hook",
-  "requires": ["python3", "git", "jinja2"],
+  "requires": ["python3", "git"],
+  "directive": "Before every `git commit` on a feature branch, write an intent manifest via `python3 -m tools.acb save-manifest` describing what changed and why. The PreToolUse hook blocks commits without a manifest. After committing, manifests are assembled into a reviewable ACB document via `/prove:review`.",
   "hooks": {
-    "PostToolUse": [
+    "PreToolUse": [
       {
         "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $PLUGIN_DIR/tools/acb/hook.py"
+            "command": "python3 $PLUGIN_DIR/tools/acb/hook.py",
+            "timeout": 10000
           }
         ]
       }
     ]
   },
-  "directories": [".prove/intents", ".prove/reviews"],
+  "directories": [".prove"],
   "config_schema": {
     "base_branch": {
       "type": "str",

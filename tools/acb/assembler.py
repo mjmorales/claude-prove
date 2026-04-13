@@ -2,41 +2,30 @@
 
 from __future__ import annotations
 
-import glob
 import hashlib
 import json
 import logging
-import os
 import subprocess
 import uuid
 from datetime import datetime, timezone
 
 from acb.schemas import CURRENT_ACB_VERSION, validate_manifest
+from acb.store import Store
 
 logger = logging.getLogger(__name__)
 
 
-def load_manifests(intents_dir: str) -> list[dict]:
-    """Load and validate all intent manifests from *intents_dir*, sorted by timestamp."""
+def load_manifests_from_store(store: Store, branch: str) -> list[dict]:
+    """Load and validate all intent manifests for *branch* from the store."""
     manifests: list[dict] = []
-    pattern = os.path.join(intents_dir, "*.json")
 
-    for path in sorted(glob.glob(pattern)):
-        try:
-            with open(path) as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, OSError) as exc:
-            logger.warning("Skipping unreadable manifest %s: %s", path, exc)
-            continue
-
+    for data in store.list_manifests(branch):
         errors = validate_manifest(data)
         if errors:
-            logger.warning("Skipping invalid manifest %s: %s", path, "; ".join(errors))
+            logger.warning("Skipping invalid manifest: %s", "; ".join(errors))
             continue
-
         manifests.append(data)
 
-    manifests.sort(key=lambda m: m.get("timestamp", ""))
     return manifests
 
 
@@ -149,15 +138,17 @@ def compute_acb_hash(acb: dict) -> str:
 
 
 def assemble(
-    intents_dir: str,
+    store: Store,
+    branch: str,
     base_ref: str,
     head_ref: str = "HEAD",
     task_statement: dict | None = None,
 ) -> dict:
-    """Assemble manifests from *intents_dir* into a single ACB document.
+    """Assemble manifests for *branch* from the store into a single ACB document.
 
     Args:
-        intents_dir: Directory containing ``<sha>.json`` manifest files.
+        store: SQLite store instance.
+        branch: Branch name to load manifests for.
         base_ref: Git ref for the merge-base (e.g. resolved SHA of main).
         head_ref: Git ref for HEAD (default ``"HEAD"``).
         task_statement: Optional ``{"turns": [...]}`` task context.
@@ -165,7 +156,7 @@ def assemble(
     Returns:
         A complete ACB document dict ready for serialisation.
     """
-    manifests = load_manifests(intents_dir)
+    manifests = load_manifests_from_store(store, branch)
     intent_groups = merge_intent_groups(manifests)
     negative_space = collect_negative_space(manifests)
     open_questions = collect_open_questions(manifests)

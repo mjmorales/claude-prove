@@ -131,7 +131,9 @@ class TestScanProveConfig:
             ],
             "index": {"excludes": [], "max_file_size": 102400},
         }
-        (tmp_path / ".prove.json").write_text(json.dumps(config))
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / ".prove.json").write_text(json.dumps(config))
         scan = scan_project(str(tmp_path))
         assert scan["prove_config"]["exists"] is True
         assert len(scan["prove_config"]["validators"]) == 1
@@ -165,7 +167,9 @@ class TestReferences:
                 ]
             }
         }
-        (tmp_path / ".prove.json").write_text(json.dumps(config))
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir(exist_ok=True)
+        (claude_dir / ".prove.json").write_text(json.dumps(config))
         scan = scan_project(str(tmp_path))
         assert scan["prove_config"]["references"] == [
             {"path": "~/.claude/standards.md", "label": "Standards"},
@@ -185,10 +189,86 @@ class TestReferences:
                 ]
             }
         }
-        (tmp_path / ".prove.json").write_text(json.dumps(config))
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir(exist_ok=True)
+        (claude_dir / ".prove.json").write_text(json.dumps(config))
         scan = scan_project(str(tmp_path))
         assert len(scan["prove_config"]["references"]) == 1
         assert scan["prove_config"]["references"][0]["path"] == "~/.claude/valid.md"
+
+
+class TestToolDirectives:
+    def test_reads_directives_from_enabled_tools(self, tmp_path):
+        """Directives from enabled tools with directive field are collected."""
+        # Create tool manifest with directive.
+        tools_dir = tmp_path / "tools" / "acb"
+        tools_dir.mkdir(parents=True)
+        (tools_dir / "tool.json").write_text(json.dumps({
+            "name": "acb",
+            "directive": "Write intent manifests before committing.",
+        }))
+
+        # Create .prove.json with tool enabled.
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / ".prove.json").write_text(json.dumps({
+            "tools": {"acb": {"enabled": True}},
+        }))
+
+        scan = scan_project(str(tmp_path), plugin_dir=str(tmp_path))
+        directives = scan["prove_config"]["tool_directives"]
+        assert len(directives) == 1
+        assert directives[0]["name"] == "acb"
+        assert "intent manifests" in directives[0]["directive"]
+
+    def test_skips_disabled_tools(self, tmp_path):
+        tools_dir = tmp_path / "tools" / "acb"
+        tools_dir.mkdir(parents=True)
+        (tools_dir / "tool.json").write_text(json.dumps({
+            "name": "acb",
+            "directive": "Write intent manifests.",
+        }))
+
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / ".prove.json").write_text(json.dumps({
+            "tools": {"acb": {"enabled": False}},
+        }))
+
+        scan = scan_project(str(tmp_path), plugin_dir=str(tmp_path))
+        assert scan["prove_config"]["tool_directives"] == []
+
+    def test_skips_tools_without_directive(self, tmp_path):
+        tools_dir = tmp_path / "tools" / "cafi"
+        tools_dir.mkdir(parents=True)
+        (tools_dir / "tool.json").write_text(json.dumps({
+            "name": "cafi",
+            "description": "File index",
+        }))
+
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / ".prove.json").write_text(json.dumps({
+            "tools": {"cafi": {"enabled": True}},
+        }))
+
+        scan = scan_project(str(tmp_path), plugin_dir=str(tmp_path))
+        assert scan["prove_config"]["tool_directives"] == []
+
+    def test_empty_when_no_tools_dir(self, tmp_path):
+        """When plugin has no tools directory, no directives are collected."""
+        # Use a plugin_dir that has no tools/ subdirectory.
+        fake_plugin = tmp_path / "fake-plugin"
+        fake_plugin.mkdir()
+
+        claude_dir = tmp_path / ".claude"
+        claude_dir.mkdir()
+        (claude_dir / ".prove.json").write_text(json.dumps({
+            "tools": {"acb": {"enabled": True}},
+        }))
+
+        scan = scan_project(str(tmp_path), plugin_dir=str(fake_plugin))
+        assert scan["prove_config"]["tool_directives"] == []
 
 
 class TestCoreCommands:

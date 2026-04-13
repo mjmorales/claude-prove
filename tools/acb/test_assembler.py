@@ -1,6 +1,5 @@
 """Tests for acb.assembler merge and assembly logic."""
 
-import json
 import os
 import sys
 import tempfile
@@ -17,9 +16,10 @@ from acb.assembler import (
     collect_open_questions,
     compute_acb_hash,
     detect_uncovered_files,
-    load_manifests,
+    load_manifests_from_store,
     merge_intent_groups,
 )
+from acb.store import Store
 
 
 def _manifest(sha: str, groups: list[dict], **kwargs) -> dict:
@@ -44,40 +44,46 @@ def _group(gid: str, files: list[str], **kwargs) -> dict:
     }
 
 
-class TestLoadManifests(unittest.TestCase):
-    def test_loads_valid_manifests(self):
-        with tempfile.TemporaryDirectory() as d:
-            m = _manifest("0", [_group("g1", ["a.py"])])
-            with open(os.path.join(d, "abc.json"), "w") as f:
-                json.dump(m, f)
-            result = load_manifests(d)
-            self.assertEqual(len(result), 1)
+class TestLoadManifestsFromStore(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.store = Store(os.path.join(self.tmp, "acb.db"))
 
-    def test_skips_invalid_json(self):
-        with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "bad.json"), "w") as f:
-                f.write("{not json")
-            result = load_manifests(d)
-            self.assertEqual(result, [])
+    def tearDown(self):
+        self.store.close()
+
+    def test_loads_valid_manifests(self):
+        m = _manifest("0", [_group("g1", ["a.py"])])
+        self.store.save_manifest("feat/x", "abc", m)
+        result = load_manifests_from_store(self.store, "feat/x")
+        self.assertEqual(len(result), 1)
 
     def test_skips_invalid_manifest(self):
-        with tempfile.TemporaryDirectory() as d:
-            with open(os.path.join(d, "empty.json"), "w") as f:
-                json.dump({"intent_groups": []}, f)
-            result = load_manifests(d)
-            self.assertEqual(result, [])
+        # Save an invalid manifest (empty intent_groups).
+        self.store.save_manifest("feat/x", "abc", {
+            "acb_manifest_version": "0.2",
+            "commit_sha": "abc",
+            "timestamp": "2026-01-01T00:00:00Z",
+            "intent_groups": [],
+        })
+        result = load_manifests_from_store(self.store, "feat/x")
+        self.assertEqual(result, [])
 
     def test_sorts_by_timestamp(self):
-        with tempfile.TemporaryDirectory() as d:
-            m1 = _manifest("2", [_group("g1", ["a.py"])])
-            m2 = _manifest("1", [_group("g2", ["b.py"])])
-            with open(os.path.join(d, "second.json"), "w") as f:
-                json.dump(m1, f)
-            with open(os.path.join(d, "first.json"), "w") as f:
-                json.dump(m2, f)
-            result = load_manifests(d)
-            self.assertEqual(result[0]["commit_sha"], "1")
-            self.assertEqual(result[1]["commit_sha"], "2")
+        m1 = _manifest("2", [_group("g1", ["a.py"])])
+        m2 = _manifest("1", [_group("g2", ["b.py"])])
+        self.store.save_manifest("feat/x", "sha2", m1)
+        self.store.save_manifest("feat/x", "sha1", m2)
+        result = load_manifests_from_store(self.store, "feat/x")
+        self.assertEqual(result[0]["commit_sha"], "1")
+        self.assertEqual(result[1]["commit_sha"], "2")
+
+    def test_branch_isolation(self):
+        self.store.save_manifest("feat/x", "abc", _manifest("0", [_group("g1", ["a.py"])]))
+        self.store.save_manifest("feat/y", "def", _manifest("1", [_group("g2", ["b.py"])]))
+        result = load_manifests_from_store(self.store, "feat/x")
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["commit_sha"], "0")
 
 
 class TestMergeIntentGroups(unittest.TestCase):

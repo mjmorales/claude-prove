@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import subprocess
 import sys
 from datetime import datetime, timezone
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
+
+from acb.store import Store
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -23,8 +24,8 @@ class ReviewHandler(BaseHTTPRequestHandler):
     """Route handler for the review server."""
 
     # Injected by ``serve()``.
-    acb_path: str = ""
-    review_path: str = ""
+    store: Store | None = None
+    branch: str = ""
     project_root: str = ""
     base_ref: str = "main"
 
@@ -66,11 +67,12 @@ class ReviewHandler(BaseHTTPRequestHandler):
     # ── GET handlers ──────────────────────────────────────────────────
 
     def _serve_review(self) -> None:
-        acb = self._read_json(self.acb_path)
+        assert self.store is not None
+        acb = self.store.load_acb(self.branch)
         if acb is None:
             self._error(404, "ACB document not found")
             return
-        review = self._read_json(self.review_path) or _empty_review(acb)
+        review = self.store.load_review(self.branch) or _empty_review(acb)
         self._json_response({"acb": acb, "review": review})
 
     def _serve_diff(self, qs: dict[str, list[str]]) -> None:
@@ -116,12 +118,13 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._error(400, "Missing group_id or verdict")
             return
 
-        acb = self._read_json(self.acb_path)
+        assert self.store is not None
+        acb = self.store.load_acb(self.branch)
         if acb is None:
             self._error(404, "ACB not found")
             return
 
-        review = self._read_json(self.review_path) or _empty_review(acb)
+        review = self.store.load_review(self.branch) or _empty_review(acb)
         for v in review["group_verdicts"]:
             if v["group_id"] == group_id:
                 v["verdict"] = verdict
@@ -131,7 +134,9 @@ class ReviewHandler(BaseHTTPRequestHandler):
 
         review["updated_at"] = datetime.now(timezone.utc).isoformat()
         review["overall_verdict"] = _compute_overall(review)
-        self._write_json(self.review_path, review)
+
+        from acb.assembler import compute_acb_hash
+        self.store.save_review(self.branch, compute_acb_hash(acb), review)
         self._json_response({"ok": True, "overall_verdict": review["overall_verdict"]})
 
     def _handle_comment(self) -> None:
@@ -144,19 +149,22 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._error(400, "Missing group_id")
             return
 
-        acb = self._read_json(self.acb_path)
+        assert self.store is not None
+        acb = self.store.load_acb(self.branch)
         if acb is None:
             self._error(404, "ACB not found")
             return
 
-        review = self._read_json(self.review_path) or _empty_review(acb)
+        review = self.store.load_review(self.branch) or _empty_review(acb)
         for v in review["group_verdicts"]:
             if v["group_id"] == group_id:
                 v["comment"] = comment
                 break
 
         review["updated_at"] = datetime.now(timezone.utc).isoformat()
-        self._write_json(self.review_path, review)
+
+        from acb.assembler import compute_acb_hash
+        self.store.save_review(self.branch, compute_acb_hash(acb), review)
         self._json_response({"ok": True})
 
     def _handle_overall(self) -> None:
@@ -168,15 +176,18 @@ class ReviewHandler(BaseHTTPRequestHandler):
             self._error(400, "Missing overall_verdict")
             return
 
-        acb = self._read_json(self.acb_path)
+        assert self.store is not None
+        acb = self.store.load_acb(self.branch)
         if acb is None:
             self._error(404, "ACB not found")
             return
 
-        review = self._read_json(self.review_path) or _empty_review(acb)
+        review = self.store.load_review(self.branch) or _empty_review(acb)
         review["overall_verdict"] = overall
         review["updated_at"] = datetime.now(timezone.utc).isoformat()
-        self._write_json(self.review_path, review)
+
+        from acb.assembler import compute_acb_hash
+        self.store.save_review(self.branch, compute_acb_hash(acb), review)
         self._json_response({"ok": True})
 
     # ── Utilities ─────────────────────────────────────────────────────
@@ -191,21 +202,6 @@ class ReviewHandler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             self._error(400, "Invalid JSON")
             return None
-
-    @staticmethod
-    def _read_json(path: str) -> dict | None:
-        try:
-            with open(path) as f:
-                return json.load(f)
-        except (OSError, json.JSONDecodeError):
-            return None
-
-    @staticmethod
-    def _write_json(path: str, data: dict) -> None:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
-            json.dump(data, f, indent=2)
-            f.write("\n")
 
     def _json_response(self, data: dict, status: int = 200) -> None:
         payload = json.dumps(data).encode()
@@ -266,8 +262,8 @@ def _guess_type(suffix: str) -> str:
 
 
 def serve(
-    acb_path: str,
-    review_path: str,
+    store: Store,
+    branch: str,
     project_root: str,
     base_ref: str = "main",
     port: int = 0,
@@ -275,14 +271,14 @@ def serve(
     """Start the review server.
 
     Args:
-        acb_path: Path to the assembled ``.acb.json`` file.
-        review_path: Path to the ``.review.json`` state file.
+        store: SQLite store instance.
+        branch: Branch to serve the review for.
         project_root: Project root for ``git diff`` commands.
         base_ref: Base git ref for diffs (default: ``main``).
         port: Port to bind (0 = auto-assign).
     """
-    ReviewHandler.acb_path = acb_path
-    ReviewHandler.review_path = review_path
+    ReviewHandler.store = store
+    ReviewHandler.branch = branch
     ReviewHandler.project_root = project_root
     ReviewHandler.base_ref = base_ref
 
@@ -291,7 +287,7 @@ def serve(
 
     url = f"http://127.0.0.1:{actual_port}"
     print(f"ACB Review UI: {url}", file=sys.stderr)
-    print(f"Reviewing: {os.path.basename(acb_path)}", file=sys.stderr)
+    print(f"Reviewing: {branch}", file=sys.stderr)
     print("Press Ctrl+C to stop.\n", file=sys.stderr)
 
     # Print the URL to stdout so callers can capture it.

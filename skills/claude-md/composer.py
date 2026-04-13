@@ -63,6 +63,11 @@ def compose(project_scan: dict, plugin_dir: str | None = None) -> str:
     if cafi.get("available") or prove.get("has_index"):
         parts.append(_section_discovery(project_scan, plugin_dir))
 
+    # Tool directives (from enabled tools with directive field in tool.json)
+    tool_directives = prove.get("tool_directives", [])
+    if tool_directives:
+        parts.append(_section_tool_directives(tool_directives))
+
     # External references (if configured in .claude/.prove.json)
     references = prove.get("references", [])
     if references:
@@ -228,6 +233,22 @@ def _section_tools(core_commands: list[dict]) -> str:
     else:
         lines.append("- `/prove:docs:claude-md` — Regenerate this file")
     lines.append("")
+    return "\n".join(lines)
+
+
+def _section_tool_directives(tool_directives: list[dict]) -> str:
+    """Render behavioral directives from enabled tools.
+
+    Each enabled tool with a ``directive`` field in its ``tool.json`` gets
+    its text injected here. Directives are short behavioral instructions
+    that prompt Claude to use the tool correctly.
+    """
+    lines = ["## Tool Directives", ""]
+    for td in tool_directives:
+        lines.append(f"### {td['name']}")
+        lines.append("")
+        lines.append(td["directive"])
+        lines.append("")
     return "\n".join(lines)
 
 

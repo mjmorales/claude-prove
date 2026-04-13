@@ -277,6 +277,23 @@ def _resolve_symlink_root(scope: str, plugin_root: Path, project_root: Path) -> 
     return plugin_root
 
 
+def _check_requires(requires: list[str]) -> list[str]:
+    """Validate that required dependencies are available. Return missing ones."""
+    import shutil
+
+    missing: list[str] = []
+    for dep in requires:
+        # Check as executable on PATH first.
+        if shutil.which(dep):
+            continue
+        # Check as importable Python module.
+        try:
+            importlib.import_module(dep)
+        except ImportError:
+            missing.append(dep)
+    return missing
+
+
 def cmd_install(args: argparse.Namespace) -> None:
     plugin_root = Path(args.plugin_root)
     project_root = Path(args.project_root)
@@ -289,6 +306,20 @@ def cmd_install(args: argparse.Namespace) -> None:
         print(f"Error: no tool.json for '{tool_name}'", file=sys.stderr)
         sys.exit(1)
     manifest = _read_json(manifest_path)
+
+    # --- dependency validation ---
+    requires = manifest.get("requires", [])
+    if requires:
+        missing = _check_requires(requires)
+        if missing:
+            print(
+                f"Error: missing dependencies for '{tool_name}': {', '.join(missing)}\n"
+                f"Install them and retry.",
+                file=sys.stderr,
+            )
+            json.dump({"error": "missing_dependencies", "missing": missing}, sys.stdout)
+            print()
+            sys.exit(1)
 
     # --- .claude/.prove.json ---
     prove = _read_prove_json(project_root)

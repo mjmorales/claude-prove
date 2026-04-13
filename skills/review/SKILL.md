@@ -28,18 +28,24 @@ argument-hint: "[base-branch (default: main)]"
 
 ## Phase 2: Assemble or Reconstruct
 
-Check for manifests: `ls .prove/intents/*.json 2>/dev/null`
+Check for manifests in the SQLite store:
+```bash
+PYTHONPATH="$PLUGIN_DIR" python3 -c "
+from tools.acb.store import open_store
+s = open_store('.')
+branch = '$(git rev-parse --abbrev-ref HEAD)'
+print(len(s.list_manifests(branch)))
+s.close()
+"
+```
 
 ### Path A: Manifests exist
 
 ```bash
-PYTHONPATH="$PLUGIN_DIR" python3 -m tools.acb assemble \
-  --intents-dir .prove/intents \
-  --base <base> \
-  --output-dir .prove/reviews
+PYTHONPATH="$PLUGIN_DIR" python3 -m tools.acb assemble --base <base>
 ```
 
-Output: `.prove/reviews/<branch-slug>.acb.json`. If **uncovered files** remain, use Path B for those files and merge.
+The ACB document is saved to the SQLite store (`.prove/acb.db`). If **uncovered files** remain, use Path B for those files and merge.
 
 ### Path B: Reconstruction fallback
 
@@ -64,7 +70,19 @@ Mark reconstructed groups with annotation: type `note`, body `"Reconstructed pos
 - Each file in exactly one group; every changed line covered
 - Max ~8 groups (merge least important); <=3 files = single group
 
-Write ACB to `.prove/reviews/<branch-slug>.acb.json` with `acb_version: "0.2"`, `change_set_ref` (base/head SHAs), `task_statement`, `intent_groups`, `negative_space`, `open_questions`, `uncovered_files`, `generated_at` (ISO), `agent_id: "prove-review"`, `manifest_count`.
+Save the reconstructed ACB to the store:
+```bash
+PYTHONPATH="$PLUGIN_DIR" python3 -c "
+import json
+from tools.acb.store import open_store
+s = open_store('.')
+acb = json.load(open('.prove/reconstructed_acb.json'))
+s.save_acb('$(git rev-parse --abbrev-ref HEAD)', acb)
+s.close()
+"
+```
+
+Build ACB with `acb_version: "0.2"`, `change_set_ref` (base/head SHAs), `task_statement`, `intent_groups`, `negative_space`, `open_questions`, `uncovered_files`, `generated_at` (ISO), `agent_id: "prove-review"`, `manifest_count`.
 
 ## Phase 3: Build Task Statement
 
@@ -75,13 +93,10 @@ Construct `task_statement.turns` (role `user`) from:
 ## Phase 4: Launch Review UI
 
 ```bash
-PYTHONPATH="$PLUGIN_DIR" python3 -m tools.acb serve \
-  --acb .prove/reviews/<branch-slug>.acb.json \
-  --base <base> \
-  --port 0
+PYTHONPATH="$PLUGIN_DIR" python3 -m tools.acb serve --base <base>
 ```
 
-Open the printed URL in the browser (`open <url>`). Tell the user the review is available. Review state auto-saves to `.prove/reviews/<branch-slug>.review.json`.
+Open the printed URL in the browser (`open <url>`). Tell the user the review is available. Review state auto-saves to the SQLite store.
 
 ## Phase 5: Present Summary
 

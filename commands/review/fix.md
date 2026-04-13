@@ -10,17 +10,17 @@ Read the review state and generate fix instructions for rejected intent groups.
 
 ## Instructions
 
-1. Find the most recent ACB review file:
+1. Get the current branch:
    ```bash
-   ls -t .prove/reviews/*.acb.json 2>/dev/null | head -1
+   git rev-parse --abbrev-ref HEAD
    ```
 
-2. If no review file exists, tell the user to run `/prove:review` first and stop.
-
-3. Run the fix prompt generator:
+2. Run the fix prompt generator:
    ```bash
-   PYTHONPATH="$PLUGIN_DIR" python3 -m tools.acb fix --acb <path>
+   PYTHONPATH="$PLUGIN_DIR" python3 -m tools.acb fix --branch <branch>
    ```
+
+3. If no ACB document exists, tell the user to run `/prove:review` first and stop.
 
 4. Present the output to the user. The prompt describes:
    - Rejected groups with reviewer comments

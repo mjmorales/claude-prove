@@ -45,6 +45,7 @@ def full_scan():
                 {"name": "test", "command": "go test ./...", "phase": "test"},
             ],
             "has_index": True,
+            "tool_directives": [],
         },
         "cafi": {"available": True, "file_count": 50},
         "core_commands": [
@@ -64,7 +65,7 @@ def minimal_scan():
         "tech_stack": {"languages": [], "frameworks": [], "build_systems": []},
         "key_dirs": {},
         "conventions": {"naming": "unknown", "test_patterns": [], "primary_extensions": []},
-        "prove_config": {"exists": False, "validators": [], "has_index": False},
+        "prove_config": {"exists": False, "validators": [], "has_index": False, "tool_directives": []},
         "cafi": {"available": False, "file_count": 0},
         "core_commands": [],
         "plugin_version": "unknown",
@@ -123,7 +124,7 @@ class TestCompose:
         result = compose(full_scan)
         assert "## Prove Commands" in result
         assert "/prove:index" in result
-        assert "/prove:docs:claude-md" in result
+        assert "/prove:claude-md" in result
 
     def test_tools_from_core_commands(self, full_scan):
         full_scan["core_commands"] = [
@@ -205,6 +206,45 @@ class TestReferences:
         # No ### heading when label is empty
         refs_section = result.split("## References")[1].split("\n## ")[0]
         assert "###" not in refs_section
+
+
+class TestToolDirectives:
+    def test_includes_tool_directives_section(self, full_scan):
+        full_scan["prove_config"]["tool_directives"] = [
+            {"name": "acb", "directive": "Write intent manifests before committing."},
+        ]
+        result = compose(full_scan)
+        assert "## Tool Directives" in result
+        assert "### acb" in result
+        assert "Write intent manifests before committing." in result
+
+    def test_multiple_directives(self, full_scan):
+        full_scan["prove_config"]["tool_directives"] = [
+            {"name": "acb", "directive": "Write manifests."},
+            {"name": "cafi", "directive": "Check the file index."},
+        ]
+        result = compose(full_scan)
+        assert "### acb" in result
+        assert "### cafi" in result
+        assert "Write manifests." in result
+        assert "Check the file index." in result
+
+    def test_no_section_when_empty(self, full_scan):
+        result = compose(full_scan)
+        assert "## Tool Directives" not in result
+
+    def test_placed_after_discovery_before_references(self, full_scan):
+        full_scan["prove_config"]["tool_directives"] = [
+            {"name": "acb", "directive": "Write manifests."},
+        ]
+        full_scan["prove_config"]["references"] = [
+            {"path": "~/.claude/ref.md", "label": "Ref"},
+        ]
+        result = compose(full_scan)
+        discovery_pos = result.find("## Discovery Protocol")
+        directives_pos = result.find("## Tool Directives")
+        references_pos = result.find("## References")
+        assert discovery_pos < directives_pos < references_pos
 
 
 class TestComposeSubagentContext:
