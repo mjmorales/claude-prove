@@ -29,17 +29,24 @@ Install in ``.claude/settings.json``::
               {
                 "type": "command",
                 "if": "Bash(git commit*)",
-                "command": "python3 $PLUGIN_DIR/tools/acb/hook.py"
+                "command": "python3 $PLUGIN_DIR/tools/acb/hook.py --workspace-root $CLAUDE_PROJECT_DIR"
               }
             ]
           }
         ]
       }
     }
+
+``--workspace-root`` is required: it pins the ACB store to the main
+worktree so commits made from linked worktrees write their manifests
+into the same ``.prove/acb.db`` the review tooling reads, and it gets
+echoed back into the ``save-manifest`` prompt so the agent's follow-up
+command targets the same root regardless of its own cwd.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import re
@@ -114,7 +121,7 @@ _MANIFEST_PROMPT = """\
 ACTION REQUIRED — commit {short_sha} on `{branch}`{slug_clause} has no intent manifest. Your next tool call MUST be this exact Bash invocation (no variations, no prefix commands):
 
 ```bash
-PYTHONPATH={plugin_dir} python3 -m tools.acb save-manifest --branch {branch} --sha {sha}{slug_flag} <<'MANIFEST'
+PYTHONPATH={plugin_dir} python3 -m tools.acb save-manifest --workspace-root {workspace_root} --branch {branch} --sha {sha}{slug_flag} <<'MANIFEST'
 {{
   "acb_manifest_version": "0.2",
   "commit_sha": "{sha}",
@@ -151,7 +158,22 @@ Diff for {short_sha}:
 Do not run any other command until the manifest is saved. The hook will re-fire on the next commit for its own SHA."""
 
 
-def main() -> None:
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--workspace-root",
+        required=True,
+        help="Absolute path to the main worktree / project root. The ACB "
+        "store at <workspace-root>/.prove/acb.db is the single source of "
+        "truth; this path is also echoed into the save-manifest prompt.",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
+    args = _parse_args(argv)
+    workspace_root = args.workspace_root
+
     try:
         hook_input = json.load(sys.stdin)
     except (json.JSONDecodeError, EOFError):
@@ -180,14 +202,9 @@ def main() -> None:
     if sha is None:
         return
 
-    root = _git.main_worktree_root(cwd=cwd)
-    if root is None:
-        return
-    store_root = str(root)
-
     run_slug = _slug.resolve_run_slug(cwd)
 
-    if _manifest_exists(store_root, sha, run_slug=run_slug):
+    if _manifest_exists(workspace_root, sha, run_slug=run_slug):
         return
 
     diff_stat = _head_diff_stat(sha, cwd=cwd)
@@ -201,6 +218,7 @@ def main() -> None:
         slug_clause=f" (run `{run_slug}`)" if run_slug else "",
         slug_flag=f" --slug {run_slug}" if run_slug else "",
         plugin_dir=plugin_dir,
+        workspace_root=workspace_root,
         now_iso=now_iso,
     )
 

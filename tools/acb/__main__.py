@@ -51,8 +51,16 @@ def _current_branch() -> str:
     return _git.current_branch() or "unknown"
 
 
-def _store_root() -> str:
-    """Return the main worktree root for store access, falling back to cwd."""
+def _store_root(override: str | None = None) -> str:
+    """Return the workspace root for store access.
+
+    When *override* is set (``--workspace-root``), it wins unconditionally —
+    this is how hook-driven invocations from linked worktrees pin writes
+    to the main worktree's ``.prove/acb.db``. Otherwise fall back to
+    ``git rev-parse --git-common-dir`` and finally to the current cwd.
+    """
+    if override:
+        return override
     root = _git.main_worktree_root()
     return str(root) if root is not None else os.getcwd()
 
@@ -81,7 +89,7 @@ def cmd_save_manifest(args: argparse.Namespace) -> None:
         print(f"Error: invalid manifest: {'; '.join(errors)}", file=sys.stderr)
         sys.exit(1)
 
-    store = open_store(_store_root())
+    store = open_store(_store_root(override=args.workspace_root))
     row_id = store.save_manifest(branch, sha, data, run_slug=run_slug)
     store.close()
 
@@ -227,6 +235,13 @@ def main(argv: list[str] | None = None) -> None:
         "--slug",
         default="",
         help="Orchestrator run slug (default: PROVE_RUN_SLUG env or .prove/RUN_SLUG marker)",
+    )
+    p_save.add_argument(
+        "--workspace-root",
+        default="",
+        help="Absolute path to the main worktree; pins the store to "
+        "<workspace-root>/.prove/acb.db regardless of cwd. Required when "
+        "invoked from a linked worktree (hook use case).",
     )
     p_save.set_defaults(func=cmd_save_manifest)
 

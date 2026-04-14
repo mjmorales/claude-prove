@@ -66,12 +66,12 @@ class TestCommitSucceeded(unittest.TestCase):
 
 
 class TestHookMain(unittest.TestCase):
-    def _run_hook(self, hook_input: dict) -> str:
+    def _run_hook(self, hook_input: dict, workspace_root: str = "/tmp/repo") -> str:
         stdin = io.StringIO(json.dumps(hook_input))
         stdout = io.StringIO()
         with patch.object(sys, "stdin", stdin), patch.object(sys, "stdout", stdout):
             try:
-                main()
+                main(["--workspace-root", workspace_root])
             except SystemExit:
                 pass
         return stdout.getvalue()
@@ -123,6 +123,7 @@ class TestHookMain(unittest.TestCase):
         self.assertEqual(data["decision"], "block")
         self.assertIn("feature/auth", data["reason"])
         self.assertIn("deadbeef1234", data["reason"])
+        self.assertIn("--workspace-root /tmp/repo", data["reason"])
 
     @patch("acb._slug.resolve_run_slug", return_value=None)
     @patch("acb.hook._manifest_exists", return_value=True)
@@ -167,22 +168,24 @@ class TestHookMain(unittest.TestCase):
         })
         self.assertEqual(result, "")
 
-    @patch("acb._git.main_worktree_root", return_value=None)
-    @patch("acb._git.head_sha", return_value="deadbeef1234")
-    @patch("acb._git.current_branch", return_value="feature/auth")
-    def test_bails_when_worktree_unresolvable(self, *_mocks):
-        result = self._run_hook({
+    def test_workspace_root_arg_is_required(self):
+        stdin = io.StringIO(json.dumps({
             "tool_name": "Bash",
             "tool_input": {"command": "git commit -m 'test'"},
             "tool_response": {"exit_code": 0},
-        })
-        self.assertEqual(result, "")
+        }))
+        stderr = io.StringIO()
+        with patch.object(sys, "stdin", stdin), patch.object(sys, "stderr", stderr):
+            with self.assertRaises(SystemExit) as cm:
+                main([])
+        self.assertNotEqual(cm.exception.code, 0)
+        self.assertIn("--workspace-root", stderr.getvalue())
 
     def test_handles_invalid_json_stdin(self):
         stdin = io.StringIO("not json")
         stdout = io.StringIO()
         with patch.object(sys, "stdin", stdin), patch.object(sys, "stdout", stdout):
-            main()
+            main(["--workspace-root", "/tmp/repo"])
         self.assertEqual(stdout.getvalue(), "")
 
 
