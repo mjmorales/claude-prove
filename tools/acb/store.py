@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS manifests (
     commit_sha TEXT NOT NULL,
     timestamp TEXT NOT NULL,
     data TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    run_slug TEXT
 );
 
 CREATE TABLE IF NOT EXISTS acb_documents (
@@ -66,19 +67,48 @@ class Store:
         self._conn = sqlite3.connect(str(self.db_path))
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Apply additive schema migrations to older DB files."""
+        cols = {
+            row[1]
+            for row in self._conn.execute("PRAGMA table_info(manifests)").fetchall()
+        }
+        if "run_slug" not in cols:
+            self._conn.execute("ALTER TABLE manifests ADD COLUMN run_slug TEXT")
+        # Index creation must come after the column exists. CREATE INDEX IF
+        # NOT EXISTS is idempotent, so running it every open is harmless.
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_manifests_run_slug "
+            "ON manifests(run_slug, branch)"
+        )
+        self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
 
     # -- Manifests -----------------------------------------------------------
 
-    def save_manifest(self, branch: str, commit_sha: str, data: dict) -> int:
-        """Insert a manifest. Returns the new row ID."""
+    def save_manifest(
+        self,
+        branch: str,
+        commit_sha: str,
+        data: dict,
+        run_slug: str | None = None,
+    ) -> int:
+        """Insert a manifest. Returns the new row ID.
+
+        *run_slug* ties the manifest to an orchestrator run. It is
+        optional: standalone commits outside an orchestrator run pass
+        ``None`` and the column stays NULL.
+        """
         ts = data.get("timestamp", _now())
         cur = self._conn.execute(
-            "INSERT INTO manifests (branch, commit_sha, timestamp, data, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (branch, commit_sha, ts, json.dumps(data), _now()),
+            "INSERT INTO manifests "
+            "(branch, commit_sha, timestamp, data, created_at, run_slug) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (branch, commit_sha, ts, json.dumps(data), _now(), run_slug),
         )
         self._conn.commit()
         return cur.lastrowid  # type: ignore[return-value]
@@ -89,6 +119,37 @@ class Store:
             "SELECT 1 FROM manifests WHERE branch = ? LIMIT 1", (branch,)
         )
         return cur.fetchone() is not None
+
+    def has_manifest_for_sha(
+        self,
+        commit_sha: str,
+        run_slug: str | None = None,
+    ) -> bool:
+        """Check if a manifest exists for *commit_sha* (prefix match).
+
+        When *run_slug* is given, only manifests tagged with that slug
+        count. A None *run_slug* matches any slug (or NULL).
+        """
+        if run_slug is None:
+            cur = self._conn.execute(
+                "SELECT 1 FROM manifests WHERE commit_sha LIKE ? || '%' LIMIT 1",
+                (commit_sha,),
+            )
+        else:
+            cur = self._conn.execute(
+                "SELECT 1 FROM manifests "
+                "WHERE commit_sha LIKE ? || '%' AND run_slug = ? LIMIT 1",
+                (commit_sha, run_slug),
+            )
+        return cur.fetchone() is not None
+
+    def list_manifests_by_run(self, run_slug: str) -> list[dict]:
+        """Return all manifests tagged with *run_slug*, ordered by timestamp."""
+        cur = self._conn.execute(
+            "SELECT data FROM manifests WHERE run_slug = ? ORDER BY timestamp ASC",
+            (run_slug,),
+        )
+        return [json.loads(row[0]) for row in cur.fetchall()]
 
     def list_manifests(self, branch: str) -> list[dict]:
         """Return all manifests for *branch*, sorted by timestamp."""

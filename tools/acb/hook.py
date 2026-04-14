@@ -1,21 +1,34 @@
 #!/usr/bin/env python3
-"""Claude Code PreToolUse hook for ACB intent capture.
+"""Claude Code PostToolUse hook for ACB intent capture.
 
-Intercepts ``git commit`` Bash commands BEFORE they execute and checks
-whether an intent manifest already exists for the staged changes.  If
-not, it blocks the commit and instructs the agent to write the manifest
-first.
+Fires AFTER every successful ``git commit`` Bash call. Resolves the
+resulting commit SHA, checks the main-worktree ACB store for a manifest
+keyed to that SHA, and — if none exists — blocks the agent with a
+``decision: block`` response that prompts it to run
+``python3 -m tools.acb save-manifest`` for the real SHA.
+
+Design notes:
+
+* No PreToolUse. Manifests describe what actually landed, so blocking
+  before the commit adds race conditions (agent writes a manifest,
+  commit fails, stale manifest lingers with a SHA that never existed).
+* No ``pending`` placeholder. ``save-manifest`` defaults ``--sha`` to
+  ``git rev-parse HEAD`` so every row has a real SHA.
+* Writes always land in the main worktree's ``.prove/acb.db``
+  (resolved via ``git rev-parse --git-common-dir``) so linked
+  worktrees do not fragment the store.
 
 Install in ``.claude/settings.json``::
 
     {
       "hooks": {
-        "PreToolUse": [
+        "PostToolUse": [
           {
             "matcher": "Bash",
             "hooks": [
               {
                 "type": "command",
+                "if": "Bash(git commit*)",
                 "command": "python3 $PLUGIN_DIR/tools/acb/hook.py"
               }
             ]
@@ -32,30 +45,24 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 
-# Set up import path for acb package.
 _hook_dir = os.path.dirname(os.path.abspath(__file__))
 _tools_dir = os.path.dirname(_hook_dir)
 if _tools_dir not in sys.path:
     sys.path.insert(0, _tools_dir)
 
 
-def _current_branch() -> str | None:
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
+_COMMIT_RE = re.compile(r"\bgit\s+commit\b")
+_SKIP_BRANCHES = {"main", "master"}
 
 
-def _staged_diff_stat() -> str:
-    """Return ``git diff --cached --stat`` output for the staged changes."""
+def _head_diff_stat(sha: str, cwd: str | None = None) -> str:
+    """Return ``git show --stat`` output for *sha*."""
     try:
         return subprocess.check_output(
-            ["git", "diff", "--cached", "--stat"],
+            ["git", "show", "--stat", "--format=", sha],
+            cwd=cwd,
             text=True,
             stderr=subprocess.DEVNULL,
         ).strip()
@@ -63,49 +70,65 @@ def _staged_diff_stat() -> str:
         return ""
 
 
-def _manifest_exists(project_root: str, branch: str) -> bool:
-    """Check if any pending intent manifest exists for *branch* in the store."""
+def _manifest_exists(
+    store_root: str,
+    commit_sha: str,
+    run_slug: str | None = None,
+) -> bool:
+    """Check the main-tree ACB store for a manifest keyed to *commit_sha*.
+
+    When *run_slug* is set, only manifests tagged with that slug count.
+    """
     try:
         from acb.store import open_store
-        store = open_store(project_root)
-        result = store.has_manifest(branch)
-        store.close()
-        return result
+
+        store = open_store(store_root)
+        try:
+            return store.has_manifest_for_sha(commit_sha, run_slug=run_slug)
+        finally:
+            store.close()
     except Exception:
         return False
 
 
-_COMMIT_RE = re.compile(r"\bgit\s+commit\b")
-_SKIP_BRANCHES = {"main", "master"}
+def _commit_succeeded(tool_response: object) -> bool:
+    """Best-effort check that the git commit call did not error out.
 
+    Claude Code's Bash PostToolUse payload is not fully standardized
+    across versions, so we treat anything that looks like an error as
+    a failed commit and skip the hook.
+    """
+    if not isinstance(tool_response, dict):
+        return True
+    if tool_response.get("is_error") is True:
+        return False
+    if tool_response.get("isError") is True:
+        return False
+    code = tool_response.get("exit_code", tool_response.get("exitCode"))
+    if isinstance(code, int) and code != 0:
+        return False
+    return True
 
-# -- Inline prompt template ---------------------------------------------------
 
 _MANIFEST_PROMPT = """\
-Write the intent manifest before committing.
+ACTION REQUIRED — commit {short_sha} on `{branch}`{slug_clause} has no intent manifest. Your next tool call MUST be this exact Bash invocation (no variations, no prefix commands):
 
-**Staged changes ({branch}):**
-```
-{diff_stat}
-```
-
-**Save via CLI:**
 ```bash
-PYTHONPATH="$PLUGIN_DIR" python3 -m tools.acb save-manifest --branch {branch} --sha pending <<'MANIFEST'
+PYTHONPATH={plugin_dir} python3 -m tools.acb save-manifest --branch {branch} --sha {sha}{slug_flag} <<'MANIFEST'
 {{
   "acb_manifest_version": "0.2",
-  "commit_sha": "pending",
-  "timestamp": "<ISO-8601>",
+  "commit_sha": "{sha}",
+  "timestamp": "{now_iso}",
   "intent_groups": [
     {{
-      "id": "short-slug",
-      "title": "What this group of changes does",
+      "id": "<slug-for-this-group>",
+      "title": "<what-this-group-does>",
       "classification": "explicit",
       "file_refs": [
-        {{"path": "src/example.py", "ranges": ["10-25", "40-42"]}}
+        {{"path": "<path/to/file>", "ranges": ["<start>-<end>"]}}
       ],
       "annotations": [
-        {{"id": "ann-1", "type": "judgment_call", "body": "Why you made a non-obvious decision"}}
+        {{"id": "ann-1", "type": "judgment_call", "body": "<why-if-non-obvious>"}}
       ]
     }}
   ]
@@ -113,15 +136,19 @@ PYTHONPATH="$PLUGIN_DIR" python3 -m tools.acb save-manifest --branch {branch} --
 MANIFEST
 ```
 
-**Classification values:** `explicit` (directly requested), `inferred` (logically required), `speculative` (beyond requested).
+Rules for filling in `intent_groups` (everything else above is fixed — do NOT edit the flags, PYTHONPATH, or JSON keys):
+1. One group per logical unit of change. Group related file edits together.
+2. Every file in the diff below MUST appear in at least one group's `file_refs`.
+3. `classification` ∈ `explicit` (user asked for it), `inferred` (logically required), `speculative` (beyond asked).
+4. `ranges` is optional — omit for whole-file changes; use `"<start>-<end>"` for partial.
+5. Add a `judgment_call` annotation only for non-obvious decisions; omit `annotations` entirely if none.
 
-**Rules:**
-1. One intent group per logical unit of change. Group related file edits together.
-2. Every changed file must appear in at least one group's `file_refs`.
-3. Add a `judgment_call` annotation for any non-trivial design decision or deviation from instructions.
-4. Use `ranges` to specify affected line ranges. Omit `ranges` for whole-file changes.
+Diff for {short_sha}:
+```
+{diff_stat}
+```
 
-Save the manifest via the CLI command above, then re-run your commit."""
+Do not run any other command until the manifest is saved. The hook will re-fire on the next commit for its own SHA."""
 
 
 def main() -> None:
@@ -138,33 +165,46 @@ def main() -> None:
     if not _COMMIT_RE.search(command):
         return
 
-    branch = _current_branch()
+    if not _commit_succeeded(hook_input.get("tool_response")):
+        return
+
+    from acb import _git, _slug
+
+    cwd = hook_input.get("cwd") or os.getcwd()
+
+    branch = _git.current_branch(cwd=cwd)
     if branch is None or branch in _SKIP_BRANCHES:
         return
 
-    project_root = hook_input.get("cwd", os.getcwd())
-
-    # If a manifest already exists for this branch, allow the commit through.
-    if _manifest_exists(project_root, branch):
+    sha = _git.head_sha(cwd=cwd)
+    if sha is None:
         return
 
-    diff_stat = _staged_diff_stat()
-    if not diff_stat:
-        # Nothing staged — let git commit fail naturally.
+    root = _git.main_worktree_root(cwd=cwd)
+    if root is None:
+        return
+    store_root = str(root)
+
+    run_slug = _slug.resolve_run_slug(cwd)
+
+    if _manifest_exists(store_root, sha, run_slug=run_slug):
         return
 
-    message = _MANIFEST_PROMPT.format(branch=branch, diff_stat=diff_stat)
-
-    json.dump(
-        {
-            "hookSpecificOutput": {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": message,
-            }
-        },
-        sys.stdout,
+    diff_stat = _head_diff_stat(sha, cwd=cwd)
+    plugin_dir = os.path.dirname(_tools_dir)
+    now_iso = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    message = _MANIFEST_PROMPT.format(
+        branch=branch,
+        sha=sha,
+        short_sha=sha[:12],
+        diff_stat=diff_stat or "(no diff stat available)",
+        slug_clause=f" (run `{run_slug}`)" if run_slug else "",
+        slug_flag=f" --slug {run_slug}" if run_slug else "",
+        plugin_dir=plugin_dir,
+        now_iso=now_iso,
     )
+
+    json.dump({"decision": "block", "reason": message}, sys.stdout)
 
 
 if __name__ == "__main__":

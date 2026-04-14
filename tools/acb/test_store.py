@@ -173,5 +173,102 @@ class TestOpenStore(unittest.TestCase):
             store.close()
 
 
+class TestRunSlug(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.store = Store(os.path.join(self.tmp, "acb.db"))
+
+    def tearDown(self):
+        self.store.close()
+
+    def test_save_with_slug_roundtrips(self):
+        self.store.save_manifest("feat/x", "abc123", _manifest("0"), run_slug="run-1")
+        rows = self.store.list_manifests_by_run("run-1")
+        self.assertEqual(len(rows), 1)
+        # list_manifests_by_run returns the stored manifest body as-is; _manifest("0")
+        # sets commit_sha="0" at manifest-body level, independent of the row's SHA.
+        self.assertEqual(rows[0]["commit_sha"], "0")
+
+    def test_list_by_run_is_slug_scoped(self):
+        self.store.save_manifest("feat/x", "aaa", _manifest("1"), run_slug="run-A")
+        self.store.save_manifest("feat/y", "bbb", _manifest("2"), run_slug="run-B")
+        self.store.save_manifest("feat/z", "ccc", _manifest("3"))  # no slug
+        self.assertEqual(len(self.store.list_manifests_by_run("run-A")), 1)
+        self.assertEqual(len(self.store.list_manifests_by_run("run-B")), 1)
+        self.assertEqual(len(self.store.list_manifests_by_run("run-Z")), 0)
+
+    def test_has_manifest_for_sha_with_slug_filter(self):
+        self.store.save_manifest("feat/x", "deadbeef", _manifest("0"), run_slug="run-1")
+        self.assertTrue(self.store.has_manifest_for_sha("deadbeef"))
+        self.assertTrue(self.store.has_manifest_for_sha("dead"))
+        self.assertTrue(self.store.has_manifest_for_sha("deadbeef", run_slug="run-1"))
+        self.assertFalse(self.store.has_manifest_for_sha("deadbeef", run_slug="run-2"))
+
+    def test_has_manifest_for_sha_null_slug_row_excluded_by_filter(self):
+        self.store.save_manifest("feat/x", "aaa", _manifest("0"))  # slug NULL
+        self.assertTrue(self.store.has_manifest_for_sha("aaa"))
+        self.assertFalse(self.store.has_manifest_for_sha("aaa", run_slug="run-1"))
+
+
+class TestRunSlugMigration(unittest.TestCase):
+    """Older DBs lack the run_slug column; the store must add it on open."""
+
+    def _make_legacy_db(self, path: str) -> None:
+        import sqlite3
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            """
+            CREATE TABLE manifests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                branch TEXT NOT NULL,
+                commit_sha TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                data TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE acb_documents (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                branch TEXT NOT NULL UNIQUE,
+                data TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE review_state (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                branch TEXT NOT NULL UNIQUE,
+                acb_hash TEXT NOT NULL,
+                data TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+        conn.execute(
+            "INSERT INTO manifests (branch, commit_sha, timestamp, data, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            ("feat/old", "oldsha", "2026-01-01", json.dumps(_manifest("0")), "2026-01-01"),
+        )
+        conn.commit()
+        conn.close()
+
+    def test_adds_run_slug_column_on_open(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = os.path.join(tmp, "acb.db")
+            self._make_legacy_db(db)
+
+            store = Store(db)
+            cols = {r[1] for r in store._conn.execute("PRAGMA table_info(manifests)").fetchall()}
+            self.assertIn("run_slug", cols)
+
+            # Pre-existing rows have NULL run_slug and don't match any filter.
+            self.assertTrue(store.has_manifest_for_sha("oldsha"))
+            self.assertFalse(store.has_manifest_for_sha("oldsha", run_slug="any"))
+
+            # New writes with a slug work.
+            store.save_manifest("feat/new", "newsha", _manifest("1"), run_slug="run-1")
+            self.assertEqual(len(store.list_manifests_by_run("run-1")), 1)
+            store.close()
+
+
 if __name__ == "__main__":
     unittest.main()

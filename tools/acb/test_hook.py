@@ -1,8 +1,7 @@
-"""Tests for acb.hook — Claude Code PreToolUse hook logic."""
+"""Tests for acb.hook — Claude Code PostToolUse hook logic."""
 
 import io
 import json
-import os
 import sys
 import tempfile
 import unittest
@@ -13,7 +12,12 @@ _tool_dir = Path(__file__).resolve().parent
 if str(_tool_dir.parent) not in sys.path:
     sys.path.insert(0, str(_tool_dir.parent))
 
-from acb.hook import main, _COMMIT_RE, _SKIP_BRANCHES
+from acb.hook import (
+    _COMMIT_RE,
+    _SKIP_BRANCHES,
+    _commit_succeeded,
+    main,
+)
 
 
 class TestCommitRegex(unittest.TestCase):
@@ -38,9 +42,31 @@ class TestSkipBranches(unittest.TestCase):
         self.assertIn("master", _SKIP_BRANCHES)
 
 
+class TestCommitSucceeded(unittest.TestCase):
+    def test_none_response_treated_as_success(self):
+        self.assertTrue(_commit_succeeded(None))
+
+    def test_non_dict_response_treated_as_success(self):
+        self.assertTrue(_commit_succeeded("ok"))
+
+    def test_is_error_flag_fails(self):
+        self.assertFalse(_commit_succeeded({"is_error": True}))
+
+    def test_camel_case_is_error_fails(self):
+        self.assertFalse(_commit_succeeded({"isError": True}))
+
+    def test_nonzero_exit_code_fails(self):
+        self.assertFalse(_commit_succeeded({"exit_code": 1}))
+
+    def test_nonzero_camel_case_exit_code_fails(self):
+        self.assertFalse(_commit_succeeded({"exitCode": 128}))
+
+    def test_zero_exit_code_passes(self):
+        self.assertTrue(_commit_succeeded({"exit_code": 0}))
+
+
 class TestHookMain(unittest.TestCase):
     def _run_hook(self, hook_input: dict) -> str:
-        """Run main() with given input on stdin, return stdout."""
         stdin = io.StringIO(json.dumps(hook_input))
         stdout = io.StringIO()
         with patch.object(sys, "stdin", stdin), patch.object(sys, "stdout", stdout):
@@ -61,7 +87,18 @@ class TestHookMain(unittest.TestCase):
         })
         self.assertEqual(result, "")
 
-    @patch("acb.hook._current_branch", return_value="main")
+    def test_ignores_failed_commit(self):
+        with patch("acb._git.current_branch", return_value="feature/auth"), \
+             patch("acb._git.head_sha", return_value="abc123"), \
+             patch("acb._git.main_worktree_root", return_value=Path("/tmp")):
+            result = self._run_hook({
+                "tool_name": "Bash",
+                "tool_input": {"command": "git commit -m 'test'"},
+                "tool_response": {"exit_code": 1},
+            })
+        self.assertEqual(result, "")
+
+    @patch("acb._git.current_branch", return_value="main")
     def test_skips_main_branch(self, _branch):
         result = self._run_hook({
             "tool_name": "Bash",
@@ -69,38 +106,75 @@ class TestHookMain(unittest.TestCase):
         })
         self.assertEqual(result, "")
 
-    @patch("acb.hook._current_branch", return_value="feature/auth")
-    @patch("acb.hook._staged_diff_stat", return_value=" src/auth.py | 10 ++++\n 1 file changed")
+    @patch("acb._slug.resolve_run_slug", return_value=None)
+    @patch("acb.hook._head_diff_stat", return_value=" src/auth.py | 10 ++++\n 1 file changed")
     @patch("acb.hook._manifest_exists", return_value=False)
-    def test_blocks_commit_without_manifest(self, _exists, _stat, _branch):
+    @patch("acb._git.main_worktree_root", return_value=Path("/tmp/repo"))
+    @patch("acb._git.head_sha", return_value="deadbeef1234")
+    @patch("acb._git.current_branch", return_value="feature/auth")
+    def test_blocks_when_manifest_missing(self, *_mocks):
         result = self._run_hook({
             "tool_name": "Bash",
             "tool_input": {"command": "git commit -m 'test'"},
+            "tool_response": {"exit_code": 0},
         })
         self.assertNotEqual(result, "")
         data = json.loads(result)
-        hook_output = data["hookSpecificOutput"]
-        self.assertEqual(hook_output["permissionDecision"], "deny")
-        self.assertIn("feature/auth", hook_output["permissionDecisionReason"])
+        self.assertEqual(data["decision"], "block")
+        self.assertIn("feature/auth", data["reason"])
+        self.assertIn("deadbeef1234", data["reason"])
 
-    @patch("acb.hook._current_branch", return_value="feature/auth")
+    @patch("acb._slug.resolve_run_slug", return_value=None)
     @patch("acb.hook._manifest_exists", return_value=True)
-    def test_allows_commit_with_manifest(self, _exists, _branch):
+    @patch("acb._git.main_worktree_root", return_value=Path("/tmp/repo"))
+    @patch("acb._git.head_sha", return_value="deadbeef1234")
+    @patch("acb._git.current_branch", return_value="feature/auth")
+    def test_allows_when_manifest_present(self, *_mocks):
         result = self._run_hook({
             "tool_name": "Bash",
             "tool_input": {"command": "git commit -m 'test'"},
+            "tool_response": {"exit_code": 0},
         })
-        # Empty output = allow (no deny response)
         self.assertEqual(result, "")
 
-    @patch("acb.hook._current_branch", return_value="feature/auth")
-    @patch("acb.hook._staged_diff_stat", return_value="")
+    @patch("acb._slug.resolve_run_slug", return_value="run-42")
+    @patch("acb.hook._head_diff_stat", return_value="")
     @patch("acb.hook._manifest_exists", return_value=False)
-    def test_allows_empty_staging(self, _exists, _stat, _branch):
-        """No staged changes — let git commit fail naturally."""
+    @patch("acb._git.main_worktree_root", return_value=Path("/tmp/repo"))
+    @patch("acb._git.head_sha", return_value="deadbeef1234")
+    @patch("acb._git.current_branch", return_value="feature/auth")
+    def test_passes_slug_to_manifest_check_and_prompt(self, _b, _s, _r, exists_mock, _ds, _sl):
         result = self._run_hook({
             "tool_name": "Bash",
             "tool_input": {"command": "git commit -m 'test'"},
+            "tool_response": {"exit_code": 0},
+        })
+        # Slug forwarded to the existence check.
+        exists_mock.assert_called_once()
+        self.assertEqual(exists_mock.call_args.kwargs.get("run_slug"), "run-42")
+        # Prompt includes the slug and the save-manifest flag.
+        data = json.loads(result)
+        self.assertIn("run-42", data["reason"])
+        self.assertIn("--slug run-42", data["reason"])
+
+    @patch("acb._git.head_sha", return_value=None)
+    @patch("acb._git.current_branch", return_value="feature/auth")
+    def test_bails_when_head_unresolvable(self, *_mocks):
+        result = self._run_hook({
+            "tool_name": "Bash",
+            "tool_input": {"command": "git commit -m 'test'"},
+            "tool_response": {"exit_code": 0},
+        })
+        self.assertEqual(result, "")
+
+    @patch("acb._git.main_worktree_root", return_value=None)
+    @patch("acb._git.head_sha", return_value="deadbeef1234")
+    @patch("acb._git.current_branch", return_value="feature/auth")
+    def test_bails_when_worktree_unresolvable(self, *_mocks):
+        result = self._run_hook({
+            "tool_name": "Bash",
+            "tool_input": {"command": "git commit -m 'test'"},
+            "tool_response": {"exit_code": 0},
         })
         self.assertEqual(result, "")
 
@@ -112,11 +186,11 @@ class TestHookMain(unittest.TestCase):
         self.assertEqual(stdout.getvalue(), "")
 
 
-class TestManifestExists(unittest.TestCase):
+class TestManifestExistsHelper(unittest.TestCase):
     def test_no_store(self):
         from acb.hook import _manifest_exists
         with tempfile.TemporaryDirectory() as tmp:
-            self.assertFalse(_manifest_exists(tmp, "feat/x"))
+            self.assertFalse(_manifest_exists(tmp, "deadbeef"))
 
     def test_empty_store(self):
         from acb.hook import _manifest_exists
@@ -124,23 +198,29 @@ class TestManifestExists(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store = open_store(tmp)
             store.close()
-            self.assertFalse(_manifest_exists(tmp, "feat/x"))
+            self.assertFalse(_manifest_exists(tmp, "deadbeef"))
 
-    def test_store_with_manifest(self):
+    def test_store_with_matching_sha(self):
         from acb.hook import _manifest_exists
         from acb.store import open_store
         with tempfile.TemporaryDirectory() as tmp:
             store = open_store(tmp)
-            store.save_manifest("feat/x", "abc", {
+            store.save_manifest("feat/x", "abc123def456", {
                 "acb_manifest_version": "0.2",
-                "commit_sha": "abc",
+                "commit_sha": "abc123def456",
                 "timestamp": "2026-01-01T00:00:00Z",
-                "intent_groups": [{"id": "g1", "title": "t", "classification": "explicit",
-                                   "file_refs": [{"path": "a.py"}]}],
+                "intent_groups": [{
+                    "id": "g1", "title": "t", "classification": "explicit",
+                    "file_refs": [{"path": "a.py"}],
+                }],
             })
             store.close()
-            self.assertTrue(_manifest_exists(tmp, "feat/x"))
-            self.assertFalse(_manifest_exists(tmp, "feat/y"))
+            # Full SHA matches.
+            self.assertTrue(_manifest_exists(tmp, "abc123def456"))
+            # Prefix matches.
+            self.assertTrue(_manifest_exists(tmp, "abc123"))
+            # Non-matching SHA does not.
+            self.assertFalse(_manifest_exists(tmp, "ffffff"))
 
 
 if __name__ == "__main__":

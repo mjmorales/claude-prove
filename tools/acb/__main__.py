@@ -24,6 +24,7 @@ _tools_dir = os.path.dirname(_acb_dir)
 if _tools_dir not in sys.path:
     sys.path.insert(0, _tools_dir)
 
+from acb import _git, _slug
 from acb.store import open_store
 
 
@@ -39,24 +40,21 @@ def _resolve_base_ref(base: str) -> str:
 
 
 def _resolve_head_ref() -> str:
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "HEAD"], text=True, stderr=subprocess.DEVNULL,
-        ).strip()
-    except subprocess.CalledProcessError:
+    sha = _git.head_sha()
+    if sha is None:
         print("Error: cannot resolve HEAD", file=sys.stderr)
         sys.exit(1)
+    return sha
 
 
 def _current_branch() -> str:
-    try:
-        return subprocess.check_output(
-            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-    except subprocess.CalledProcessError:
-        return "unknown"
+    return _git.current_branch() or "unknown"
+
+
+def _store_root() -> str:
+    """Return the main worktree root for store access, falling back to cwd."""
+    root = _git.main_worktree_root()
+    return str(root) if root is not None else os.getcwd()
 
 
 # -- save-manifest -----------------------------------------------------------
@@ -64,13 +62,17 @@ def _current_branch() -> str:
 
 def cmd_save_manifest(args: argparse.Namespace) -> None:
     branch = args.branch or _current_branch()
-    sha = args.sha or "pending"
+    sha = args.sha or _resolve_head_ref()
+    run_slug = args.slug or _slug.resolve_run_slug(os.getcwd())
 
     try:
         data = json.load(sys.stdin)
     except json.JSONDecodeError as exc:
         print(f"Error: invalid JSON on stdin: {exc}", file=sys.stderr)
         sys.exit(1)
+
+    # Keep the manifest body consistent with the row's commit_sha.
+    data["commit_sha"] = sha
 
     from acb.schemas import validate_manifest
 
@@ -79,13 +81,23 @@ def cmd_save_manifest(args: argparse.Namespace) -> None:
         print(f"Error: invalid manifest: {'; '.join(errors)}", file=sys.stderr)
         sys.exit(1)
 
-    store = open_store(os.getcwd())
-    row_id = store.save_manifest(branch, sha, data)
+    store = open_store(_store_root())
+    row_id = store.save_manifest(branch, sha, data, run_slug=run_slug)
     store.close()
 
-    json.dump({"saved": True, "id": row_id, "branch": branch, "sha": sha}, sys.stdout)
+    json.dump(
+        {
+            "saved": True,
+            "id": row_id,
+            "branch": branch,
+            "sha": sha,
+            "run_slug": run_slug,
+        },
+        sys.stdout,
+    )
     print()
-    print(f"Manifest saved for {branch} (sha: {sha})", file=sys.stderr)
+    tail = f" run:{run_slug}" if run_slug else ""
+    print(f"Manifest saved for {branch} (sha: {sha}){tail}", file=sys.stderr)
 
 
 # -- assemble ----------------------------------------------------------------
@@ -98,7 +110,7 @@ def cmd_assemble(args: argparse.Namespace) -> None:
     base_sha = _resolve_base_ref(args.base)
     head_sha = _resolve_head_ref()
 
-    store = open_store(os.getcwd())
+    store = open_store(_store_root())
     acb = assemble(
         store=store,
         branch=branch,
@@ -135,7 +147,7 @@ def cmd_serve(args: argparse.Namespace) -> None:
 
     branch = args.branch or _current_branch()
     project_root = args.project_root or os.getcwd()
-    store = open_store(os.getcwd())
+    store = open_store(_store_root())
 
     acb = store.load_acb(branch)
     if acb is None:
@@ -159,7 +171,7 @@ def _load_acb_and_review(branch: str) -> tuple[dict, dict]:
     """Load an ACB and its companion review state from the store."""
     from acb.server import _empty_review
 
-    store = open_store(os.getcwd())
+    store = open_store(_store_root())
     acb = store.load_acb(branch)
     if acb is None:
         # Fall back to most recent ACB if branch has none.
@@ -210,7 +222,12 @@ def main(argv: list[str] | None = None) -> None:
     # save-manifest
     p_save = sub.add_parser("save-manifest", help="Save an intent manifest to the store")
     p_save.add_argument("--branch", default="", help="Branch name (default: current)")
-    p_save.add_argument("--sha", default="pending", help="Commit SHA (default: pending)")
+    p_save.add_argument("--sha", default="", help="Commit SHA (default: current HEAD)")
+    p_save.add_argument(
+        "--slug",
+        default="",
+        help="Orchestrator run slug (default: PROVE_RUN_SLUG env or .prove/RUN_SLUG marker)",
+    )
     p_save.set_defaults(func=cmd_save_manifest)
 
     # assemble

@@ -34,7 +34,7 @@ SAMPLE_MANIFEST_ACB = {
             {
                 "matcher": "Bash",
                 "hooks": [
-                    {"type": "command", "command": "python3 hook.py"}
+                    {"type": "command", "if": "Bash(git commit*)", "command": "python3 hook.py"}
                 ],
             }
         ]
