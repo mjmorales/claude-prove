@@ -341,6 +341,19 @@ def cmd_install(args: argparse.Namespace) -> None:
     settings = _read_settings_json(project_root)
     hooks_added = 0
 
+    # Strip any existing hooks tagged for this tool across ALL events before
+    # re-adding from manifest. This makes install idempotent and lets a tool's
+    # manifest migrate hook events (e.g. PreToolUse -> PostToolUse) without
+    # leaving stale entries behind.
+    if "hooks" in settings:
+        for event_name in list(settings["hooks"]):
+            original = settings["hooks"][event_name]
+            filtered = [h for h in original if h.get("_tool") != tool_name]
+            if filtered:
+                settings["hooks"][event_name] = filtered
+            else:
+                del settings["hooks"][event_name]
+
     manifest_hooks = manifest.get("hooks", {})
     if manifest_hooks:
         settings_hooks = settings.setdefault("hooks", {})
@@ -351,7 +364,7 @@ def cmd_install(args: argparse.Namespace) -> None:
                 tagged["_tool"] = tool_name
                 event_list.append(tagged)
                 hooks_added += 1
-        _write_json(_settings_json_path(project_root), settings)
+    _write_json(_settings_json_path(project_root), settings)
 
     # --- directories ---
     dirs_created = 0

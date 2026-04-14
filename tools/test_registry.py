@@ -297,6 +297,47 @@ class TestInstall:
             pre_hooks = settings["hooks"]["PreToolUse"]
             assert len(pre_hooks) == 2  # existing + new
 
+    def test_install_migrates_hook_event(self, capsys: pytest.CaptureFixture[str]) -> None:
+        """Re-install strips stale tagged hooks so an event migration (e.g.
+        PreToolUse -> PostToolUse in the manifest) doesn't leave orphan
+        entries in settings.json."""
+        stale_settings_hooks = {
+            "PreToolUse": [
+                {
+                    "matcher": "Bash",
+                    "_tool": "acb",
+                    "hooks": [{"type": "command", "command": "old.py"}],
+                }
+            ]
+        }
+        migrated_manifest = dict(SAMPLE_MANIFEST_ACB)
+        migrated_manifest["hooks"] = {
+            "PostToolUse": [
+                {
+                    "matcher": "Bash",
+                    "hooks": [{"type": "command", "command": "new.py"}],
+                }
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            plugin_root, project_root = _make_env(
+                tmp,
+                manifests={"acb": migrated_manifest},
+                settings_hooks=stale_settings_hooks,
+            )
+            registry.main([
+                "--plugin-root", str(plugin_root),
+                "--project-root", str(project_root),
+                "install", "acb",
+            ])
+            settings = json.loads(
+                (project_root / ".claude" / "settings.json").read_text()
+            )
+            assert "PreToolUse" not in settings["hooks"]
+            post_hooks = settings["hooks"]["PostToolUse"]
+            assert len(post_hooks) == 1
+            assert post_hooks[0]["_tool"] == "acb"
+
     def test_install_calls_post_install_lifecycle(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Lifecycle post_install function is called."""
         called = []
