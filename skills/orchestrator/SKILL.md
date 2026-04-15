@@ -38,6 +38,7 @@ All `.prove/...` paths are rooted at the **main worktree** (`$MAIN_ROOT`), not t
    - New branch:
      ```bash
      git worktree add .claude/worktrees/orchestrator-<slug> -b orchestrator/<slug>
+     printf '%s\n' "<slug>" > .claude/worktrees/orchestrator-<slug>/.prove-wt-slug.txt
      ```
    - All work happens in this worktree. Main worktree stays on its current branch.
 

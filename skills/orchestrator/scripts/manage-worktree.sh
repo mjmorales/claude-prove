@@ -65,6 +65,7 @@ case "$ACTION" in
 
     # If worktree already exists, print path and exit (idempotent)
     if [[ -d "$WT_PATH" ]]; then
+      printf '%s\n' "$SLUG" > "$WT_PATH/.prove-wt-slug.txt"
       echo "$WT_PATH"
       exit 0
     fi
@@ -76,6 +77,7 @@ case "$ACTION" in
 
     # Create worktree branching from the orchestrator branch
     git worktree add "$WT_PATH" -b "$BRANCH" "$BASE_BRANCH"
+    printf '%s\n' "$SLUG" > "$WT_PATH/.prove-wt-slug.txt"
     echo "$WT_PATH"
     ;;
 

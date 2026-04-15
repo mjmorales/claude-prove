@@ -46,6 +46,7 @@ case "$COMMAND" in
     # Create worktree from the orchestrator branch
     mkdir -p "$(dirname "$WT_PATH")"
     git worktree add "$WT_PATH" -b "$BRANCH" "$BASE_BRANCH" 2>&1 >&2
+    printf '%s\n' "$SLUG" > "$WT_PATH/.prove-wt-slug.txt"
     echo "$WT_PATH"
     ;;
 

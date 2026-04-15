@@ -9,15 +9,17 @@ Discovery order (first match wins):
 
 1. ``PROVE_RUN_SLUG`` environment variable — set by the orchestrator
    when spawning a worktree-agent subprocess.
-2. Explicit registration at ``<main-tree>/.prove/runs/<slug>/worktree``
-   whose contents match the current worktree root. Cheapest
-   unambiguous lookup; preferred for orchestrator integration.
-3. Parse ``<main-tree>/.prove/runs/<slug>/TASK_PLAN.md`` and match its
+2. ``<worktree-root>/.prove-wt-slug.txt`` marker written by
+   ``manage-worktree.sh create``. Cheapest unambiguous lookup;
+   pinned to the worktree itself.
+3. Explicit registration at ``<main-tree>/.prove/runs/<slug>/worktree``
+   whose contents match the current worktree root.
+4. Parse ``<main-tree>/.prove/runs/<slug>/TASK_PLAN.md`` and match its
    ``**Worktree:**`` field against the current worktree root.
    Zero-config fallback that reuses data the orchestrator already
    writes.
-4. ``<worktree-root>/.prove/RUN_SLUG`` marker file. Manual escape hatch.
-5. ``None`` — standalone commit outside an orchestrator run.
+5. ``<worktree-root>/.prove/RUN_SLUG`` marker file. Manual escape hatch.
+6. ``None`` — standalone commit outside an orchestrator run.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from pathlib import Path
 
 
 _ENV_VAR = "PROVE_RUN_SLUG"
+_WT_SLUG_FILE = ".prove-wt-slug.txt"
 _MARKER_REL = Path(".prove") / "RUN_SLUG"
 _RUNS_REL = Path(".prove") / "runs"
 _WORKTREE_FILE = "worktree"
@@ -52,6 +55,16 @@ def resolve_run_slug(cwd: str | Path | None = None) -> str | None:
 
     wt = _git.worktree_root(cwd=cwd)
     main = _git.main_worktree_root(cwd=cwd)
+
+    if wt is not None:
+        wt_marker = wt / _WT_SLUG_FILE
+        if wt_marker.is_file():
+            try:
+                text = wt_marker.read_text(encoding="utf-8").strip()
+            except OSError:
+                text = ""
+            if text:
+                return text
 
     if main is not None and wt is not None:
         runs_dir = main / _RUNS_REL

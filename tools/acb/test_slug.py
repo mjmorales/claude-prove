@@ -161,6 +161,21 @@ class TestRunDirectoryLookup(unittest.TestCase):
             for m in mocks:
                 m.stop()
 
+    def test_wt_slug_file_beats_runs_dir(self):
+        wt = self.root / "wt-marked"
+        wt.mkdir()
+        (wt / ".prove-wt-slug.txt").write_text("wt-slug\n")
+        run = self._run_dir("runs-dir-slug")
+        (run / "worktree").write_text(str(wt))
+        mocks = self._mock_git(self.root, wt)
+        for m in mocks:
+            m.start()
+        try:
+            self.assertEqual(resolve_run_slug(str(wt)), "wt-slug")
+        finally:
+            for m in mocks:
+                m.stop()
+
     def test_symlink_worktree_still_matches(self):
         real = self.root / "real-wt"
         real.mkdir()

@@ -1,8 +1,8 @@
 <!-- prove:managed:start -->
 # claude-prove
 
-<!-- prove:plugin-version:0.26.0 -->
-**Prove plugin v0.26.0** — if the installed plugin version (`cat /Users/manuelmorales/dev/claude-prove/.claude-plugin/plugin.json | grep version`) does not match v0.26.0, run `/prove:update` to sync.
+<!-- prove:plugin-version:0.31.0 -->
+**Prove plugin v0.31.0** — if the installed plugin version (`cat /Users/manuelmorales/dev/claude-prove/.claude-plugin/plugin.json | grep version`) does not match v0.31.0, run `/prove:update` to sync.
 
 JavaScript/TypeScript (npm)
 
@@ -28,6 +28,12 @@ Before broad Glob/Grep searches, check the file index first:
 - `python3 /Users/manuelmorales/dev/claude-prove/tools/cafi/__main__.py lookup <keyword>` — search by keyword
 
 Only fall back to Glob/Grep when the index doesn't cover what you need.
+## Tool Directives
+
+### acb
+
+Feature-branch commits must carry an ACB v0.2 intent manifest; the PostToolUse hook on `git commit` supplies the exact save command. Assemble via `/prove:review`.
+
 ## References
 
 ### LLM-Optimized Coding Standards
