@@ -67,6 +67,14 @@ _SKIP_BRANCHES = {"main", "master"}
 # the worktree is misconfigured and the hook must refuse to proceed.
 _ORCHESTRATOR_BRANCH_PREFIXES = ("orchestrator/", "task/")
 
+# Matches `cd PATH` at the start of the command or after a separator
+# (`;`, `&&`, `|`, newline). PATH can be unquoted, double-quoted, or
+# single-quoted. Subshells like `(cd X && git commit)` also match
+# because `(` counts as preceding whitespace/punctuation.
+_CD_RE = re.compile(
+    r'(?:^|[;&|()\n])\s*cd\s+(?P<path>"[^"]*"|\'[^\']*\'|[^\s;&|()]+)'
+)
+
 
 def _head_diff_stat(sha: str, cwd: str | None = None) -> str:
     """Return ``git show --stat`` output for *sha*."""
@@ -100,6 +108,41 @@ def _manifest_exists(
             store.close()
     except Exception:
         return False
+
+
+def _effective_cwd(command: str, fallback: str) -> str:
+    """Resolve the cwd the commit actually ran in.
+
+    Claude Code fires PostToolUse with ``cwd`` = the session's cwd. Subagents
+    never persist ``cd`` across Bash calls (each tool call is a fresh shell),
+    so a worktree commit arrives as a chained command like::
+
+        cd /path/to/worktree && git commit ...
+
+    We read HEAD from the command's cd target, not the hook's cwd, so the
+    correct worktree's HEAD is seen. If the command has no concrete cd
+    preceding ``git commit`` (or the path contains an unresolved env var),
+    fall back to ``fallback``.
+    """
+    commit_pos = command.find("git commit")
+    if commit_pos < 0:
+        return fallback
+    last_cd: str | None = None
+    for m in _CD_RE.finditer(command):
+        if m.start() >= commit_pos:
+            break
+        path = m.group("path")
+        if path.startswith(('"', "'")) and path.endswith(path[0]) and len(path) >= 2:
+            path = path[1:-1]
+        # Unresolvable expansions — give up rather than guess.
+        if any(token in path for token in ("$", "`", "~")):
+            continue
+        last_cd = path
+    if last_cd is None:
+        return fallback
+    if not os.path.isabs(last_cd):
+        last_cd = os.path.normpath(os.path.join(fallback, last_cd))
+    return last_cd if os.path.isdir(last_cd) else fallback
 
 
 def _commit_succeeded(tool_response: object) -> bool:
@@ -196,7 +239,12 @@ def main(argv: list[str] | None = None) -> None:
 
     from acb import _git, _slug
 
-    cwd = hook_input.get("cwd") or os.getcwd()
+    session_cwd = hook_input.get("cwd") or os.getcwd()
+    # Subagents issue commits as `cd <worktree> && git commit` because their
+    # shell state doesn't persist across Bash calls. Parse the cd target so
+    # HEAD / branch are read from the worktree that actually received the
+    # commit — not the session's main-worktree cwd.
+    cwd = _effective_cwd(command, session_cwd)
 
     branch = _git.current_branch(cwd=cwd)
     if branch is None or branch in _SKIP_BRANCHES:

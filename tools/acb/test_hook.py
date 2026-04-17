@@ -16,6 +16,7 @@ from acb.hook import (
     _COMMIT_RE,
     _SKIP_BRANCHES,
     _commit_succeeded,
+    _effective_cwd,
     main,
 )
 
@@ -40,6 +41,77 @@ class TestSkipBranches(unittest.TestCase):
 
     def test_master_in_skip(self):
         self.assertIn("master", _SKIP_BRANCHES)
+
+
+class TestEffectiveCwd(unittest.TestCase):
+    """Parse `cd X && git commit` for effective cwd resolution."""
+
+    def setUp(self):
+        self._ctx = tempfile.TemporaryDirectory()
+        self.root = Path(self._ctx.name)
+        self.fallback = str(self.root)
+        (self.root / "main").mkdir()
+        (self.root / "wt").mkdir()
+        (self.root / "wt with space").mkdir()
+
+    def tearDown(self):
+        self._ctx.cleanup()
+
+    def test_no_cd_returns_fallback(self):
+        cmd = "git commit -m 'msg'"
+        self.assertEqual(_effective_cwd(cmd, self.fallback), self.fallback)
+
+    def test_cd_absolute_path_resolves(self):
+        wt = str(self.root / "wt")
+        cmd = f"cd {wt} && git commit -m 'msg'"
+        self.assertEqual(_effective_cwd(cmd, self.fallback), wt)
+
+    def test_cd_relative_path_resolves_against_fallback(self):
+        cmd = "cd wt && git commit -m 'msg'"
+        self.assertEqual(
+            _effective_cwd(cmd, self.fallback),
+            str(self.root / "wt"),
+        )
+
+    def test_cd_double_quoted_path(self):
+        wt = str(self.root / "wt with space")
+        cmd = f'cd "{wt}" && git commit -m "msg"'
+        self.assertEqual(_effective_cwd(cmd, self.fallback), wt)
+
+    def test_cd_single_quoted_path(self):
+        wt = str(self.root / "wt")
+        cmd = f"cd '{wt}' && git commit -m msg"
+        self.assertEqual(_effective_cwd(cmd, self.fallback), wt)
+
+    def test_cd_with_env_var_falls_back(self):
+        cmd = "cd $WORKTREE && git commit -m msg"
+        self.assertEqual(_effective_cwd(cmd, self.fallback), self.fallback)
+
+    def test_cd_to_nonexistent_path_falls_back(self):
+        cmd = f"cd {self.root}/bogus && git commit"
+        self.assertEqual(_effective_cwd(cmd, self.fallback), self.fallback)
+
+    def test_last_cd_before_commit_wins(self):
+        wt = str(self.root / "wt")
+        other = str(self.root / "main")
+        cmd = f"cd {other} && cd {wt} && git commit"
+        self.assertEqual(_effective_cwd(cmd, self.fallback), wt)
+
+    def test_cd_after_commit_ignored(self):
+        # A `cd` that comes AFTER `git commit` isn't the target of the commit.
+        wt = str(self.root / "wt")
+        cmd = f"git commit -m msg && cd {wt}"
+        self.assertEqual(_effective_cwd(cmd, self.fallback), self.fallback)
+
+    def test_subshell_cd(self):
+        wt = str(self.root / "wt")
+        cmd = f"(cd {wt} && git commit -m msg)"
+        self.assertEqual(_effective_cwd(cmd, self.fallback), wt)
+
+    def test_semicolon_separator(self):
+        wt = str(self.root / "wt")
+        cmd = f"cd {wt}; git commit -m msg"
+        self.assertEqual(_effective_cwd(cmd, self.fallback), wt)
 
 
 class TestCommitSucceeded(unittest.TestCase):
@@ -208,6 +280,47 @@ class TestHookMain(unittest.TestCase):
         self.assertEqual(data["decision"], "block")
         self.assertNotIn("no run slug resolved", data["reason"])
         self.assertIn("--slug demo", data["reason"])
+
+    def test_cd_in_command_flows_through_to_git_cwd(self):
+        """The cwd parsed from `cd X && git commit` must reach _git calls.
+
+        Reproduces the sub-agent bug: session cwd = main worktree, the
+        commit lives inside a worktree reached via `cd`. Without cd
+        parsing, _git.current_branch is called with the main cwd and
+        sees the wrong HEAD.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            main_root = Path(tmp) / "main"
+            wt = Path(tmp) / "wt"
+            main_root.mkdir()
+            wt.mkdir()
+
+            seen_cwds: list[str] = []
+
+            def _fake_branch(cwd=None):
+                seen_cwds.append(str(cwd))
+                return "orchestrator/demo"
+
+            def _fake_sha(cwd=None):
+                seen_cwds.append(str(cwd))
+                return "deadbeef"
+
+            with patch("acb._git.current_branch", side_effect=_fake_branch), \
+                 patch("acb._git.head_sha", side_effect=_fake_sha), \
+                 patch("acb._git.main_worktree_root", return_value=main_root), \
+                 patch("acb.hook._manifest_exists", return_value=True), \
+                 patch("acb._slug.resolve_run_slug", return_value="demo"):
+                self._run_hook({
+                    "tool_name": "Bash",
+                    "tool_input": {"command": f"cd {wt} && git commit -m msg"},
+                    "tool_response": {"exit_code": 0},
+                    "cwd": str(main_root),
+                })
+
+            # Every _git call should see the WORKTREE cwd, not the main cwd
+            self.assertTrue(seen_cwds, "at least one _git call expected")
+            for cwd in seen_cwds:
+                self.assertEqual(cwd, str(wt))
 
     @patch("acb._git.head_sha", return_value=None)
     @patch("acb._git.current_branch", return_value="feature/auth")
