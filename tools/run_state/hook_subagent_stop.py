@@ -206,15 +206,9 @@ def main() -> None:
     for c in changes:
         lines.append(f"- {c['step_id']} → {c['action']}: {c['detail']}")
 
-    json.dump(
-        {
-            "hookSpecificOutput": {
-                "hookEventName": "SubagentStop",
-                "additionalContext": "\n".join(lines),
-            }
-        },
-        sys.stdout,
-    )
+    # SubagentStop does not accept hookSpecificOutput; emit as systemMessage
+    # so the user sees the reconcile notice. state.json is already updated.
+    json.dump({"systemMessage": "\n".join(lines)}, sys.stdout)
 
 
 if __name__ == "__main__":

@@ -128,9 +128,10 @@ def test_stop_hook_halts_lingering_steps(tmp_path: Path) -> None:
 
     result = _run_hook("hook_stop.py", {"cwd": str(project)})
     assert result.returncode == 0, result.stderr
-    # Hook emits notice
+    # Hook emits notice via systemMessage (Stop does not support hookSpecificOutput)
     out = json.loads(result.stdout)
-    assert "reconciled" in out["hookSpecificOutput"]["additionalContext"]
+    assert "reconciled" in out["systemMessage"]
+    assert "hookSpecificOutput" not in out
 
     # State is now halted
     data = json.loads(paths.state.read_text())

@@ -80,15 +80,10 @@ def main() -> None:
     for c in all_changes:
         lines.append(f"- {c['branch']}/{c['slug']} {c['step_id']} → {c['action']}: {c['detail']}")
 
-    json.dump(
-        {
-            "hookSpecificOutput": {
-                "hookEventName": "Stop",
-                "additionalContext": "\n".join(lines),
-            }
-        },
-        sys.stdout,
-    )
+    # Stop hook does not accept hookSpecificOutput; use systemMessage for a
+    # user-visible notice. State is already persisted — next session's
+    # SessionStart hook surfaces the halted runs via additionalContext.
+    json.dump({"systemMessage": "\n".join(lines)}, sys.stdout)
 
 
 if __name__ == "__main__":
