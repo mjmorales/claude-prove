@@ -143,10 +143,14 @@ jobs:
 
       - name: Update CHANGELOG.md
         if: steps.bump.outputs.skip != 'true'
+        env:
+          # Pass via env instead of `${{ ... }}` shell interpolation so
+          # backticks, `$()`, and other shell-active characters in commit
+          # subjects are treated as literal text — not command substitutions.
+          NEW_VERSION: ${{ steps.bump.outputs.new_version }}
+          CHANGELOG: ${{ steps.changelog.outputs.changelog }}
         run: |
-          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
           DATE=$(date -u +%Y-%m-%d)
-          CHANGELOG="${{ steps.changelog.outputs.changelog }}"
 
           # Build the new entry
           ENTRY=$(printf "## [%s] - %s\n\n%s\n" "$NEW_VERSION" "$DATE" "$CHANGELOG")
