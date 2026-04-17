@@ -12,7 +12,7 @@
           {
             "type": "command",
             "if": "Bash(git commit*)",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/tools/acb/hook.py --workspace-root ${CLAUDE_PROJECT_DIR}",
+            "command": "python3 $PLUGIN_DIR/tools/acb/hook.py --workspace-root $CLAUDE_PROJECT_DIR",
             "timeout": 10000
           }
         ]

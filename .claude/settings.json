@@ -7,7 +7,7 @@
           {
             "type": "command",
             "if": "Bash(git commit*)",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/tools/acb/hook.py --workspace-root ${CLAUDE_PROJECT_DIR}",
+            "command": "python3 /Users/manuelmorales/dev/claude-prove/tools/acb/hook.py --workspace-root $CLAUDE_PROJECT_DIR",
             "timeout": 10000
           }
         ],
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/tools/run_state/hook_validate.py",
+            "command": "python3 /Users/manuelmorales/dev/claude-prove/tools/run_state/hook_validate.py",
             "timeout": 5000
           }
         ],
@@ -31,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/tools/cafi/cafi_gate.py",
+            "command": "python3 /Users/manuelmorales/dev/claude-prove/tools/cafi/cafi_gate.py",
             "timeout": 10000
           }
         ],
@@ -42,7 +42,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/tools/run_state/hook_guard.py",
+            "command": "python3 /Users/manuelmorales/dev/claude-prove/tools/run_state/hook_guard.py",
             "timeout": 5000
           }
         ],
@@ -55,7 +55,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/tools/run_state/hook_session_start.py",
+            "command": "python3 /Users/manuelmorales/dev/claude-prove/tools/run_state/hook_session_start.py",
             "timeout": 3000
           }
         ],
@@ -68,7 +68,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/tools/run_state/hook_stop.py",
+            "command": "python3 /Users/manuelmorales/dev/claude-prove/tools/run_state/hook_stop.py",
             "timeout": 5000
           }
         ],
@@ -81,7 +81,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/tools/run_state/hook_subagent_stop.py",
+            "command": "python3 /Users/manuelmorales/dev/claude-prove/tools/run_state/hook_subagent_stop.py",
             "timeout": 5000
           }
         ],
