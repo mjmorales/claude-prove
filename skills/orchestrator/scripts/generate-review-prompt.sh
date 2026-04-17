@@ -1,53 +1,74 @@
 #!/usr/bin/env bash
-# generate-review-prompt.sh — Generates a review prompt for the principal-architect agent.
+# generate-review-prompt.sh — Build a principal-architect review prompt from JSON artifacts.
 #
-# Usage: generate-review-prompt.sh <worktree-path> <task-id> <task-plan-path> <prd-path> <base-branch>
-#
-# Produces a self-contained review prompt that includes the diff, task spec,
-# and a structured checklist the reviewer must evaluate against.
+# Usage: generate-review-prompt.sh <worktree-path> <task-id> <run-dir> <base-branch>
 
 set -euo pipefail
 
 WORKTREE_PATH="$1"
 TASK_ID="$2"
-TASK_PLAN="$3"
-PRD="$4"
-BASE_BRANCH="$5"
+RUN_DIR="$3"
+BASE_BRANCH="$4"
 
-# Get the diff of changes in the worktree branch vs base
+PLAN="${RUN_DIR}/plan.json"
+PRD="${RUN_DIR}/prd.json"
+
+if [[ ! -f "$PLAN" || ! -f "$PRD" ]]; then
+  echo "ERROR: plan.json/prd.json missing under $RUN_DIR" >&2
+  exit 1
+fi
+
 DIFF=$(cd "$WORKTREE_PATH" && git diff "$BASE_BRANCH"...HEAD -- . 2>/dev/null || git diff HEAD~1 -- . 2>/dev/null || echo "ERROR: Could not generate diff")
-
-# Extract task detail from plan
-TASK_DETAIL=$(awk -v id="$TASK_ID" '
-  /^### Task / {
-    if (found) exit
-    if ($0 ~ "### Task " id ":") found=1
-  }
-  /^## / { if (found) exit }
-  found { print }
-' "$TASK_PLAN")
-
-# Extract acceptance criteria from PRD
-ACCEPTANCE=$(awk '/^## Acceptance Criteria/,/^## [^A]/' "$PRD" | head -30)
-
-# List files changed
 FILES_CHANGED=$(cd "$WORKTREE_PATH" && git diff --name-only "$BASE_BRANCH"...HEAD 2>/dev/null || git diff --name-only HEAD~1 2>/dev/null || echo "unknown")
 
+_ALL=$(python3 - "$PLAN" "$PRD" "$TASK_ID" <<'PY'
+import json, sys
+plan = json.load(open(sys.argv[1]))
+prd = json.load(open(sys.argv[2]))
+task_id = sys.argv[3]
+
+task = next((t for t in plan.get("tasks", []) if t["id"] == task_id), None)
+if task is None:
+    sys.stderr.write(f"ERROR: task {task_id} not found\n")
+    sys.exit(1)
+
+def block(label, value):
+    print(f"<<<{label}>>>"); print(value or ""); print(f"<<</{label}>>>")
+
+block("TASK_TITLE", task.get("title", ""))
+block("TASK_DESC", task.get("description", ""))
+block("TASK_AC", "\n".join(f"- {c}" for c in task.get("acceptance_criteria", [])))
+block("PRD_AC", "\n".join(f"- {c}" for c in prd.get("acceptance_criteria", [])))
+PY
+)
+
+_get() {
+  awk -v lbl="$1" '
+    $0 == "<<<" lbl ">>>" { capture=1; next }
+    $0 == "<<</" lbl ">>>" { capture=0 }
+    capture { print }
+  ' <<<"$_ALL"
+}
+
+TASK_TITLE=$(_get TASK_TITLE)
+TASK_DESC=$(_get TASK_DESC)
+TASK_AC=$(_get TASK_AC)
+PRD_AC=$(_get PRD_AC)
+
 cat <<PROMPT
-# Architectural Review: Task $TASK_ID
+# Architectural Review: Task $TASK_ID — $TASK_TITLE
 
 You are reviewing code produced by an implementation agent. Your job is to ensure
 the code meets quality standards BEFORE it can be merged.
 
 ## Review Protocol
 
-You MUST evaluate every item below. For each item, mark PASS or FAIL with a brief reason.
+Evaluate every item below. For each item, mark PASS or FAIL with a brief reason.
 The task CANNOT be approved if ANY item is FAIL.
 
 ### Checklist
 
 1. **Scope Compliance** — Does the diff ONLY touch files specified in the task?
-   Files specified: see task details below
    Files actually changed: $FILES_CHANGED
 
 2. **Correctness** — Does the implementation match the task description and acceptance criteria?
@@ -71,19 +92,24 @@ The task CANNOT be approved if ANY item is FAIL.
 7. **No Regressions** — Changes don't break existing functionality (check imports, exports, interfaces)
 
 ## Task Specification
-$TASK_DETAIL
 
-## Acceptance Criteria
-$ACCEPTANCE
+$TASK_DESC
+
+$(if [[ -n "$TASK_AC" ]]; then printf "### Task Acceptance Criteria\n\n%s\n" "$TASK_AC"; fi)
+
+## PRD Acceptance Criteria
+
+$PRD_AC
 
 ## Diff to Review
+
 \`\`\`diff
 $DIFF
 \`\`\`
 
 ## Output Format
 
-You MUST output your review in this exact format:
+Output your review in this exact format:
 
 \`\`\`markdown
 ## Review: Task $TASK_ID
@@ -111,7 +137,7 @@ You MUST output your review in this exact format:
 
 IMPORTANT:
 - Be strict. If something is wrong, mark it FAIL.
-- Be specific. "Code quality is bad" is not useful. "Function foo() on line 42 has an unused parameter 'bar'" is.
+- Be specific. "Function foo() on line 42 has an unused parameter 'bar'" beats "code quality is bad".
 - Do NOT approve code that has ANY failing checklist items.
 - Do NOT suggest nice-to-haves as required changes — only flag real issues.
 PROMPT

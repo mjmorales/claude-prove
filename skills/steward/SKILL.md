@@ -11,7 +11,7 @@ Audit every source file for clarity, extensibility, and agent-workflow debt. Cle
 ## Phase 0: Prerequisites
 
 1. Read `CLAUDE.md` for conventions, `.claude/.prove.json` for validators/scopes (do not guess commands).
-2. Check `.prove/TASK_PLAN.md` or `.prove/plans/` for task context.
+2. Check active run's `plan.json` (`scripts/prove-run show plan`) or `.prove/plans/` for task context.
 3. Scope: `$ARGUMENTS` if provided, otherwise full codebase.
 
 ## Phase 1: Progressive Context Distillation (PCD)

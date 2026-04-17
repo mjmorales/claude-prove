@@ -1,55 +1,65 @@
 #!/usr/bin/env bash
-# session-stop.sh — Claude Code Stop hook
+# session-stop.sh — Claude Code Stop hook.
 #
-# Fires when Claude finishes responding. Checks if an orchestrator run
-# was active and dispatches execution-complete if so.
-#
-# This runs async — it must never block.
+# Fires when Claude finishes responding. If an orchestrator run is active
+# (state.json present, run_status != completed), dispatches an
+# execution-complete event with the current progress.
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DISPATCH="${SCRIPT_DIR}/../dispatch-event.sh"
-# Use CLAUDE_PROJECT_DIR or cwd for git context (may be a worktree)
 WORK_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
-# .prove/ is gitignored — always lives in the main worktree
 MAIN_ROOT=$(git -C "$WORK_DIR" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print substr($0,10); exit}')
 MAIN_ROOT="${MAIN_ROOT:-$WORK_DIR}"
 
-# Check we're on an orchestrator branch
-BRANCH=$(cd "$WORK_DIR" && git branch --show-current 2>/dev/null || echo "unknown")
+BRANCH=$(cd "$WORK_DIR" && git branch --show-current 2>/dev/null || echo "")
 if [[ "$BRANCH" != orchestrator/* ]]; then
   exit 0
 fi
+SLUG="${BRANCH#orchestrator/}"
 
-TASK="${BRANCH#orchestrator/}"
+# Find state.json under any branch namespace
+STATE_FILE=""
+RUN_BRANCH=""
+for candidate in "${MAIN_ROOT}/.prove/runs"/*/"${SLUG}"/state.json; do
+  if [[ -f "$candidate" ]]; then
+    STATE_FILE="$candidate"
+    RUN_BRANCH="$(basename "$(dirname "$(dirname "$candidate")")")"
+    break
+  fi
+done
 
-# Progress is namespaced per run under .prove/runs/<slug>/
-PROGRESS_FILE="${MAIN_ROOT}/.prove/runs/${TASK}/PROGRESS.md"
-
-# Only dispatch if there's an active orchestrator run
-if [[ ! -f "$PROGRESS_FILE" ]]; then
+if [[ -z "$STATE_FILE" ]]; then
   exit 0
 fi
 
-# Check if PROGRESS.md shows an in-progress status
-if ! grep -qi 'Status.*In Progress' "$PROGRESS_FILE" 2>/dev/null; then
-  exit 0
-fi
+# Derive counts + status via Python (single JSON read)
+_COUNTS=$(python3 - "$STATE_FILE" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1]))
+steps = [st for t in s.get("tasks", []) for st in t.get("steps", [])]
+done = sum(1 for st in steps if st["status"] == "completed")
+total = len(steps)
+print(f"{s.get('run_status', 'unknown')}\t{done}\t{total}")
+PY
+)
+IFS=$'\t' read -r RUN_STATUS DONE TOTAL <<<"$_COUNTS"
 
-# Count completed steps from PROGRESS.md
-COMPLETED=$(grep -c '\[x\]' "$PROGRESS_FILE" 2>/dev/null || echo "0")
-TOTAL=$(grep -cE '\[[ x]\]' "$PROGRESS_FILE" 2>/dev/null || echo "0")
-
-if [[ "$COMPLETED" -eq "$TOTAL" && "$TOTAL" -gt 0 ]]; then
+if [[ "$RUN_STATUS" == "completed" ]]; then
   DETAIL="Completed all $TOTAL steps"
   STATUS="completed"
+elif [[ "$RUN_STATUS" == "halted" ]]; then
+  DETAIL="Halted — $DONE/$TOTAL steps done"
+  STATUS="halted"
 else
-  DETAIL="Session ended — $COMPLETED/$TOTAL steps done"
+  DETAIL="Session ended — $DONE/$TOTAL steps done"
   STATUS="paused"
 fi
 
-PROVE_TASK="$TASK" \
+PROVE_TASK="$SLUG" \
+PROVE_RUN_SLUG="$SLUG" \
+PROVE_RUN_BRANCH="$RUN_BRANCH" \
 PROVE_STATUS="$STATUS" \
 PROVE_BRANCH="$BRANCH" \
 PROVE_DETAIL="$DETAIL" \

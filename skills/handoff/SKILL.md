@@ -36,7 +36,7 @@ Generate a 3-5 sentence pickup note -- the only LLM-generated part. Answer:
 3. **Key decisions** -- choices from this session not captured in artifacts
 
 Conditional additions:
-- `.prove/TASK_PLAN.md` exists: reference the specific step to resume
+- Active run (state.json + plan.json under `.prove/runs/<branch>/<slug>/`): reference the specific step id from `scripts/prove-run show state`
 - `.prove/decisions/` has entries: mention the most recent decision
 - No prove artifacts: summarize from git state
 - `$ARGUMENTS` provided: incorporate it

@@ -13,7 +13,7 @@ Audit source files changed on this branch. Tests are excluded from scope. Artifa
 Read these for context (do not modify):
 1. `CLAUDE.md` -- project conventions
 2. `.claude/.prove.json` -- validators, project structure (if exists)
-3. `.prove/TASK_PLAN.md` or `.prove/plans/` -- intent behind changes (if exists)
+3. Active run's `plan.json` (`scripts/prove-run show plan`) or `.prove/plans/` -- intent behind changes (if exists)
 
 ## Phase 1: Scope Discovery
 

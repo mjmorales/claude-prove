@@ -116,11 +116,16 @@ How should we handle this?
 
 ### Finalize Plan
 ```
-Create .prove/TASK_PLAN.md from our discussion:
-- Requirements: [summarize]
-- Approach: [summarize]
-- Edge cases: [list]
-- Steps: [outline]
+Emit prd.json and plan.json under .prove/runs/<branch>/<slug>/, matching
+the schemas in tools/run_state/schemas.py. Then run:
 
-Each step must be independently testable, clearly scoped, with verification criteria and specific file changes.
+    scripts/prove-run init --branch <b> --slug <s> --plan <plan.json> --prd <prd.json>
+
+Summary to encode:
+- Requirements: [summarize into prd.context / prd.goals / prd.acceptance_criteria]
+- Approach: [summarize into prd.body_markdown or plan.tasks[].description]
+- Edge cases: [encode in prd.acceptance_criteria or task acceptance_criteria]
+- Steps: [one plan.tasks[].steps[] entry per independently testable unit]
+
+Each step must be independently testable, clearly scoped, with verification criteria and specific file changes captured in the step's description and acceptance_criteria.
 ```

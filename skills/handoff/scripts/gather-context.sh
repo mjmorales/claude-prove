@@ -178,13 +178,15 @@ for v in cfg.get('validators', []):
 fi
 
 # --- Task Plan Summary ---
-# Extract step status from active run plans
-for run_dir in .prove/runs/*/; do
-  if [[ -d "$run_dir" && -f "$run_dir/TASK_PLAN.md" ]]; then
-    run_slug=$(basename "$run_dir")
-    echo "## Task Plan Steps ($run_slug)"
-    echo ""
-    grep -E '^### Step [0-9]+:' "$run_dir/TASK_PLAN.md" 2>/dev/null | sed 's/^### /- /' || true
-    echo ""
-  fi
+# Extract step status from every active run via run_state CLI
+for state in .prove/runs/*/*/state.json; do
+  [[ -f "$state" ]] || continue
+  run_dir="$(dirname "$state")"
+  slug="$(basename "$run_dir")"
+  branch="$(basename "$(dirname "$run_dir")")"
+  echo "## Task Plan Steps ($branch/$slug)"
+  echo ""
+  PROVE_RUN_BRANCH="$branch" PROVE_RUN_SLUG="$slug" \
+    python3 -m tools.run_state show --format md 2>/dev/null || true
+  echo ""
 done

@@ -62,6 +62,10 @@ if _tools_dir not in sys.path:
 
 _COMMIT_RE = re.compile(r"\bgit\s+commit\b")
 _SKIP_BRANCHES = {"main", "master"}
+# Branches managed by the orchestrator always have a .prove-wt-slug.txt
+# marker in their worktree. If slug resolution fails on these prefixes,
+# the worktree is misconfigured and the hook must refuse to proceed.
+_ORCHESTRATOR_BRANCH_PREFIXES = ("orchestrator/", "task/")
 
 
 def _head_diff_stat(sha: str, cwd: str | None = None) -> str:
@@ -203,6 +207,26 @@ def main(argv: list[str] | None = None) -> None:
         return
 
     run_slug = _slug.resolve_run_slug(cwd)
+
+    # Orchestrator-managed worktrees must carry a slug (.prove-wt-slug.txt is
+    # written by manage-worktree.sh). A missing slug means the worktree was
+    # created outside the managed path — refuse to proceed so the mismatch
+    # surfaces immediately instead of producing orphaned manifests.
+    if run_slug is None and any(branch.startswith(p) for p in _ORCHESTRATOR_BRANCH_PREFIXES):
+        json.dump(
+            {
+                "decision": "block",
+                "reason": (
+                    f"ACB: branch `{branch}` looks orchestrator-managed but no run slug "
+                    "resolved. Expected .prove-wt-slug.txt in this worktree or "
+                    "PROVE_RUN_SLUG env var. Run "
+                    "`bash skills/orchestrator/scripts/manage-worktree.sh create <slug> <task-id>` "
+                    "to create the worktree, or write the marker manually."
+                ),
+            },
+            sys.stdout,
+        )
+        return
 
     if _manifest_exists(workspace_root, sha, run_slug=run_slug):
         return

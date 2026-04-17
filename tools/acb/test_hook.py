@@ -158,6 +158,57 @@ class TestHookMain(unittest.TestCase):
         self.assertIn("run-42", data["reason"])
         self.assertIn("--slug run-42", data["reason"])
 
+    @patch("acb._slug.resolve_run_slug", return_value=None)
+    @patch("acb.hook._manifest_exists", return_value=False)
+    @patch("acb._git.main_worktree_root", return_value=Path("/tmp/repo"))
+    @patch("acb._git.head_sha", return_value="deadbeef1234")
+    @patch("acb._git.current_branch", return_value="orchestrator/demo")
+    def test_orchestrator_branch_requires_slug(self, *_mocks):
+        result = self._run_hook({
+            "tool_name": "Bash",
+            "tool_input": {"command": "git commit -m 'test'"},
+            "tool_response": {"exit_code": 0},
+        })
+        data = json.loads(result)
+        self.assertEqual(data["decision"], "block")
+        self.assertIn("orchestrator/demo", data["reason"])
+        self.assertIn(".prove-wt-slug.txt", data["reason"])
+        self.assertIn("no run slug resolved", data["reason"])
+
+    @patch("acb._slug.resolve_run_slug", return_value=None)
+    @patch("acb.hook._manifest_exists", return_value=False)
+    @patch("acb._git.main_worktree_root", return_value=Path("/tmp/repo"))
+    @patch("acb._git.head_sha", return_value="deadbeef1234")
+    @patch("acb._git.current_branch", return_value="task/demo/1.1")
+    def test_task_branch_requires_slug(self, *_mocks):
+        result = self._run_hook({
+            "tool_name": "Bash",
+            "tool_input": {"command": "git commit -m 'test'"},
+            "tool_response": {"exit_code": 0},
+        })
+        data = json.loads(result)
+        self.assertEqual(data["decision"], "block")
+        self.assertIn("task/demo/1.1", data["reason"])
+        self.assertIn(".prove-wt-slug.txt", data["reason"])
+
+    @patch("acb._slug.resolve_run_slug", return_value="demo")
+    @patch("acb.hook._head_diff_stat", return_value="")
+    @patch("acb.hook._manifest_exists", return_value=False)
+    @patch("acb._git.main_worktree_root", return_value=Path("/tmp/repo"))
+    @patch("acb._git.head_sha", return_value="deadbeef1234")
+    @patch("acb._git.current_branch", return_value="orchestrator/demo")
+    def test_orchestrator_branch_with_slug_falls_through(self, *_mocks):
+        result = self._run_hook({
+            "tool_name": "Bash",
+            "tool_input": {"command": "git commit -m 'test'"},
+            "tool_response": {"exit_code": 0},
+        })
+        # Slug resolved — hook should emit the normal manifest prompt, not the slug error.
+        data = json.loads(result)
+        self.assertEqual(data["decision"], "block")
+        self.assertNotIn("no run slug resolved", data["reason"])
+        self.assertIn("--slug demo", data["reason"])
+
     @patch("acb._git.head_sha", return_value=None)
     @patch("acb._git.current_branch", return_value="feature/auth")
     def test_bails_when_head_unresolvable(self, *_mocks):

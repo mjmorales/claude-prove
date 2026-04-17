@@ -8,40 +8,33 @@ Read-only status check across active orchestrator runs. Never modify files.
 
 ## Steps
 
-1. Scan `.prove/runs/*/PROGRESS.md` for active runs.
-   - If none: "No active orchestrator run found. Start one with `/prove:orchestrator` or `/prove:full-auto`."
+1. List active runs:
+   ```bash
+   scripts/prove-run ls
+   ```
+   If empty: "No active orchestrator run. Start one with `/prove:orchestrator` or `/prove:full-auto`."
 
-2. For each run, read `PROGRESS.md` and `reports/run-log.md`. Extract:
-   - Overall status, current wave/total waves, per-task status
-   - Review verdicts (last 5), issues/blockers, test results
-   - WIP or failed steps from the Step Log
+2. For each run, render the full state view (joined with the plan for titles):
+   ```bash
+   cd <worktree for slug>  # or rely on PROVE_RUN_SLUG / marker
+   scripts/prove-run show state
+   ```
+   `state.json` is the source of truth. Markdown is rendered JIT — never persisted.
 
-3. If multiple runs, show summary table first:
+3. If multiple runs, precede with a summary table:
 
-   | Slug | Status | Branch | Tasks |
-   |------|--------|--------|-------|
+   | Branch/Slug | Status | Current Step | Tasks done/total |
+   |-------------|--------|--------------|------------------|
 
-4. Present compact summary per run:
-
-```
-## Orchestrator Status: [Feature Name]
-**Status**: In Progress | **Branch**: orchestrator/<slug>
-**Wave**: 2/3 | **Tasks**: 4/6 complete
-
-### Current Wave
-- [x] Task 2.1: Index manager — APPROVED, merged
-- [ ] Task 2.2: CLI entry point — In progress
-
-### Review Log (last 5)
-- 14:30 Task 1.1: APPROVED (round 2)
-
-### Blockers
-- None
-```
-
-5. For completed runs, include final stats and merge instructions.
+4. For completed runs, follow the rendered state with:
+   - Total duration (`started_at` → `ended_at` from state.json)
+   - Review verdicts summary
+   - Merge readiness (clean vs halted)
 
 ## Rules
-- Read-only — never modify run files
+
+- Read-only — never invoke step/task/validator mutators
+- `state.json` is the single source of truth; `scripts/prove-run show` renders views on demand
+- Agents must not parse JSON directly — use `scripts/prove-run summary` for one-line and `show` for full
 - State ambiguity explicitly rather than guessing
-- Keep output concise — status check, not full report
+- Keep output concise

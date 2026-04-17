@@ -6,6 +6,112 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v0.34.0 — JSON-first Run State (breaking)
+
+All run artifacts under `.prove/runs/` are now JSON. Markdown (`PRD.md`, `TASK_PLAN.md`, `PROGRESS.md`) and the old `dispatch-state.json` are gone.
+
+**New layout**: `.prove/runs/<branch>/<slug>/` with:
+
+- `prd.json` — write-once requirements
+- `plan.json` — write-once task graph (tasks, waves, deps, steps)
+- `state.json` — hot path, mutated **only** via `scripts/prove-run`
+- `reports/<step_id>.json` — write-once per-step reports
+
+No markdown is persisted. Every human view renders JIT from JSON:
+
+```bash
+scripts/prove-run ls               # list active runs
+scripts/prove-run show state       # render current state
+scripts/prove-run show plan        # render plan
+scripts/prove-run show prd         # render PRD
+scripts/prove-run show-report <id> # render per-step report
+```
+
+### `scripts/prove-run` — the blessed CLI
+
+Every mutation and query routes through this single wrapper. Agents must not inline `python3 -c`, `jq`, or `sed` against run state.
+
+```bash
+scripts/prove-run init --branch <b> --slug <s> --plan ... [--prd ...]
+scripts/prove-run step-start <id>
+scripts/prove-run step-complete <id> --commit <sha>
+scripts/prove-run step-fail <id> --reason "..."
+scripts/prove-run step-halt <id> --reason "..."
+scripts/prove-run validator <id> <phase> <status>
+scripts/prove-run review <task-id> approved|rejected --reviewer <name>
+scripts/prove-run report <id> --status completed --commit <sha>
+scripts/prove-run dispatch-record <key> <event>
+scripts/prove-run step-info <id>   # JSON: {task, step, task_state, step_state}
+```
+
+Slug is auto-resolved from `.prove-wt-slug.txt` (written by `manage-worktree.sh create`). If missing, the CLI hard-errors (exit 2) — agents must never invent slugs.
+
+### Hook enforcement
+
+A `run_state` tool ships with three hooks (installed via `python3 tools/registry.py install run_state`):
+
+- **PreToolUse** `Write|Edit|MultiEdit` on `state.json`: blocks direct edits; directs to `prove-run`
+- **PostToolUse** `Write|Edit|MultiEdit` on any `.prove/runs/**/*.json`: validates against the schema; blocks invalid writes
+- **SessionStart** `resume|compact`: prints active-run summary into the new session
+- **SubagentStop**: reconciles the subagent's worktree — auto-completes the current step if the subagent produced a new commit, halts it otherwise
+- **Stop** (session end): halts any `in_progress` step with a diagnostic reason so the next session resumes on clean state
+
+Sub-agents MUST NOT call `scripts/prove-run step-complete` themselves. The step-state contract for workers is: commit your work and exit — the SubagentStop hook records the SHA. The orchestrator owns step transitions.
+
+Override the Pre hook with `RUN_STATE_ALLOW_DIRECT=1` only for emergency recovery.
+
+### Migration
+
+```bash
+# One-shot — converts every legacy run in-place, folds dispatch-state.json
+# into state.json, preserves markdown bodies under prd.body_markdown.
+python3 -m tools.run_state migrate
+
+# Review what changed first:
+python3 -m tools.run_state migrate --dry-run
+
+# Then delete legacy md/json:
+find .prove/runs -type f \
+  \( -name "PRD.md" -o -name "TASK_PLAN.md" -o -name "PROGRESS.md" \
+     -o -name "dispatch-state.json" -o -name "dispatch-state.json.lock" \) -delete
+find .prove/runs -type d -empty -delete
+
+# Move any remaining flat-layout runs into a branch namespace:
+mkdir -p .prove/runs/main
+mv .prove/runs/<slug> .prove/runs/main/
+
+# Install the enforcement hooks:
+python3 tools/registry.py install run_state
+```
+
+### Files removed
+
+- `scripts/update-progress.sh` (PROGRESS.md is gone)
+- `skills/orchestrator/scripts/update-progress.sh`
+- `scripts/manage-worktree.sh` (kept only at `skills/orchestrator/scripts/manage-worktree.sh`)
+- `scripts/generate-task-prompt.sh` (top-level duplicate)
+- `scripts/generate-review-prompt.sh` (top-level duplicate)
+- `skills/task-planner/assets/templates/TASK_PLAN_template.md`
+
+### Consumers updated
+
+- `skills/orchestrator/SKILL.md` + scripts — drive state via `scripts/prove-run`; prompts render from JSON
+- `skills/task-planner/SKILL.md` — emits `prd.json` + `plan.json`, calls `init` to seed `state.json`
+- `skills/plan-step/SKILL.md` — reads via `scripts/prove-run step-info <id>`
+- `skills/handoff/scripts/gather-context.sh` — renders run state via the CLI
+- `skills/cleanup/SKILL.md` + `scripts/cleanup.sh` — archives JSON, scans branched layout
+- `skills/prep-permissions/SKILL.md`, `skills/review/SKILL.md`, `skills/steward*/SKILL.md` — read `plan.json` via the CLI
+- `scripts/dispatch-event.sh` — dedup via `state.json.dispatch.dispatched[]`
+- `scripts/hooks/*.sh` — read state.json; propagate `PROVE_RUN_SLUG` / `PROVE_RUN_BRANCH`
+- `tools/acb/_slug.py` — slug resolution now scans `plan.json`'s `worktree.path` field
+- `tools/acb/hook.py` — on `orchestrator/*` or `task/*` branches, a missing slug hard-blocks the commit; the error instructs you to create the worktree via `manage-worktree.sh create` (which writes `.prove-wt-slug.txt`). Non-orchestrator branches keep the previous behavior (slug optional)
+
+### Schema evolution
+
+Run-state JSON carries its own `schema_version` (currently `"1"`) independent from the `.claude/.prove.json` schema. Future breaking changes will increment and migrate via `tools/run_state/migrate.py`.
+
+---
+
 ## v0.18.0 — External References & Dynamic Commands
 
 ### External References for CLAUDE.md

@@ -20,7 +20,7 @@ Audit, fix, re-audit modified files, repeat until clean or capped.
 ## Phase 0: Prerequisites & Configuration
 
 1. Read `CLAUDE.md` for conventions, `.claude/.prove.json` for validators/structure.
-2. Check `.prove/TASK_PLAN.md` or `.prove/plans/` for task context.
+2. Check active run's `plan.json` (`scripts/prove-run show plan`) or `.prove/plans/` for task context.
 3. **Parse `$ARGUMENTS`**:
    - `--full` -- full codebase on pass 1 (default: changed files via `git diff main...HEAD --name-only`)
    - `--max-passes N` -- iteration cap (default: 3)

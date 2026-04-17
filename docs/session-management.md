@@ -18,7 +18,7 @@ Creates `.prove/handoff.md` — a focused, self-contained prompt that a fresh se
 | --- | --- |
 | Pickup note | 3-5 sentence summary: what to do next, current blockers, key decisions made |
 | Git state | Current branch, uncommitted changes, recent commits |
-| Prove artifacts | Links to TASK_PLAN.md, decision records, and other `.prove/` files |
+| Prove artifacts | Rendered via `scripts/prove-run show` for the active run, plus decision records and other `.prove/` files |
 | Files to Read First | 3-7 priority-ordered files the next agent should read, each with a one-line reason |
 | Instructions | Exact steps to resume, including validation commands |
 | Resume command | The exact `claude` invocation to start the next session |

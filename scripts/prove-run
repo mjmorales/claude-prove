@@ -1,0 +1,187 @@
+#!/usr/bin/env bash
+# prove-run — thin wrapper around `python3 -m tools.run_state` for agent use.
+#
+# Always operates from the main worktree root so .prove/runs/ paths resolve
+# correctly when an agent is inside a sub-worktree. Auto-detects slug from
+# .prove-wt-slug.txt; errors loudly if missing.
+#
+# Usage:
+#   prove-run ls
+#   prove-run show [state|plan|prd] [--format md|json]
+#   prove-run show-report <step-id> [--format md|json]
+#   prove-run summary
+#   prove-run init --branch <b> --slug <s> --plan <path> [--prd <path>] [--overwrite]
+#   prove-run step-start    <step-id>
+#   prove-run step-complete <step-id> [--commit <sha>]
+#   prove-run step-fail     <step-id> [--reason <text>]
+#   prove-run step-halt     <step-id> [--reason <text>]
+#   prove-run validator     <step-id> <phase> <status>
+#   prove-run review        <task-id> <verdict> [--notes <t>] [--reviewer <n>]
+#   prove-run report        <step-id> --status <s> [--commit <sha>] [--json <path>] [--notes <t>]
+#   prove-run dispatch-has    <key>
+#   prove-run dispatch-record <key> <event>
+#   prove-run validate <file> [--kind prd|plan|state|report]
+#   prove-run migrate [--dry-run] [--overwrite]
+#
+# Flags `--branch` and `--slug` are optional overrides; the default comes
+# from .prove-wt-slug.txt or PROVE_RUN_SLUG.
+
+set -euo pipefail
+
+# --- Resolve main worktree root for .prove/runs/ access ---
+_WORK_DIR="${CLAUDE_PROJECT_DIR:-$(pwd)}"
+_MAIN_ROOT=$(git -C "$_WORK_DIR" worktree list --porcelain 2>/dev/null \
+  | awk '/^worktree /{print substr($0,10); exit}')
+_MAIN_ROOT="${_MAIN_ROOT:-$_WORK_DIR}"
+
+# Plugin / repo root — where tools/ lives. Prefer $PLUGIN_DIR set by the
+# Claude Code plugin runtime; fall back to the main worktree.
+_PLUGIN_ROOT="${PLUGIN_DIR:-$_MAIN_ROOT}"
+
+export PYTHONPATH="${_PLUGIN_ROOT}:${PYTHONPATH:-}"
+
+_cli() {
+  # Always run from main worktree so --runs-root defaults correctly
+  (cd "$_MAIN_ROOT" && python3 -m tools.run_state "$@")
+}
+
+SUB="${1:-}"
+shift || true
+
+case "$SUB" in
+  ""|-h|--help|help)
+    cat <<'HELP'
+prove-run — agent wrapper around the run_state CLI.
+
+Subcommands:
+  ls                       List active runs (from every branch namespace)
+  show [kind] [--format]   Render prd|plan|state (default: state)
+  show-report <step-id>    Render a per-step report
+  summary                  One-line status summary
+  step-info <step-id>      Print plan+state info for a single step (JSON)
+  init ...                 Initialize a run (see below)
+  step-start <id>
+  step-complete <id> [--commit <sha>]
+  step-fail    <id> [--reason <text>]
+  step-halt    <id> [--reason <text>]
+  validator <step-id> <phase> <status>
+  review    <task-id> <verdict> [--notes <t>] [--reviewer <n>]
+  report    <step-id> --status <s> [--commit <sha>] [--json <path>] [--notes <t>]
+  dispatch-has    <key>
+  dispatch-record <key> <event>
+  validate <file> [--kind <k>]
+  migrate [--dry-run] [--overwrite]
+
+Slug is auto-resolved from .prove-wt-slug.txt (written by
+scripts/manage-worktree.sh create). Errors if missing — agents must not
+invent slugs.
+HELP
+    exit 0
+    ;;
+
+  ls)
+    for state in "$_MAIN_ROOT"/.prove/runs/*/*/state.json; do
+      [[ -f "$state" ]] || continue
+      run_dir="$(dirname "$state")"
+      slug="$(basename "$run_dir")"
+      branch="$(basename "$(dirname "$run_dir")")"
+      PROVE_RUN_BRANCH="$branch" PROVE_RUN_SLUG="$slug" _cli current --format text
+    done
+    ;;
+
+  show)
+    kind="state"
+    if [[ "${1:-}" =~ ^(state|plan|prd)$ ]]; then
+      kind="$1"
+      shift
+    fi
+    _cli show --kind "$kind" "$@"
+    ;;
+
+  show-report)
+    step_id="${1:?usage: prove-run show-report <step-id>}"
+    shift
+    _cli report show "$step_id" "$@"
+    ;;
+
+  summary)
+    _cli current "$@"
+    ;;
+
+  step-info)
+    id="${1:?usage: prove-run step-info <step-id>}"
+    shift
+    _cli step-info "$id" "$@"
+    ;;
+
+  init)
+    _cli init "$@"
+    ;;
+
+  step-start)
+    id="${1:?usage: prove-run step-start <step-id>}"
+    _cli step start "$id"
+    ;;
+
+  step-complete)
+    id="${1:?usage: prove-run step-complete <step-id> [--commit <sha>]}"
+    shift
+    _cli step complete "$id" "$@"
+    ;;
+
+  step-fail)
+    id="${1:?usage: prove-run step-fail <step-id> [--reason <text>]}"
+    shift
+    _cli step fail "$id" "$@"
+    ;;
+
+  step-halt)
+    id="${1:?usage: prove-run step-halt <step-id> [--reason <text>]}"
+    shift
+    _cli step halt "$id" "$@"
+    ;;
+
+  validator)
+    step="${1:?usage: prove-run validator <step-id> <phase> <status>}"
+    phase="${2:?missing phase}"
+    status="${3:?missing status}"
+    _cli validator set "$step" "$phase" "$status"
+    ;;
+
+  review)
+    task="${1:?usage: prove-run review <task-id> <verdict> [--notes t] [--reviewer n]}"
+    verdict="${2:?missing verdict}"
+    shift 2
+    _cli task review "$task" --verdict "$verdict" "$@"
+    ;;
+
+  report)
+    step="${1:?usage: prove-run report <step-id> --status <s> [--commit sha] [--json path] [--notes t]}"
+    shift
+    _cli report write "$step" "$@"
+    ;;
+
+  dispatch-has)
+    key="${1:?usage: prove-run dispatch-has <key>}"
+    _cli dispatch has "$key"
+    ;;
+
+  dispatch-record)
+    key="${1:?usage: prove-run dispatch-record <key> <event>}"
+    event="${2:?missing event}"
+    _cli dispatch record "$key" "$event"
+    ;;
+
+  validate)
+    _cli validate "$@"
+    ;;
+
+  migrate)
+    _cli migrate "$@"
+    ;;
+
+  *)
+    echo "prove-run: unknown subcommand '$SUB' — see 'prove-run --help'" >&2
+    exit 1
+    ;;
+esac

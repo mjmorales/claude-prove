@@ -1,5 +1,6 @@
 """Tests for acb._slug — run-slug resolution."""
 
+import json
 import os
 import sys
 import tempfile
@@ -12,6 +13,34 @@ if str(_tool_dir.parent) not in sys.path:
     sys.path.insert(0, str(_tool_dir.parent))
 
 from acb._slug import resolve_run_slug
+
+
+def _write_plan(run_dir: Path, worktree_path: Path, task_id: str = "1.1") -> None:
+    plan = {
+        "schema_version": "1",
+        "kind": "plan",
+        "mode": "simple",
+        "tasks": [
+            {
+                "id": task_id,
+                "title": "t",
+                "wave": 1,
+                "deps": [],
+                "description": "",
+                "acceptance_criteria": [],
+                "worktree": {"path": str(worktree_path), "branch": ""},
+                "steps": [
+                    {
+                        "id": f"{task_id}.1",
+                        "title": "s",
+                        "description": "",
+                        "acceptance_criteria": [],
+                    }
+                ],
+            }
+        ],
+    }
+    (run_dir / "plan.json").write_text(json.dumps(plan))
 
 
 class TestResolveRunSlug(unittest.TestCase):
@@ -62,12 +91,11 @@ class TestResolveRunSlug(unittest.TestCase):
 
 
 class TestRunDirectoryLookup(unittest.TestCase):
-    """Slug resolution via ``.prove/runs/<slug>/`` registration."""
+    """Slug resolution via ``.prove/runs/**/plan.json`` worktree registration."""
 
     def setUp(self):
         self._ctx = tempfile.TemporaryDirectory()
         self.root = Path(self._ctx.name)
-        # Isolate env so PROVE_RUN_SLUG from the outer shell never leaks.
         self._env_ctx = patch.dict(
             os.environ,
             {k: v for k, v in os.environ.items() if k != "PROVE_RUN_SLUG"},
@@ -85,34 +113,16 @@ class TestRunDirectoryLookup(unittest.TestCase):
             patch("acb._git.worktree_root", return_value=wt),
         ]
 
-    def _run_dir(self, slug: str) -> Path:
-        d = self.root / ".prove" / "runs" / slug
+    def _run_dir(self, branch: str, slug: str) -> Path:
+        d = self.root / ".prove" / "runs" / branch / slug
         d.mkdir(parents=True)
         return d
 
-    def test_worktree_file_match(self):
+    def test_plan_worktree_match_branched_layout(self):
         wt = self.root / "wt"
         wt.mkdir()
-        run = self._run_dir("run-explicit")
-        (run / "worktree").write_text(str(wt))
-        for m in self._mock_git(self.root, wt):
-            m.start()
-        try:
-            self.assertEqual(resolve_run_slug(str(wt)), "run-explicit")
-        finally:
-            for m in self._mock_git(self.root, wt):
-                m.stop()
-
-    def test_task_plan_worktree_field_match(self):
-        wt = self.root / "wt2"
-        wt.mkdir()
-        run = self._run_dir("run-planned")
-        (run / "TASK_PLAN.md").write_text(
-            "# Plan\n\n"
-            "**Branch:** feat/foo\n"
-            f"**Worktree:** {wt}\n"
-            "**Baseline:** main\n"
-        )
+        run = self._run_dir("feature", "run-planned")
+        _write_plan(run, wt)
         mocks = self._mock_git(self.root, wt)
         for m in mocks:
             m.start()
@@ -122,23 +132,19 @@ class TestRunDirectoryLookup(unittest.TestCase):
             for m in mocks:
                 m.stop()
 
-    def test_worktree_file_beats_task_plan_when_both_match(self):
-        wt = self.root / "wt3"
+    def test_plan_worktree_match_flat_layout(self):
+        # Legacy runs created at .prove/runs/<slug>/plan.json are still scannable
+        # via rglob — slug resolves to the containing dir name.
+        wt = self.root / "wt-flat"
         wt.mkdir()
-        good = self._run_dir("good")
-        (good / "worktree").write_text(str(wt))
-        # Another run also claims the same worktree via TASK_PLAN.md.
-        bad = self._run_dir("bad-plan")
-        (bad / "TASK_PLAN.md").write_text(f"**Worktree:** {wt}\n")
+        run = self.root / ".prove" / "runs" / "flat-slug"
+        run.mkdir(parents=True)
+        _write_plan(run, wt)
         mocks = self._mock_git(self.root, wt)
         for m in mocks:
             m.start()
         try:
-            # Iteration order is sorted alphabetically; "bad-plan" < "good".
-            # Both matches are valid; the invariant we care about is that a
-            # matching run is found, deterministically.
-            result = resolve_run_slug(str(wt))
-            self.assertIn(result, {"good", "bad-plan"})
+            self.assertEqual(resolve_run_slug(str(wt)), "flat-slug")
         finally:
             for m in mocks:
                 m.stop()
@@ -148,8 +154,8 @@ class TestRunDirectoryLookup(unittest.TestCase):
         wt.mkdir()
         other_wt = self.root / "other"
         other_wt.mkdir()
-        run = self._run_dir("mismatched")
-        (run / "worktree").write_text(str(other_wt))
+        run = self._run_dir("feature", "mismatched")
+        _write_plan(run, other_wt)
         (wt / ".prove").mkdir()
         (wt / ".prove" / "RUN_SLUG").write_text("fallback-slug")
         mocks = self._mock_git(self.root, wt)
@@ -161,12 +167,12 @@ class TestRunDirectoryLookup(unittest.TestCase):
             for m in mocks:
                 m.stop()
 
-    def test_wt_slug_file_beats_runs_dir(self):
+    def test_wt_slug_file_beats_plan_scan(self):
         wt = self.root / "wt-marked"
         wt.mkdir()
         (wt / ".prove-wt-slug.txt").write_text("wt-slug\n")
-        run = self._run_dir("runs-dir-slug")
-        (run / "worktree").write_text(str(wt))
+        run = self._run_dir("feature", "plan-slug")
+        _write_plan(run, wt)
         mocks = self._mock_git(self.root, wt)
         for m in mocks:
             m.start()
@@ -181,16 +187,27 @@ class TestRunDirectoryLookup(unittest.TestCase):
         real.mkdir()
         link = self.root / "linked-wt"
         os.symlink(real, link)
-        run = self._run_dir("run-sym")
-        # Registration written with the realpath.
-        (run / "worktree").write_text(str(real))
+        run = self._run_dir("feature", "run-sym")
+        _write_plan(run, real)
         mocks = self._mock_git(self.root, link)
         for m in mocks:
             m.start()
         try:
-            # _git.worktree_root would normally return the symlink; _normalize
-            # resolves both sides.
             self.assertEqual(resolve_run_slug(str(link)), "run-sym")
+        finally:
+            for m in mocks:
+                m.stop()
+
+    def test_malformed_plan_ignored(self):
+        wt = self.root / "wt-bad"
+        wt.mkdir()
+        run = self._run_dir("feature", "broken")
+        (run / "plan.json").write_text("{not json")
+        mocks = self._mock_git(self.root, wt)
+        for m in mocks:
+            m.start()
+        try:
+            self.assertIsNone(resolve_run_slug(str(wt)))
         finally:
             for m in mocks:
                 m.stop()

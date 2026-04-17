@@ -38,7 +38,15 @@
       "enabled": true,
       "scope": "user",
       "config": {
-        "excludes": ["*.lock", "node_modules/**", "vendor/**", "dist/**", "*.min.js", "*.map", "cache/**"],
+        "excludes": [
+          "*.lock",
+          "node_modules/**",
+          "vendor/**",
+          "dist/**",
+          "*.min.js",
+          "*.map",
+          "cache/**"
+        ],
         "max_file_size": 102400,
         "concurrency": 3
       }
@@ -54,6 +62,10 @@
     },
     "schema": {
       "enabled": true
+    },
+    "run_state": {
+      "enabled": true,
+      "scope": "user"
     }
   }
 }

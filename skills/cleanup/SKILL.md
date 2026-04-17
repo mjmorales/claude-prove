@@ -33,21 +33,23 @@ Report what was archived, removed, and skipped.
 Read archived files in `.prove/archive/<YYYY-MM-DD>_<task-slug>/` and write `SUMMARY.md` there:
 
 ```markdown
-# Task Summary: <Task Name>
+# Task Summary: <Task Name from prd.json.title>
 
 **Completed**: <date>
 **Branch**: orchestrator/<task-slug>
-**Final Status**: <from workflow report or manual>
+**Final Status**: <state.json.run_status from archive>
 
 ## What Was Done
-<brief summary from archived TASK_PLAN.md or PRD.md>
+<summary from archived prd.json (context, goals)>
 
-## Key Decisions
-<extracted from archived design-decisions.md, if present>
+## Tasks Completed
+<extracted from archived state.json — list tasks with review verdicts>
 
 ## Files Changed
 <from archived files-changed.txt, if present>
 ```
+
+Read the archived JSON artifacts (`prd.json`, `plan.json`, `state.json`) rather than md — they contain the same data in structured form.
 
 ## Committing
 

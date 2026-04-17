@@ -3,145 +3,152 @@ name: orchestrator
 description: >
   Autonomous task orchestrator that auto-scales between simple mode (<=3 steps,
   sequential, no worktrees) and full mode (4+ steps, parallel worktrees with
-  mandatory principal-architect review). Each run operates in its own git worktree
-  with namespaced state (.prove/runs/<slug>/), enabling concurrent runs that
-  consolidate at merge time. Creates feature branches, runs validation gates,
-  commits after each step, and supports rollback via git. Use when a
-  .prove/runs/<slug>/TASK_PLAN.md or .prove/plans/ directory exists and the user
-  wants hands-off execution. Triggers on "orchestrate", "autopilot", "full auto",
-  "run autonomously", "implement without me", "hands-off mode".
+  mandatory principal-architect review). Each run stores state as JSON under
+  .prove/runs/<branch>/<slug>/ (prd.json, plan.json, state.json, reports/*.json)
+  and is mutated only through the run_state CLI. Creates feature branches, runs
+  validation gates, commits per step, and supports rollback via git. Use when a
+  .prove/runs/<branch>/<slug>/plan.json exists and the user wants hands-off
+  execution. Triggers on "orchestrate", "autopilot", "full auto", "run
+  autonomously", "implement without me", "hands-off mode".
 ---
 
 # Orchestrator Skill
 
 **Simple mode** (<=3 steps): sequential, no worktrees, lightweight reporting.
-**Full mode** (4+ steps): parallel worktrees, architect review, full progress tracking.
+**Full mode** (4+ steps): parallel worktrees, architect review, full tracking.
 
-Requires `.prove/runs/<slug>/TASK_PLAN.md` or `.prove/plans/plan_X/`. If neither exists, suggest `/plan-task`.
+Requires `.prove/runs/<branch>/<slug>/plan.json`. If missing, suggest `/prove:plan-task` first.
+
+All run artifacts are JSON and live under `.prove/runs/<branch>/<slug>/`:
+
+- `prd.json`, `plan.json` — write-once inputs
+- `state.json` — hot path, mutated **only** via `python3 -m tools.run_state ...`
+- `reports/<step_id>.json` — write-once per step
+
+Direct edits to `state.json` are blocked by a PreToolUse hook. Render human views JIT (`run_state show`).
 
 ---
 
 ## Phase 0: Initialization
 
-All `.prove/...` paths are rooted at the **main worktree** (`$MAIN_ROOT`), not the orchestrator worktree. Scripts resolve this via `git worktree list`.
+All `.prove/...` paths resolve from the **main worktree** (`$MAIN_ROOT`), not the orchestrator worktree. Scripts find this via `git worktree list`.
 
-1. **Derive slug** from user input (kebab-case, max 40 chars). The slug determines the run directory path -- do not derive from parsing the plan.
+1. **Derive slug + branch namespace** from user input:
+   - slug: kebab-case, max 40 chars
+   - branch: `feature`, `fix`, `chore` (default `feature`) — matches the task's intent, not the git branch
 
-2. **Create run directory**: `mkdir -p .prove/runs/<slug>/reports/`
+2. **Verify plan exists**: `.prove/runs/<branch>/<slug>/plan.json`. If missing → stop, suggest `/prove:plan-task`.
 
-3. **Validate inputs** -- read `.prove/runs/<slug>/TASK_PLAN.md` or `.prove/plans/plan_X/` to extract task name and ordered steps.
+3. **Initialize run state** (if not already done):
+   ```bash
+   scripts/prove-run init \
+     --branch <branch> --slug <slug> \
+     --plan .prove/runs/<branch>/<slug>/plan.json \
+     --prd .prove/runs/<branch>/<slug>/prd.json
+   ```
+   `init` is the ONLY subcommand that requires explicit `--branch`/`--slug` (no state.json exists yet). After init, the orchestrator worktree's `.prove-wt-slug.txt` carries the slug and every subsequent invocation resolves it automatically.
 
-4. **Auto-scale** -- <=3 steps: simple mode. 4+ steps: full mode. Log the decision.
+4. **Auto-scale** — total step count <=3: simple mode; 4+: full mode. Record mode in the plan at creation time; orchestrator does not override.
 
-5. **Create feature branch + worktree**
-   - Existing branch: AskUserQuestion header "Branch", options: "Resume" / "Start Fresh"
+5. **Create feature branch + worktree**:
+   - Existing branch: AskUserQuestion header "Branch" — "Resume" / "Start Fresh"
    - New branch:
      ```bash
      git worktree add .claude/worktrees/orchestrator-<slug> -b orchestrator/<slug>
      printf '%s\n' "<slug>" > .claude/worktrees/orchestrator-<slug>/.prove-wt-slug.txt
      ```
-   - All work happens in this worktree. Main worktree stays on its current branch.
 
-6. **Create run log** at `.prove/runs/<slug>/reports/run-log.md`:
-   ```markdown
-   # Orchestrator Run Log: <Task Name>
-   **Branch**: orchestrator/<slug>
-   **Worktree**: .claude/worktrees/orchestrator-<slug>
-   **Mode**: Simple | Full
-   **Started**: <ISO timestamp>
-   **Status**: In Progress
-   **Validators**: <from .claude/.prove.json or auto-detected>
-   **Steps**: <total count>
+6. **Load validators** from `.claude/.prove.json` or auto-detect per `references/validation-config.md`.
 
-   ## Step Log
-   | # | Step | Status | Commit | Notes |
-   |---|------|--------|--------|-------|
-   ```
-
-7. **Load validators** from `.claude/.prove.json` or auto-detect per `references/validation-config.md`.
-
-8. **Load reporters** from `.claude/.prove.json` `reporters` array. Log to run-log: `Reporters: <names>` or `Reporters: none`.
-
-Reporter dispatch is automatic via Claude Code hooks -- the orchestrator never invokes reporters manually. See `references/reporter-protocol.md`.
+7. **Load reporters** from `.claude/.prove.json` `reporters` array. Reporter dispatch is automatic via Claude Code hooks (see `references/reporter-protocol.md`).
 
 ---
 
 ## Phase 1: Plan Review
 
-1. Extract ordered steps from `.prove/runs/<slug>/TASK_PLAN.md` > "Implementation Steps" or `.prove/plans/plan_X/05_implementation_plan.md`
-2. Resolve dependencies (topological sort if needed)
-3. Map validation criteria per step from `06_test_strategy.md` and step-level verification items
-4. Log execution plan to run-log
+1. Read `plan.json`; walk `tasks[]` in order. Each task carries its own `steps[]`, `deps[]`, `wave`, optional `worktree` block.
+2. Resolve dependencies (topological sort if needed — the planner typically emits wave-ready ordering).
+3. Map validators per step from `.claude/.prove.json` and any step-level `acceptance_criteria`.
+4. Render for the user: `scripts/prove-run show plan`
 
 ---
 
 ## Phase 2: Execution Loop
 
+Every state mutation uses `scripts/prove-run` — the agent-facing wrapper. Never inline python/jq/sed. Slug is auto-resolved from `.prove-wt-slug.txt`; if missing, `prove-run` hard-errors (exit 2).
+
 ### Simple Mode (<=3 steps)
 
 For each step N:
 
-1. Update run-log: `in_progress`
-2. Output: `"[Step N/<total>] Starting: <description>"`
+1. Start: `scripts/prove-run step-start <step_id>`
+2. Announce: `[Step <id>] Starting: <title>`
 3. Implement directly (no subagent delegation)
-4. Run validation gate (see below)
-5. Pass: git snapshot and continue
-6. Fail: one retry, then halt
+4. Run validation gate
+5. Record validator outcomes:
+   ```bash
+   scripts/prove-run validator <step_id> build pass
+   scripts/prove-run validator <step_id> lint pass
+   scripts/prove-run validator <step_id> test pass
+   ```
+6. Commit (see Git Snapshot). Capture SHA.
+7. Complete: `scripts/prove-run step-complete <step_id> --commit <SHA>`
+8. Write report: `scripts/prove-run report <step_id> --status completed --commit <SHA>`
+9. On validation failure → one retry. Still failing:
+   - `scripts/prove-run step-halt <step_id> --reason "<short>"`
+   - Commit WIP (`orchestrator: [WIP] ...`)
 
 ### Full Mode (4+ steps)
 
-Group steps into waves by dependency (independent steps = same wave). Max 4 agents per wave -- split larger waves into sub-waves.
-
-For each wave:
+Group steps into waves by dependency. Max 4 agents per wave; split larger waves.
 
 #### 2a. Launch Worktree Agents (parallel)
 
 For each task in the wave:
 
-1. Create worktree:
+1. Create worktree (also writes `.prove-wt-slug.txt` with the run slug):
    ```bash
-   WT_PATH=$(bash scripts/manage-worktree.sh create <slug> <task-id>)
+   WT_PATH=$(bash skills/orchestrator/scripts/manage-worktree.sh create <slug> <task-id>)
    ```
-2. Generate prompt:
+2. Generate the agent prompt from JSON:
    ```bash
-   PROMPT=$(bash scripts/generate-task-prompt.sh \
-     .prove/runs/<slug>/TASK_PLAN.md <task-id> .prove/runs/<slug>/PRD.md <project-root> "$WT_PATH")
+   RUN_DIR=".prove/runs/<branch>/<slug>"
+   PROMPT=$(bash skills/orchestrator/scripts/generate-task-prompt.sh \
+     "$RUN_DIR" <task-id> <project-root> "$WT_PATH")
    ```
-3. Launch agent (worktree already exists, no `isolation: "worktree"`):
+3. Launch agent (worktree already exists — do NOT pass `isolation: "worktree"`):
    ```
-   Agent(
-     subagent_type: "general-purpose",
-     run_in_background: true,
-     prompt: $PROMPT
-   )
+   Agent(subagent_type: "general-purpose", run_in_background: true, prompt: $PROMPT)
+   ```
+4. Mark first step started:
+   ```bash
+   scripts/prove-run step-start <task-id>.<first-step-seq>
    ```
 
 Create ALL worktrees first, then launch ALL agents as parallel calls in a single message.
 
-Update progress per task:
-```bash
-bash scripts/update-progress.sh .prove/runs/<slug>/PROGRESS.md task-start <task-id>
-```
-
 #### 2b. Wait for Completion
 
-Wait for all wave agents. Update progress as each finishes:
-```bash
-bash scripts/update-progress.sh .prove/runs/<slug>/PROGRESS.md task-complete <task-id>
-```
+The SubagentStop hook auto-completes the step with the subagent's latest commit SHA (or halts with a diagnostic if no commits landed). You only need to intervene when:
+
+- The hook reports `halted` → inspect `halt_reason`, decide retry or abort
+- A per-step report is required (validators summary, notes, artifacts):
+  ```bash
+  scripts/prove-run report <step_id> --status completed --commit <SHA>
+  ```
+
+Sub-agents themselves must NOT call `scripts/prove-run step-complete` — the orchestrator owns step transitions and the hook is the safety net. Their contract is: commit, exit.
 
 #### 2c. Validation Gate (per task)
 
-Run before architect review. Implementation agents already run command validators during work, but the orchestrator re-verifies them as a gate. LLM validators run here only -- implementation agents cannot launch `validation-agent` subagents.
+Before review, re-run validators. Implementation agents run command validators during work; the orchestrator verifies and runs LLM validators (agents cannot spawn `validation-agent`).
 
 For each completed task:
-1. `cd` into the task worktree
-2. Run all validators per the Validation Gate section below
-3. All pass: proceed to 2d. Any fail: retry/halt protocol.
-4. Update progress:
-   ```bash
-   bash scripts/update-progress.sh .prove/runs/<slug>/PROGRESS.md task-validated <task-id>
-   ```
+
+1. `cd` into the task worktree (slug auto-resolves from the worktree marker)
+2. Run validators per phase order
+3. Record each outcome via `scripts/prove-run validator <step_id> <phase> <status>`
+4. All pass: proceed to 2d. Any fail: retry/halt protocol.
 
 #### 2d. Architect Review (per task)
 
@@ -150,43 +157,48 @@ Every task requires principal-architect approval before merge.
 ```
 REVIEW LOOP (max 3 iterations per task):
 
-1. Generate review prompt:
-   WT_PATH=$(bash scripts/manage-worktree.sh path <slug> <task-id>)
-   REVIEW_PROMPT=$(bash scripts/generate-review-prompt.sh \
-     "$WT_PATH" <task-id> .prove/runs/<slug>/TASK_PLAN.md .prove/runs/<slug>/PRD.md <base-branch>)
+1. Build review prompt:
+   WT_PATH=$(bash skills/orchestrator/scripts/manage-worktree.sh path <slug> <task-id>)
+   RUN_DIR=".prove/runs/<branch>/<slug>"
+   REVIEW_PROMPT=$(bash skills/orchestrator/scripts/generate-review-prompt.sh \
+     "$WT_PATH" <task-id> "$RUN_DIR" <base-branch>)
 
 2. Launch review:
    Agent(subagent_type: "principal-architect", prompt: $REVIEW_PROMPT)
 
 3. Parse verdict:
-   - APPROVED: exit loop, proceed to merge
-   - CHANGES_REQUIRED: continue to step 4
+   - APPROVED → exit loop, proceed to merge
+   - CHANGES_REQUIRED → continue
 
-4. Update progress:
-   bash scripts/update-progress.sh .prove/runs/<slug>/PROGRESS.md task-review <task-id> "CHANGES_REQUIRED"
+4. Record review:
+   scripts/prove-run review <task-id> rejected --notes "<summary>" --reviewer principal-architect
 
-5. Launch fix agent in the SAME worktree:
+5. Launch fix agent in the SAME worktree (slug resolves automatically):
    Agent(
      subagent_type: "general-purpose",
      prompt: """
-       You are fixing review findings for Task <task-id>.
+       Fix review findings for Task <task-id>.
 
-       ## Review Findings
-       <paste the CHANGES_REQUIRED items from the review>
+       ## Findings
+       <paste CHANGES_REQUIRED items>
 
        ## Rules
-       - Fix ONLY the items flagged by the reviewer
-       - Do not refactor or improve code beyond what was flagged
+       - Fix ONLY flagged items
+       - Do not refactor beyond the flags
        - Run tests after fixes
-       - Commit with message: "fix(<scope>): address review feedback (round N)"
+       - Commit: fix(<scope>): address review feedback (round N)
      """
    )
 
 6. Go to step 1 (re-review)
 
 If 3 iterations without APPROVED:
-  - Log failure in PROGRESS.md
-  - AskUserQuestion header "Resolution", options: "Force Approve" / "Fix Manually" / "Abort"
+  - AskUserQuestion header "Resolution" — "Force Approve" / "Fix Manually" / "Abort"
+```
+
+On APPROVED:
+```bash
+scripts/prove-run review <task-id> approved --reviewer principal-architect
 ```
 
 #### 2e. Sequential Merge-Back
@@ -196,129 +208,98 @@ After all wave tasks are approved:
 1. Merge each task (in order) into the orchestrator worktree:
    ```bash
    cd .claude/worktrees/orchestrator-<slug>
-   BRANCH=$(bash scripts/manage-worktree.sh branch <slug> <task-id>)
+   BRANCH=$(bash skills/orchestrator/scripts/manage-worktree.sh branch <slug> <task-id>)
    git merge "$BRANCH" --no-ff -m "merge: task <id> - <name>"
-   ```
-   ```bash
-   bash scripts/update-progress.sh .prove/runs/<slug>/PROGRESS.md merge <task-id> "clean"
    ```
 
 2. Clean up task worktree + branch:
    ```bash
-   bash scripts/manage-worktree.sh remove <slug> <task-id>
+   bash skills/orchestrator/scripts/manage-worktree.sh remove <slug> <task-id>
    ```
 
-3. Merge conflict: log with `merge <task-id> "conflict"`, attempt auto-resolution for trivial conflicts, ask user for non-trivial.
+3. Merge conflict: halt, ask user. No force-merge.
 
-4. Run full test suite after merging the wave.
+4. Run full test suite after the wave merges.
 
 #### 2f. Advance to Next Wave
 
-Repeat 2a-2e for each subsequent wave.
+Repeat 2a-2e for subsequent waves.
 
 ### Validation Gate (both modes)
 
-Run all validators in phase order: build -> lint -> test -> custom -> llm, then verify expected files exist.
+Run validators in phase order: build → lint → test → custom → llm.
 
-Validators loaded per `references/validation-config.md` (`.claude/.prove.json` or auto-detected).
+Validators load per `references/validation-config.md`.
 
 #### LLM Validator Execution
 
 For each prompt validator in `.claude/.prove.json`:
 
-1. Read the prompt file from the validator's `prompt` field
-2. Generate diff: `git diff HEAD~1` (simple) or `git diff <base-branch>...HEAD` (full)
-3. Launch validation:
+1. Read the prompt file
+2. Generate diff (`git diff HEAD~1` simple, `git diff <base>...HEAD` full)
+3. Launch:
    ```
    Agent(
-     subagent_type: "validation-agent",
-     model: "haiku",
+     subagent_type: "validation-agent", model: "haiku",
      prompt: """
        ## Validation Prompt
-       {contents of the prompt markdown file}
+       {prompt markdown content}
 
        ## Changes to Validate
        ```diff
-       {git diff output}
+       {diff}
        ```
 
        ## Instructions
-       Evaluate the changes against the validation prompt criteria.
-       Return your verdict in the required format (PASS/FAIL with findings).
+       Evaluate against the prompt criteria. Return PASS/FAIL with findings.
      """
    )
    ```
-4. PASS: log and continue. FAIL: same retry cycle as command validators.
+4. PASS → log and continue. FAIL → same retry cycle as command validators.
 
 #### Failure Protocol
 
-1. Log failure details in run-log
-2. Attempt ONE auto-fix: send failure output, re-run all validators
-3. Still failing: commit WIP (`"orchestrator: [WIP] step N - <desc> (validation failed)"`), log blocker details, halt execution, proceed to Phase 3
-
-Record all results in run-log.
+1. `scripts/prove-run validator <step_id> <phase> fail`
+2. Auto-fix attempt (one): send failure output, re-run validators
+3. Still failing:
+   - `scripts/prove-run step-halt <step_id> --reason "<phase> validation failed"`
+   - Commit WIP (`orchestrator: [WIP] <step> (validation failed)`)
+   - Halt execution; proceed to Phase 3
 
 ### Git Snapshot (both modes)
 
 ```bash
 git add <files modified in this step>
 git commit -m "$(cat <<'EOF'
-orchestrator: step N - <step description>
+orchestrator: step <step_id> - <step title>
 
-Part of: <task name>
-Validated: <comma-separated list of checks passed>
+Part of: <task title>
+Validated: <phases that passed>
 
 Co-Authored-By: Claude <noreply@anthropic.com>
 EOF
 )"
 ```
 
-Record commit SHA in run-log.
+Capture the SHA and pass it to `scripts/prove-run step-complete --commit <SHA>` and `scripts/prove-run report --status completed --commit <SHA>`.
 
 ---
 
 ## Phase 3: Completion
 
-Generate `.prove/runs/<slug>/reports/report.md`:
+Render the final status:
 
-```markdown
-# Orchestrator Report: <Task Name>
-
-**Branch**: orchestrator/<slug>
-**Mode**: Simple | Full
-**Status**: Completed | Halted at Step N
-**Started**: <timestamp>  **Finished**: <timestamp>
-**Total Commits**: N
-
-## Summary
-<What was accomplished, what remains>
-
-## Steps
-| # | Step | Status | Commit |
-|---|------|--------|--------|
-(mark HALTED steps with [WIP])
-
-## Validation Summary
-- Build/Tests/Lint: PASS or FAIL (include counts)
-
-## Files Changed
-<output of: git diff --stat main...HEAD>
-
-## How to Review
-- `/prove:review` or `git diff main...orchestrator/<slug>`
-- `git log --oneline main..orchestrator/<slug>` -- step-by-step
-- `git show <commit-sha>` -- inspect individual step
-
-## Rollback
-- Undo all: `git checkout main && git branch -D orchestrator/<slug>`
-- Revert one step: `git revert <commit-sha>`
-- Reset to step: `git reset --hard <commit-sha>`
-
-## Merge
-git checkout main && git merge --no-ff orchestrator/<slug>
+```bash
+scripts/prove-run show state
 ```
 
-Present: status, report location, next action (review / fix blocker / merge).
+`state.json` is the single source of truth. Do NOT write a report markdown file — the CLI renders it JIT. For the user-facing summary, combine:
+
+- `scripts/prove-run show state` output
+- `git diff --stat main...orchestrator/<slug>` for file changes
+- Rollback recipes (linked below)
+
+Present: status, JSON artifact paths, next action (review / fix blocker / merge). Never persist a markdown summary — it would drift from state.json.
 
 ---
 
@@ -328,10 +309,10 @@ Runs after user review and approval. Skip if execution halted.
 
 ### 4.1 Merge Gate
 
-AskUserQuestion header "Merge & Cleanup", options:
-- "Merge & Clean" -- merge, archive, delete branch
-- "Merge Only" -- merge, keep artifacts
-- "Skip" -- manual merge (remind to run `/task-cleanup`)
+AskUserQuestion header "Merge & Cleanup":
+- "Merge & Clean" — merge, archive, delete branch
+- "Merge Only" — merge, keep artifacts
+- "Skip" — manual merge (remind user to run `/prove:task-cleanup`)
 
 ### 4.2 Merge to Main
 
@@ -339,7 +320,7 @@ AskUserQuestion header "Merge & Cleanup", options:
 git merge --no-ff orchestrator/<slug> -m "merge: <task-name>"
 ```
 
-If another run merged first, pull/merge main first. On conflict: halt and inform user, do not force-merge.
+If another run merged first, pull/merge main first. On conflict: halt and inform the user — no force-merge.
 
 ### 4.3 Cleanup (if "Merge & Clean")
 
@@ -347,21 +328,11 @@ If another run merged first, pull/merge main first. On conflict: halt and inform
 PROJECT_ROOT="." bash scripts/cleanup.sh --auto <slug>
 ```
 
-Archives to `.prove/archive/<date>_<slug>/`, removes run directory, worktree, and branch. Generates `SUMMARY.md` in archive.
+Archives to `.prove/archive/<date>_<slug>/`, removes run directory, worktree, branch. Generates `SUMMARY.md` from JSON in archive.
 
 ### 4.4 Confirm
 
-Present: merge SHA, archived location, skipped items. If "Skip": remind to run `/task-cleanup <slug>`.
-
----
-
-## Full Mode: Progress Tracking
-
-Maintain `.prove/runs/<slug>/PROGRESS.md` via `scripts/update-progress.sh`.
-
-Sections: Header (name, status, branch), Overview table (wave/tasks/completed/reviewed), Task Status (per-wave checklist), Review Log, Merge Log, Issues, Test Results.
-
-Update on: task start, task complete, review verdict, merge, wave complete, issue, final tests.
+Present: merge SHA, archived location, skipped items. If "Skip": remind to run `/prove:task-cleanup <slug>`.
 
 ---
 
@@ -369,18 +340,16 @@ Update on: task start, task complete, review verdict, merge, wave complete, issu
 
 When triggered with "full auto" and no existing plan:
 
-1. Derive slug, create run directory
+1. Derive slug + branch namespace; create `.prove/runs/<branch>/<slug>/`
 2. Read project context (`CLAUDE.md`, `README.md`, `docs/`, recent git history)
 3. Launch requirements-gathering subagent (user stories, acceptance criteria, non-goals, constraints, verification)
-4. Write PRD to `.prove/runs/<slug>/PRD.md` using `references/prd-template.md`
-5. AskUserQuestion header "PRD": "Approve" / "Request Changes"
-6. Generate `.prove/runs/<slug>/TASK_PLAN.md` with wave-based task graph
+4. Write `prd.json` via the task-planner skill (which emits valid JSON matching `tools/run_state/schemas.py`)
+5. AskUserQuestion header "PRD" — "Approve" / "Request Changes"
+6. Generate `plan.json` (wave-based task graph, every task has `id`, `wave`, `deps`, `steps[]`)
+7. AskUserQuestion header "Plan" — "Approve" / "Request Changes"
+8. Run `scripts/prove-run init --branch <b> --slug <s> --plan ... --prd ...` to generate `state.json`
 
-   Task headers use `### Task {wave}.{seq}: {name}` format (e.g., `### Task 1.1: Setup config`). Wave = parallel batch, seq = order within wave. The scripts `generate-task-prompt.sh` and `generate-review-prompt.sh` parse these with awk -- any other format causes silent extraction failure.
-
-7. AskUserQuestion header "Plan": "Approve" / "Request Changes"
-
-All artifacts in the run directory. Concurrent runs stay isolated.
+All artifacts live in the run directory. Concurrent runs stay isolated under different `<branch>/<slug>` paths.
 
 ---
 
@@ -388,57 +357,61 @@ All artifacts in the run directory. Concurrent runs stay isolated.
 
 | Scenario | Action |
 |----------|--------|
-| No plan found | Stop, suggest `/plan-task` |
+| No plan found | Stop, suggest `/prove:plan-task` |
 | Branch exists | AskUserQuestion: Resume / Start Fresh |
-| Build/test fails | One retry, then halt with report |
-| Subagent produces no changes | Log warning, skip commit, continue |
+| Build/test fails | One retry, then `step halt`, commit WIP, halt |
+| Subagent produces no changes | Log in report, skip commit, continue |
 | Git conflict | Halt, report to user |
 | Unclear requirements | Halt, ask user |
 | Review deadlock (3 rounds) | AskUserQuestion: Force Approve / Fix Manually / Abort |
+| state.json write rejected by hook | Use `scripts/prove-run`; never `Write`/`Edit` state.json directly |
+| No slug resolved | Ensure you are inside a worktree with `.prove-wt-slug.txt` (created by `scripts/manage-worktree.sh create`) |
 
 ## Rules
 
+- All state mutations through `scripts/prove-run` — never direct-edit `state.json`, never inline `python3 -c`, `jq`, or `sed` for run state
+- Never write markdown status files (`PROGRESS.md`, `run-log.md`, `report.md`) — views render JIT from JSON via the CLI
+- Slug is resolved from `.prove-wt-slug.txt`; agents must not invent or pass slugs ad-hoc. If no slug, hard-error and surface the fix (create marker or run `scripts/manage-worktree.sh create`)
 - Do not force-push or rewrite history on the orchestrator branch
 - Every step passes validation before proceeding
-- All work on the feature branch -- main stays clean
-- Run-log is the audit trail -- log everything
+- All work on the feature branch — main stays clean
 - Prefer `git add <files>` over `git add -A`
 
 ## Conventions
 
-**Branches**: `orchestrator/<slug>` (worktree: `.claude/worktrees/orchestrator-<slug>`), sub-tasks: `task/<slug>/<task-id>` (worktree: `.claude/worktrees/<slug>-task-<task-id>`). Managed by `scripts/manage-worktree.sh`.
+**Branches**: `orchestrator/<slug>` (worktree: `.claude/worktrees/orchestrator-<slug>`). Sub-tasks: `task/<slug>/<task-id>` (worktree: `.claude/worktrees/<slug>-task-<task-id>`). Managed by `skills/orchestrator/scripts/manage-worktree.sh`.
 
 **Run directory**:
 ```
-.prove/runs/<slug>/
-├── TASK_PLAN.md         # Implementation plan
-├── PRD.md               # Product requirements (if full-auto)
-├── PROGRESS.md          # Live progress (full mode)
-├── dispatch-state.json  # Reporter dedup state
+.prove/runs/<branch>/<slug>/
+├── prd.json          # Requirements
+├── plan.json         # Task graph
+├── state.json        # Live run state (mutated only via CLI)
+├── state.json.lock
 └── reports/
-    ├── run-log.md       # Audit trail
-    └── report.md        # Final report
+    └── <step_id>.json  # Per-step report (write-once)
 ```
 
 ## Scripts
 
 | Script | Purpose |
 |--------|---------|
-| `generate-task-prompt.sh` | Prompt for worktree implementation agents |
-| `generate-review-prompt.sh` | Review prompt for principal-architect |
-| `update-progress.sh` | Updates PROGRESS.md with task/wave status |
-| `cleanup.sh` | Archives and removes run artifacts |
+| `scripts/prove-run` | Agent wrapper around the run_state CLI — all JSON mutations and renders go through this |
+| `skills/orchestrator/scripts/generate-task-prompt.sh` | Prompt for worktree implementation agents |
+| `skills/orchestrator/scripts/generate-review-prompt.sh` | Review prompt for principal-architect |
+| `skills/orchestrator/scripts/manage-worktree.sh` | Create/remove/list sub-task worktrees (writes `.prove-wt-slug.txt`) |
+| `scripts/cleanup.sh` | Archive and remove run artifacts |
 
 ## References
 
 | File | Purpose |
 |------|---------|
-| `references/prd-template.md` | PRD template |
-| `references/handoff-protocol.md` | Phase handoff protocol |
-| `references/reporter-protocol.md` | Reporter dispatch protocol |
-| `references/validation-config.md` | Validation spec (schema, auto-detection, execution order) |
+| `references/prd-template.md` | PRD field reference |
+| `references/handoff-protocol.md` | Phase handoff |
+| `references/reporter-protocol.md` | Reporter dispatch |
+| `references/validation-config.md` | Validators (schema, auto-detect, execution order) |
 | `references/interaction-patterns.md` | AskUserQuestion usage |
 
 ## Committing
 
-Follow `commit` skill conventions: `scopes` from `.claude/.prove.json` (fall back to directory-based), `<type>(<scope>): <description>` format. One atomic commit per step.
+Follow the `commit` skill: `scopes` from `.claude/.prove.json`, `<type>(<scope>): <description>`. One atomic commit per step.

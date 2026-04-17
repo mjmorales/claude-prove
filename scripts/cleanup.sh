@@ -46,23 +46,23 @@ scan_artifacts() {
   local slug="$1"
 
   if [[ -n "$slug" ]]; then
-    # Scan for specific task
-    [[ -d "$PROVE_DIR/runs/$slug" ]] && found_runs+=("$slug") || true
+    # Scan for specific task — runs live under .prove/runs/<branch>/<slug>/
+    for d in "$PROVE_DIR"/runs/*/"$slug"/; do
+      [[ -d "$d" ]] && found_runs+=("$(basename "$(dirname "$d")")/$slug")
+    done
     for d in "$PROVE_DIR"/plans/plan_*/; do
       [[ -d "$d" ]] && found_plans+=("$(basename "$d")")
     done
     [[ -d "$PROVE_DIR/context/$slug" ]] && found_context+=("$slug") || true
-    # Check orchestrator branches
     if git branch --list "orchestrator/$slug" 2>/dev/null | grep -q .; then
       found_branches+=("orchestrator/$slug")
     fi
-    # Check orchestrator worktrees
     local wt_path=".claude/worktrees/orchestrator-$slug"
     [[ -d "$wt_path" ]] && found_worktrees+=("$wt_path") || true
   else
     # Scan for all artifacts
-    for d in "$PROVE_DIR"/runs/*/; do
-      [[ -d "$d" ]] && found_runs+=("$(basename "$d")")
+    for d in "$PROVE_DIR"/runs/*/*/; do
+      [[ -d "$d" ]] && found_runs+=("$(basename "$(dirname "$d")")/$(basename "$d")")
     done
     for d in "$PROVE_DIR"/plans/plan_*/; do
       [[ -d "$d" ]] && found_plans+=("$(basename "$d")")
@@ -71,10 +71,9 @@ scan_artifacts() {
       [[ -d "$d" ]] && found_context+=("$(basename "$d")")
     done
     while IFS= read -r branch; do
-      branch=$(echo "$branch" | xargs)  # trim whitespace
+      branch=$(echo "$branch" | xargs)
       [[ -n "$branch" ]] && found_branches+=("$branch")
     done < <(git branch --list 'orchestrator/*' 2>/dev/null)
-    # Scan orchestrator worktrees
     for d in .claude/worktrees/orchestrator-*/; do
       [[ -d "$d" ]] && found_worktrees+=("$d")
     done
@@ -149,19 +148,27 @@ archive_slug() {
   local archive_dir="$PROVE_DIR/archive/${TODAY}_${slug}"
   mkdir -p "$archive_dir"
 
-  # Archive run directory
+  # Archive run directory (branched layout: .prove/runs/<branch>/<slug>/)
   if [[ "$slug" == "all" ]]; then
-    for d in "$PROVE_DIR"/runs/*/; do
+    for d in "$PROVE_DIR"/runs/*/*/; do
       if [[ -d "$d" ]]; then
-        local rname
+        local branch_name rname
         rname=$(basename "$d")
-        cp -r "$d" "$archive_dir/run-$rname/"
-        echo "  archived: runs/$rname/ -> archive/${TODAY}_${slug}/"
+        branch_name=$(basename "$(dirname "$d")")
+        cp -r "$d" "$archive_dir/run-${branch_name}-${rname}/"
+        echo "  archived: runs/${branch_name}/${rname}/ -> archive/${TODAY}_${slug}/"
       fi
     done
-  elif [[ -d "$PROVE_DIR/runs/$slug" ]]; then
-    cp -r "$PROVE_DIR/runs/$slug/" "$archive_dir/run/"
-    echo "  archived: runs/$slug/ -> archive/${TODAY}_${slug}/"
+  else
+    for d in "$PROVE_DIR"/runs/*/"$slug"/; do
+      if [[ -d "$d" ]]; then
+        local branch_name
+        branch_name=$(basename "$(dirname "$d")")
+        cp -r "$d" "$archive_dir/run/"
+        echo "  archived: runs/${branch_name}/${slug}/ -> archive/${TODAY}_${slug}/"
+        break
+      fi
+    done
   fi
 
   # Archive plans (copy key files from any matching plan dirs)
@@ -199,14 +206,31 @@ remove_artifacts() {
   local remove_all=false
   [[ "$slug" == "all" ]] && remove_all=true
 
-  # Remove run directories
+  # Remove run directories (branched layout)
   if $remove_all; then
-    for d in "$PROVE_DIR"/runs/*/; do
-      [[ -d "$d" ]] && rm -rf "$d" && echo "  removed: .prove/runs/$(basename "$d")/"
+    for d in "$PROVE_DIR"/runs/*/*/; do
+      if [[ -d "$d" ]]; then
+        local bn sn
+        sn=$(basename "$d")
+        bn=$(basename "$(dirname "$d")")
+        rm -rf "$d"
+        echo "  removed: .prove/runs/${bn}/${sn}/"
+      fi
     done
-  elif [[ -d "$PROVE_DIR/runs/$slug" ]]; then
-    rm -rf "$PROVE_DIR/runs/$slug"
-    echo "  removed: .prove/runs/$slug/"
+    # Clean up now-empty branch dirs
+    for d in "$PROVE_DIR"/runs/*/; do
+      rmdir "$d" 2>/dev/null && echo "  removed: $d (empty)" || true
+    done
+  else
+    for d in "$PROVE_DIR"/runs/*/"$slug"/; do
+      if [[ -d "$d" ]]; then
+        local bn
+        bn=$(basename "$(dirname "$d")")
+        rm -rf "$d"
+        echo "  removed: .prove/runs/${bn}/${slug}/"
+        rmdir "$PROVE_DIR/runs/$bn" 2>/dev/null || true
+      fi
+    done
   fi
   rmdir "$PROVE_DIR/runs" 2>/dev/null && echo "  removed: .prove/runs/ (empty)" || true
 

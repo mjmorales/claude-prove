@@ -87,7 +87,7 @@ Build ACB with `acb_version: "0.2"`, `change_set_ref` (base/head SHAs), `task_st
 ## Phase 3: Build Task Statement
 
 Construct `task_statement.turns` (role `user`) from:
-1. `.prove/PRD.md` or `.prove/TASK_PLAN.md`
+1. Active run's `prd.json` + `plan.json` (`scripts/prove-run show prd` / `show plan`)
 2. Fall back to `git log <base>..HEAD`
 
 ## Phase 4: Launch Review UI

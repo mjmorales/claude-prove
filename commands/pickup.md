@@ -12,7 +12,7 @@ Read `.prove/handoff.md`. If missing, tell the user to run `/prove:handoff` firs
 
 1. Read the handoff file completely
 2. Read each file listed in "Files to Read First" in order
-3. Read any referenced prove artifacts (TASK_PLAN.md, decision records)
+3. Read referenced prove artifacts: `scripts/prove-run show state` / `show plan` / `show prd` for the active run, plus decision records
 
 ## Step 3: Confirm and Clean Up
 

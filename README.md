@@ -9,7 +9,7 @@ Takes you from idea to merged code through a structured pipeline:
 ```
 /prove:brainstorm  →  /prove:task-planner  →  /prove:plan-step  →  /prove:orchestrator  →  /prove:review  →  /prove:comprehend  →  /prove:cleanup
       │                        │                         │                        │                        │                        │                        │
-.prove/decisions/       .prove/TASK_PLAN.md     .prove/plans/plan_X/    .prove/reports/         .prove/reviews/         .prove/learning/         .prove/archive/
+.prove/decisions/       .prove/runs/<b>/<s>/    .prove/plans/plan_X/    .prove/runs/.../state.json   .prove/reviews/         .prove/learning/         .prove/archive/
 ```
 
 1. **Brainstorm** — Explore options, weigh trade-offs, record decisions
@@ -158,7 +158,7 @@ references/
 └── interaction-patterns.md     # UX interaction patterns
 skills/
 ├── brainstorm/                 # Interactive brainstorming → .prove/decisions/
-├── task-planner/               # Discovery & planning → .prove/TASK_PLAN.md
+├── task-planner/               # Discovery & planning → .prove/runs/<branch>/<slug>/{prd,plan}.json
 ├── plan-step/                  # Step-level requirements → .prove/plans/
 ├── orchestrator/               # Autonomous execution with validation gates
 ├── review/                     # Intent-based code review
@@ -201,19 +201,24 @@ All prove artifacts are stored under `.prove/` in your project:
 
 ```
 .prove/
-├── decisions/          # Brainstorm decision records
-├── plans/              # Step-level planning docs
+├── decisions/                    # Brainstorm decision records
+├── plans/                        # Step-level planning docs (plan-step workspace)
 │   └── plan_X.Y.Z/
-├── reports/            # Orchestrator run logs and reports
-│   └── <task-slug>/
-├── context/            # Inter-agent handoff context
-│   └── <task-slug>/
-├── learning/           # Comprehension session logs
-├── archive/            # Archived completed tasks
-├── TASK_PLAN.md        # Active task plan
-├── PROGRESS.md         # Live progress (full mode)
-└── PRD.md              # Product requirements (full-auto)
+├── runs/                         # Orchestrator runs (JSON-first)
+│   └── <branch>/<slug>/
+│       ├── prd.json              # Write-once requirements
+│       ├── plan.json             # Write-once task graph (tasks, waves, steps)
+│       ├── state.json            # Live run state (mutated only via scripts/prove-run)
+│       ├── state.json.lock
+│       └── reports/
+│           └── <step_id>.json    # Per-step write-once report
+├── context/                      # Inter-agent handoff context
+├── learning/                     # Comprehension session logs
+├── archive/                      # Archived completed tasks
+└── handoff.md                    # Ephemeral session-to-session handoff prompt
 ```
+
+Human views (progress, PRD, plan) render JIT from the JSON via `scripts/prove-run show ...`. No markdown status files are persisted.
 
 Add `.prove/` to your `.gitignore` to keep artifacts out of version control:
 

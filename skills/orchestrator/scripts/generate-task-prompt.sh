@@ -1,107 +1,105 @@
 #!/usr/bin/env bash
-# generate-task-prompt.sh — Generates a focused prompt for a worktree implementation agent.
+# generate-task-prompt.sh — Build a worktree implementation agent prompt from JSON artifacts.
 #
-# Usage: generate-task-prompt.sh <task-plan-path> <task-id> <prd-path> <project-root> [worktree-path]
+# Usage: generate-task-prompt.sh <run-dir> <task-id> <project-root> [worktree-path]
 #
-# Reads TASK_PLAN.md and PRD, extracts the relevant task detail section,
-# and outputs a complete, self-contained prompt for a worktree agent.
-#
-# If worktree-path is provided, the prompt includes a directive to cd into it first.
+# Reads plan.json + prd.json from <run-dir>, extracts the task detail and PRD
+# fields, then emits a self-contained prompt for a worktree agent.
 
 set -euo pipefail
 
-TASK_PLAN="$1"
+RUN_DIR="$1"
 TASK_ID="$2"
-PRD="$3"
-PROJECT_ROOT="$4"
-WORKTREE_PATH="${5:-}"
+PROJECT_ROOT="$3"
+WORKTREE_PATH="${4:-}"
 
-if [[ ! -f "$TASK_PLAN" ]]; then
-  echo "ERROR: TASK_PLAN.md not found at $TASK_PLAN" >&2
+PLAN="${RUN_DIR}/plan.json"
+PRD="${RUN_DIR}/prd.json"
+
+if [[ ! -f "$PLAN" ]]; then
+  echo "ERROR: plan.json not found at $PLAN" >&2
   exit 1
 fi
-
 if [[ ! -f "$PRD" ]]; then
-  echo "ERROR: PRD.md not found at $PRD" >&2
+  echo "ERROR: prd.json not found at $PRD" >&2
   exit 1
 fi
 
-# Extract the task detail section (from "### Task {id}:" to the next "### Task" or "## " heading)
-TASK_DETAIL=$(awk -v id="$TASK_ID" '
-  /^### Task / {
-    if (found) exit
-    if ($0 ~ "### Task " id ":") found=1
-  }
-  /^## / { if (found) exit }
-  found { print }
-' "$TASK_PLAN")
+# Extract task detail + PRD fields + validators in one Python call.
+_ALL=$(python3 - "$PLAN" "$PRD" "$TASK_ID" "$PROJECT_ROOT" <<'PY'
+import json, sys, os
 
-if [[ -z "$TASK_DETAIL" ]]; then
-  echo "ERROR: Task $TASK_ID not found in $TASK_PLAN" >&2
-  exit 1
-fi
+plan_path, prd_path, task_id, project_root = sys.argv[1:5]
+plan = json.load(open(plan_path))
+prd = json.load(open(prd_path))
 
-# Extract task name from the detail header
-TASK_NAME=$(echo "$TASK_DETAIL" | head -1 | sed 's/^### Task [0-9.]*: //')
+task = next((t for t in plan.get("tasks", []) if t["id"] == task_id), None)
+if task is None:
+    sys.stderr.write(f"ERROR: task {task_id} not found in {plan_path}\n")
+    sys.exit(1)
 
-# Extract acceptance criteria from PRD
-ACCEPTANCE=$(awk '/^## Acceptance Criteria/,/^## [^A]/' "$PRD" | head -30)
+def block(label, value):
+    print(f"<<<{label}>>>")
+    print(value if value is not None else "")
+    print(f"<<</{label}>>>")
 
-# Extract test strategy from PRD
-TEST_STRATEGY=$(awk '/^## Test Strategy/,/^## /' "$PRD" | head -20)
+block("TASK_NAME", task.get("title", ""))
+block("TASK_DESC", task.get("description", ""))
+ac = task.get("acceptance_criteria") or []
+block("TASK_AC", "\n".join(f"- {c}" for c in ac))
 
-# Load validator commands from .claude/.prove.json, fall back to CLAUDE.md
-BUILD_CMD=""
-LINT_CMD=""
-TEST_CMD=""
-CUSTOM_CMDS=""
-LLM_VALIDATORS=""
-
-if [[ -f "$PROJECT_ROOT/.claude/.prove.json" ]]; then
-  PROVE_CONFIG="$PROJECT_ROOT/.claude/.prove.json"
-
-  # Single Python call to extract all validator phases at once (avoids parsing JSON five times)
-  _VALIDATOR_OUTPUT=$(python3 -c "
-import json, sys
-
-with open(sys.argv[1]) as f:
-    cfg = json.load(f)
-
-validators = cfg.get('validators', [])
-
-for phase in ('build', 'lint', 'test', 'custom'):
-    cmds = [v['command'] for v in validators if v.get('phase') == phase]
-    joined = ('; '.join(cmds)) if cmds else ''
-    print(f'{phase.upper()}={joined}')
-
-prompt_validators = [v for v in validators if v.get('prompt')]
-if prompt_validators:
-    lines = [f'   - **{v[\"name\"]}**: \`{v[\"prompt\"]}\`' for v in prompt_validators]
-    print('LLM=' + chr(10).join(lines))
+steps = task.get("steps") or []
+if steps:
+    block("TASK_STEPS", "\n".join(f"- `{s['id']}` {s.get('title','')}" for s in steps))
 else:
-    print('LLM=')
-" "$PROVE_CONFIG" 2>/dev/null || true)
+    block("TASK_STEPS", "")
 
-  # Parse the combined output into individual shell variables
-  while IFS= read -r line; do
-    case "$line" in
-      BUILD=*)   BUILD_CMD="${line#BUILD=}" ;;
-      LINT=*)    LINT_CMD="${line#LINT=}" ;;
-      TEST=*)    TEST_CMD="${line#TEST=}" ;;
-      CUSTOM=*)  CUSTOM_CMDS="${line#CUSTOM=}" ;;
-      LLM=*)     LLM_VALIDATORS="${line#LLM=}" ;;
-      # Continuation lines for multi-line LLM validators
-      "   - "*)  LLM_VALIDATORS="${LLM_VALIDATORS}"$'\n'"${line}" ;;
-    esac
-  done <<< "$_VALIDATOR_OUTPUT"
+block("PRD_AC", "\n".join(f"- {c}" for c in prd.get("acceptance_criteria", [])))
+block("PRD_TEST_STRATEGY", prd.get("test_strategy", ""))
 
-elif [[ -f "$PROJECT_ROOT/CLAUDE.md" ]]; then
-  # Fall back to CLAUDE.md scraping
-  TEST_CMD=$(grep -A2 -i '# .*test\|## .*test\|running tests' "$PROJECT_ROOT/CLAUDE.md" | grep -E '^\s*(godot|npm|pytest|go test|cargo test|make test)' | head -1 | xargs 2>/dev/null || true)
-  LINT_CMD=$(grep -A2 -i 'lint\|format' "$PROJECT_ROOT/CLAUDE.md" | grep -E '^\s*(npm|npx|go |cargo |make )' | head -1 | xargs 2>/dev/null || true)
-fi
+# Validators
+cfg_path = os.path.join(project_root, ".claude", ".prove.json")
+build = lint = test = custom = ""
+llm_lines = []
+if os.path.isfile(cfg_path):
+    cfg = json.load(open(cfg_path))
+    vs = cfg.get("validators", [])
+    build = "; ".join(v["command"] for v in vs if v.get("phase") == "build" and v.get("command"))
+    lint = "; ".join(v["command"] for v in vs if v.get("phase") == "lint" and v.get("command"))
+    test = "; ".join(v["command"] for v in vs if v.get("phase") == "test" and v.get("command"))
+    custom = "; ".join(v["command"] for v in vs if v.get("phase") == "custom" and v.get("command"))
+    for v in vs:
+        if v.get("prompt"):
+            llm_lines.append(f"   - **{v['name']}**: `{v['prompt']}`")
+block("BUILD_CMD", build)
+block("LINT_CMD", lint)
+block("TEST_CMD", test)
+block("CUSTOM_CMD", custom)
+block("LLM_VALIDATORS", "\n".join(llm_lines))
+PY
+)
 
-# Output the prompt
+_get() {
+  # Extract content between <<<LABEL>>> and <<</LABEL>>>
+  awk -v lbl="$1" '
+    $0 == "<<<" lbl ">>>" { capture=1; next }
+    $0 == "<<</" lbl ">>>" { capture=0 }
+    capture { print }
+  ' <<<"$_ALL"
+}
+
+TASK_NAME=$(_get TASK_NAME)
+TASK_DESC=$(_get TASK_DESC)
+TASK_AC=$(_get TASK_AC)
+TASK_STEPS=$(_get TASK_STEPS)
+PRD_AC=$(_get PRD_AC)
+PRD_TEST_STRATEGY=$(_get PRD_TEST_STRATEGY)
+BUILD_CMD=$(_get BUILD_CMD)
+LINT_CMD=$(_get LINT_CMD)
+TEST_CMD=$(_get TEST_CMD)
+CUSTOM_CMD=$(_get CUSTOM_CMD)
+LLM_VALIDATORS=$(_get LLM_VALIDATORS)
+
 cat <<PROMPT
 $(if [[ -n "$WORKTREE_PATH" ]]; then
 cat <<WORKTREE_BLOCK
@@ -120,13 +118,18 @@ fi)
 You are implementing **Task $TASK_ID: $TASK_NAME**
 
 ## Task Details
-$TASK_DETAIL
+
+$TASK_DESC
+
+$(if [[ -n "$TASK_AC" ]]; then printf "## Task Acceptance Criteria\n\n%s\n" "$TASK_AC"; fi)
+
+$(if [[ -n "$TASK_STEPS" ]]; then printf "## Steps\n\n%s\n" "$TASK_STEPS"; fi)
 
 ## Acceptance Criteria (from PRD)
-$ACCEPTANCE
 
-## Test Strategy (from PRD)
-$TEST_STRATEGY
+$PRD_AC
+
+$(if [[ -n "$PRD_TEST_STRATEGY" ]]; then printf "## Test Strategy (from PRD)\n\n%s\n" "$PRD_TEST_STRATEGY"; fi)
 
 ## Implementation Rules
 
@@ -136,8 +139,8 @@ $TEST_STRATEGY
 4. **Verify before committing**:
 $(if [[ -n "$BUILD_CMD" ]]; then echo "   - Build: \`$BUILD_CMD\`"; fi)
 $(if [[ -n "$LINT_CMD" ]]; then echo "   - Lint: \`$LINT_CMD\`"; fi)
-$(if [[ -n "$TEST_CMD" ]]; then echo "   - Tests: \`$TEST_CMD\`"; else echo "   - Run the project's test suite (check CLAUDE.md or .claude/.prove.json for the command)"; fi)
-$(if [[ -n "$CUSTOM_CMDS" ]]; then echo "   - Custom: \`$CUSTOM_CMDS\`"; fi)
+$(if [[ -n "$TEST_CMD" ]]; then echo "   - Tests: \`$TEST_CMD\`"; else echo "   - Run the project's test suite (check .claude/.prove.json for the command)"; fi)
+$(if [[ -n "$CUSTOM_CMD" ]]; then echo "   - Custom: \`$CUSTOM_CMD\`"; fi)
 $(if [[ -n "$LLM_VALIDATORS" ]]; then
   echo "   - LLM validators (your code will be evaluated against these prompt criteria):"
   echo "$LLM_VALIDATORS"
@@ -146,6 +149,7 @@ fi)
 6. **Max 3 retry attempts** if tests fail — fix the issue, don't just retry.
 
 ## Code Quality Checklist (reviewer will check these)
+
 - [ ] No unused imports or variables
 - [ ] No hardcoded values that should be configurable
 - [ ] Error handling for edge cases
@@ -154,10 +158,18 @@ fi)
 - [ ] Tests cover happy path AND at least one error case
 
 ## Resource Constraints
+
 - **DO NOT** spawn agents with \`isolation: "worktree"\`. You are already in a worktree — nested worktrees cause exponential resource growth.
 - **DO NOT** use the Agent tool with \`run_in_background: true\` for heavy workloads. You are a leaf worker, not an orchestrator.
 
 ## When Done
-Commit your work. The worktree branch will be reviewed by a principal-architect agent before merge.
-Do NOT merge — just commit.
+
+Commit your work and exit. The worktree branch will be reviewed by a principal-architect agent before merge.
+
+**Step-state accounting is the orchestrator's job, not yours.** Do NOT call \`scripts/prove-run step-complete\` or any other run_state mutator. Your contract is:
+
+1. Produce at least one commit on this worktree branch containing the intended change.
+2. Exit.
+
+The SubagentStop hook reads the latest commit on this worktree and auto-completes the step from it. If you exit without committing, the hook halts the step with a diagnostic so the orchestrator knows to retry. Do NOT merge.
 PROMPT

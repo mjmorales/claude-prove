@@ -12,20 +12,16 @@ Discovery order (first match wins):
 2. ``<worktree-root>/.prove-wt-slug.txt`` marker written by
    ``manage-worktree.sh create``. Cheapest unambiguous lookup;
    pinned to the worktree itself.
-3. Explicit registration at ``<main-tree>/.prove/runs/<slug>/worktree``
-   whose contents match the current worktree root.
-4. Parse ``<main-tree>/.prove/runs/<slug>/TASK_PLAN.md`` and match its
-   ``**Worktree:**`` field against the current worktree root.
-   Zero-config fallback that reuses data the orchestrator already
-   writes.
-5. ``<worktree-root>/.prove/RUN_SLUG`` marker file. Manual escape hatch.
-6. ``None`` — standalone commit outside an orchestrator run.
+3. Scan ``<main-tree>/.prove/runs/**/plan.json`` and match the
+   task's ``worktree.path`` against the current worktree root.
+4. ``<worktree-root>/.prove/RUN_SLUG`` marker file. Manual escape hatch.
+5. ``None`` — standalone commit outside an orchestrator run.
 """
 
 from __future__ import annotations
 
+import json
 import os
-import re
 from pathlib import Path
 
 
@@ -33,20 +29,10 @@ _ENV_VAR = "PROVE_RUN_SLUG"
 _WT_SLUG_FILE = ".prove-wt-slug.txt"
 _MARKER_REL = Path(".prove") / "RUN_SLUG"
 _RUNS_REL = Path(".prove") / "runs"
-_WORKTREE_FILE = "worktree"
-_TASK_PLAN = "TASK_PLAN.md"
-
-# Matches `**Worktree:** <path>`, tolerant of surrounding whitespace and
-# optional trailing fields. Captures the path verbatim; callers
-# normalize before comparing.
-_WORKTREE_RE = re.compile(r"^\*\*Worktree:\*\*\s*(.+?)\s*$", re.MULTILINE)
 
 
 def resolve_run_slug(cwd: str | Path | None = None) -> str | None:
-    """Return the current run slug, or None if not inside an orchestrator run.
-
-    See module docstring for the resolution order.
-    """
+    """Return the current run slug, or None if not inside an orchestrator run."""
     env = os.environ.get(_ENV_VAR, "").strip()
     if env:
         return env
@@ -70,12 +56,9 @@ def resolve_run_slug(cwd: str | Path | None = None) -> str | None:
         runs_dir = main / _RUNS_REL
         wt_norm = _normalize(wt)
         if runs_dir.is_dir():
-            for entry in sorted(runs_dir.iterdir()):
-                if not entry.is_dir():
-                    continue
-                slug = _match_run_dir(entry, wt_norm)
-                if slug is not None:
-                    return slug
+            slug = _scan_plans_for_worktree(runs_dir, wt_norm)
+            if slug is not None:
+                return slug
 
     root = Path(cwd) if cwd is not None else (wt if wt is not None else Path.cwd())
     marker = root / _MARKER_REL
@@ -90,28 +73,18 @@ def resolve_run_slug(cwd: str | Path | None = None) -> str | None:
     return None
 
 
-def _match_run_dir(run_dir: Path, wt_norm: str) -> str | None:
-    """Return the run slug if *run_dir* registers *wt_norm*, else None."""
-    worktree_file = run_dir / _WORKTREE_FILE
-    if worktree_file.is_file():
+def _scan_plans_for_worktree(runs_dir: Path, wt_norm: str) -> str | None:
+    """Return the slug whose plan.json registers ``wt_norm`` as a worktree."""
+    for plan_path in runs_dir.rglob("plan.json"):
         try:
-            declared = worktree_file.read_text(encoding="utf-8").strip()
-        except OSError:
-            declared = ""
-        if declared and _normalize(Path(declared)) == wt_norm:
-            return run_dir.name
-
-    task_plan = run_dir / _TASK_PLAN
-    if task_plan.is_file():
-        try:
-            content = task_plan.read_text(encoding="utf-8")
-        except OSError:
-            return None
-        for match in _WORKTREE_RE.finditer(content):
-            declared = match.group(1).strip()
-            if declared and _normalize(Path(declared)) == wt_norm:
-                return run_dir.name
-
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for task in plan.get("tasks", []):
+            wt = (task.get("worktree") or {}).get("path", "")
+            if wt and _normalize(Path(wt)) == wt_norm:
+                # Slug = name of directory containing plan.json
+                return plan_path.parent.name
     return None
 
 
