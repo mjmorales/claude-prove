@@ -10,7 +10,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 $PLUGIN_DIR/tools/cafi/cafi_gate.py",
+            "command": "python3 ${CLAUDE_PLUGIN_ROOT}/tools/cafi/cafi_gate.py",
             "timeout": 10000
           }
         ]

@@ -34,9 +34,11 @@ _MAIN_ROOT=$(git -C "$_WORK_DIR" worktree list --porcelain 2>/dev/null \
   | awk '/^worktree /{print substr($0,10); exit}')
 _MAIN_ROOT="${_MAIN_ROOT:-$_WORK_DIR}"
 
-# Plugin / repo root — where tools/ lives. Prefer $PLUGIN_DIR set by the
-# Claude Code plugin runtime; fall back to the main worktree.
-_PLUGIN_ROOT="${PLUGIN_DIR:-$_MAIN_ROOT}"
+# Plugin / repo root — where tools/ lives.
+# Prefer Claude Code's canonical $CLAUDE_PLUGIN_ROOT (set by the plugin
+# runtime at hook / command invocation), then prove's legacy $PLUGIN_DIR,
+# then fall back to the main worktree for local dev.
+_PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_DIR:-$_MAIN_ROOT}}"
 
 export PYTHONPATH="${_PLUGIN_ROOT}:${PYTHONPATH:-}"
 

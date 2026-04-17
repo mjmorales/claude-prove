@@ -34,34 +34,27 @@
     ]
   },
   "tools": {
-    "cafi": {
-      "enabled": true,
-      "scope": "user",
-      "config": {
-        "excludes": [
-          "*.lock",
-          "node_modules/**",
-          "vendor/**",
-          "dist/**",
-          "*.min.js",
-          "*.map",
-          "cache/**"
-        ],
-        "max_file_size": 102400,
-        "concurrency": 3
-      }
-    },
-    "acb": {
-      "enabled": true,
-      "config": {
-        "base_branch": "main"
-      }
-    },
     "pcd": {
       "enabled": true
     },
     "schema": {
       "enabled": true
+    },
+    "acb": {
+      "enabled": true,
+      "scope": "user",
+      "config": {
+        "base_branch": "main"
+      }
+    },
+    "cafi": {
+      "enabled": true,
+      "scope": "user",
+      "config": {
+        "excludes": [],
+        "max_file_size": 102400,
+        "concurrency": 3
+      }
     },
     "run_state": {
       "enabled": true,
