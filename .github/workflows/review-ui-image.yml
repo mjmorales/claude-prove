@@ -1,5 +1,9 @@
 name: Review UI Image
 
+# Release channel for the review UI. Decoupled from the prove plugin release
+# (see .github/workflows/release.yml) — review-ui changes publish a Docker
+# image to GHCR without bumping the plugin version.
+
 on:
   push:
     branches: [main]
@@ -21,7 +25,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write   # for GitHub Release on tag pushes
       packages: write
 
     steps:
@@ -53,6 +57,7 @@ jobs:
             type=match,pattern=review-ui-v(.*),group=1
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v5
         with:
           context: tools/review-ui
@@ -62,3 +67,25 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha,scope=review-ui
           cache-to: type=gha,scope=review-ui,mode=max
+
+      - name: Create GitHub Release for tag
+        if: startsWith(github.ref, 'refs/tags/review-ui-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: |
+            Review UI Docker image.
+
+            **Pull:**
+            ```
+            docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.meta.outputs.version }}
+            ```
+
+            **Run:**
+            ```
+            /prove:review-ui --tag ${{ steps.meta.outputs.version }}
+            ```
+
+            **Digest:** `${{ steps.build.outputs.digest }}`
+          generate_release_notes: true

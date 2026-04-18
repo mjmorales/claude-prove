@@ -3,6 +3,12 @@ name: Release
 on:
   push:
     branches: [main]
+    # Review UI lives in its own release channel (GHCR Docker image published
+    # by .github/workflows/review-ui-image.yml). Pushes that only touch
+    # review-ui files should not cut a new plugin release.
+    paths-ignore:
+      - 'tools/review-ui/**'
+      - '.github/workflows/review-ui-image.yml'
 
 permissions:
   contents: write
@@ -42,11 +48,15 @@ jobs:
           echo "latest_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
 
-          # Analyze commits since last tag
+          # Analyze commits since last tag, EXCLUDING commits that only touch
+          # the review UI — that path has its own Docker-image release channel.
+          # `:(exclude)` pathspec filters out commits that changed only
+          # tools/review-ui/ or the review-ui workflow file.
+          EXCLUDES=(':(exclude)tools/review-ui' ':(exclude).github/workflows/review-ui-image.yml')
           if [ "$LATEST_TAG" = "v0.0.0" ]; then
-            COMMITS=$(git log --pretty=format:"%s%n%b" HEAD)
+            COMMITS=$(git log --pretty=format:"%s%n%b" HEAD -- . "${EXCLUDES[@]}")
           else
-            COMMITS=$(git log --pretty=format:"%s%n%b" "${LATEST_TAG}..HEAD")
+            COMMITS=$(git log --pretty=format:"%s%n%b" "${LATEST_TAG}..HEAD" -- . "${EXCLUDES[@]}")
           fi
 
           if [ -z "$COMMITS" ]; then
@@ -96,12 +106,16 @@ jobs:
             RANGE="${LATEST_TAG}..HEAD"
           fi
 
+          # Match the bump step: keep review-ui commits out of the plugin
+          # CHANGELOG. They ship separately via the GHCR image.
+          EXCLUDES=(':(exclude)tools/review-ui' ':(exclude).github/workflows/review-ui-image.yml')
+
           {
             echo "changelog<<CHANGELOG_EOF"
 
             # Breaking changes
-            BREAKING=$(git log --pretty=format:"%s" "$RANGE" | grep -iE "^[a-z]+(\(.+\))?!:" || true)
-            BREAKING_BODY=$(git log --pretty=format:"%b" "$RANGE" | grep -A1 "BREAKING CHANGE:" | grep -v "^--$" || true)
+            BREAKING=$(git log --pretty=format:"%s" "$RANGE" -- . "${EXCLUDES[@]}" | grep -iE "^[a-z]+(\(.+\))?!:" || true)
+            BREAKING_BODY=$(git log --pretty=format:"%b" "$RANGE" -- . "${EXCLUDES[@]}" | grep -A1 "BREAKING CHANGE:" | grep -v "^--$" || true)
             if [ -n "$BREAKING" ] || [ -n "$BREAKING_BODY" ]; then
               echo "### Breaking Changes"
               [ -n "$BREAKING" ] && echo "$BREAKING" | sed 's/^/- /'
@@ -110,7 +124,7 @@ jobs:
             fi
 
             # Features
-            FEATURES=$(git log --pretty=format:"- %s (%h)" "$RANGE" | grep -E "^- feat" || true)
+            FEATURES=$(git log --pretty=format:"- %s (%h)" "$RANGE" -- . "${EXCLUDES[@]}" | grep -E "^- feat" || true)
             if [ -n "$FEATURES" ]; then
               echo "### Features"
               echo "$FEATURES"
@@ -118,7 +132,7 @@ jobs:
             fi
 
             # Fixes
-            FIXES=$(git log --pretty=format:"- %s (%h)" "$RANGE" | grep -E "^- fix" || true)
+            FIXES=$(git log --pretty=format:"- %s (%h)" "$RANGE" -- . "${EXCLUDES[@]}" | grep -E "^- fix" || true)
             if [ -n "$FIXES" ]; then
               echo "### Fixes"
               echo "$FIXES"
@@ -126,7 +140,7 @@ jobs:
             fi
 
             # Other changes (docs, refactor, perf, style, build)
-            OTHER=$(git log --pretty=format:"- %s (%h)" "$RANGE" | grep -E "^- (docs|refactor|perf|style|build)" || true)
+            OTHER=$(git log --pretty=format:"- %s (%h)" "$RANGE" -- . "${EXCLUDES[@]}" | grep -E "^- (docs|refactor|perf|style|build)" || true)
             if [ -n "$OTHER" ]; then
               echo "### Other"
               echo "$OTHER"
