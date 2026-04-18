@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { listAllBranches, listWorktrees } from "./git.js";
+import { listManifestsForSlug } from "./acb.js";
 import {
   extractRunProgress,
   readJson,
@@ -52,11 +53,13 @@ export async function listRuns(repoRoot: string): Promise<RunSummary[]> {
       const stateExists = await fileExists(path.join(runPath, "state.json"));
       if (!stateExists) continue;
 
-      // Only surface runs whose orchestrator branch still exists (or has a
-      // live worktree). Merged/cleaned runs drop out.
+      // Surface the run if either the orchestrator branch is live OR its
+      // manifests are still in the ACB store. Post-merge / post-cleanup
+      // runs stay reviewable as long as their manifests survive.
       const orchName = `orchestrator/${slug}`;
       const live = branchNames.has(orchName) || worktreeBranches.has(orchName);
-      if (!live) continue;
+      const hasManifests = live || slugHasManifests(repoRoot, slug);
+      if (!live && !hasManifests) continue;
 
       const summary = await readRunSummary(repoRoot, branchNs, slug);
       if (summary) out.push(summary);
@@ -124,6 +127,19 @@ export async function readRunSummary(
     progress: extractRunProgress(state),
     lastActivity: mtime ? mtime.toISOString() : null,
   };
+}
+
+/**
+ * Cheap existence check against the ACB store: does this run slug have any
+ * committed manifests? Used to keep merged/cleaned runs reviewable after
+ * their git branches are gone.
+ */
+function slugHasManifests(repoRoot: string, slug: string): boolean {
+  try {
+    return listManifestsForSlug(repoRoot, slug).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 async function listSubdirs(dir: string): Promise<string[]> {

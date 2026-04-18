@@ -111,13 +111,13 @@ export function registerProveRoutes(app: FastifyInstance, repoRoot: string) {
     const key = parseRunKey(req.params.slug);
     if (!key) return reply.code(400).send({ error: "bad slug" });
     const runBranches = await branchesForRun(repoRoot, key.slug);
-    if (runBranches.length === 0)
-      return { slug: key.composite, branches: [], groups: [], orphanCommits: [] };
 
     const summary = await readRunSummary(repoRoot, key.branch, key.slug);
     const base = summary?.baseline?.split("@")[0].trim() || "main";
 
     // Collect every commit in any run branch range (base..branch). Dedup by sha.
+    // Empty when all run branches have been deleted (cleaned-up run) — the
+    // manifest-slug backfill below recovers that case.
     const commitByHead = new Map<string, Commit>();
     for (const b of runBranches) {
       const cwd = b.worktreePath ?? undefined;
