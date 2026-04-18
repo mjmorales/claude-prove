@@ -13,10 +13,10 @@ import {
   getAcbDocument,
   getManifestForCommit,
   listManifestsForBranch,
-  listManifestsForBranches,
+  listManifestsForSlug,
   type IntentManifest,
 } from "../acb.js";
-import { listCommits, type Commit } from "../commits.js";
+import { listCommits, showCommit, type Commit } from "../commits.js";
 import { filterReferenced, listDecisions, readDecision } from "../decisions.js";
 import { listStewardReports } from "../steward.js";
 import { readRunSummary } from "../runs.js";
@@ -114,8 +114,6 @@ export function registerProveRoutes(app: FastifyInstance, repoRoot: string) {
     if (runBranches.length === 0)
       return { slug: key.composite, branches: [], groups: [], orphanCommits: [] };
 
-    const branchNames = runBranches.map((b) => b.name);
-    const manifests = listManifestsForBranches(repoRoot, branchNames);
     const summary = await readRunSummary(repoRoot, key.branch, key.slug);
     const base = summary?.baseline?.split("@")[0].trim() || "main";
 
@@ -129,10 +127,23 @@ export function registerProveRoutes(app: FastifyInstance, repoRoot: string) {
       }
     }
 
-    // commit_sha -> branch (prefer the first branch that stored a manifest for it).
+    // Load manifests for this run. We look up by slug rather than by
+    // currently-live branches so post-merge runs (task branches deleted,
+    // orchestrator branch already merged into main → empty base..head
+    // range) still surface their review content.
     const manifestByCommit = new Map<string, IntentManifest>();
-    for (const m of manifests) {
+    const slugManifests = listManifestsForSlug(repoRoot, key.slug);
+    for (const m of slugManifests) {
       if (!manifestByCommit.has(m.commitSha)) manifestByCommit.set(m.commitSha, m);
+    }
+
+    // Backfill commit metadata for manifest SHAs that weren't discovered in
+    // any run-branch range (merged-run case). Uses `git show` so we tolerate
+    // stale worktree paths and deleted branches.
+    for (const sha of manifestByCommit.keys()) {
+      if (commitByHead.has(sha)) continue;
+      const c = await showCommit(repoRoot, sha);
+      if (c) commitByHead.set(sha, c);
     }
 
     const groups = new Map<string, IntentGroupAgg>();
@@ -235,7 +246,7 @@ export function registerProveRoutes(app: FastifyInstance, repoRoot: string) {
 
     return {
       slug: key.composite,
-      branches: branchNames,
+      branches: runBranches.map((b) => b.name),
       groups: [...groups.values()].sort((a, b) => a.title.localeCompare(b.title)),
       negativeSpace: [...negativeSpace.values()],
       openQuestions: [...openQuestions.values()],

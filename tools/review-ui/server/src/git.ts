@@ -1,6 +1,7 @@
 import { simpleGit, SimpleGit } from "simple-git";
 import path from "node:path";
 import fs from "node:fs/promises";
+import fsSync from "node:fs";
 
 export type BranchRef = {
   name: string;
@@ -83,7 +84,42 @@ export async function listWorktrees(repoRoot: string): Promise<Worktree[]> {
     }
   }
   if (cur.path) out.push({ path: cur.path, branch: cur.branch ?? null, head: cur.head ?? "" });
-  return out;
+  return out.map((w) => ({ ...w, path: remapWorktreePath(w.path, repoRoot) }));
+}
+
+/**
+ * Rebase a worktree path onto the current `repoRoot`.
+ *
+ * Worktree metadata (`.git/worktrees/<name>/gitdir`) stores the absolute path
+ * that was used when the worktree was created. When this server runs inside a
+ * container (or on a different host) that records a bind-mounted repo, the
+ * recorded path doesn't exist in the current filesystem. Any operation that
+ * cd's into it (diff, status, intent-commit walks) will silently fail.
+ *
+ * Strategy:
+ *   - If the recorded path already exists, keep it.
+ *   - Else, look for the `.claude/worktrees/<tail>` suffix and rebase onto
+ *     `<repoRoot>/.claude/worktrees/<tail>` when that exists. This matches the
+ *     prove convention for orchestrator + task worktrees.
+ *   - Otherwise return the original path so downstream code can fail loudly
+ *     rather than silently masking a real misconfiguration.
+ */
+function remapWorktreePath(p: string, repoRoot: string): string {
+  try {
+    if (fsSync.existsSync(p)) return p;
+  } catch {
+    /* ignore */
+  }
+  const m = p.match(/\/\.claude\/worktrees\/(.+)$/);
+  if (m) {
+    const candidate = path.join(repoRoot, ".claude", "worktrees", m[1]);
+    try {
+      if (fsSync.existsSync(candidate)) return candidate;
+    } catch {
+      /* ignore */
+    }
+  }
+  return p;
 }
 
 export async function branchesForRun(repoRoot: string, slug: string): Promise<BranchRef[]> {
@@ -266,18 +302,40 @@ async function synthAddPatch(worktreePath: string, relPath: string): Promise<str
   );
 }
 
+const EMPTY_STATUS: StatusSummary = {
+  branch: null,
+  ahead: 0,
+  behind: 0,
+  files: [],
+  staged: [],
+  modified: [],
+  untracked: [],
+};
+
 export async function workingDirStatus(worktreePath: string): Promise<StatusSummary> {
   const git = gitAt(worktreePath);
-  const s = await git.status();
-  return {
-    branch: s.current,
-    ahead: s.ahead,
-    behind: s.behind,
-    files: s.files.map((f) => ({ path: f.path, index: f.index, workingDir: f.working_dir })),
-    staged: s.staged,
-    modified: s.modified,
-    untracked: s.not_added,
-  };
+  try {
+    const s = await git.status();
+    return {
+      branch: s.current,
+      ahead: s.ahead,
+      behind: s.behind,
+      files: s.files.map((f) => ({ path: f.path, index: f.index, workingDir: f.working_dir })),
+      staged: s.staged,
+      modified: s.modified,
+      untracked: s.not_added,
+    };
+  } catch (err: unknown) {
+    // Stale / broken worktree: the `.git` file inside the worktree points at
+    // a host-only gitdir (common when the repo was bind-mounted into a
+    // container after the worktree was created). Reporting "no pending
+    // changes" is the right behaviour — the worktree isn't usable here.
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/not a git repository|gitdir|no such file or directory/i.test(msg)) {
+      return EMPTY_STATUS;
+    }
+    throw err;
+  }
 }
 
 export async function exists(p: string): Promise<boolean> {

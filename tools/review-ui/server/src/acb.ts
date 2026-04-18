@@ -138,6 +138,86 @@ export function listManifestsForBranches(
   }
 }
 
+/**
+ * Look up manifests by exact commit SHA. Unlike `listManifestsForBranches`,
+ * this survives branch deletion — after a merged full-auto run the task
+ * branches are gone but their manifests are still keyed by SHA and the
+ * commits themselves remain reachable via the orchestrator branch.
+ */
+export function listManifestsForCommits(
+  repoRoot: string,
+  shas: string[],
+): IntentManifest[] {
+  if (shas.length === 0) return [];
+  const db = openDb(repoRoot);
+  if (!db) return [];
+  try {
+    const placeholders = shas.map(() => "?").join(",");
+    const rows = db
+      .prepare(
+        `SELECT branch, commit_sha, timestamp, data, created_at
+         FROM manifests
+         WHERE commit_sha IN (${placeholders})
+         ORDER BY id ASC`,
+      )
+      .all(...shas) as Array<{
+      branch: string;
+      commit_sha: string;
+      timestamp: string;
+      data: string;
+      created_at: string;
+    }>;
+    return rows.map((r) => ({
+      branch: r.branch,
+      commitSha: r.commit_sha,
+      timestamp: r.timestamp,
+      data: safeParse(r.data),
+      createdAt: r.created_at,
+    }));
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * List every manifest that belongs to a given run slug, regardless of whether
+ * the originating branch still exists. Covers both branch naming conventions
+ * prove uses: `orchestrator/<slug>` and `task/<slug>/<task-id>`. Useful for
+ * merged runs whose task branches have been deleted.
+ */
+export function listManifestsForSlug(
+  repoRoot: string,
+  slug: string,
+): IntentManifest[] {
+  const db = openDb(repoRoot);
+  if (!db) return [];
+  try {
+    const rows = db
+      .prepare(
+        `SELECT branch, commit_sha, timestamp, data, created_at
+         FROM manifests
+         WHERE branch = ? OR branch LIKE ?
+         ORDER BY id ASC`,
+      )
+      .all(`orchestrator/${slug}`, `task/${slug}/%`) as Array<{
+      branch: string;
+      commit_sha: string;
+      timestamp: string;
+      data: string;
+      created_at: string;
+    }>;
+    return rows.map((r) => ({
+      branch: r.branch,
+      commitSha: r.commit_sha,
+      timestamp: r.timestamp,
+      data: safeParse(r.data),
+      createdAt: r.created_at,
+    }));
+  } finally {
+    db.close();
+  }
+}
+
 export function listManifestsForBranch(repoRoot: string, branch: string): IntentManifest[] {
   const db = openDb(repoRoot);
   if (!db) return [];
