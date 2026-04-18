@@ -5,6 +5,30 @@ import { useSelection } from "../lib/store";
 import { cn } from "../lib/cn";
 import { parseUnifiedDiff } from "../lib/diff";
 import { PanelLoading } from "./PanelLoading";
+import { FileTree } from "./FileTree";
+
+type ChangeFilter = "A" | "M" | "D";
+const CHANGE_FILTERS: Array<{ key: ChangeFilter; label: string; color: string }> = [
+  { key: "A", label: "Added", color: "#50fa7b" },
+  { key: "M", label: "Modified", color: "#8be9fd" },
+  { key: "D", label: "Deleted", color: "#ff5555" },
+];
+
+function applyFilters(
+  files: FileChange[],
+  query: string,
+  types: Set<ChangeFilter>,
+): FileChange[] {
+  const q = query.trim().toLowerCase();
+  return files.filter((f) => {
+    if (types.size > 0) {
+      const key = (f.status[0] ?? "M") as ChangeFilter;
+      if (!types.has(key)) return false;
+    }
+    if (q && !f.path.toLowerCase().includes(q)) return false;
+    return true;
+  });
+}
 
 type Group = {
   id: string;
@@ -88,19 +112,66 @@ export function FileList() {
     ? groups.reduce((s, g) => s + g.files.length, 0)
     : flatFiles.length;
 
+  const [query, setQuery] = useState("");
+  const [types, setTypes] = useState<Set<ChangeFilter>>(new Set());
+  const [viewMode, setViewMode] = useState<"tree" | "flat">("tree");
+
+  const filteredFlat = useMemo(
+    () => applyFilters(flatFiles, query, types),
+    [flatFiles, query, types],
+  );
+  const filteredGroups = useMemo(
+    () =>
+      groups.map((g) => ({
+        ...g,
+        files: applyFilters(g.files, query, types),
+      })),
+    [groups, query, types],
+  );
+
+  const toggleType = (k: ChangeFilter) => {
+    setTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  };
+
   return (
     <div className="flex flex-col h-full min-h-0 bg-bg-panel">
-      <div className="shrink-0 bg-bg-deep border-b border-bg-line">
-        <div className="px-4 h-10 flex items-center gap-3">
-          <span className="font-semibold text-[13px] text-fg-bright">Files</span>
-          {showAggregate && (
-            <span className="text-[11px] text-data">· aggregate</span>
-          )}
-          <span className="ml-auto flex items-center gap-3 font-mono text-[11.5px] tabular-nums">
-            <span className="text-fg-faint">{totalFiles}</span>
+      <div className="shrink-0 border-b border-bg-line">
+        {totalFiles > 0 && (
+          <div className="px-3 pt-2">
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Filter by path…"
+              className="w-full h-7 px-2 rounded border border-bg-line bg-bg-void text-[12.5px] text-fg-base placeholder:text-fg-faint focus:outline-none focus:border-phos"
+            />
+          </div>
+        )}
+        <div className="px-3 py-2 flex items-center gap-1.5">
+          {CHANGE_FILTERS.map((c) => (
+            <FilterChip
+              key={c.key}
+              label={c.label}
+              color={c.color}
+              active={types.has(c.key)}
+              onClick={() => toggleType(c.key)}
+            />
+          ))}
+          <div className="ml-auto flex items-center gap-2 font-mono text-[11.5px] tabular-nums">
             <span className="text-ok">+{totalAdd}</span>
             <span className="text-anom">−{totalDel}</span>
-          </span>
+            <button
+              onClick={() => setViewMode((m) => (m === "tree" ? "flat" : "tree"))}
+              title={`Switch to ${viewMode === "tree" ? "flat list" : "tree view"}`}
+              className="ml-1 text-[11px] text-fg-dim hover:text-fg-bright"
+            >
+              {viewMode === "tree" ? "tree" : "flat"}
+            </button>
+          </div>
         </div>
         <div className="h-[2px] w-full bg-bg-line/40 flex overflow-hidden">
           <div
@@ -119,12 +190,13 @@ export function FileList() {
 
         {showAggregate && !loading && groups.length === 0 && <Empty text="No changes yet" />}
         {showAggregate &&
-          groups.map((g) => (
+          filteredGroups.map((g) => (
             <GroupBlock
               key={g.id}
               group={g}
               selectedFile={selectedFile}
               activeBranch={branch}
+              viewMode={viewMode}
               onSelect={(path) =>
                 selectFileFromGroup(path, {
                   branch: g.branch,
@@ -139,17 +211,55 @@ export function FileList() {
         {!showAggregate && !loading && flatFiles.length === 0 && slug && (
           <Empty text="No changes" />
         )}
+        {!showAggregate && filteredFlat.length === 0 && flatFiles.length > 0 && (
+          <Empty text="No matches" />
+        )}
         {!showAggregate &&
-          flatFiles.map((f) => (
-            <FileRow
-              key={f.path}
-              file={f}
-              active={f.path === selectedFile}
-              onClick={() => selectFile(f.path)}
+          filteredFlat.length > 0 &&
+          (viewMode === "tree" ? (
+            <FileTree
+              files={filteredFlat}
+              selectedPath={selectedFile}
+              onSelect={selectFile}
             />
+          ) : (
+            filteredFlat.map((f) => (
+              <FileRow
+                key={f.path}
+                file={f}
+                active={f.path === selectedFile}
+                onClick={() => selectFile(f.path)}
+              />
+            ))
           ))}
       </div>
     </div>
+  );
+}
+
+function FilterChip({
+  label,
+  color,
+  active,
+  onClick,
+}: {
+  label: string;
+  color: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className="h-6 px-2 rounded-md border text-[11.5px] transition-colors"
+      style={{
+        borderColor: active ? color : "#44475a",
+        background: active ? `${color}20` : "transparent",
+        color: active ? color : "#a9b0c4",
+      }}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -157,11 +267,13 @@ function GroupBlock({
   group,
   selectedFile,
   activeBranch,
+  viewMode,
   onSelect,
 }: {
   group: Group;
   selectedFile: string | null;
   activeBranch: string | null;
+  viewMode: "tree" | "flat";
   onSelect: (path: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
@@ -178,34 +290,41 @@ function GroupBlock({
     <div className="border-b border-bg-line">
       <button
         onClick={() => setCollapsed((c) => !c)}
-        className="w-full px-3 py-1.5 flex items-center gap-3 bg-bg-deep/60 hover:bg-bg-raised transition-colors"
+        className="w-full px-3 py-2 flex items-center gap-3 bg-bg-deep/60 hover:bg-bg-raised transition-colors"
       >
         <span
-          className={cn(
-            "text-[10px] transition-transform",
-            collapsed ? "-rotate-90" : "",
-            toneText(tone),
-          )}
+          className={cn("text-[11px] transition-transform", collapsed ? "-rotate-90" : "")}
+          style={{ color: toneHex(tone) }}
         >
           ▾
         </span>
-        <span className={cn("label", toneText(tone))}>{group.label}</span>
-        <span className="font-mono text-[10.5px] text-fg-dim">[{group.files.length}]</span>
+        <span className="text-[12.5px] font-medium" style={{ color: toneHex(tone) }}>
+          {group.label}
+        </span>
+        <span className="font-mono text-[11.5px] text-fg-faint tabular-nums">
+          {group.files.length}
+        </span>
         {group.pending && <span className="led led-amber !w-[5px] !h-[5px] shrink-0" />}
-        <span className="ml-auto flex items-center gap-2 font-mono text-[10.5px] tabular-nums">
-          <span className="text-phos">+{group.insertions}</span>
-          <span className="text-anom">-{group.deletions}</span>
+        <span className="ml-auto flex items-center gap-2 font-mono text-[11.5px] tabular-nums">
+          <span className="text-ok">+{group.insertions}</span>
+          <span className="text-anom">−{group.deletions}</span>
         </span>
       </button>
       {!collapsed && (
         <div>
-          <div className="px-3 py-1 text-[10px] font-mono text-fg-faint truncate">
+          <div className="px-3 py-1 text-[11px] font-mono text-fg-faint truncate">
             {group.pending
               ? `uncommitted @ ${truncMid(group.cwd ?? "", 40)}`
               : `${group.base} → ${truncMid(group.branch, 40)}`}
           </div>
           {group.files.length === 0 ? (
-            <div className="px-3 py-2 text-[11px] text-fg-dim">empty</div>
+            <div className="px-3 py-2 text-[12px] text-fg-dim">empty</div>
+          ) : viewMode === "tree" ? (
+            <FileTree
+              files={group.files}
+              selectedPath={activeBranch === group.branch ? selectedFile : null}
+              onSelect={onSelect}
+            />
           ) : (
             group.files.map((f) => {
               const selected = f.path === selectedFile && activeBranch === group.branch;
@@ -280,10 +399,10 @@ function Badge({ status }: { status: string }) {
   );
 }
 
-function toneText(t: "phos" | "amber" | "data"): string {
-  if (t === "phos") return "label-phos";
-  if (t === "amber") return "text-amber";
-  return "text-data";
+function toneHex(t: "phos" | "amber" | "data"): string {
+  if (t === "phos") return "#bd93f9";
+  if (t === "amber") return "#ffb86c";
+  return "#8be9fd";
 }
 
 function fractionPct(num: number, total: number): number {
