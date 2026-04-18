@@ -13,10 +13,24 @@ type Command = {
   score?: number;
 };
 
-export function CommandPalette({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [q, setQ] = useState("");
+export function CommandPalette({
+  open,
+  onClose,
+  initialQuery = "",
+}: {
+  open: boolean;
+  onClose: () => void;
+  initialQuery?: string;
+}) {
+  const [q, setQ] = useState(initialQuery);
   const [idx, setIdx] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Keep query in sync when the palette is re-opened with a new initialQuery
+  // (e.g. the topbar search handed focus over).
+  useEffect(() => {
+    if (open) setQ(initialQuery);
+  }, [open, initialQuery]);
 
   const { data: runs } = useQuery({ queryKey: ["runs"], queryFn: api.runs });
 

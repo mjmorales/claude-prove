@@ -1,10 +1,24 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "../lib/api";
+import { api, type GroupVerdict } from "../lib/api";
 import { useSelection } from "../lib/store";
 import { useConnection } from "../hooks/useConnection";
 import { cn } from "../lib/cn";
 
-export function StatusHeader({ onOpenPalette }: { onOpenPalette: () => void }) {
+type VerdictKey = Exclude<GroupVerdict, "pending">;
+
+const VERDICT_META: Record<VerdictKey, { label: string; color: string }> = {
+  approved: { label: "Approved", color: "#50fa7b" },
+  rejected: { label: "Rejected", color: "#ff5555" },
+  discuss: { label: "Discuss", color: "#8be9fd" },
+  rework: { label: "Rework", color: "#ffb86c" },
+};
+
+export function StatusHeader({
+  onOpenPalette,
+}: {
+  onOpenPalette: (query?: string) => void;
+}) {
   const { state } = useConnection();
   const slug = useSelection((s) => s.slug);
   const branch = useSelection((s) => s.branch);
@@ -14,6 +28,18 @@ export function StatusHeader({ onOpenPalette }: { onOpenPalette: () => void }) {
   const { data: tasks } = useQuery({
     queryKey: ["tasks", slug],
     queryFn: () => api.tasks(slug!),
+    enabled: !!slug,
+    retry: false,
+  });
+  const { data: intents } = useQuery({
+    queryKey: ["intents", slug],
+    queryFn: () => api.intents(slug!),
+    enabled: !!slug,
+    retry: false,
+  });
+  const { data: review } = useQuery({
+    queryKey: ["review", slug],
+    queryFn: () => api.reviewState(slug!),
     enabled: !!slug,
     retry: false,
   });
@@ -29,48 +55,52 @@ export function StatusHeader({ onOpenPalette }: { onOpenPalette: () => void }) {
   const connLabel =
     state === "live" ? "Live" : state === "stale" ? "Stale" : state === "down" ? "Offline" : "Idle";
 
+  const tally = computeTally(intents?.groups.length ?? 0, review?.verdicts ?? []);
+  const hasReviewable = (intents?.groups.length ?? 0) > 0;
+
   return (
     <header className="shrink-0 border-b border-bg-line bg-bg-deep">
-      <div className="h-12 px-4 flex items-center gap-5">
-        {/* Brand */}
-        <div className="flex items-center gap-2.5 pr-4 border-r border-bg-line h-6">
+      {/* Row 1: brand · run context · connection · review button */}
+      <div className="h-12 px-4 flex items-center gap-4">
+        <div className="flex items-center gap-2.5 pr-3 border-r border-bg-line h-6">
           <span className="w-2 h-2 rounded-full bg-phos shadow-phos" />
           <span className="font-mono font-bold text-[14px] text-fg-bright">prove</span>
           <span className="mono text-[13px] text-fg-faint">/</span>
           <span className="mono text-[13px] text-fg-dim">review</span>
         </div>
 
-        {/* Run context */}
-        <div className="flex items-center gap-4 min-w-0 flex-1">
-          {slug ? (
-            <>
+        {slug ? (
+          <div className="flex items-center gap-4 min-w-0">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="eyebrow">Run</span>
+              <span className="mono text-[13.5px] text-fg-bright truncate max-w-[280px]">
+                {run ? `${run.branch}/${run.slug}` : slug}
+              </span>
+            </div>
+            {branch && (
               <div className="flex items-center gap-2 min-w-0">
-                <span className="text-[11px] uppercase tracking-wider text-fg-faint">Run</span>
-                <span className="mono text-[12.5px] text-fg-bright truncate max-w-[320px]">
-                  {run ? `${run.branch}/${run.slug}` : slug}
-                </span>
+                <span className="eyebrow">Branch</span>
+                <span className="mono text-[13.5px] text-data truncate max-w-[220px]">{branch}</span>
               </div>
-              {branch && (
-                <div className="flex items-center gap-2 min-w-0">
-                  <span className="text-[11px] uppercase tracking-wider text-fg-faint">Branch</span>
-                  <span className="mono text-[12.5px] text-data truncate max-w-[280px]">{branch}</span>
-                </div>
-              )}
-              {total > 0 && (
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] uppercase tracking-wider text-fg-faint">Progress</span>
-                  <ProgressChip pct={pct} done={done} total={total} />
-                </div>
-              )}
-            </>
-          ) : (
-            <span className="text-fg-dim text-[13px]">Select a run to begin</span>
-          )}
-        </div>
+            )}
+            {total > 0 && (
+              <div className="flex items-center gap-2">
+                <span className="eyebrow">Steps</span>
+                <ProgressChip pct={pct} done={done} total={total} />
+              </div>
+            )}
+          </div>
+        ) : (
+          <span className="text-fg-dim text-[13.5px]">Select a run to begin</span>
+        )}
 
-        {/* Connection + actions */}
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-2 px-3 h-8 rounded-md border border-bg-line bg-bg-panel">
+        <div className="ml-auto flex items-center gap-2">
+          <SearchBox onOpenPalette={onOpenPalette} />
+
+          <div
+            className="flex items-center gap-2 px-3 h-8 rounded-md border border-bg-line bg-bg-panel"
+            title={`Connection: ${connLabel}`}
+          >
             <span
               className={cn(
                 "led",
@@ -80,24 +110,15 @@ export function StatusHeader({ onOpenPalette }: { onOpenPalette: () => void }) {
                 connTone === "dim" && "led-dim",
               )}
             />
-            <span className="mono text-[11.5px] text-fg-base">{connLabel}</span>
+            <span className="mono text-[12px] text-fg-base">{connLabel}</span>
           </div>
-
-          <button
-            onClick={onOpenPalette}
-            className="btn btn-ghost btn-sm"
-            title="Command palette"
-          >
-            <span>Commands</span>
-            <span className="kbd">⌘K</span>
-          </button>
 
           <button
             onClick={() => setReviewMode(!reviewMode)}
             disabled={!slug}
-            title={slug ? "Open review mode" : "Select a run first"}
+            title={slug ? "Toggle review mode" : "Select a run first"}
             className={cn(
-              "btn",
+              "btn btn-sm",
               reviewMode ? "btn-primary" : "btn-ghost",
               !slug && "is-disabled",
             )}
@@ -108,7 +129,60 @@ export function StatusHeader({ onOpenPalette }: { onOpenPalette: () => void }) {
           </button>
         </div>
       </div>
+
+      {/* Row 2: verdict summary (only when a run has reviewable groups) */}
+      {slug && hasReviewable && (
+        <div className="h-9 px-4 flex items-center gap-3 border-t border-bg-line bg-bg-deep/60">
+          <span className="eyebrow">Verdicts</span>
+          <div className="flex items-center gap-1.5">
+            {(Object.keys(VERDICT_META) as VerdictKey[]).map((k) => (
+              <VerdictChip
+                key={k}
+                label={VERDICT_META[k].label}
+                color={VERDICT_META[k].color}
+                value={tally[k]}
+                onClick={() => setReviewMode(true)}
+              />
+            ))}
+            <VerdictChip
+              label="Pending"
+              color="#6272a4"
+              value={tally.pending}
+              onClick={() => setReviewMode(true)}
+              dim
+            />
+          </div>
+          <div className="ml-auto flex items-center gap-2 text-[12px] text-fg-dim">
+            <span>
+              <span className="text-fg-bright font-medium">{tally.decided}</span>
+              <span className="text-fg-faint">/{intents?.groups.length ?? 0}</span> reviewed
+            </span>
+          </div>
+        </div>
+      )}
     </header>
+  );
+}
+
+function SearchBox({ onOpenPalette }: { onOpenPalette: (q?: string) => void }) {
+  const [val, setVal] = useState("");
+  return (
+    <div className="relative">
+      <input
+        value={val}
+        readOnly
+        onFocus={() => {
+          onOpenPalette(val);
+          setVal("");
+        }}
+        placeholder="Search runs, files, commits…"
+        className="w-[280px] h-8 pl-8 pr-16 rounded-md border border-bg-line bg-bg-panel text-[13px] text-fg-base placeholder:text-fg-faint focus:outline-none focus:border-phos cursor-text"
+      />
+      <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-fg-faint text-[13px]">
+        ⌕
+      </span>
+      <span className="absolute right-2 top-1/2 -translate-y-1/2 kbd pointer-events-none">⌘K</span>
+    </div>
   );
 }
 
@@ -122,10 +196,61 @@ function ProgressChip({ pct, done, total }: { pct: number; done: number; total: 
           style={{ width: `${pct}%`, background: color }}
         />
       </div>
-      <span className="mono text-[11.5px] tabular-nums text-fg-base">
+      <span className="mono text-[12px] tabular-nums text-fg-base">
         {done}/{total}
         <span className="text-fg-faint ml-1.5">{pct}%</span>
       </span>
     </div>
   );
+}
+
+function VerdictChip({
+  label,
+  value,
+  color,
+  onClick,
+  dim,
+}: {
+  label: string;
+  value: number;
+  color: string;
+  onClick?: () => void;
+  dim?: boolean;
+}) {
+  const empty = value === 0;
+  return (
+    <button
+      onClick={onClick}
+      className="flex items-center gap-1.5 px-2 h-6 rounded-md border transition-colors"
+      style={{
+        borderColor: empty ? "#44475a" : color,
+        background: empty ? "transparent" : `${color}14`,
+      }}
+      title={`${label}: ${value}${onClick ? " — click to review" : ""}`}
+    >
+      <span
+        className="font-mono text-[12px] tabular-nums font-semibold"
+        style={{ color: empty ? "#6272a4" : color }}
+      >
+        {value}
+      </span>
+      <span className="text-[11.5px]" style={{ color: empty || dim ? "#6272a4" : color }}>
+        {label}
+      </span>
+    </button>
+  );
+}
+
+function computeTally(
+  totalGroups: number,
+  verdicts: Array<{ groupId: string; verdict: GroupVerdict }>,
+) {
+  const base = { approved: 0, rejected: 0, discuss: 0, rework: 0, pending: 0, decided: 0 };
+  for (const v of verdicts) {
+    if (v.verdict === "pending") continue;
+    base[v.verdict as VerdictKey] += 1;
+    base.decided += 1;
+  }
+  base.pending = Math.max(0, totalGroups - base.decided);
+  return base;
 }
