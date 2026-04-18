@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""ACB v2 CLI — save manifests, assemble, serve review UI, generate prompts.
+"""ACB v2 CLI — save manifests and assemble intent groups.
 
 Usage::
 
     python3 -m tools.acb save-manifest --branch feat/x --sha abc1234 < manifest.json
     python3 -m tools.acb assemble --base main
-    python3 -m tools.acb serve --base main
-    python3 -m tools.acb fix
-    python3 -m tools.acb discuss
-    python3 -m tools.acb resolve
+
+Review UI (verdicts, fix/discuss/resolve prompts) lives in
+``tools/review-ui/`` and is launched via ``/prove:review-ui``.
 """
 
 from __future__ import annotations
@@ -147,79 +146,6 @@ def cmd_assemble(args: argparse.Namespace) -> None:
     print()
 
 
-# -- serve -------------------------------------------------------------------
-
-
-def cmd_serve(args: argparse.Namespace) -> None:
-    from acb.server import serve
-
-    branch = args.branch or _current_branch()
-    project_root = args.project_root or os.getcwd()
-    store = open_store(_store_root())
-
-    acb = store.load_acb(branch)
-    if acb is None:
-        print(f"Error: no ACB document for branch '{branch}'", file=sys.stderr)
-        store.close()
-        sys.exit(1)
-
-    serve(
-        store=store,
-        branch=branch,
-        project_root=project_root,
-        base_ref=args.base,
-        port=args.port,
-    )
-
-
-# -- fix / discuss / resolve -------------------------------------------------
-
-
-def _load_acb_and_review(branch: str) -> tuple[dict, dict]:
-    """Load an ACB and its companion review state from the store."""
-    from acb.server import _empty_review
-
-    store = open_store(_store_root())
-    acb = store.load_acb(branch)
-    if acb is None:
-        # Fall back to most recent ACB if branch has none.
-        fallback = store.latest_acb_branch()
-        if fallback:
-            acb = store.load_acb(fallback)
-    if acb is None:
-        print(f"Error: no ACB document found (branch: {branch})", file=sys.stderr)
-        store.close()
-        sys.exit(1)
-
-    review = store.load_review(branch) or _empty_review(acb)
-    store.close()
-    return acb, review
-
-
-def cmd_fix(args: argparse.Namespace) -> None:
-    from acb.review_prompts import generate_fix_prompt
-
-    branch = args.branch or _current_branch()
-    acb, review = _load_acb_and_review(branch)
-    print(generate_fix_prompt(acb, review))
-
-
-def cmd_discuss(args: argparse.Namespace) -> None:
-    from acb.review_prompts import generate_discuss_prompt
-
-    branch = args.branch or _current_branch()
-    acb, review = _load_acb_and_review(branch)
-    print(generate_discuss_prompt(acb, review))
-
-
-def cmd_resolve(args: argparse.Namespace) -> None:
-    from acb.review_prompts import generate_resolve_summary
-
-    branch = args.branch or _current_branch()
-    acb, review = _load_acb_and_review(branch)
-    print(generate_resolve_summary(acb, review))
-
-
 # -- CLI entry point ---------------------------------------------------------
 
 
@@ -250,29 +176,6 @@ def main(argv: list[str] | None = None) -> None:
     p_asm.add_argument("--branch", default="", help="Branch name (default: current)")
     p_asm.add_argument("--base", default="main", help="Base branch (default: main)")
     p_asm.set_defaults(func=cmd_assemble)
-
-    # serve
-    p_srv = sub.add_parser("serve", help="Launch the review UI server")
-    p_srv.add_argument("--branch", default="", help="Branch name (default: current)")
-    p_srv.add_argument("--base", default="main", help="Base ref for diffs")
-    p_srv.add_argument("--port", type=int, default=0, help="Port (0 = auto)")
-    p_srv.add_argument("--project-root", default="", help="Project root for git commands")
-    p_srv.set_defaults(func=cmd_serve)
-
-    # fix
-    p_fix = sub.add_parser("fix", help="Generate fix prompt from rejected groups")
-    p_fix.add_argument("--branch", default="", help="Branch name (default: current)")
-    p_fix.set_defaults(func=cmd_fix)
-
-    # discuss
-    p_disc = sub.add_parser("discuss", help="Surface groups needing discussion")
-    p_disc.add_argument("--branch", default="", help="Branch name (default: current)")
-    p_disc.set_defaults(func=cmd_discuss)
-
-    # resolve
-    p_res = sub.add_parser("resolve", help="Show review approval summary")
-    p_res.add_argument("--branch", default="", help="Branch name (default: current)")
-    p_res.set_defaults(func=cmd_resolve)
 
     args = parser.parse_args(argv)
     args.func(args)

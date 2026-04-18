@@ -6,6 +6,52 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v0.35.0 — Docker-based review UI (breaking)
+
+The ACB review UI has moved out of the plugin and into a standalone Docker image published to GHCR. All Python-side review commands and the embedded Flask UI are gone.
+
+**Removed** (breaking):
+
+- `/prove:review`, `/prove:review:fix`, `/prove:review:discuss`, `/prove:review:resolve` commands
+- `skills/review/` skill
+- `python3 -m tools.acb` subcommands: `serve`, `fix`, `discuss`, `resolve`
+- `tools/acb/server.py`, `tools/acb/static/`, `tools/acb/review_prompts.py`, and the `fix_prompt.j2` / `discuss_prompt.j2` / `resolve_summary.j2` templates
+
+**Added**:
+
+- `/prove:review-ui` — launches `ghcr.io/mjmorales/claude-prove/review-ui` as a detached Docker container named `prove-review`. Binds the project root to `/repo`. Handles container lifecycle (start, reuse, stop, restart) and opens the browser.
+- `tools/review-ui/` — Fastify + Vite React tool that replaces the Python UI. Same underlying `.prove/acb.db` store; different frontend (Dracula theme, progressive column reveal, explicit verdict CTAs).
+- `.github/workflows/review-ui-image.yml` — builds and pushes multi-arch (`linux/amd64`, `linux/arm64`) images on pushes to `main` and tags matching `review-ui-v*`.
+
+**Migration**:
+
+1. Install Docker Desktop (or any compatible runtime — `colima`, `podman machine`). The `/prove:review-ui` command checks for `docker` on `PATH`.
+2. Replace any `/prove:review` invocations in scripts, docs, or agent prompts with `/prove:review-ui`. The new command keeps the UI running between calls (detached container named `prove-review`) so repeated invocations just reopen the browser.
+3. If you previously relied on CLI-mode review (`python3 -m tools.acb fix|discuss|resolve`), use the in-UI actions instead — the rework drawer composes the same fix brief and writes verdicts to `.prove/acb.db` that the review UI reads.
+4. `python3 -m tools.acb save-manifest` and `python3 -m tools.acb assemble` are unchanged — manifest creation and ACB assembly still run locally.
+
+**Auto-adoption**: `/prove:update` refreshes the `acb` tool directive in CLAUDE.md to point at `/prove:review-ui`. The old command files are removed from the plugin automatically on next update.
+
+### Config
+
+New keys under `tools.acb.config` in `.claude/.prove.json`:
+
+```json
+{
+  "tools": {
+    "acb": {
+      "config": {
+        "review_ui_port":  5174,
+        "review_ui_image": "ghcr.io/mjmorales/claude-prove/review-ui",
+        "review_ui_tag":   "latest"
+      }
+    }
+  }
+}
+```
+
+`/prove:review-ui` reads these as defaults. Precedence: `--port`/`--image`/`--tag` flags > `PROVE_REVIEW_*` env vars > config > built-in defaults. Pin `review_ui_tag` to `review-ui-vX.Y.Z` for reproducible review sessions.
+
 ## v0.34.0 — JSON-first Run State (breaking)
 
 All run artifacts under `.prove/runs/` are now JSON. Markdown (`PRD.md`, `TASK_PLAN.md`, `PROGRESS.md`) and the old `dispatch-state.json` are gone.

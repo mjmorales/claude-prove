@@ -1,9 +1,9 @@
 {
   "name": "acb",
-  "version": "0.2.0",
-  "description": "Intent-based code review: manifest assembly, web review UI, CC hook",
+  "version": "0.4.0",
+  "description": "Intent-based code review: manifest assembly + CC post-commit hook. Browser UI (Docker) configured via review_ui_* keys.",
   "requires": ["python3", "git"],
-  "directive": "Feature-branch commits must carry an ACB v0.2 intent manifest; the PostToolUse hook on `git commit` supplies the exact save command. Assemble via `/prove:review`.",
+  "directive": "Feature-branch commits must carry an ACB v0.2 intent manifest; the PostToolUse hook on `git commit` supplies the exact save command. Review via `/prove:review-ui` (Docker-based UI).",
   "hooks": {
     "PostToolUse": [
       {
@@ -25,9 +25,25 @@
       "type": "str",
       "default": "main",
       "description": "Base branch for diffs"
+    },
+    "review_ui_port": {
+      "type": "int",
+      "default": 5174,
+      "description": "Host port for the /prove:review-ui Docker container. Overridden by --port or PROVE_REVIEW_PORT. Auto-falls-through to the next free port if busy."
+    },
+    "review_ui_image": {
+      "type": "str",
+      "default": "ghcr.io/mjmorales/claude-prove/review-ui",
+      "description": "Container image for /prove:review-ui. Tag is appended separately (default: latest)."
+    },
+    "review_ui_tag": {
+      "type": "str",
+      "default": "latest",
+      "description": "Tag for the review UI image. Pin to `review-ui-vX.Y.Z` for reproducibility."
     }
   },
   "provides": {
-    "commands": ["review", "review/fix", "review/discuss", "review/resolve"],
-    "skills": ["review"]
-  }}
+    "commands": ["review-ui"],
+    "skills": []
+  }
+}

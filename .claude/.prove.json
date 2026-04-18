@@ -44,7 +44,10 @@
       "enabled": true,
       "scope": "user",
       "config": {
-        "base_branch": "main"
+        "base_branch": "main",
+        "review_ui_port": 5174,
+        "review_ui_image": "ghcr.io/mjmorales/claude-prove/review-ui",
+        "review_ui_tag": "latest"
       }
     },
     "cafi": {

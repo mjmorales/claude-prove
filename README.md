@@ -7,7 +7,7 @@
 Takes you from idea to merged code through a structured pipeline:
 
 ```
-/prove:brainstorm  →  /prove:task-planner  →  /prove:plan-step  →  /prove:orchestrator  →  /prove:review  →  /prove:comprehend  →  /prove:cleanup
+/prove:brainstorm  →  /prove:task-planner  →  /prove:plan-step  →  /prove:orchestrator  →  /prove:review-ui  →  /prove:comprehend  →  /prove:cleanup
       │                        │                         │                        │                        │                        │                        │
 .prove/decisions/       .prove/runs/<b>/<s>/    .prove/plans/plan_X/    .prove/runs/.../state.json   .prove/reviews/         .prove/learning/         .prove/archive/
 ```
@@ -16,14 +16,14 @@ Takes you from idea to merged code through a structured pipeline:
 2. **Task Planner** — Discover requirements via questionnaires, create incremental plans
 3. **Plan Step** — Deep-dive into individual steps: requirements, design decisions, test strategy
 4. **Orchestrator** — Autonomous execution with validation gates and git snapshots
-5. **Review** — Generate an Agent Change Brief for structured code review
+5. **Review** — Inspect intent-grouped diffs and record verdicts via the Docker-based review UI
 6. **Comprehend** — Socratic quiz on agent-generated diffs to build code comprehension
 7. **Cleanup** — Archive artifacts, remove working files, delete branches
 
 ## Key Features
 
 - **Auto-scaling orchestrator**: Small tasks (≤3 steps) run sequentially. Larger tasks use parallel git worktrees with mandatory architect review. Three execution modes: `/prove:orchestrator`, `/prove:autopilot`, and `/prove:full-auto`.
-- **Structured code review**: Intent-manifest-driven code review. Agents declare *why* they made each change via Claude Code hooks. Changes are grouped by intent for structured review in a browser-based UI. Run `/prove:review` to start.
+- **Structured code review**: Intent-manifest-driven code review. Agents declare *why* they made each change via Claude Code hooks. Changes are grouped by intent for structured review in a Dracula-themed browser UI. Run `/prove:review-ui` to launch the Docker image (pulled from `ghcr.io/mjmorales/claude-prove/review-ui`).
 - **Code quality steward**: Deep line-by-line audits (`/prove:steward`), iterative audit-fix loops (`/prove:steward:auto-steward`), and lightweight session-scoped reviews (`/prove:steward:steward-review`). See [docs/code-quality.md](docs/code-quality.md).
 - **Stack-agnostic validation**: Auto-detects your project type (Go, Rust, Python, Node, Godot, Makefile) and runs appropriate build/lint/test checks. Supports LLM-based prompt validators for higher-level checks. Configure with `.claude/.prove.json` or let auto-detection handle it.
 - **Session management**: Create handoff prompts (`/prove:handoff`) to preserve context across Claude Code sessions. Resume with `/prove:pickup` in a fresh session.
@@ -57,8 +57,8 @@ If Claude Code is already running, restart it for the plugin to take effect.
 # Execute autonomously
 /prove:orchestrator
 
-# Review agent-generated code
-/prove:review
+# Review agent-generated code (launches Docker UI)
+/prove:review-ui
 
 # Quiz yourself on what the agent wrote
 /prove:comprehend
@@ -91,10 +91,7 @@ If Claude Code is already running, restart it for the plugin to take effect.
 
 | Command | Description |
 |---------|-------------|
-| `/prove:review` | Assemble intent manifests and launch the review UI |
-| `/prove:review:resolve` | Show approval summary — accepted groups and merge readiness |
-| `/prove:review:fix` | Generate fix prompts from rejected review groups |
-| `/prove:review:discuss` | Surface groups needing discussion from review |
+| `/prove:review-ui` | Launch the Docker-based review UI (`ghcr.io/mjmorales/claude-prove/review-ui`). Inspect runs, intent groups, diffs, and record verdicts (approve / reject / discuss / rework) |
 
 ### Code Quality
 

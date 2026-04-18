@@ -32,7 +32,7 @@ Only fall back to Glob/Grep when the index doesn't cover what you need.
 
 ### acb
 
-Feature-branch commits must carry an ACB v0.2 intent manifest; the PostToolUse hook on `git commit` supplies the exact save command. Assemble via `/prove:review`.
+Feature-branch commits must carry an ACB v0.2 intent manifest; the PostToolUse hook on `git commit` supplies the exact save command. Review via `/prove:review-ui` (Docker-based UI; image at `ghcr.io/mjmorales/claude-prove/review-ui`).
 
 ## References
 

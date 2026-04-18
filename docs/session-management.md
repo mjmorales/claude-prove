@@ -129,7 +129,7 @@ Session 3: Review and Learn
    /prove:pickup
    /prove:comprehend HEAD~5..HEAD
    /prove:steward:steward-review
-   /prove:review
+   /prove:review-ui
    /prove:cleanup rate-limiting
 ```
 
