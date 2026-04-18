@@ -14,8 +14,8 @@
   body {
     font-family: "Geist", "IBM Plex Sans", system-ui, sans-serif;
     font-feature-settings: "cv11", "ss01";
-    font-size: 13px;
-    line-height: 1.5;
+    font-size: 14px;
+    line-height: 1.55;
     color: #e2e2e6;
     background: #191a21;
     overflow: hidden;
@@ -36,13 +36,20 @@
      Typography primitives
      ------------------------------------------------------------------ */
 
-  /* Small uppercase section label. Reserved for section headers — not
-     scattered everywhere. Lowercase by default elsewhere. */
+  /* Section header label. Sentence case by default. Reserved for section
+     eyebrows / sidebar group titles — not scattered everywhere. Use
+     `.label-tracked` for the old uppercase-tracked look when needed. */
   .label {
+    font-size: 12px;
+    font-weight: 500;
+    color: #a9b0c4;
+    letter-spacing: 0;
+  }
+  .label-tracked {
     font-family: "JetBrains Mono", ui-monospace, monospace;
     text-transform: uppercase;
-    letter-spacing: 0.12em;
-    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    font-size: 11px;
     font-weight: 500;
     color: #a9b0c4;
   }
@@ -51,6 +58,14 @@
   }
   .label-phos {
     color: #bd93f9;
+  }
+  .eyebrow {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-size: 11px;
+    font-weight: 500;
+    color: #a9b0c4;
   }
 
   .mono {
@@ -149,7 +164,7 @@
     padding: 0 14px;
     border-radius: 6px;
     font-family: "Geist", "IBM Plex Sans", system-ui, sans-serif;
-    font-size: 13px;
+    font-size: 13.5px;
     font-weight: 500;
     letter-spacing: 0;
     border: 1px solid transparent;
@@ -237,13 +252,13 @@
   .btn-sm {
     height: 28px;
     padding: 0 10px;
-    font-size: 12px;
+    font-size: 12.5px;
     border-radius: 5px;
   }
   .btn-lg {
     height: 40px;
     padding: 0 18px;
-    font-size: 14px;
+    font-size: 14.5px;
   }
 
   /* ------------------------------------------------------------------
@@ -253,11 +268,11 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 18px;
-    height: 18px;
-    padding: 0 5px;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 6px;
     font-family: "JetBrains Mono", monospace;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 600;
     color: #a9b0c4;
     background: rgba(68, 71, 90, 0.5);
@@ -320,13 +335,13 @@
      ------------------------------------------------------------------ */
   .prose-md {
     font-family: "Geist", "IBM Plex Sans", system-ui, sans-serif;
-    font-size: 14px;
+    font-size: 15px;
     line-height: 1.65;
     color: #e2e2e6;
   }
   .prose-md h1 {
     font-family: "JetBrains Mono", monospace;
-    font-size: 18px;
+    font-size: 20px;
     font-weight: 700;
     color: #bd93f9;
     margin: 0 0 14px;
@@ -335,20 +350,20 @@
   }
   .prose-md h2 {
     font-family: "JetBrains Mono", monospace;
-    font-size: 15px;
+    font-size: 16.5px;
     font-weight: 600;
     color: #f8f8f2;
     margin: 22px 0 8px;
   }
   .prose-md h3 {
     font-family: "JetBrains Mono", monospace;
-    font-size: 13.5px;
+    font-size: 15px;
     color: #ff79c6;
     margin: 18px 0 6px;
     font-weight: 600;
   }
   .prose-md h4 {
-    font-size: 13.5px;
+    font-size: 14.5px;
     color: #f8f8f2;
     font-weight: 600;
     margin: 14px 0 4px;
@@ -396,7 +411,7 @@
   }
   .prose-md code {
     font-family: "JetBrains Mono", monospace;
-    font-size: 12.5px;
+    font-size: 13px;
     background: #282a36;
     border: 1px solid #44475a;
     padding: 1px 6px;
@@ -405,7 +420,7 @@
   }
   .prose-md pre {
     font-family: "JetBrains Mono", monospace;
-    font-size: 12px;
+    font-size: 13px;
     background: #21222c;
     border: 1px solid #44475a;
     border-radius: 6px;

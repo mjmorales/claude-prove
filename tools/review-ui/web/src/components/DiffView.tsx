@@ -62,14 +62,14 @@ export function DiffView() {
   return (
     <div className="flex flex-col h-full min-h-0">
       <div className="shrink-0 h-9 px-4 flex items-center gap-3 bg-bg-deep border-b border-bg-line">
-        <span className="mono text-[11px] uppercase tracking-wider text-data">Diff</span>
-        <span className="font-mono text-[12.5px] text-fg-bright truncate flex-1">{filePath}</span>
-        <span className="font-mono text-[11.5px] tabular-nums shrink-0">
+        <span className="eyebrow text-data">Diff</span>
+        <span className="font-mono text-[13px] text-fg-bright truncate flex-1">{filePath}</span>
+        <span className="font-mono text-[12.5px] tabular-nums shrink-0">
           <span className="text-ok">+{totalAdd}</span>
           <span className="text-fg-faint mx-1.5">·</span>
           <span className="text-anom">−{totalDel}</span>
         </span>
-        {parsed.isBinary && <span className="text-[11px] text-amber">binary</span>}
+        {parsed.isBinary && <span className="text-[12px] text-amber">binary</span>}
       </div>
       <div className="flex-1 overflow-auto scrollbar-thin bg-bg-void">
         {loading ? (
@@ -81,13 +81,11 @@ export function DiffView() {
         ) : (
           parsed.hunks.map((h, i) => (
             <div key={i} className="mb-3">
-              <div className="sticky top-0 z-10 px-4 py-1 bg-bg-panel/95 backdrop-blur border-b border-bg-line flex items-center gap-3">
-                <span className="mono text-[10.5px] uppercase tracking-wider text-amber">
-                  Hunk
-                </span>
-                <span className="font-mono text-[11px] text-fg-dim">{h.header}</span>
+              <div className="sticky top-0 z-10 px-4 py-1.5 bg-bg-panel/95 backdrop-blur border-b border-bg-line flex items-center gap-3">
+                <span className="eyebrow text-amber">Hunk</span>
+                <span className="font-mono text-[12px] text-fg-dim">{h.header}</span>
               </div>
-              <table className="w-full font-mono text-[12px] leading-[1.55]">
+              <table className="w-full font-mono text-[13.5px] leading-[1.55]">
                 <tbody>
                   {h.lines.map((ln, j) => (
                     <Row key={j} line={ln} />
@@ -123,7 +121,7 @@ function Row({ line }: { line: DiffLine }) {
     <tr className={cn(bg, "group")}>
       <td
         className={cn(
-          "select-none text-right px-2 w-[52px] text-[10.5px] tabular-nums border-r border-bg-line/50",
+          "select-none text-right px-2 w-[56px] text-[11.5px] tabular-nums border-r border-bg-line/50",
           gutter,
         )}
       >
@@ -131,7 +129,7 @@ function Row({ line }: { line: DiffLine }) {
       </td>
       <td
         className={cn(
-          "select-none text-right px-2 w-[52px] text-[10.5px] tabular-nums border-r border-bg-line/50",
+          "select-none text-right px-2 w-[56px] text-[11.5px] tabular-nums border-r border-bg-line/50",
           gutter,
         )}
       >
