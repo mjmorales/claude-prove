@@ -53,6 +53,14 @@ export type IntentsResponse = {
   openQuestions: OpenQuestion[];
   uncoveredFiles: string[];
   orphanCommits: IntentCommitRef[];
+  /**
+   * End-state diff range. Review diffs should be computed as
+   * `git diff <endBase>..<endHead> -- <file>` to avoid surfacing code
+   * that's been superseded by later commits in the same run.
+   * Null when the orchestrator branch is gone (cleaned-up run).
+   */
+  endBase: string | null;
+  endHead: string | null;
 };
 
 export type GroupVerdictRecord = {

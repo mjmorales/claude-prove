@@ -4,7 +4,6 @@ import {
   diffUnified,
   workingDirDiff,
   resolveWorktreePath,
-  branchesForRun,
   listWorktrees,
 } from "../git.js";
 import { readRunSummary } from "../runs.js";
@@ -75,17 +74,19 @@ export function registerDiffRoutes(app: FastifyInstance, repoRoot: string) {
   );
 }
 
+/**
+ * Committed diffs resolve refs just fine from the main repoRoot — running
+ * them from a worktree is a micro-optimization we can't afford because
+ * bind-mounted worktree metadata often contains stale host paths
+ * (`fatal: not a git repository`). Always use repoRoot for committed
+ * diffs; keep worktree cwd for pending/working-dir diffs only.
+ */
 async function resolveCwdForBranch(
-  repoRoot: string,
-  compositeSlug: string | undefined,
-  branch: string,
+  _repoRoot: string,
+  _compositeSlug: string | undefined,
+  _branch: string,
 ): Promise<string | undefined> {
-  if (!compositeSlug) return undefined;
-  const key = parseRunKey(compositeSlug);
-  if (!key) return undefined;
-  const branches = await branchesForRun(repoRoot, key.slug);
-  const match = branches.find((b) => b.name === branch);
-  return match?.worktreePath ?? undefined;
+  return undefined;
 }
 
 function sanitizeGitError(err: unknown): string {

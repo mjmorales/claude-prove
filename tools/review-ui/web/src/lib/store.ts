@@ -19,6 +19,12 @@ export type Selection = {
   rightTab: RightTab;
   docView: DocView;
   reviewMode: boolean;
+  /** The intent group currently under review. Drives auto-advance and the
+   * scroll position of the active card. */
+  activeIntentId: string | null;
+  /** When true (default), a verdict auto-advances to the next queued intent.
+   * Space toggles it in review mode. */
+  reviewAutoAdvance: boolean;
 };
 
 export type ManifestGroupRef = {
@@ -39,6 +45,8 @@ type Actions = {
   setRightTab: (t: RightTab) => void;
   setDocView: (v: DocView) => void;
   setReviewMode: (on: boolean) => void;
+  setActiveIntentId: (id: string | null) => void;
+  setReviewAutoAdvance: (on: boolean) => void;
 };
 
 export const useSelection = create<Selection & Actions>((set) => ({
@@ -53,6 +61,8 @@ export const useSelection = create<Selection & Actions>((set) => ({
   rightTab: "diff",
   docView: "PLAN",
   reviewMode: false,
+  activeIntentId: null,
+  reviewAutoAdvance: true,
   selectRun: (slug) =>
     set({
       slug,
@@ -103,4 +113,6 @@ export const useSelection = create<Selection & Actions>((set) => ({
   setRightTab: (rightTab) => set({ rightTab }),
   setDocView: (docView) => set({ docView }),
   setReviewMode: (reviewMode) => set({ reviewMode }),
+  setActiveIntentId: (activeIntentId) => set({ activeIntentId }),
+  setReviewAutoAdvance: (reviewAutoAdvance) => set({ reviewAutoAdvance }),
 }));

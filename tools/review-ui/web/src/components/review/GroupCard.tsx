@@ -1,7 +1,6 @@
-import { useState } from "react";
 import { cn } from "../../lib/cn";
 import type { GroupVerdict, IntentGroupView } from "../../lib/api";
-import { tokenOf } from "./verdictTokens";
+import { tokenOf, VERDICTS } from "./verdictTokens";
 import { VerdictStamp } from "./VerdictStamp";
 import { InlineDiff } from "./InlineDiff";
 
@@ -19,6 +18,12 @@ export function GroupCard({
   slug,
   diffOpen,
   stampKey,
+  endBase,
+  endHead,
+  onVerdict,
+  working,
+  focused,
+  aboveSlot,
 }: {
   group: IntentGroupView;
   index: number;
@@ -28,14 +33,25 @@ export function GroupCard({
   slug: string;
   diffOpen: boolean;
   stampKey: number;
+  /**
+   * End-state review range (from /api/runs/:slug/intents). Files are
+   * diffed as `git diff <endBase>..<endHead> -- <file>` so superseded
+   * intermediate-commit code isn't shown.
+   */
+  endBase: string | null;
+  endHead: string | null;
+  /** Emit a verdict choice for this intent. */
+  onVerdict: (v: Exclude<GroupVerdict, "pending">) => void;
+  working: Exclude<GroupVerdict, "pending"> | null;
+  /** Visual highlight for Tab-focus. */
+  focused: boolean;
+  /** Optional content rendered above the card header (composite banner). */
+  aboveSlot?: React.ReactNode;
 }) {
-  const [filePick, setFilePick] = useState<string | null>(group.files[0] ?? null);
   const t = tokenOf(verdict);
   const cls = group.classification.toLowerCase();
   const risky = SPECULATIVE.has(cls);
   const inferred = INFERRED.has(cls);
-  const headCommit = group.commits[0];
-  const diffHead = headCommit?.sha ?? null;
 
   const judgmentCalls = group.annotations.filter((a) => a.type === "judgment_call");
   const flags = group.annotations.filter((a) => a.type === "flag");
@@ -43,18 +59,17 @@ export function GroupCard({
     (a) => a.type !== "judgment_call" && a.type !== "flag",
   );
 
-  const currentRanges =
-    filePick != null
-      ? group.fileRefs.find((r) => r.path === filePick)?.ranges ?? []
-      : [];
-
   return (
-    <article
-      className={cn(
-        "rack-in card-face relative border border-bg-line",
-        t ? t.cardClass : null,
-      )}
-    >
+    <>
+      {aboveSlot}
+      <article
+        tabIndex={-1}
+        className={cn(
+          "rack-in card-face relative border border-bg-line",
+          t ? t.cardClass : null,
+          focused && "ring-2 ring-phos/60 ring-offset-0",
+        )}
+      >
       {/* Hazard rail for speculative / no-manifest groups */}
       <div
         className={cn(
@@ -102,6 +117,37 @@ export function GroupCard({
           )}
         </div>
       </header>
+
+      {/* Verdict CTA strip — per-intent, always visible at the top. */}
+      <div className="px-5 py-3 flex items-center gap-2 flex-wrap border-b border-bg-line bg-bg-deep/30">
+        {(["approved", "rejected", "discuss", "rework"] as const).map((k) => {
+          const spec = VERDICTS[k];
+          const active = verdict === k;
+          const busy = working === k;
+          return (
+            <button
+              key={k}
+              onClick={() => onVerdict(k)}
+              disabled={!!working}
+              className={cn(
+                "btn btn-sm",
+                active ? spec.btnClass : "btn-ghost",
+                busy && "is-disabled",
+              )}
+              title={`${spec.label} (${spec.keycap})`}
+            >
+              <span className="text-[13px] leading-none">{spec.glyph}</span>
+              <span>{spec.label}</span>
+              <span className={cn("kbd", active && "kbd-on-solid")}>{spec.keycap}</span>
+            </button>
+          );
+        })}
+        {focused && (
+          <span className="ml-auto mono text-[11px] text-phos flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-phos" /> focused · Tab next
+          </span>
+        )}
+      </div>
 
       {/* Body */}
       <div className="p-6 grid grid-cols-[1fr_auto] gap-6">
@@ -223,53 +269,37 @@ export function GroupCard({
               <SectionLabel asSpan>
                 Files · <span className="tabular-nums">{group.fileRefs.length}</span>
                 <span className="text-fg-faint normal-case tracking-normal ml-2">
-                  pick to preview
+                  {endBase && endHead ? "end-state diff" : "per-commit diff (end-state unavailable)"}
                 </span>
               </SectionLabel>
               <span className="flex items-center gap-1.5 text-[11px] text-fg-faint">
-                <span className="kbd">v</span> {diffOpen ? "hide diff" : "show diff"}
+                <span className="kbd">v</span> {diffOpen ? "hide diffs" : "show diffs"}
               </span>
             </div>
             <div className="flex flex-wrap gap-1.5">
-              {group.fileRefs.map((ref) => {
-                const active = filePick === ref.path;
-                return (
-                  <button
-                    key={ref.path}
-                    onClick={() => setFilePick(ref.path)}
-                    className={cn(
-                      "px-2.5 py-1 rounded-md font-mono text-[11.5px] border transition-colors flex items-center gap-1.5",
-                      active
-                        ? "border-phos bg-phos/15 text-phos"
-                        : "border-bg-line text-fg-base hover:bg-bg-raised hover:border-fg-faint",
-                    )}
-                  >
-                    <span>{shortenPath(ref.path)}</span>
-                    {ref.ranges.length > 0 && (
-                      <span
-                        className="text-[10.5px] text-fg-faint tabular-nums"
-                        title={`Lines: ${ref.ranges.join(", ")}`}
-                      >
-                        {ref.ranges.length === 1 ? `L${ref.ranges[0]}` : `${ref.ranges.length} ranges`}
-                      </span>
-                    )}
-                  </button>
-                );
-              })}
+              {group.fileRefs.map((ref) => (
+                <a
+                  key={ref.path}
+                  href={`#file-${cssId(ref.path)}`}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    const el = document.getElementById(`file-${cssId(ref.path)}`);
+                    el?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  }}
+                  className="px-2.5 py-1 rounded-md font-mono text-[11.5px] border border-bg-line text-fg-base hover:bg-bg-raised hover:border-fg-faint transition-colors flex items-center gap-1.5"
+                >
+                  <span>{shortenPath(ref.path)}</span>
+                  {ref.ranges.length > 0 && (
+                    <span
+                      className="text-[10.5px] text-fg-faint tabular-nums"
+                      title={`Lines: ${ref.ranges.join(", ")}`}
+                    >
+                      {ref.ranges.length === 1 ? `L${ref.ranges[0]}` : `${ref.ranges.length} ranges`}
+                    </span>
+                  )}
+                </a>
+              ))}
             </div>
-            {currentRanges.length > 0 && (
-              <div className="mt-2 text-[11px] font-mono text-fg-dim flex flex-wrap items-center gap-1.5">
-                <span className="text-fg-faint">Ranges:</span>
-                {currentRanges.map((r) => (
-                  <span
-                    key={r}
-                    className="inline-block px-1.5 py-[1px] rounded border border-bg-line bg-bg-deep text-phos tabular-nums"
-                  >
-                    L{r}
-                  </span>
-                ))}
-              </div>
-            )}
           </section>
         </div>
 
@@ -294,27 +324,57 @@ export function GroupCard({
         </div>
       </div>
 
-      {/* Inline diff */}
-      {diffOpen && filePick && diffHead && (
+      {/* Stacked end-state diffs, one per file */}
+      {diffOpen && endBase && endHead && group.fileRefs.length > 0 && (
         <div className="border-t border-bg-line">
-          <div className="h-8 px-4 flex items-center gap-3 bg-bg-deep border-b border-bg-line">
-            <span className="mono text-[11px] text-data uppercase tracking-wider">Diff</span>
-            <span className="font-mono text-[11.5px] text-fg-base truncate">{filePick}</span>
-            <span className="ml-auto font-mono text-[10.5px] text-fg-faint tabular-nums">
-              {headCommit.shortSha}
-            </span>
-          </div>
-          <InlineDiff
-            slug={slug}
-            base={`${diffHead}^`}
-            head={diffHead}
-            path={filePick}
-            height={320}
-          />
+          {group.fileRefs.map((ref) => (
+            <div
+              key={ref.path}
+              id={`file-${cssId(ref.path)}`}
+              className="border-b border-bg-line last:border-b-0"
+            >
+              <div className="h-8 px-4 flex items-center gap-3 bg-bg-deep sticky top-0 z-10 border-b border-bg-line">
+                <span className="mono text-[11px] text-data uppercase tracking-wider">Diff</span>
+                <span className="font-mono text-[12px] text-fg-bright truncate">{ref.path}</span>
+                {ref.ranges.length > 0 && (
+                  <span className="ml-auto font-mono text-[11px] text-fg-faint tabular-nums">
+                    {ref.ranges.length === 1 ? `L${ref.ranges[0]}` : `${ref.ranges.length} ranges`}
+                  </span>
+                )}
+              </div>
+              <InlineDiff slug={slug} base={endBase} head={endHead} path={ref.path} />
+            </div>
+          ))}
         </div>
       )}
-    </article>
+      {diffOpen && (!endBase || !endHead) && group.commits[0] && (
+        <div className="border-t border-bg-line">
+          <div className="h-8 px-4 flex items-center gap-3 bg-bg-deep border-b border-bg-line">
+            <span className="mono text-[11px] text-amber uppercase tracking-wider">
+              Fallback · per-commit
+            </span>
+            <span className="text-[11.5px] text-fg-dim">
+              End-state branch unavailable — showing commit diff.
+            </span>
+          </div>
+          {group.fileRefs.slice(0, 1).map((ref) => (
+            <InlineDiff
+              key={ref.path}
+              slug={slug}
+              base={`${group.commits[0].sha}^`}
+              head={group.commits[0].sha}
+              path={ref.path}
+            />
+          ))}
+        </div>
+      )}
+      </article>
+    </>
   );
+}
+
+function cssId(path: string): string {
+  return path.replace(/[^a-z0-9]+/gi, "-");
 }
 
 function shortenPath(p: string): string {

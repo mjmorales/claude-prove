@@ -8,14 +8,16 @@ export function InlineDiff({
   base,
   head,
   path,
-  height = 360,
+  height,
 }: {
   slug: string;
   base: string;
   head: string;
   path: string;
+  /** Fixed height in px. Omit for natural height (stacked layouts). */
   height?: number;
 }) {
+  const fixedHeight = typeof height === "number" ? { height } : undefined;
   const { data, isPending, isError } = useQuery({
     queryKey: ["rv-diff-file", slug, base, head, path],
     queryFn: () => api.diffFile(slug, base, head, path),
@@ -27,7 +29,7 @@ export function InlineDiff({
     return (
       <div
         className="flex items-center justify-center text-fg-dim text-[11px] font-mono"
-        style={{ height }}
+        style={fixedHeight ?? { minHeight: 48 }}
       >
         DECODING DELTA…
       </div>
@@ -36,7 +38,7 @@ export function InlineDiff({
     return (
       <div
         className="flex items-center justify-center text-anom text-[11px] font-mono"
-        style={{ height }}
+        style={fixedHeight ?? { minHeight: 48 }}
       >
         DELTA UNREACHABLE
       </div>
@@ -47,7 +49,7 @@ export function InlineDiff({
     return (
       <div
         className="flex items-center justify-center text-fg-dim text-[11px] font-mono"
-        style={{ height }}
+        style={fixedHeight ?? { minHeight: 48 }}
       >
         {parsed?.isBinary ? "BINARY FILE — NO PREVIEW" : "NO DELTA"}
       </div>
@@ -56,8 +58,8 @@ export function InlineDiff({
 
   return (
     <div
-      className="font-mono text-[11.5px] leading-[1.55] overflow-auto scrollbar-thin bg-bg-void"
-      style={{ height }}
+      className="font-mono text-[12.5px] leading-[1.55] overflow-auto scrollbar-thin bg-bg-void"
+      style={fixedHeight}
     >
       {parsed.hunks.map((h, hi) => (
         <div key={hi}>

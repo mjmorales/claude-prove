@@ -20,7 +20,7 @@ import { listCommits, showCommit, type Commit } from "../commits.js";
 import { filterReferenced, listDecisions, readDecision } from "../decisions.js";
 import { listStewardReports } from "../steward.js";
 import { readRunSummary } from "../runs.js";
-import { branchesForRun, resolveWorktreePath } from "../git.js";
+import { branchesForRun, gitAt, resolveWorktreePath } from "../git.js";
 
 type FileRef = { path: string; ranges: string[] };
 type Annotation = { id: string; type: string; body: string };
@@ -244,6 +244,17 @@ export function registerProveRoutes(app: FastifyInstance, repoRoot: string) {
     }
     const uncoveredFiles = [...diffPaths].filter((p) => !coveredPaths.has(p)).sort();
 
+    // End-state review range: `git diff <endBase>..<endHead> -- <file>` gives
+    // the view of each file as it actually lands, so intermediate-commit
+    // code that's been rewritten by later commits in the same run isn't
+    // reviewed in its stale shape.
+    //
+    // endBase = merge-base(baseline, orchestrator) — pins the range even if
+    //           `baseline` (e.g. main) advances during review.
+    // endHead = orchestrator branch tip (or null when the branch is gone).
+    const orchRef = runBranches.find((b) => b.name === `orchestrator/${key.slug}`);
+    const { endBase, endHead } = await resolveEndRange(repoRoot, base, orchRef?.name ?? null);
+
     return {
       slug: key.composite,
       branches: runBranches.map((b) => b.name),
@@ -252,6 +263,8 @@ export function registerProveRoutes(app: FastifyInstance, repoRoot: string) {
       openQuestions: [...openQuestions.values()],
       uncoveredFiles,
       orphanCommits,
+      endBase,
+      endHead,
     };
   });
 
@@ -299,6 +312,31 @@ export function registerProveRoutes(app: FastifyInstance, repoRoot: string) {
     if (!content) return reply.code(404).send({ error: "not found" });
     return { name, path: p, content };
   });
+}
+
+/**
+ * Resolve the end-state review range:
+ *   endBase = merge-base(baseline, head) — pins the lower bound against
+ *             baseline drift.
+ *   endHead = the branch name itself (git resolves at query time).
+ *
+ * Returns nulls when the head branch isn't available (cleaned-up run), so
+ * the client can fall back to its own behaviour (usually: no diff).
+ */
+async function resolveEndRange(
+  repoRoot: string,
+  baseRef: string,
+  headRef: string | null,
+): Promise<{ endBase: string | null; endHead: string | null }> {
+  if (!headRef) return { endBase: null, endHead: null };
+  const git = gitAt(repoRoot);
+  try {
+    const mb = await git.raw(["merge-base", baseRef, headRef]);
+    const endBase = mb.trim();
+    return { endBase: endBase || null, endHead: headRef };
+  } catch {
+    return { endBase: null, endHead: null };
+  }
 }
 
 type RawIntentGroup = {
