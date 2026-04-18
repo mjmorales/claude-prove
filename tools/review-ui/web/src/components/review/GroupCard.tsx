@@ -59,6 +59,8 @@ export function GroupCard({
     (a) => a.type !== "judgment_call" && a.type !== "flag",
   );
 
+  const anyAnn = judgmentCalls.length + flags.length + notes.length;
+
   return (
     <>
       {aboveSlot}
@@ -70,110 +72,125 @@ export function GroupCard({
           focused && "ring-2 ring-phos/60 ring-offset-0",
         )}
       >
-      {/* Hazard rail for speculative / no-manifest groups */}
-      <div
-        className={cn(
-          "absolute left-0 top-0 bottom-0 w-[6px] pointer-events-none",
-          risky && "rail-hazard",
-        )}
-      />
+        {/* Hazard rail for speculative / no-manifest groups */}
+        <div
+          className={cn(
+            "absolute left-0 top-0 bottom-0 w-[6px] pointer-events-none",
+            risky && "rail-hazard",
+          )}
+        />
 
-      {/* Head strip */}
-      <header className="h-11 pl-5 pr-4 flex items-center gap-4 border-b border-bg-line bg-bg-deep/60 rounded-t-md">
-        <span className="font-mono text-[11.5px] tabular-nums text-fg-faint">
-          {index + 1} / {total}
-        </span>
-        <span className="font-mono text-[11px] text-fg-dim truncate max-w-[320px]">
-          {group.id}
-        </span>
-        <ClassificationBadge classification={group.classification} />
-        {group.ambiguityTags.length > 0 && (
-          <div className="flex items-center gap-1.5 flex-wrap">
-            {group.ambiguityTags.map((tag) => (
-              <AmbiguityChip key={tag} tag={tag} />
-            ))}
+        {/* ──────────────── STICKY intent header ────────────────
+           Pins to the top of the scrolling inspector so verdict CTAs
+           and group context follow the user as they scroll the diffs. */}
+        <div className="sticky top-0 z-20 bg-bg-panel border-b border-bg-line rounded-t-md">
+          <div className="px-5 pt-4 pb-3">
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="mono text-[11.5px] tabular-nums text-fg-faint">
+                {index} / {total}
+              </span>
+              <span className="mono text-[11px] text-fg-dim truncate max-w-[260px]">
+                {group.id}
+              </span>
+              <ClassificationBadge classification={group.classification} />
+              {group.ambiguityTags.map((tag) => (
+                <AmbiguityChip key={tag} tag={tag} />
+              ))}
+              <span className="mono text-[11px] text-fg-faint tabular-nums flex items-center gap-3">
+                <span title="Commits">{group.commits.length}c</span>
+                <span title="Files">{group.files.length}f</span>
+                <span
+                  style={{ color: judgmentCalls.length > 0 ? "#f1fa8c" : undefined }}
+                  title="Judgement calls"
+                >
+                  {judgmentCalls.length}⚖
+                </span>
+                {flags.length > 0 && (
+                  <span className="text-anom" title="Flags">
+                    {flags.length}⚑
+                  </span>
+                )}
+              </span>
+              <div className="ml-auto">
+                {t ? (
+                  <VerdictStamp verdict={verdict} size="sm" animateKey={stampKey} />
+                ) : (
+                  <span className="text-[11px] text-fg-faint">Awaiting verdict</span>
+                )}
+              </div>
+            </div>
+
+            <h2 className="mt-2 font-mono text-[17px] leading-snug text-fg-bright break-words">
+              {group.title}
+            </h2>
+
+            {/* Compact commit line — "225abea feat(diag): …  task/…" */}
+            {group.commits.length > 0 && (
+              <div className="mt-2 font-mono text-[12px] text-fg-dim flex items-center gap-2 min-w-0">
+                <span className="text-data tabular-nums shrink-0">
+                  {group.commits[0].shortSha}
+                </span>
+                <span className="truncate text-fg-base">{group.commits[0].subject}</span>
+                <span className="ml-auto text-[11px] text-fg-faint shrink-0">
+                  {group.commits[0].branch}
+                  {group.commits.length > 1 && ` · +${group.commits.length - 1} more`}
+                </span>
+              </div>
+            )}
+
+            {note && (
+              <div
+                className="mt-3 px-3 py-2 text-[12.5px] font-mono border-l-2 rounded-r-md bg-bg-deep/60"
+                style={{ borderColor: t?.color ?? "#44475a", color: t?.color ?? "#a9b0c4" }}
+              >
+                <span
+                  className="mr-2 text-[11px] font-sans"
+                  style={{ color: t?.color ?? "#a9b0c4" }}
+                >
+                  Reviewer note:
+                </span>
+                {note}
+              </div>
+            )}
           </div>
-        )}
-        <div className="ml-auto flex items-center gap-4 text-[11px] font-mono text-fg-dim">
-          <span className="flex items-center gap-3">
-            <span title="Commits">{group.commits.length}c</span>
-            <span title="Files">{group.files.length}f</span>
-            <span
-              style={{ color: judgmentCalls.length > 0 ? "#f1fa8c" : undefined }}
-              title="Judgement calls"
-            >
-              {judgmentCalls.length}⚖
-            </span>
-            {flags.length > 0 && (
-              <span className="text-anom" title="Flags">
-                {flags.length}⚑
+
+          {/* Verdict CTA strip — per-intent, always visible at the top. */}
+          <div className="px-5 pb-3 flex items-center gap-2 flex-wrap">
+            {(["approved", "rejected", "discuss", "rework"] as const).map((k) => {
+              const spec = VERDICTS[k];
+              const active = verdict === k;
+              const busy = working === k;
+              return (
+                <button
+                  key={k}
+                  onClick={() => onVerdict(k)}
+                  disabled={!!working}
+                  className={cn(
+                    "btn btn-sm",
+                    active ? spec.btnClass : "btn-ghost",
+                    busy && "is-disabled",
+                  )}
+                  title={`${spec.label} (${spec.keycap})`}
+                >
+                  <span className="text-[13px] leading-none">{spec.glyph}</span>
+                  <span>{spec.label}</span>
+                  <span className={cn("kbd", active && "kbd-on-solid")}>{spec.keycap}</span>
+                </button>
+              );
+            })}
+            <RiskBar classification={cls} risky={risky} inferred={inferred} />
+            {focused && (
+              <span className="ml-auto mono text-[11px] text-phos flex items-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-phos" /> focused · Tab next
               </span>
             )}
-          </span>
-          {t && (
-            <span className="font-semibold" style={{ color: t.color }}>
-              {t.label}
-            </span>
-          )}
+          </div>
         </div>
-      </header>
 
-      {/* Verdict CTA strip — per-intent, always visible at the top. */}
-      <div className="px-5 py-3 flex items-center gap-2 flex-wrap border-b border-bg-line bg-bg-deep/30">
-        {(["approved", "rejected", "discuss", "rework"] as const).map((k) => {
-          const spec = VERDICTS[k];
-          const active = verdict === k;
-          const busy = working === k;
-          return (
-            <button
-              key={k}
-              onClick={() => onVerdict(k)}
-              disabled={!!working}
-              className={cn(
-                "btn btn-sm",
-                active ? spec.btnClass : "btn-ghost",
-                busy && "is-disabled",
-              )}
-              title={`${spec.label} (${spec.keycap})`}
-            >
-              <span className="text-[13px] leading-none">{spec.glyph}</span>
-              <span>{spec.label}</span>
-              <span className={cn("kbd", active && "kbd-on-solid")}>{spec.keycap}</span>
-            </button>
-          );
-        })}
-        {focused && (
-          <span className="ml-auto mono text-[11px] text-phos flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-phos" /> focused · Tab next
-          </span>
-        )}
-      </div>
-
-      {/* Body */}
-      <div className="p-6 grid grid-cols-[1fr_auto] gap-6">
-        <div className="min-w-0">
-          <h2 className="font-mono text-[20px] leading-snug text-fg-bright break-words">
-            {group.title}
-          </h2>
-
-          {note && (
-            <div
-              className="mt-3 px-3 py-2 text-[12.5px] font-mono border-l-2 rounded-r-md bg-bg-deep/60"
-              style={{ borderColor: t?.color ?? "#44475a", color: t?.color ?? "#a9b0c4" }}
-            >
-              <span
-                className="label mr-2 normal-case tracking-normal text-[11px] font-sans"
-                style={{ color: t?.color ?? "#a9b0c4" }}
-              >
-                Reviewer note
-              </span>
-              {note}
-            </div>
-          )}
-
-          {/* Task grounding — what the user actually asked for. */}
+        {/* ──────────────── BODY: task-grounding + annotations + per-file diffs ──────────────── */}
+        <div className="px-5 pt-4 pb-6 space-y-4">
           {group.taskGrounding && (
-            <blockquote className="mt-4 pl-3 border-l-2 border-data text-[13px] text-fg-base leading-relaxed whitespace-pre-wrap">
+            <blockquote className="pl-3 border-l-2 border-data text-[13px] text-fg-base leading-relaxed whitespace-pre-wrap">
               <div className="mono text-[11px] uppercase tracking-wider text-data mb-1">
                 Task grounding
               </div>
@@ -181,234 +198,217 @@ export function GroupCard({
             </blockquote>
           )}
 
-          {/* Judgment calls — the reviewer's primary signal. */}
-          {judgmentCalls.length > 0 && (
-            <section className="mt-5">
-              <SectionLabel tone="yellow">
-                Judgement calls · {judgmentCalls.length}
-              </SectionLabel>
-              <ul className="space-y-2">
-                {judgmentCalls.map((a) => (
-                  <li
-                    key={a.id}
-                    className="rounded-md border-l-2 border-yellow bg-yellow/5 px-3 py-2 text-[12.5px] text-fg-bright font-mono whitespace-pre-wrap leading-relaxed"
-                  >
-                    <span className="mono text-[10px] text-yellow mr-2 uppercase tracking-wider">
-                      {a.id}
-                    </span>
-                    {a.body}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {flags.length > 0 && (
-            <section className="mt-5">
-              <SectionLabel tone="anom">Flags · {flags.length}</SectionLabel>
-              <ul className="space-y-2">
-                {flags.map((a) => (
-                  <li
-                    key={a.id}
-                    className="rounded-md border-l-2 border-anom bg-anom/10 px-3 py-2 text-[12.5px] text-fg-bright font-mono whitespace-pre-wrap leading-relaxed"
-                  >
-                    <span className="mono text-[10px] text-anom mr-2 uppercase tracking-wider">
-                      {a.id}
-                    </span>
-                    {a.body}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {notes.length > 0 && (
-            <section className="mt-5">
-              <SectionLabel tone="dim">Notes · {notes.length}</SectionLabel>
-              <ul className="space-y-2">
-                {notes.map((a) => (
-                  <li
-                    key={a.id}
-                    className="border-l border-bg-line px-3 py-1.5 text-[12px] text-fg-base font-mono whitespace-pre-wrap leading-relaxed"
-                  >
-                    <span className="mono text-[10px] text-fg-faint mr-2 uppercase tracking-wider">
-                      {a.id}
-                    </span>
-                    {a.body}
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-
-          {judgmentCalls.length === 0 && flags.length === 0 && notes.length === 0 && (
-            <div className="mt-5 text-[12px] text-fg-dim italic">
-              No author annotations — the change claims to be self-evident.
-            </div>
-          )}
-
-          {/* Commits */}
-          <section className="mt-6">
-            <SectionLabel>
-              Commits · <span className="tabular-nums">{group.commits.length}</span>
-            </SectionLabel>
-            <ul className="font-mono text-[12px] space-y-1.5">
-              {group.commits.map((c) => (
-                <li key={c.sha} className="flex gap-3">
-                  <span className="text-data tabular-nums shrink-0">{c.shortSha}</span>
-                  <span className="truncate text-fg-base">{c.subject}</span>
-                  <span className="ml-auto text-[10.5px] text-fg-faint shrink-0">{c.branch}</span>
-                </li>
-              ))}
-            </ul>
-          </section>
-
-          {/* File refs with ranges */}
-          <section className="mt-5">
-            <div className="flex items-center justify-between mb-2">
-              <SectionLabel asSpan>
-                Files · <span className="tabular-nums">{group.fileRefs.length}</span>
-                <span className="text-fg-faint normal-case tracking-normal ml-2">
-                  {endBase && endHead ? "end-state diff" : "per-commit diff (end-state unavailable)"}
-                </span>
-              </SectionLabel>
-              <span className="flex items-center gap-1.5 text-[11px] text-fg-faint">
-                <span className="kbd">v</span> {diffOpen ? "hide diffs" : "show diffs"}
-              </span>
-            </div>
-            <div className="flex flex-wrap gap-1.5">
-              {group.fileRefs.map((ref) => (
-                <a
-                  key={ref.path}
-                  href={`#file-${cssId(ref.path)}`}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    const el = document.getElementById(`file-${cssId(ref.path)}`);
-                    el?.scrollIntoView({ behavior: "smooth", block: "start" });
-                  }}
-                  className="px-2.5 py-1 rounded-md font-mono text-[11.5px] border border-bg-line text-fg-base hover:bg-bg-raised hover:border-fg-faint transition-colors flex items-center gap-1.5"
-                >
-                  <span>{shortenPath(ref.path)}</span>
-                  {ref.ranges.length > 0 && (
-                    <span
-                      className="text-[10.5px] text-fg-faint tabular-nums"
-                      title={`Lines: ${ref.ranges.join(", ")}`}
-                    >
-                      {ref.ranges.length === 1 ? `L${ref.ranges[0]}` : `${ref.ranges.length} ranges`}
-                    </span>
-                  )}
-                </a>
-              ))}
-            </div>
-          </section>
-        </div>
-
-        {/* Verdict + risk lane */}
-        <div className="w-[172px] flex flex-col items-center justify-start pt-1 gap-3">
-          {t ? (
-            <VerdictStamp verdict={verdict} size="lg" animateKey={stampKey} />
-          ) : (
-            <div className="text-center">
-              <div
-                className="inline-flex items-center justify-center w-12 h-12 rounded-full border border-dashed border-fg-faint text-fg-faint text-[22px]"
-                aria-hidden
-              >
-                ◌
-              </div>
-              <div className="text-[11.5px] text-fg-dim mt-2">Awaiting verdict</div>
-            </div>
-          )}
-          <div className="w-full text-center mt-2">
-            <RiskBar classification={cls} risky={risky} inferred={inferred} />
-          </div>
-        </div>
-      </div>
-
-      {/* Stacked end-state diffs, one per file */}
-      {diffOpen && endBase && endHead && group.fileRefs.length > 0 && (
-        <div className="border-t border-bg-line">
-          {group.fileRefs.map((ref) => (
-            <div
-              key={ref.path}
-              id={`file-${cssId(ref.path)}`}
-              className="border-b border-bg-line last:border-b-0"
-            >
-              <div className="h-8 px-4 flex items-center gap-3 bg-bg-deep sticky top-0 z-10 border-b border-bg-line">
-                <span className="mono text-[11px] text-data uppercase tracking-wider">Diff</span>
-                <span className="font-mono text-[12px] text-fg-bright truncate">{ref.path}</span>
-                {ref.ranges.length > 0 && (
-                  <span className="ml-auto font-mono text-[11px] text-fg-faint tabular-nums">
-                    {ref.ranges.length === 1 ? `L${ref.ranges[0]}` : `${ref.ranges.length} ranges`}
-                  </span>
-                )}
-              </div>
-              <InlineDiff slug={slug} base={endBase} head={endHead} path={ref.path} />
-            </div>
-          ))}
-        </div>
-      )}
-      {diffOpen && (!endBase || !endHead) && group.commits[0] && (
-        <div className="border-t border-bg-line">
-          <div className="h-8 px-4 flex items-center gap-3 bg-bg-deep border-b border-bg-line">
-            <span className="mono text-[11px] text-amber uppercase tracking-wider">
-              Fallback · per-commit
-            </span>
-            <span className="text-[11.5px] text-fg-dim">
-              End-state branch unavailable — showing commit diff.
-            </span>
-          </div>
-          {group.fileRefs.slice(0, 1).map((ref) => (
-            <InlineDiff
-              key={ref.path}
-              slug={slug}
-              base={`${group.commits[0].sha}^`}
-              head={group.commits[0].sha}
-              path={ref.path}
+          {/* Annotations without file-range anchors — these show above diffs.
+              Anchored annotations (body starts with `@L<n>[-<m>]:`) render
+              inline within the diff for the file they reference. */}
+          {anyAnn > 0 && (
+            <AnnotationSummary
+              judgmentCalls={judgmentCalls.filter((a) => !isAnchored(a.body))}
+              flags={flags.filter((a) => !isAnchored(a.body))}
+              notes={notes.filter((a) => !isAnchored(a.body))}
             />
-          ))}
+          )}
+
+          {!diffOpen && (
+            <div className="text-[12.5px] text-fg-dim italic">
+              Diffs hidden — press <span className="kbd">v</span> to show.
+            </div>
+          )}
+
+          {diffOpen && endBase && endHead && group.fileRefs.length > 0 && (
+            <div className="space-y-3">
+              {group.fileRefs.map((ref) => (
+                <FileSection
+                  key={ref.path}
+                  ref_={ref}
+                  slug={slug}
+                  endBase={endBase}
+                  endHead={endHead}
+                  annotations={group.annotations.filter(
+                    (a) => isAnchored(a.body) && annotationMatchesFile(a, ref.path),
+                  )}
+                />
+              ))}
+            </div>
+          )}
+
+          {diffOpen && (!endBase || !endHead) && group.commits[0] && (
+            <div className="rounded-md border border-amber/40">
+              <div className="h-8 px-4 flex items-center gap-3 bg-bg-deep border-b border-bg-line">
+                <span className="mono text-[11px] text-amber uppercase tracking-wider">
+                  Fallback · per-commit
+                </span>
+                <span className="text-[11.5px] text-fg-dim">
+                  End-state branch unavailable — showing commit diff.
+                </span>
+              </div>
+              {group.fileRefs.slice(0, 1).map((ref) => (
+                <InlineDiff
+                  key={ref.path}
+                  slug={slug}
+                  base={`${group.commits[0].sha}^`}
+                  head={group.commits[0].sha}
+                  path={ref.path}
+                />
+              ))}
+            </div>
+          )}
         </div>
-      )}
       </article>
     </>
   );
 }
 
+/** Detect annotation anchor prefix. Authors write `@L42: ...` or `@L10-20: ...`
+ *  to pin an annotation to a specific line range. */
+function isAnchored(body: string): boolean {
+  return /^@L\d+(-\d+)?:/.test(body.trimStart());
+}
+
+/** Match an annotation to a file. We support an optional `@file:<path> @L…:`
+ *  prefix; when absent we fall back to matching the annotation id against
+ *  the path (e.g. `ANN-span-1` ↔ `span.go`). */
+function annotationMatchesFile(
+  ann: { id: string; body: string },
+  filePath: string,
+): boolean {
+  const fileMatch = /^@file:(\S+)\s/.exec(ann.body.trimStart());
+  if (fileMatch) return filePath.endsWith(fileMatch[1]);
+  // Loose heuristic: put annotation on the first file when ids are generic.
+  return true;
+}
+
+function FileSection({
+  ref_,
+  slug,
+  endBase,
+  endHead,
+  annotations,
+}: {
+  ref_: { path: string; ranges: string[] };
+  slug: string;
+  endBase: string;
+  endHead: string;
+  annotations: Array<{ id: string; type: string; body: string }>;
+}) {
+  return (
+    <section
+      id={`file-${cssId(ref_.path)}`}
+      className="rounded-md border border-bg-line overflow-hidden"
+    >
+      <header className="h-9 px-3 flex items-center gap-3 bg-bg-deep border-b border-bg-line">
+        <span className="font-mono text-[13px] text-fg-bright truncate">{ref_.path}</span>
+        {ref_.ranges.length > 0 && (
+          <span className="ml-auto font-mono text-[11px] text-fg-faint tabular-nums">
+            {ref_.ranges.length === 1 ? `L${ref_.ranges[0]}` : `${ref_.ranges.length} ranges`}
+          </span>
+        )}
+      </header>
+      {annotations.length > 0 && (
+        <div className="px-3 py-2 space-y-1.5 bg-yellow/5 border-b border-yellow/20">
+          {annotations.map((a) => (
+            <AnchoredAnnotation key={a.id} annotation={a} />
+          ))}
+        </div>
+      )}
+      <InlineDiff slug={slug} base={endBase} head={endHead} path={ref_.path} />
+    </section>
+  );
+}
+
+function AnchoredAnnotation({
+  annotation,
+}: {
+  annotation: { id: string; type: string; body: string };
+}) {
+  const m = /^(?:@file:\S+\s+)?@L(\d+)(?:-(\d+))?:\s*([\s\S]*)$/.exec(annotation.body.trimStart());
+  const startLine = m ? m[1] : null;
+  const endLine = m ? m[2] : null;
+  const body = m ? m[3] : annotation.body;
+  const color =
+    annotation.type === "judgment_call"
+      ? "#f1fa8c"
+      : annotation.type === "flag"
+        ? "#ff5555"
+        : "#a9b0c4";
+  return (
+    <div
+      className="flex gap-2.5 text-[12.5px] font-mono"
+      style={{ color }}
+    >
+      <span className="shrink-0 text-[11px] tabular-nums" style={{ color }}>
+        L{startLine}
+        {endLine ? `-${endLine}` : ""}
+      </span>
+      <span className="text-fg-base whitespace-pre-wrap">{body}</span>
+      <span className="ml-auto shrink-0 text-[10.5px] text-fg-faint uppercase tracking-wider">
+        {annotation.id}
+      </span>
+    </div>
+  );
+}
+
+function AnnotationSummary({
+  judgmentCalls,
+  flags,
+  notes,
+}: {
+  judgmentCalls: Array<{ id: string; body: string }>;
+  flags: Array<{ id: string; body: string }>;
+  notes: Array<{ id: string; body: string }>;
+}) {
+  if (judgmentCalls.length + flags.length + notes.length === 0) return null;
+  return (
+    <div className="space-y-3">
+      {judgmentCalls.length > 0 && (
+        <AnnotationList title="Judgement calls" color="#f1fa8c" items={judgmentCalls} />
+      )}
+      {flags.length > 0 && <AnnotationList title="Flags" color="#ff5555" items={flags} />}
+      {notes.length > 0 && <AnnotationList title="Notes" color="#a9b0c4" items={notes} />}
+    </div>
+  );
+}
+
+function AnnotationList({
+  title,
+  color,
+  items,
+}: {
+  title: string;
+  color: string;
+  items: Array<{ id: string; body: string }>;
+}) {
+  return (
+    <div>
+      <div
+        className="mono text-[11px] uppercase tracking-wider mb-1.5"
+        style={{ color }}
+      >
+        {title} · {items.length}
+      </div>
+      <ul className="space-y-1.5">
+        {items.map((a) => (
+          <li
+            key={a.id}
+            className="rounded-md border-l-2 px-3 py-1.5 text-[12.5px] text-fg-base font-mono whitespace-pre-wrap leading-relaxed"
+            style={{ borderColor: color, background: `${color}10` }}
+          >
+            <span
+              className="mono text-[10.5px] mr-2 uppercase tracking-wider"
+              style={{ color }}
+            >
+              {a.id}
+            </span>
+            {a.body}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function cssId(path: string): string {
   return path.replace(/[^a-z0-9]+/gi, "-");
-}
-
-function shortenPath(p: string): string {
-  if (p.length <= 48) return p;
-  const parts = p.split("/");
-  if (parts.length <= 3) return p;
-  return `${parts[0]}/…/${parts.slice(-2).join("/")}`;
-}
-
-function SectionLabel({
-  children,
-  tone = "base",
-  asSpan,
-}: {
-  children: React.ReactNode;
-  tone?: "base" | "yellow" | "anom" | "dim";
-  asSpan?: boolean;
-}) {
-  const color =
-    tone === "yellow"
-      ? "text-yellow"
-      : tone === "anom"
-        ? "text-anom"
-        : tone === "dim"
-          ? "text-fg-faint"
-          : "text-fg-dim";
-  const Cmp = asSpan ? "span" : "div";
-  return (
-    <Cmp
-      className={`mono text-[11px] uppercase tracking-wider ${color} ${asSpan ? "" : "mb-2 block"}`}
-    >
-      {children}
-    </Cmp>
-  );
 }
 
 function ClassificationBadge({ classification }: { classification: string }) {
