@@ -78,11 +78,14 @@ function Line({ line }: { line: DiffLine }) {
     line.kind === "add" ? "rv-line-add" : line.kind === "del" ? "rv-line-del" : "rv-line-ctx";
   const sign = line.kind === "add" ? "+" : line.kind === "del" ? "-" : " ";
   return (
-    <div className={cn("grid grid-cols-[48px_48px_18px_1fr] px-2 whitespace-pre", cls)}>
+    <div
+      className={cn("grid grid-cols-[48px_48px_18px_1fr] px-2 whitespace-pre", cls)}
+      style={{ tabSize: 4 }}
+    >
       <span className="rv-gutter text-right tabular-nums pr-2">{line.oldN ?? ""}</span>
       <span className="rv-gutter text-right tabular-nums pr-2">{line.newN ?? ""}</span>
       <span className="rv-sign">{sign}</span>
-      <span className="truncate">{line.text}</span>
+      <span>{line.text}</span>
     </div>
   );
 }

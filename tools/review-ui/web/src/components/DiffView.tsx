@@ -85,7 +85,10 @@ export function DiffView() {
                 <span className="eyebrow text-amber">Hunk</span>
                 <span className="font-mono text-[12px] text-fg-dim">{h.header}</span>
               </div>
-              <table className="w-full font-mono text-[13.5px] leading-[1.55]">
+              <table
+                className="w-full font-mono text-[13.5px] leading-[1.55]"
+                style={{ tabSize: 4 }}
+              >
                 <tbody>
                   {h.lines.map((ln, j) => (
                     <Row key={j} line={ln} />
