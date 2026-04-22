@@ -25,6 +25,7 @@ __fixtures__/
     sequences.json          <- shared mutator-sequence specs
     python-captures/<name>/ <- state.json, reports/*, sidecar.json
     ts-captures/<name>/     <- mirrors python-captures, asserted byte-equal
+<<<<<<< HEAD
   render/
     capture.sh              <- regenerates render markdown/JSON captures
     cases.json              <- view/format/input mapping
@@ -33,6 +34,13 @@ __fixtures__/
     python-captures/<n>.txt <- JSON captures (.txt skirts biome formatter)
     ts-captures/<n>.md
     ts-captures/<n>.txt
+=======
+  integration/
+    capture.sh              <- regenerates CLI integration captures
+    cases.json              <- shared CLI-subcommand scenario specs
+    python-captures/<name>/ <- final state.json + reports/* for each scenario
+    ts-captures/<name>/     <- mirrors python-captures, asserted byte-equal
+>>>>>>> task/run-state-topic/5
 ```
 
 ## Regeneration
@@ -41,7 +49,11 @@ __fixtures__/
 bash packages/cli/src/topics/run-state/__fixtures__/validator/capture.sh
 bash packages/cli/src/topics/run-state/__fixtures__/schemas/capture.sh
 bash packages/cli/src/topics/run-state/__fixtures__/state/capture.sh
+<<<<<<< HEAD
 bash packages/cli/src/topics/run-state/__fixtures__/render/capture.sh
+=======
+bash packages/cli/src/topics/run-state/__fixtures__/integration/capture.sh
+>>>>>>> task/run-state-topic/5
 ```
 
 Both scripts:
@@ -95,6 +107,7 @@ identical output. Scenarios:
 | `report_write_twice_overwrites` | reportWrite is overwrite-in-place      |
 | `invalid_transition_error`      | StateError byte-parity on illegal FSM  |
 
+<<<<<<< HEAD
 Render captures (`render/`) cover every exported view (`renderPrd`,
 `renderPlan`, `renderState`, `renderReport`, `renderSummary`,
 `renderCurrent`) on canonical fixtures plus edge cases:
@@ -112,6 +125,24 @@ Render captures (`render/`) cover every exported view (`renderPrd`,
 | `report_completed`       | completed step report with diff stats + validators   |
 | `report_halted`          | halted step with fenced validator output block       |
 | `summary_*` / `current_*`| per-state summary text and current JSON/text branch  |
+=======
+Integration captures (`integration/`) drive the CLI end-to-end from
+both `python3 -m tools.run_state` and `bun run packages/cli/bin/run.ts
+run-state`. Python patches `utcnow_iso` in-process via a tiny wrapper
+script so timestamps frozen by `PROVE_STATE_FROZEN_NOW` match the TS
+side. Scenarios:
+
+| Scenario                | Coverage                                         |
+| ----------------------- | ------------------------------------------------ |
+| `init_only`             | init writes prd.json / plan.json / state.json    |
+| `step_start`            | step start transitions step + task + run_status  |
+| `validator_set`         | validator set overwrites phase slot              |
+| `step_complete`         | step complete records commit_sha + advances      |
+| `task_review_approved`  | task review verdict=approved, reviewer recorded  |
+| `dispatch_record`       | dispatch record appends to ledger                |
+| `step_halt`             | step halt marks task/run halted, captures reason |
+| `report_write`          | report write serializes reports/<step_id>.json   |
+>>>>>>> task/run-state-topic/5
 
 ## Provenance
 
