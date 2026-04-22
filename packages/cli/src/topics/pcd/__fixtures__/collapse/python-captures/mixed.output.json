@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "stats": {
+    "total_cards": 5,
+    "preserved": 2,
+    "collapsed": 3,
+    "compression_ratio": 0.6
+  },
+  "preserved_cards": [
+    {
+      "file": "src/service/payments.py",
+      "lines": 180,
+      "risk": "medium",
+      "confidence": 4,
+      "findings": [
+        {
+          "category": "contract",
+          "brief": "Retry policy not documented",
+          "line_range": [
+            90,
+            120
+          ]
+        }
+      ],
+      "questions": []
+    },
+    {
+      "file": "src/service/auth.py",
+      "lines": 220,
+      "risk": "critical",
+      "confidence": 5,
+      "findings": [
+        {
+          "category": "error_handling",
+          "brief": "Token expiry bypass",
+          "line_range": [
+            40,
+            75
+          ]
+        }
+      ],
+      "questions": []
+    }
+  ],
+  "collapsed_summaries": [
+    {
+      "cluster_id": 3,
+      "file_count": 3,
+      "files": [
+        "src/core/config.py",
+        "src/core/util.py",
+        "src/core/logger.py"
+      ],
+      "max_risk": "low",
+      "aggregate_signals": [
+        "Unused helper"
+      ]
+    }
+  ],
+  "question_index": [
+    {
+      "id": "q-001",
+      "from_file": "src/service/payments.py",
+      "target_files": [
+        "src/core/config.py"
+      ],
+      "question_type": "contract"
+    }
+  ]
+}

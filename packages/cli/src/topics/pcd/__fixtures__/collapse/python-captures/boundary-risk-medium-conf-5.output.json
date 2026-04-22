@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "stats": {
+    "total_cards": 1,
+    "preserved": 1,
+    "collapsed": 0,
+    "compression_ratio": 0.0
+  },
+  "preserved_cards": [
+    {
+      "file": "src/medium.py",
+      "lines": 120,
+      "risk": "medium",
+      "confidence": 5,
+      "findings": [
+        {
+          "category": "performance",
+          "brief": "Hot path allocates in loop",
+          "line_range": [
+            55,
+            70
+          ]
+        }
+      ],
+      "questions": []
+    }
+  ],
+  "collapsed_summaries": [],
+  "question_index": []
+}

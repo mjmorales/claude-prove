@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "stats": {
+    "files_reviewed": 1,
+    "high_risk": 0,
+    "medium_risk": 0,
+    "low_risk": 1,
+    "total_questions": 0
+  },
+  "cards": [
+    {
+      "file": "src/boundary.py",
+      "lines": 80,
+      "risk": "low",
+      "confidence": 4,
+      "cluster_id": 7,
+      "findings": [
+        {
+          "category": "naming",
+          "brief": "Ambiguous local variable name",
+          "line_range": [12, 12]
+        }
+      ],
+      "questions": []
+    }
+  ],
+  "question_index": []
+}
