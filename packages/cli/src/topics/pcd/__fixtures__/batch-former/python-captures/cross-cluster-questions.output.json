@@ -1,0 +1,127 @@
+[
+  {
+    "batch_id": 1,
+    "files": [
+      "src/main.py",
+      "src/util.py"
+    ],
+    "triage_cards": [
+      {
+        "file": "src/main.py",
+        "lines": 100,
+        "risk": "high",
+        "confidence": 4,
+        "findings": [
+          {
+            "category": "error_handling",
+            "brief": "Issue in src/main.py",
+            "line_range": [
+              1,
+              10
+            ]
+          }
+        ],
+        "questions": []
+      },
+      {
+        "file": "src/util.py",
+        "lines": 80,
+        "risk": "medium",
+        "confidence": 3,
+        "findings": [
+          {
+            "category": "contract",
+            "brief": "Issue in src/util.py",
+            "line_range": [
+              1,
+              10
+            ]
+          }
+        ],
+        "questions": []
+      }
+    ],
+    "cluster_context": [
+      {
+        "id": 0,
+        "name": "core",
+        "files": [
+          "src/main.py",
+          "src/util.py"
+        ],
+        "internal_edges": 1,
+        "external_edges": 0
+      }
+    ],
+    "routed_questions": [],
+    "estimated_tokens": 8000
+  },
+  {
+    "batch_id": 2,
+    "files": [
+      "src/db.py",
+      "src/api.py"
+    ],
+    "triage_cards": [
+      {
+        "file": "src/db.py",
+        "lines": 80,
+        "risk": "high",
+        "confidence": 4,
+        "findings": [
+          {
+            "category": "error_handling",
+            "brief": "Issue in src/db.py",
+            "line_range": [
+              1,
+              10
+            ]
+          }
+        ],
+        "questions": []
+      },
+      {
+        "file": "src/api.py",
+        "lines": 60,
+        "risk": "medium",
+        "confidence": 3,
+        "findings": [
+          {
+            "category": "side_effect",
+            "brief": "Issue in src/api.py",
+            "line_range": [
+              1,
+              10
+            ]
+          }
+        ],
+        "questions": []
+      }
+    ],
+    "cluster_context": [
+      {
+        "id": 1,
+        "name": "data",
+        "files": [
+          "src/db.py",
+          "src/api.py"
+        ],
+        "internal_edges": 1,
+        "external_edges": 0
+      }
+    ],
+    "routed_questions": [
+      {
+        "id": "q-001",
+        "from_file": "src/main.py",
+        "question": "What happens on connection failure?"
+      },
+      {
+        "id": "q-002",
+        "from_file": "src/util.py",
+        "question": "What does the API return on error?"
+      }
+    ],
+    "estimated_tokens": 8000
+  }
+]

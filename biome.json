@@ -26,7 +26,8 @@
       "tools/project-manager",
       "tools/_lib",
       "packages/cli/src/topics/pcd/__fixtures__/structural-map/python-captures",
-      "packages/cli/src/topics/pcd/__fixtures__/collapse/python-captures"
+      "packages/cli/src/topics/pcd/__fixtures__/collapse/python-captures",
+      "packages/cli/src/topics/pcd/__fixtures__/batch-former/python-captures"
     ]
   },
   "organizeImports": { "enabled": true },

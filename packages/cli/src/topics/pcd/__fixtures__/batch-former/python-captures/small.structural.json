@@ -1,0 +1,42 @@
+{
+  "version": 1,
+  "timestamp": "2026-03-28T00:00:00+00:00",
+  "generated_by": "deterministic",
+  "summary": {
+    "total_files": 2,
+    "total_lines": 200,
+    "languages": {"python": 2}
+  },
+  "modules": [
+    {
+      "path": "src/main.py",
+      "lines": 100,
+      "language": "python",
+      "exports": [],
+      "imports_from": ["src/util.py"],
+      "imported_by": [],
+      "cluster_id": 0
+    },
+    {
+      "path": "src/util.py",
+      "lines": 100,
+      "language": "python",
+      "exports": [],
+      "imports_from": [],
+      "imported_by": ["src/main.py"],
+      "cluster_id": 0
+    }
+  ],
+  "clusters": [
+    {
+      "id": 0,
+      "name": "core",
+      "files": ["src/main.py", "src/util.py"],
+      "internal_edges": 1,
+      "external_edges": 0
+    }
+  ],
+  "dependency_edges": [
+    {"from": "src/main.py", "to": "src/util.py", "type": "internal"}
+  ]
+}
