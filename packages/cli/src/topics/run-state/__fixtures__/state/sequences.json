@@ -1,0 +1,111 @@
+{
+  "happy_path": [
+    { "op": "init" },
+    { "op": "stepStart", "step_id": "1.1.1" },
+    { "op": "validatorSet", "step_id": "1.1.1", "phase": "build", "status": "pass" },
+    { "op": "validatorSet", "step_id": "1.1.1", "phase": "test", "status": "pass" },
+    { "op": "stepComplete", "step_id": "1.1.1", "commit_sha": "deadbeefcafe" },
+    {
+      "op": "reportWrite",
+      "report": {
+        "schema_version": "1",
+        "kind": "report",
+        "step_id": "1.1.1",
+        "task_id": "1.1",
+        "status": "completed",
+        "commit_sha": "deadbeefcafe",
+        "started_at": "2026-04-22T12:00:00Z",
+        "ended_at": "2026-04-22T12:00:00Z",
+        "diff_stats": { "files_changed": 1, "insertions": 10, "deletions": 2 },
+        "validators": [],
+        "artifacts": [],
+        "notes": ""
+      }
+    }
+  ],
+  "review_approved": [
+    { "op": "init" },
+    {
+      "op": "taskReview",
+      "task_id": "1.1",
+      "verdict": "approved",
+      "notes": "LGTM",
+      "reviewer": "principal"
+    }
+  ],
+  "review_rejected": [
+    { "op": "init" },
+    {
+      "op": "taskReview",
+      "task_id": "1.1",
+      "verdict": "rejected",
+      "notes": "needs work",
+      "reviewer": "principal"
+    }
+  ],
+  "dispatch_miss_then_hit": [
+    { "op": "init" },
+    { "op": "dispatchHas", "key": "step-complete:1.1.1", "expect": false },
+    {
+      "op": "dispatchRecord",
+      "key": "step-complete:1.1.1",
+      "event": "step-complete",
+      "expect": true
+    },
+    { "op": "dispatchHas", "key": "step-complete:1.1.1", "expect": true },
+    {
+      "op": "dispatchRecord",
+      "key": "step-complete:1.1.1",
+      "event": "step-complete",
+      "expect": false
+    }
+  ],
+  "report_write_twice_overwrites": [
+    { "op": "init" },
+    { "op": "stepStart", "step_id": "1.1.1" },
+    { "op": "stepComplete", "step_id": "1.1.1", "commit_sha": "abc" },
+    {
+      "op": "reportWrite",
+      "report": {
+        "schema_version": "1",
+        "kind": "report",
+        "step_id": "1.1.1",
+        "task_id": "1.1",
+        "status": "completed",
+        "commit_sha": "abc",
+        "started_at": "",
+        "ended_at": "",
+        "diff_stats": { "files_changed": 0, "insertions": 0, "deletions": 0 },
+        "validators": [],
+        "artifacts": [],
+        "notes": "first"
+      }
+    },
+    {
+      "op": "reportWrite",
+      "report": {
+        "schema_version": "1",
+        "kind": "report",
+        "step_id": "1.1.1",
+        "task_id": "1.1",
+        "status": "completed",
+        "commit_sha": "abc",
+        "started_at": "",
+        "ended_at": "",
+        "diff_stats": { "files_changed": 0, "insertions": 0, "deletions": 0 },
+        "validators": [],
+        "artifacts": [],
+        "notes": "second"
+      }
+    }
+  ],
+  "invalid_transition_error": [
+    { "op": "init" },
+    {
+      "op": "stepComplete",
+      "step_id": "1.1.1",
+      "commit_sha": "",
+      "expect_error": "illegal transition"
+    }
+  ]
+}

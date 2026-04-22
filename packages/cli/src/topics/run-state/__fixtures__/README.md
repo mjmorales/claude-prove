@@ -20,6 +20,11 @@ __fixtures__/
     cases.json              <- shared input set for both sides
     python-captures/<n>.json
     ts-captures/<n>.json
+  state/
+    capture.sh              <- regenerates state-engine captures
+    sequences.json          <- shared mutator-sequence specs
+    python-captures/<name>/ <- state.json, reports/*, sidecar.json
+    ts-captures/<name>/     <- mirrors python-captures, asserted byte-equal
 ```
 
 ## Regeneration
@@ -27,6 +32,7 @@ __fixtures__/
 ```bash
 bash packages/cli/src/topics/run-state/__fixtures__/validator/capture.sh
 bash packages/cli/src/topics/run-state/__fixtures__/schemas/capture.sh
+bash packages/cli/src/topics/run-state/__fixtures__/state/capture.sh
 ```
 
 Both scripts:
@@ -66,6 +72,19 @@ canonical and a boundary case:
 - `state_valid_empty_tasks`, `state_bad_run_status`, `state_dispatch_missing_fields`
 - `report_valid_minimal`, `report_bad_status`
 - `unknown_kind`
+
+State-engine captures (`state/`) exercise mutator sequences end-to-end.
+Timestamps are frozen via `PROVE_STATE_FROZEN_NOW` so both sides produce
+identical output. Scenarios:
+
+| Sequence                        | Coverage                               |
+| ------------------------------- | -------------------------------------- |
+| `happy_path`                    | init → start → validators → complete → report |
+| `review_approved`               | taskReview verdict=approved            |
+| `review_rejected`               | taskReview verdict=rejected            |
+| `dispatch_miss_then_hit`        | dispatchHas miss + dispatchRecord dedup|
+| `report_write_twice_overwrites` | reportWrite is overwrite-in-place      |
+| `invalid_transition_error`      | StateError byte-parity on illegal FSM  |
 
 ## Provenance
 
