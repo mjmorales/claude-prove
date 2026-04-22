@@ -1,0 +1,50 @@
+{
+  "$schema": "https://biomejs.dev/schemas/1.9.4/schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "ignoreUnknown": true,
+    "ignore": [
+      "**/node_modules",
+      "**/dist",
+      "**/*.tsbuildinfo",
+      ".prove",
+      ".prove.json",
+      ".mcp.json",
+      ".claude/.prove.json",
+      ".claude/settings.json",
+      ".claude/settings.local.json",
+      ".claude/worktrees",
+      "tools/review-ui",
+      "tools/cafi",
+      "tools/pcd",
+      "tools/acb",
+      "tools/run_state",
+      "tools/schema",
+      "tools/round-table",
+      "tools/project-manager",
+      "tools/_lib"
+    ]
+  },
+  "organizeImports": { "enabled": true },
+  "linter": {
+    "enabled": true,
+    "rules": { "recommended": true }
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "always",
+      "trailingCommas": "all"
+    }
+  }
+}

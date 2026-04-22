@@ -143,6 +143,56 @@ Detailed documentation for major feature areas:
 - **[Code Quality](docs/code-quality.md)** — Steward, auto-steward, and steward-review audit system
 - **[Session Management](docs/session-management.md)** — Handoff/pickup workflow for context preservation
 
+## Monorepo Layout
+
+Prove is mid-migration from a collection of Python tools under `tools/` to a unified TypeScript CLI
+(see `.prove/decisions/2026-04-21-typescript-cli-unification.md` for the full decision record).
+The new TS workspace sits alongside the legacy Python tools:
+
+```
+packages/
+├── cli/           # oclif v4 CLI — bin/run.ts, src/commands/<topic>/index.ts stubs
+└── shared/        # @claude-prove/shared — types, logger, cross-package utilities
+```
+
+Each port phase replaces one `tools/<name>/` Python module with a `packages/<name>/` TypeScript
+implementation (or folds it into `packages/cli/src/topics/<topic>/`). Until the final phase lands,
+both toolchains coexist; hooks and slash commands migrate incrementally.
+
+### Running the CLI locally
+
+```bash
+bun install
+bun run packages/cli/bin/run.ts --help    # topic tree
+bun run packages/cli/bin/run.ts store     # stub command (prints phase notice)
+```
+
+### Compiling a standalone binary
+
+```bash
+bun build --compile \
+  --target=bun-darwin-arm64 \
+  --outfile dist-bin/prove \
+  packages/cli/bin/run.ts
+```
+
+**Known limitation (tracked for phase 3, `packages/store/`)**: in compiled binaries produced by
+`bun build --compile`, oclif's dynamic command discovery does not resolve paths through bun's
+virtual filesystem. The binary runs and exits cleanly but `--help` renders only the top-level
+chrome, not the topic list shown in dev mode. Full dispatch from the compiled binary is addressed
+when the first real topic (`store`) ports and needs runtime command invocation from the binary.
+
+### Workspace scripts
+
+```bash
+bun test          # all packages
+bun run lint      # biome check
+bun run format    # biome format --write
+bun run typecheck # tsc --build
+bun run build     # tsc --build (emits packages/*/dist)
+bun run clean     # tsc --build --clean
+```
+
 ## Project Structure
 
 ```
