@@ -197,9 +197,9 @@ These are not agents — they are invoked via Bash by the orchestrating skill.
 
 | Round | Command | Input | Output |
 |-------|---------|-------|--------|
-| 0a | `python3 $PLUGIN_DIR/tools/pcd/__main__.py --project-root "$PROJECT_ROOT" map [--scope files]` | Codebase | `structural-map.json` |
-| Collapse | `python3 $PLUGIN_DIR/tools/pcd/__main__.py --project-root "$PROJECT_ROOT" collapse` | `triage-manifest.json` | `collapsed-manifest.json` |
-| Batch | `python3 $PLUGIN_DIR/tools/pcd/__main__.py --project-root "$PROJECT_ROOT" batch` | collapsed + structural map | `batch-definitions.json` |
+| 0a | `prove pcd map --project-root "$PROJECT_ROOT" [--scope files]` | Codebase | `structural-map.json` |
+| Collapse | `prove pcd collapse --project-root "$PROJECT_ROOT"` | `triage-manifest.json` | `collapsed-manifest.json` |
+| Batch | `prove pcd batch --project-root "$PROJECT_ROOT"` | collapsed + structural map | `batch-definitions.json` |
 
 ## Fallback Protocol
 
