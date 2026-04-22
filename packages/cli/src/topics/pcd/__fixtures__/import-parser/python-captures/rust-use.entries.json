@@ -1,0 +1,26 @@
+[
+  {
+    "source_file": "src/main.rs",
+    "imported_module": "std::collections::HashMap",
+    "import_type": "stdlib",
+    "raw_line": "use std::collections::HashMap;"
+  },
+  {
+    "source_file": "src/main.rs",
+    "imported_module": "serde::Serialize",
+    "import_type": "external",
+    "raw_line": "use serde::Serialize;"
+  },
+  {
+    "source_file": "src/main.rs",
+    "imported_module": "crate::parser::Parser",
+    "import_type": "internal",
+    "raw_line": "use crate::parser::Parser;"
+  },
+  {
+    "source_file": "src/main.rs",
+    "imported_module": "super::parent_mod",
+    "import_type": "internal",
+    "raw_line": "use super::parent_mod;"
+  }
+]

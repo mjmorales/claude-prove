@@ -1,0 +1,14 @@
+[
+  {
+    "source_file": "pkg/mod.py",
+    "imported_module": ".",
+    "import_type": "internal",
+    "raw_line": "from . import sibling"
+  },
+  {
+    "source_file": "pkg/mod.py",
+    "imported_module": "..parent",
+    "import_type": "internal",
+    "raw_line": "from ..parent import thing"
+  }
+]

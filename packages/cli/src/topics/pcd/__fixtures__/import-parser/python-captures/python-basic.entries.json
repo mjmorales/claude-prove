@@ -1,0 +1,8 @@
+[
+  {
+    "source_file": "app.py",
+    "imported_module": "os",
+    "import_type": "stdlib",
+    "raw_line": "import os"
+  }
+]

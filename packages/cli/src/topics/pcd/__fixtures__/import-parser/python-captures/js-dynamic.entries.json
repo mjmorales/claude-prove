@@ -1,0 +1,8 @@
+[
+  {
+    "source_file": "app.js",
+    "imported_module": "./module",
+    "import_type": "internal",
+    "raw_line": "import('./module')"
+  }
+]

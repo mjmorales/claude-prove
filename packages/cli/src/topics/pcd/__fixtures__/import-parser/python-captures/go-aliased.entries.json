@@ -1,0 +1,20 @@
+[
+  {
+    "source_file": "main.go",
+    "imported_module": "fmt",
+    "import_type": "stdlib",
+    "raw_line": "import (\n    f \"fmt\"\n    \"os\"\n)"
+  },
+  {
+    "source_file": "main.go",
+    "imported_module": "os",
+    "import_type": "stdlib",
+    "raw_line": "import (\n    f \"fmt\"\n    \"os\"\n)"
+  },
+  {
+    "source_file": "main.go",
+    "imported_module": "fmt",
+    "import_type": "stdlib",
+    "raw_line": "import f \"fmt\""
+  }
+]

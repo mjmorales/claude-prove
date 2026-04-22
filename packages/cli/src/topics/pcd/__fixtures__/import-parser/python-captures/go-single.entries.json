@@ -1,0 +1,14 @@
+[
+  {
+    "source_file": "main.go",
+    "imported_module": "fmt",
+    "import_type": "stdlib",
+    "raw_line": "import \"fmt\""
+  },
+  {
+    "source_file": "main.go",
+    "imported_module": "github.com/gorilla/mux",
+    "import_type": "external",
+    "raw_line": "import \"github.com/gorilla/mux\""
+  }
+]

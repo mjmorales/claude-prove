@@ -1,0 +1,8 @@
+[
+  {
+    "source_file": "src/main.rs",
+    "imported_module": "std::{io, fs}",
+    "import_type": "stdlib",
+    "raw_line": "use std::{io, fs};"
+  }
+]

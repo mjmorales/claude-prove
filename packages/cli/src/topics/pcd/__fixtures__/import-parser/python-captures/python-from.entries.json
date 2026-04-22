@@ -1,0 +1,8 @@
+[
+  {
+    "source_file": "app.py",
+    "imported_module": "collections",
+    "import_type": "stdlib",
+    "raw_line": "from collections import OrderedDict"
+  }
+]
