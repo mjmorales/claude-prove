@@ -24,6 +24,13 @@
       "name": "@claude-prove/shared",
       "version": "0.0.0",
     },
+    "packages/store": {
+      "name": "@claude-prove/store",
+      "version": "0.0.0",
+      "dependencies": {
+        "@claude-prove/shared": "workspace:*",
+      },
+    },
   },
   "packages": {
     "@biomejs/biome": ["@biomejs/biome@1.9.4", "", { "optionalDependencies": { "@biomejs/cli-darwin-arm64": "1.9.4", "@biomejs/cli-darwin-x64": "1.9.4", "@biomejs/cli-linux-arm64": "1.9.4", "@biomejs/cli-linux-arm64-musl": "1.9.4", "@biomejs/cli-linux-x64": "1.9.4", "@biomejs/cli-linux-x64-musl": "1.9.4", "@biomejs/cli-win32-arm64": "1.9.4", "@biomejs/cli-win32-x64": "1.9.4" }, "bin": { "biome": "bin/biome" } }, "sha512-1rkd7G70+o9KkTn5KLmDYXihGoTaIGO9PIIN2ZB7UJxFrWw04CZHPYiMRjYsaDvVV7hP1dYNRLxSANLaBFGpog=="],
@@ -47,6 +54,8 @@
     "@claude-prove/cli": ["@claude-prove/cli@workspace:packages/cli"],
 
     "@claude-prove/shared": ["@claude-prove/shared@workspace:packages/shared"],
+
+    "@claude-prove/store": ["@claude-prove/store@workspace:packages/store"],
 
     "@types/bun": ["@types/bun@1.3.12", "", { "dependencies": { "bun-types": "1.3.12" } }, "sha512-DBv81elK+/VSwXHDlnH3Qduw+KxkTIWi7TXkAeh24zpi5l0B2kUg9Ga3tb4nJaPcOFswflgi/yAvMVBPrxMB+A=="],
 
