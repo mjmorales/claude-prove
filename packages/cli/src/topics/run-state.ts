@@ -1,7 +1,10 @@
-import type { StubTopic } from '../stub-topic';
+import type { CAC } from 'cac';
+import { registerStubTopic } from '../stub-topic';
 
-export const topic: StubTopic = {
-  name: 'run-state',
-  description: 'Orchestrator run state CRUD (not yet implemented)',
-  phase: 6,
-};
+export function register(cli: CAC): void {
+  registerStubTopic(cli, {
+    name: 'run-state',
+    description: 'Orchestrator run state CRUD (not yet implemented)',
+    phase: 6,
+  });
+}

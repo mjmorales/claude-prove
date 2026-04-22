@@ -1,7 +1,10 @@
-import type { StubTopic } from '../stub-topic';
+import type { CAC } from 'cac';
+import { registerStubTopic } from '../stub-topic';
 
-export const topic: StubTopic = {
-  name: 'pcd',
-  description: 'Structural-map audits (not yet implemented)',
-  phase: 7,
-};
+export function register(cli: CAC): void {
+  registerStubTopic(cli, {
+    name: 'pcd',
+    description: 'Structural-map audits (not yet implemented)',
+    phase: 7,
+  });
+}

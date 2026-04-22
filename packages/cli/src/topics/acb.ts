@@ -1,7 +1,10 @@
-import type { StubTopic } from '../stub-topic';
+import type { CAC } from 'cac';
+import { registerStubTopic } from '../stub-topic';
 
-export const topic: StubTopic = {
-  name: 'acb',
-  description: 'Agent change brief review (not yet implemented)',
-  phase: 9,
-};
+export function register(cli: CAC): void {
+  registerStubTopic(cli, {
+    name: 'acb',
+    description: 'Agent change brief review (not yet implemented)',
+    phase: 9,
+  });
+}

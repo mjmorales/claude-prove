@@ -17,6 +17,7 @@
       },
       "dependencies": {
         "@claude-prove/shared": "workspace:*",
+        "@claude-prove/store": "workspace:*",
         "cac": "^6.7.14",
       },
     },

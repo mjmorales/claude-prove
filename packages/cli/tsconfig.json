@@ -8,5 +8,5 @@
   },
   "include": ["bin/**/*", "src/**/*", "package.json"],
   "exclude": ["**/*.test.ts", "dist", "test"],
-  "references": [{ "path": "../shared" }]
+  "references": [{ "path": "../shared" }, { "path": "../store" }]
 }
