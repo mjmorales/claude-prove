@@ -1,0 +1,26 @@
+[
+  {
+    "source_file": "app.py",
+    "imported_module": "typing",
+    "import_type": "stdlib",
+    "raw_line": "from typing import List, Dict"
+  },
+  {
+    "source_file": "app.py",
+    "imported_module": "os",
+    "import_type": "stdlib",
+    "raw_line": "import os, sys"
+  },
+  {
+    "source_file": "app.py",
+    "imported_module": "sys",
+    "import_type": "stdlib",
+    "raw_line": "import os, sys"
+  },
+  {
+    "source_file": "app.py",
+    "imported_module": "numpy",
+    "import_type": "external",
+    "raw_line": "import numpy as np"
+  }
+]

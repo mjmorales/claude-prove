@@ -1,0 +1,8 @@
+[
+  {
+    "source_file": "app.js",
+    "imported_module": "lodash",
+    "import_type": "external",
+    "raw_line": "require('lodash')"
+  }
+]

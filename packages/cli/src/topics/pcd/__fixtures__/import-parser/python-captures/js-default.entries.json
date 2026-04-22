@@ -1,0 +1,14 @@
+[
+  {
+    "source_file": "app.ts",
+    "imported_module": "react",
+    "import_type": "external",
+    "raw_line": "import React from 'react'"
+  },
+  {
+    "source_file": "app.ts",
+    "imported_module": "react",
+    "import_type": "external",
+    "raw_line": "import React from \"react\""
+  }
+]

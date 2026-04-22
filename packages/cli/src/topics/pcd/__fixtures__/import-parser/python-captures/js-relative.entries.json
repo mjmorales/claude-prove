@@ -1,0 +1,14 @@
+[
+  {
+    "source_file": "app.ts",
+    "imported_module": "./utils",
+    "import_type": "internal",
+    "raw_line": "import { helper } from './utils'"
+  },
+  {
+    "source_file": "app.ts",
+    "imported_module": "../config",
+    "import_type": "internal",
+    "raw_line": "import { config } from '../config'"
+  }
+]

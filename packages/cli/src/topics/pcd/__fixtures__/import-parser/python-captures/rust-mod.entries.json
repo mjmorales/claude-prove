@@ -1,0 +1,14 @@
+[
+  {
+    "source_file": "src/lib.rs",
+    "imported_module": "lexer",
+    "import_type": "internal",
+    "raw_line": "mod lexer;"
+  },
+  {
+    "source_file": "src/lib.rs",
+    "imported_module": "parser",
+    "import_type": "internal",
+    "raw_line": "mod parser;"
+  }
+]
