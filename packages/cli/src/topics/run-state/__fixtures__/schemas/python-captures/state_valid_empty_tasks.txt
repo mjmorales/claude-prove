@@ -1,0 +1,7 @@
+{
+  "name": "state_valid_empty_tasks",
+  "kind": "state",
+  "version": "1",
+  "ok": true,
+  "errors": []
+}

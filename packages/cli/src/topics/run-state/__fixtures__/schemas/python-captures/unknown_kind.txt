@@ -1,0 +1,9 @@
+{
+  "name": "unknown_kind",
+  "kind": "nonexistent",
+  "version": "1",
+  "ok": false,
+  "errors": [
+    "  ERROR: : unknown schema kind: 'nonexistent'"
+  ]
+}

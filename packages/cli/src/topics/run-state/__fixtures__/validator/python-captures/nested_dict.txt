@@ -1,0 +1,6 @@
+{
+  "name": "nested_dict",
+  "errors": [
+    "  ERROR: scope.out: required field is missing"
+  ]
+}

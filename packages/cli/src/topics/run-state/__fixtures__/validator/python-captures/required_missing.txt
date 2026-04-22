@@ -1,0 +1,8 @@
+{
+  "name": "required_missing",
+  "errors": [
+    "  ERROR: schema_version: required field is missing",
+    "  ERROR: kind: required field is missing",
+    "  ERROR: tasks: required field is missing"
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "name": "enum_mismatch",
+  "errors": [
+    "  ERROR: status: must be one of ['pending', 'running', 'completed', 'failed', 'halted'], got 'weird'"
+  ]
+}

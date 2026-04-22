@@ -1,0 +1,6 @@
+{
+  "name": "wrong_type_int",
+  "errors": [
+    "  ERROR: count: expected int, got str"
+  ]
+}
