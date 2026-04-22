@@ -1,0 +1,6 @@
+  ERROR: validators[0].phase: required field is missing
+  WARN: validators[0].stage: unknown field (not in schema — may be from a tool or future version)
+  ERROR: validators[1].phase: required field is missing
+  WARN: validators[1].stage: unknown field (not in schema — may be from a tool or future version)
+
+FAIL: 2 error(s), 2 warning(s)

@@ -1,0 +1,4 @@
+Migration plan for <FIXTURE_PATH> (v2 -> v3):
+  ~ schema_version: "2" -> "3"
+  ~ index: moved to tools.cafi.config
+  + tools: added tool registry section

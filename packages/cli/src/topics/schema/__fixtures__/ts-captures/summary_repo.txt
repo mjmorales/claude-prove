@@ -1,0 +1,83 @@
+=== Config Diff: .claude/.prove.json ===
+
+Validation Issues:
+  WARN: tools.acb.scope: unknown field (not in schema — may be from a tool or future version)
+  WARN: tools.cafi.scope: unknown field (not in schema — may be from a tool or future version)
+  WARN: tools.run_state.scope: unknown field (not in schema — may be from a tool or future version)
+
+Migration Changes:
+  ~ schema_version: "3" -> "4"
+  - scopes.tools: tools registry lives under top-level tools.* since v3
+  - tools.schema: schema CLI is built-in — no toggleable tool entry
+
+Target config after migration:
+{
+  "schema_version": "4",
+  "scopes": {
+    "agents": "agents/",
+    "cache": "cache/",
+    "commands": "commands/",
+    "packages": "packages/",
+    "references": "references/",
+    "skills": "skills/",
+    "scripts": "scripts/"
+  },
+  "claude_md": {
+    "references": [
+      {
+        "path": "references/llm-coding-standards.md",
+        "label": "LLM-Optimized Coding Standards"
+      },
+      {
+        "path": "references/interaction-patterns.md",
+        "label": "Interaction Patterns"
+      },
+      {
+        "path": "references/validation-config.md",
+        "label": "Validation Configuration"
+      },
+      {
+        "path": "references/creator-conventions.md",
+        "label": "Creator Conventions"
+      },
+      {
+        "path": "references/prompt-engineering-guide.md",
+        "label": "Prompt Engineering Guide"
+      }
+    ]
+  },
+  "tools": {
+    "pcd": {
+      "enabled": true
+    },
+    "acb": {
+      "enabled": true,
+      "scope": "user",
+      "config": {
+        "base_branch": "main",
+        "review_ui_port": 5174,
+        "review_ui_image": "ghcr.io/mjmorales/claude-prove/review-ui",
+        "review_ui_tag": "latest"
+      }
+    },
+    "cafi": {
+      "enabled": true,
+      "scope": "user",
+      "config": {
+        "excludes": [],
+        "max_file_size": 102400,
+        "concurrency": 3
+      }
+    },
+    "run_state": {
+      "enabled": true,
+      "scope": "user"
+    }
+  }
+}
+
+=== Config Diff: .claude/settings.json ===
+
+Validation Issues:
+  WARN: hooks.PostToolUse[0].hooks[0].if: unknown field (not in schema — may be from a tool or future version)
+

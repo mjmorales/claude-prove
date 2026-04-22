@@ -1,0 +1,3 @@
+=== Config Diff: .claude/.prove.json ===
+
+Config is up to date (no migration needed).
