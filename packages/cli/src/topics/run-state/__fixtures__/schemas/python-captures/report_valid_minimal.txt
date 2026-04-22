@@ -1,0 +1,7 @@
+{
+  "name": "report_valid_minimal",
+  "kind": "report",
+  "version": "1",
+  "ok": true,
+  "errors": []
+}

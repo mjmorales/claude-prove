@@ -1,0 +1,6 @@
+{
+  "name": "values_spec_descent",
+  "errors": [
+    "  ERROR: map.b: expected int, got str"
+  ]
+}

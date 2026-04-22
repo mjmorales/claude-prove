@@ -1,0 +1,10 @@
+{
+  "name": "state_dispatch_missing_fields",
+  "kind": "state",
+  "version": "1",
+  "ok": false,
+  "errors": [
+    "  ERROR: dispatch.dispatched[0].key: required field is missing",
+    "  ERROR: dispatch.dispatched[0].timestamp: required field is missing"
+  ]
+}

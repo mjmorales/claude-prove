@@ -1,0 +1,6 @@
+{
+  "name": "wrong_type_str",
+  "errors": [
+    "  ERROR: title: expected str, got int"
+  ]
+}

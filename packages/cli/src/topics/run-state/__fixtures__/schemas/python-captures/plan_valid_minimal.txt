@@ -1,0 +1,7 @@
+{
+  "name": "plan_valid_minimal",
+  "kind": "plan",
+  "version": "1",
+  "ok": true,
+  "errors": []
+}

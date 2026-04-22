@@ -1,0 +1,7 @@
+{
+  "name": "prd_valid",
+  "kind": "prd",
+  "version": "1",
+  "ok": true,
+  "errors": []
+}

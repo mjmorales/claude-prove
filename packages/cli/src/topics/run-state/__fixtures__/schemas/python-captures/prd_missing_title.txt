@@ -1,0 +1,9 @@
+{
+  "name": "prd_missing_title",
+  "kind": "prd",
+  "version": "1",
+  "ok": false,
+  "errors": [
+    "  ERROR: title: required field is missing"
+  ]
+}
