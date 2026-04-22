@@ -31,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/manuelmorales/dev/claude-prove/tools/cafi/cafi_gate.py",
+            "command": "bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts cafi gate",
             "timeout": 10000
           }
         ],
