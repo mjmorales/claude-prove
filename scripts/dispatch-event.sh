@@ -49,7 +49,7 @@ fi
 DEDUP_KEY="${EVENT_TYPE}:${PROVE_STEP:-$RUN_SLUG}"
 
 if (cd "$MAIN_ROOT" && PROVE_RUN_BRANCH="$RUN_BRANCH" PROVE_RUN_SLUG="$RUN_SLUG" \
-      python3 -m tools.run_state dispatch has "$DEDUP_KEY" 2>/dev/null) | grep -q '^yes$'; then
+      scripts/prove-run dispatch-has "$DEDUP_KEY" 2>/dev/null) | grep -q '^yes$'; then
   exit 0
 fi
 
@@ -80,6 +80,6 @@ done
 # --- Record dispatch ---
 
 (cd "$MAIN_ROOT" && PROVE_RUN_BRANCH="$RUN_BRANCH" PROVE_RUN_SLUG="$RUN_SLUG" \
-  python3 -m tools.run_state dispatch record "$DEDUP_KEY" "$EVENT_TYPE") >/dev/null 2>&1 || true
+  scripts/prove-run dispatch-record "$DEDUP_KEY" "$EVENT_TYPE") >/dev/null 2>&1 || true
 
 exit 0

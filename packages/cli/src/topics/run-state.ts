@@ -16,6 +16,7 @@
  *   prove run-state summary
  *   prove run-state current [--format json|text]
  *   prove run-state step <start|complete|fail|halt> <step_id> [--commit SHA] [--reason TEXT]
+ *   prove run-state step-info <step_id>
  *   prove run-state validator set <step_id> <phase> <status>
  *   prove run-state task review <task_id> --verdict V [--notes T] [--reviewer N]
  *   prove run-state dispatch <record|has> <key> [<event>]
@@ -46,6 +47,7 @@ import { runMigrate } from './run-state/cli/migrate-cmd';
 import { runReportWrite } from './run-state/cli/report-cmd';
 import { runCurrent, runShow, runShowReport, runSummary } from './run-state/cli/show-cmd';
 import { type StepAction, runStep } from './run-state/cli/step-cmd';
+import { runStepInfo } from './run-state/cli/step-info-cmd';
 import { runTaskReview } from './run-state/cli/task-cmd';
 import { runValidate } from './run-state/cli/validate-cmd';
 import { runValidatorSet } from './run-state/cli/validator-cmd';
@@ -86,6 +88,7 @@ type RunStateAction =
   | 'summary'
   | 'current'
   | 'step'
+  | 'step-info'
   | 'validator'
   | 'task'
   | 'dispatch'
@@ -102,6 +105,7 @@ const ACTIONS: RunStateAction[] = [
   'summary',
   'current',
   'step',
+  'step-info',
   'validator',
   'task',
   'dispatch',
@@ -247,6 +251,16 @@ function dispatch(
         commit: flags.commit,
         reason: flags.reason,
         format: narrowMdJson(flags.format ?? 'md'),
+      });
+    }
+
+    case 'step-info': {
+      // run-state step-info <step_id>
+      if (!arg1) return usage('the following arguments are required: step_id');
+      return runStepInfo(arg1, {
+        runsRoot: flags.runsRoot,
+        branch: flags.branch,
+        slug: flags.slug,
       });
     }
 

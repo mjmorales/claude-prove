@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/manuelmorales/dev/claude-prove/tools/run_state/hook_validate.py",
+            "command": "bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts run-state hook validate",
             "timeout": 5000
           }
         ],
@@ -42,7 +42,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/manuelmorales/dev/claude-prove/tools/run_state/hook_guard.py",
+            "command": "bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts run-state hook guard",
             "timeout": 5000
           }
         ],
@@ -55,7 +55,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/manuelmorales/dev/claude-prove/tools/run_state/hook_session_start.py",
+            "command": "bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts run-state hook session-start",
             "timeout": 3000
           }
         ],
@@ -68,7 +68,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/manuelmorales/dev/claude-prove/tools/run_state/hook_stop.py",
+            "command": "bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts run-state hook stop",
             "timeout": 5000
           }
         ],
@@ -81,7 +81,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 /Users/manuelmorales/dev/claude-prove/tools/run_state/hook_subagent_stop.py",
+            "command": "bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts run-state hook subagent-stop",
             "timeout": 5000
           }
         ],

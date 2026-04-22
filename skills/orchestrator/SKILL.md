@@ -22,7 +22,7 @@ Requires `.prove/runs/<branch>/<slug>/plan.json`. If missing, suggest `/prove:pl
 All run artifacts are JSON and live under `.prove/runs/<branch>/<slug>/`:
 
 - `prd.json`, `plan.json` — write-once inputs
-- `state.json` — hot path, mutated **only** via `python3 -m tools.run_state ...`
+- `state.json` — hot path, mutated **only** via `scripts/prove-run ...` (thin wrapper over `prove run-state ...`)
 - `reports/<step_id>.json` — write-once per step
 
 Direct edits to `state.json` are blocked by a PreToolUse hook. Render human views JIT (`run_state show`).
@@ -343,7 +343,7 @@ When triggered with "full auto" and no existing plan:
 1. Derive slug + branch namespace; create `.prove/runs/<branch>/<slug>/`
 2. Read project context (`CLAUDE.md`, `README.md`, `docs/`, recent git history)
 3. Launch requirements-gathering subagent (user stories, acceptance criteria, non-goals, constraints, verification)
-4. Write `prd.json` via the task-planner skill (which emits valid JSON matching `tools/run_state/schemas.py`)
+4. Write `prd.json` via the task-planner skill (which emits valid JSON matching `packages/cli/src/topics/run-state/schemas.ts`)
 5. AskUserQuestion header "PRD" — "Approve" / "Request Changes"
 6. Generate `plan.json` (wave-based task graph, every task has `id`, `wave`, `deps`, `steps[]`)
 7. AskUserQuestion header "Plan" — "Approve" / "Request Changes"

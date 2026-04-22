@@ -117,7 +117,7 @@ How should we handle this?
 ### Finalize Plan
 ```
 Emit prd.json and plan.json under .prove/runs/<branch>/<slug>/, matching
-the schemas in tools/run_state/schemas.py. Then run:
+the schemas in packages/cli/src/topics/run-state/schemas.ts. Then run:
 
     scripts/prove-run init --branch <b> --slug <s> --plan <plan.json> --prd <prd.json>
 

@@ -187,6 +187,6 @@ for state in .prove/runs/*/*/state.json; do
   echo "## Task Plan Steps ($branch/$slug)"
   echo ""
   PROVE_RUN_BRANCH="$branch" PROVE_RUN_SLUG="$slug" \
-    python3 -m tools.run_state show --format md 2>/dev/null || true
+    scripts/prove-run show state --format md 2>/dev/null || true
   echo ""
 done

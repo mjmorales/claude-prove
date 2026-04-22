@@ -16,7 +16,7 @@ Configure `.claude/settings.local.json` with scoped tool permissions for the act
 Read these files (skip missing ones):
 
 1. Active run's `plan.json` under `.prove/runs/<branch>/<slug>/` — task/step list, deps. Use:
-   `python3 -m tools.run_state show --kind plan --format json`
+   `scripts/prove-run show plan --format json`
 2. `.prove/plans/plan_*/05_implementation_plan.md` — file paths, commands
 3. `.claude/.prove.json` — validator and reporter commands
 4. `.claude/settings.local.json` — existing rules to preserve
