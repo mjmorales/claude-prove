@@ -6,7 +6,7 @@
  */
 
 import { StateError, taskReview } from '../state';
-import { renderStateJson } from './render-fallback';
+import { printMutationResult } from './print-result';
 import { type RunSelection, ResolveError, resolvePaths } from './resolve';
 
 export interface TaskReviewFlags extends RunSelection {
@@ -41,11 +41,7 @@ export function runTaskReview(taskId: string, flags: TaskReviewFlags): number {
       notes: flags.notes ?? '',
       reviewer: flags.reviewer ?? '',
     });
-    if ((flags.format ?? 'md') === 'json') {
-      console.log(JSON.stringify(state, null, 2));
-    } else {
-      process.stdout.write(renderStateJson(state));
-    }
+    printMutationResult(state, resolved.paths, flags.format ?? 'md');
     return 0;
   } catch (err) {
     if (err instanceof StateError) {

@@ -13,7 +13,7 @@ import {
   stepHalt,
   stepStart,
 } from '../state';
-import { renderStateJson } from './render-fallback';
+import { printMutationResult } from './print-result';
 import { type RunSelection, ResolveError, resolvePaths } from './resolve';
 
 export type StepAction = 'start' | 'complete' | 'fail' | 'halt';
@@ -64,17 +64,6 @@ export function runStep(action: StepAction, stepId: string, flags: StepFlags): n
     throw err;
   }
 
-  printResult(state, flags.format ?? 'md');
+  printMutationResult(state, resolved.paths, flags.format ?? 'md');
   return 0;
-}
-
-function printResult(state: StateData, format: 'md' | 'json'): void {
-  if (format === 'json') {
-    console.log(JSON.stringify(state, null, 2));
-  } else {
-    // Task 4 (render port) lands after this task; emit a terse textual
-    // fallback so the mutator flow stays usable end-to-end. Wired to real
-    // `renderSummary` in the post-merge pass.
-    process.stdout.write(renderStateJson(state));
-  }
 }

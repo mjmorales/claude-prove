@@ -6,7 +6,7 @@
  */
 
 import { StateError, validatorSet } from '../state';
-import { renderStateJson } from './render-fallback';
+import { printMutationResult } from './print-result';
 import { type RunSelection, ResolveError, resolvePaths } from './resolve';
 
 export interface ValidatorFlags extends RunSelection {
@@ -35,11 +35,7 @@ export function runValidatorSet(
   }
   try {
     const state = validatorSet(resolved.paths, stepId, phase, status);
-    if ((flags.format ?? 'md') === 'json') {
-      console.log(JSON.stringify(state, null, 2));
-    } else {
-      process.stdout.write(renderStateJson(state));
-    }
+    printMutationResult(state, resolved.paths, flags.format ?? 'md');
     return 0;
   } catch (err) {
     if (err instanceof StateError) {

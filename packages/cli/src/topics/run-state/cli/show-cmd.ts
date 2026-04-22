@@ -1,19 +1,17 @@
 /**
- * `run-state show` / `show-report` / `summary` / `current` — render-dependent
- * read-only views.
+ * `run-state show` / `show-report` / `summary` / `current` — read-only views.
  *
- * Task 4 (render port) lands in parallel; this worktree exposes the
- * subcommand names but exits with a TODO pointer so orchestrator shell
- * wiring compiles and tests can at least hit the dispatch table. The
- * post-Wave-3-merge pass wires these to `../render.ts`.
- *
- * For `--format json` we CAN serve today — it just re-emits the raw
- * artifact — so we do, matching Python behavior byte-for-byte.
+ * Mirrors the Python `cmd_show`, `cmd_current`, and the `summary` CLI path:
+ * JSON format emits the raw artifact; md format delegates to `render.ts`
+ * (byte-equal to Python for every view).
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
 import { loadState } from '../state';
-import { type RunSelection, ResolveError, resolvePaths } from './resolve';
+import { renderPlan, renderPrd, renderReport, renderState, renderSummary } from '../render';
+import type { PlanData, PrdData, ReportData, StateData } from '../state';
+import { type RunSelection, ResolveError, resolvePaths, defaultRunsRoot } from './resolve';
 
 export interface ShowFlags extends RunSelection {
   kind?: 'state' | 'plan' | 'prd' | 'report';
@@ -52,9 +50,21 @@ export function runShow(flags: ShowFlags): number {
     console.log(JSON.stringify(data, null, 2));
     return 0;
   }
-  // TODO(task-4-merge): wire to `render.renderPrd/renderPlan/renderState`.
-  console.error('error: `show --format md` wiring lands in the Task 4 render-port merge; use --format json for now');
-  return 2;
+  if (kind === 'prd') {
+    process.stdout.write(renderPrd(data as PrdData));
+    return 0;
+  }
+  if (kind === 'plan') {
+    process.stdout.write(renderPlan(data as PlanData));
+    return 0;
+  }
+  // state — load plan if present so step/task titles render.
+  let plan: PlanData | null = null;
+  if (existsSync(resolved.paths.plan)) {
+    plan = JSON.parse(readFileSync(resolved.paths.plan, 'utf8')) as PlanData;
+  }
+  process.stdout.write(renderState(data as StateData, { plan }));
+  return 0;
 }
 
 export interface ShowReportFlags extends RunSelection {
@@ -82,14 +92,13 @@ export function runShowReport(stepId: string, flags: ShowReportFlags): number {
     console.error(`error: no report for step ${stepId}`);
     return 1;
   }
-  const data = JSON.parse(readFileSync(target, 'utf8'));
+  const data = JSON.parse(readFileSync(target, 'utf8')) as ReportData;
   if ((flags.format ?? 'md') === 'json') {
     console.log(JSON.stringify(data, null, 2));
     return 0;
   }
-  // TODO(task-4-merge): wire to `render.renderReport`.
-  console.error('error: `show-report --format md` wiring lands in the Task 4 render-port merge; use --format json for now');
-  return 2;
+  process.stdout.write(renderReport(data));
+  return 0;
 }
 
 export interface CurrentFlags extends RunSelection {
@@ -112,21 +121,59 @@ export function runCurrent(flags: CurrentFlags): number {
     return 1;
   }
   const state = loadState(resolved.paths);
-  if ((flags.format ?? 'text') === 'json') {
+  const format = flags.format ?? 'text';
+  if (format === 'json') {
     console.log(JSON.stringify(state, null, 2));
     return 0;
   }
-  // TODO(task-4-merge): wire to `render.renderSummary`.
-  console.error('error: `current --format text` wiring lands in the Task 4 render-port merge; use --format json for now');
-  return 2;
+  let plan: PlanData | null = null;
+  if (existsSync(resolved.paths.plan)) {
+    plan = JSON.parse(readFileSync(resolved.paths.plan, 'utf8')) as PlanData;
+  }
+  process.stdout.write(renderSummary(state, { plan }));
+  return 0;
 }
 
 export interface SummaryFlags {
   runsRoot?: string;
 }
 
-export function runSummary(_flags: SummaryFlags): number {
-  // TODO(task-4-merge): wire to `render.renderSummary` across all runs.
-  console.error('error: `summary` wiring lands in the Task 4 render-port merge');
-  return 2;
+export function runSummary(flags: SummaryFlags): number {
+  // Aggregate summaries across every active run under runs-root. Mirrors the
+  // `scripts/prove-run ls`-style sweep; per-run output uses renderSummary.
+  const runsRoot = flags.runsRoot ?? defaultRunsRoot();
+  if (!existsSync(runsRoot)) {
+    console.error(`error: no runs root at ${runsRoot}`);
+    return 1;
+  }
+  const branches = safeReaddir(runsRoot);
+  let emitted = 0;
+  for (const branch of branches) {
+    const branchDir = join(runsRoot, branch);
+    const slugs = safeReaddir(branchDir);
+    for (const slug of slugs) {
+      const statePath = join(branchDir, slug, 'state.json');
+      if (!existsSync(statePath)) continue;
+      const state = JSON.parse(readFileSync(statePath, 'utf8')) as StateData;
+      const planPath = join(branchDir, slug, 'plan.json');
+      const plan = existsSync(planPath)
+        ? (JSON.parse(readFileSync(planPath, 'utf8')) as PlanData)
+        : null;
+      process.stdout.write(renderSummary(state, { plan }));
+      emitted += 1;
+    }
+  }
+  if (emitted === 0) {
+    console.error('error: no active runs found');
+    return 1;
+  }
+  return 0;
+}
+
+function safeReaddir(dir: string): string[] {
+  try {
+    return readdirSync(dir).sort();
+  } catch {
+    return [];
+  }
 }
