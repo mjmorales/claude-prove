@@ -1,0 +1,33 @@
+{
+  "schema_version": "1",
+  "kind": "plan",
+  "mode": "full",
+  "tasks": [
+    {
+      "id": "1.1",
+      "title": "Foundation",
+      "wave": 1,
+      "deps": [],
+      "description": "Lay down schemas and validator engine.",
+      "acceptance_criteria": ["Schemas ported", "Validator engine parity"],
+      "worktree": {
+        "path": ".claude/worktrees/demo-1",
+        "branch": "task/demo/1"
+      },
+      "steps": [
+        { "id": "1.1.1", "title": "Port schemas" },
+        { "id": "1.1.2", "title": "Port validator engine" }
+      ]
+    },
+    {
+      "id": "2.1",
+      "title": "Render",
+      "wave": 2,
+      "deps": ["1.1"],
+      "description": "",
+      "acceptance_criteria": [],
+      "worktree": { "path": "", "branch": "" },
+      "steps": [{ "id": "2.1.1", "title": "Port render.py" }]
+    }
+  ]
+}

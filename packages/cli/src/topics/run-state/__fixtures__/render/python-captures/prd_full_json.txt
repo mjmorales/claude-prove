@@ -1,0 +1,27 @@
+{
+  "schema_version": "1",
+  "kind": "prd",
+  "title": "Port run_state to TypeScript",
+  "context": "The run_state tool currently lives in Python. Port to TS to match the topic refactor.",
+  "goals": [
+    "Deprecate tools/run_state/",
+    "Byte-equal JSON output across Python and TS"
+  ],
+  "scope": {
+    "in": [
+      "render.ts with full markdown parity",
+      "Parity fixtures matching existing patterns"
+    ],
+    "out": [
+      "Retiring the Python source (Task 7)",
+      "Wiring into the CLI command (Task 5)"
+    ]
+  },
+  "acceptance_criteria": [
+    "renderState/Plan/Prd/Report emit byte-identical markdown to Python",
+    "renderSummary prints a single-line-block text summary",
+    "renderCurrent dispatches JSON vs text per format flag"
+  ],
+  "test_strategy": "Parity fixtures capture both Python and TS output and assert byte-equality.",
+  "body_markdown": "## Notes\n\nKeep the timestamp helper aligned with Python's `datetime.utcnow().isoformat(timespec='seconds')`.\n"
+}

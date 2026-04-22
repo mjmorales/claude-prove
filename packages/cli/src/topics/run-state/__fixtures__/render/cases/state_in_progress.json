@@ -1,0 +1,59 @@
+{
+  "schema_version": "1",
+  "kind": "state",
+  "run_status": "running",
+  "slug": "demo",
+  "branch": "feature/demo",
+  "current_task": "1.1",
+  "current_step": "1.1.2",
+  "started_at": "2026-04-22T12:00:00Z",
+  "updated_at": "2026-04-22T12:05:00Z",
+  "ended_at": "",
+  "tasks": [
+    {
+      "id": "1.1",
+      "status": "in_progress",
+      "started_at": "2026-04-22T12:00:00Z",
+      "ended_at": "",
+      "review": {
+        "verdict": "pending",
+        "notes": "",
+        "reviewer": "",
+        "reviewed_at": ""
+      },
+      "steps": [
+        {
+          "id": "1.1.1",
+          "status": "completed",
+          "started_at": "2026-04-22T12:00:00Z",
+          "ended_at": "2026-04-22T12:01:00Z",
+          "commit_sha": "abc1234",
+          "validator_summary": {
+            "build": "pass",
+            "lint": "pass",
+            "test": "pass",
+            "custom": "pending",
+            "llm": "pending"
+          },
+          "halt_reason": ""
+        },
+        {
+          "id": "1.1.2",
+          "status": "in_progress",
+          "started_at": "2026-04-22T12:02:00Z",
+          "ended_at": "",
+          "commit_sha": "",
+          "validator_summary": {
+            "build": "pass",
+            "lint": "pending",
+            "test": "pending",
+            "custom": "pending",
+            "llm": "pending"
+          },
+          "halt_reason": ""
+        }
+      ]
+    }
+  ],
+  "dispatch": { "dispatched": [] }
+}

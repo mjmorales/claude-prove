@@ -25,6 +25,14 @@ __fixtures__/
     sequences.json          <- shared mutator-sequence specs
     python-captures/<name>/ <- state.json, reports/*, sidecar.json
     ts-captures/<name>/     <- mirrors python-captures, asserted byte-equal
+  render/
+    capture.sh              <- regenerates render markdown/JSON captures
+    cases.json              <- view/format/input mapping
+    cases/*.json            <- canonical PRD/plan/state/report inputs
+    python-captures/<n>.md  <- markdown captures
+    python-captures/<n>.txt <- JSON captures (.txt skirts biome formatter)
+    ts-captures/<n>.md
+    ts-captures/<n>.txt
 ```
 
 ## Regeneration
@@ -33,6 +41,7 @@ __fixtures__/
 bash packages/cli/src/topics/run-state/__fixtures__/validator/capture.sh
 bash packages/cli/src/topics/run-state/__fixtures__/schemas/capture.sh
 bash packages/cli/src/topics/run-state/__fixtures__/state/capture.sh
+bash packages/cli/src/topics/run-state/__fixtures__/render/capture.sh
 ```
 
 Both scripts:
@@ -85,6 +94,24 @@ identical output. Scenarios:
 | `dispatch_miss_then_hit`        | dispatchHas miss + dispatchRecord dedup|
 | `report_write_twice_overwrites` | reportWrite is overwrite-in-place      |
 | `invalid_transition_error`      | StateError byte-parity on illegal FSM  |
+
+Render captures (`render/`) cover every exported view (`renderPrd`,
+`renderPlan`, `renderState`, `renderReport`, `renderSummary`,
+`renderCurrent`) on canonical fixtures plus edge cases:
+
+| Scenario                 | Coverage                                             |
+| ------------------------ | ---------------------------------------------------- |
+| `prd_full`               | full PRD with context, goals, scope, AC, body        |
+| `prd_minimal`            | PRD with only the required `title`                   |
+| `plan_multi_wave`        | multi-wave plan with deps, worktree, AC, steps       |
+| `plan_empty`             | empty plan (no tasks) — header-only output           |
+| `state_pending`          | fresh run, no timestamps beyond `updated_at`         |
+| `state_in_progress`      | active run with validator summary per step           |
+| `state_completed`        | completed run with approved review + dispatch ledger |
+| `state_halted`           | halted run with rejected review + halt reason        |
+| `report_completed`       | completed step report with diff stats + validators   |
+| `report_halted`          | halted step with fenced validator output block       |
+| `summary_*` / `current_*`| per-state summary text and current JSON/text branch  |
 
 ## Provenance
 
