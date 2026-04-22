@@ -1,3 +1,16 @@
+=== Config Diff: .claude/.prove.json ===
+
+Validation Issues:
+  WARN: tools.acb.scope: unknown field (not in schema — may be from a tool or future version)
+  WARN: tools.cafi.scope: unknown field (not in schema — may be from a tool or future version)
+  WARN: tools.run_state.scope: unknown field (not in schema — may be from a tool or future version)
+
+Migration Changes:
+  ~ schema_version: "3" -> "4"
+  - scopes.tools: tools registry lives under top-level tools.* since v3
+  - tools.schema: schema CLI is built-in — no toggleable tool entry
+
+Target config after migration:
 {
   "schema_version": "4",
   "scopes": {
@@ -62,3 +75,9 @@
     }
   }
 }
+
+=== Config Diff: .claude/settings.json ===
+
+Validation Issues:
+  WARN: hooks.PostToolUse[0].hooks[0].if: unknown field (not in schema — may be from a tool or future version)
+

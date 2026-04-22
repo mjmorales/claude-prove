@@ -1,0 +1,1 @@
+PASS: <FIXTURE_PATH> is valid (schema v3, 0 warning(s))

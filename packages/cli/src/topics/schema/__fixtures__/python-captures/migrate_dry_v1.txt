@@ -1,0 +1,7 @@
+Migration plan for <FIXTURE_PATH> (v1 -> v3):
+  ~ schema_version: "1" -> "2"
+  ~ validators[lint].stage: renamed "stage" -> "phase"
+  ~ validators[test].stage: renamed "stage" -> "phase"
+  + claude_md: added with empty references (configure via /prove:init or /prove:update)
+  ~ schema_version: "2" -> "3"
+  + tools.cafi: added (disabled — no prior index config)

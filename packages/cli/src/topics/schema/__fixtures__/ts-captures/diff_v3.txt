@@ -1,0 +1,34 @@
+=== Config Diff: .claude/.prove.json ===
+
+Migration Changes:
+  ~ schema_version: "3" -> "4"
+  - scopes.tools: tools registry lives under top-level tools.* since v3
+  - tools.schema: schema CLI is built-in — no toggleable tool entry
+
+Target config after migration:
+{
+  "schema_version": "4",
+  "validators": [
+    {
+      "name": "test",
+      "command": "pytest",
+      "phase": "test"
+    }
+  ],
+  "scopes": {
+    "plugin": "."
+  },
+  "claude_md": {
+    "references": []
+  },
+  "tools": {
+    "cafi": {
+      "enabled": true,
+      "config": {
+        "excludes": [
+          "*.log"
+        ]
+      }
+    }
+  }
+}

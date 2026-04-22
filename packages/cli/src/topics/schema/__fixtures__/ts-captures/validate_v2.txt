@@ -1,0 +1,3 @@
+  WARN: index: unknown field (not in schema — may be from a tool or future version)
+
+PASS: <FIXTURE_PATH> is valid (schema v2, 1 warning(s))

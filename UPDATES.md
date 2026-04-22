@@ -6,6 +6,35 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v0.37.0 — Schema topic ported to TypeScript (breaking config migration)
+
+Phase 4 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`). The Python `tools/schema/` module is retired; `prove schema` is now a real TypeScript topic backed by `packages/cli/src/topics/schema/`. `.claude/.prove.json` migrates from v3 to v4.
+
+**Removed**:
+
+- `tools/schema/` (all Python sources, tests, and `tool.json`)
+- `python3 -m tools.schema <cmd>` invocation path
+- `scopes.tools` mapping in `.claude/.prove.json` (no longer needed — `tools/` directory is retired per the TS unification plan)
+- `tools.schema.enabled` registry entry (schema is now a CLI topic, not a pluggable tool)
+
+**Added**:
+
+- `prove schema validate [--file <path>] [--strict]`
+- `prove schema migrate [--file <path>] [--dry-run]`
+- `prove schema diff [--file <path>]`
+- `prove schema summary`
+- `packages/cli/src/topics/schema/` — full TS port with bun test coverage (64 tests) and parity fixtures under `__fixtures__/`
+- v3→v4 migration in `packages/cli/src/topics/schema/migrate.ts` (drops `scopes.tools` + `tools.schema`)
+
+**Migration**:
+
+1. Run `/prove:update` — it picks up the new CLI and runs `prove schema migrate` against `.claude/.prove.json` automatically.
+2. Manual fallback: `bun run <plugin>/packages/cli/bin/run.ts schema migrate --file .claude/.prove.json`.
+3. Remove any `.bak` file the migrator writes (only needed if you want to keep an on-disk backup; git history already covers it).
+4. If you have scripts that call `python3 -m tools.schema …`, rewrite them to call `prove schema …`.
+
+**Auto-adoption**: `/prove:update` runs the migration and refreshes command bodies in place. No manual config edits required for standard repos.
+
 ## v0.35.0 — Docker-based review UI (breaking)
 
 The ACB review UI has moved out of the plugin and into a standalone Docker image published to GHCR. All Python-side review commands and the embedded Flask UI are gone.

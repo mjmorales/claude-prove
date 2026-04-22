@@ -1,13 +1,15 @@
-"""Lightweight JSON config validator using schema definitions from schemas.py.
+"""Lightweight JSON schema validator for run-state artifacts.
+
+Narrow field-spec DSL — only ``ValidationError`` and ``validate_config``
+are re-exported. File I/O and global config auto-detection live in the
+``prove schema`` TypeScript topic.
 
 No external dependencies — pure Python stdlib.
 """
 
-import json
-from pathlib import Path
-from typing import Any
+from __future__ import annotations
 
-from tools.schema.schemas import PROVE_SCHEMA, SETTINGS_SCHEMA
+from typing import Any
 
 TYPE_MAP = {
     "str": str,
@@ -122,7 +124,7 @@ def validate_config(
 
     Args:
         config: The parsed JSON config
-        schema: Schema definition (PROVE_SCHEMA or SETTINGS_SCHEMA)
+        schema: Schema definition (kind-specific, see schemas.py)
         strict: If True, treat warnings as errors
 
     Returns:
@@ -136,46 +138,3 @@ def validate_config(
                 e.severity = "error"
 
     return errors
-
-
-def validate_file(
-    path: str, schema: dict | None = None, strict: bool = False
-) -> tuple[dict | None, list[ValidationError]]:
-    """Validate a JSON config file.
-
-    Auto-detects schema from filename if not provided.
-
-    Returns:
-        (parsed_config_or_None, errors)
-    """
-    filepath = Path(path)
-
-    if not filepath.exists():
-        return None, [ValidationError(path, "file not found")]
-
-    try:
-        with open(filepath) as f:
-            config = json.load(f)
-    except json.JSONDecodeError as e:
-        return None, [ValidationError(path, f"invalid JSON: {e}")]
-
-    if not isinstance(config, dict):
-        return None, [ValidationError(path, "top-level value must be an object")]
-
-    # Auto-detect schema
-    if schema is None:
-        if filepath.name == ".prove.json" or str(filepath).endswith(".claude/.prove.json"):
-            schema = PROVE_SCHEMA
-        elif filepath.name == "settings.json" and ".claude" in str(filepath):
-            schema = SETTINGS_SCHEMA
-        else:
-            return config, [
-                ValidationError(
-                    path,
-                    "cannot auto-detect schema — pass schema explicitly",
-                    severity="warning",
-                )
-            ]
-
-    errors = validate_config(config, schema, strict=strict)
-    return config, errors

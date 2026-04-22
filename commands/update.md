@@ -26,7 +26,7 @@ On "Create minimal config": write the file and proceed. The v0 -> current migrat
 ## Step 1: Run validation
 
 ```bash
-PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema validate --file "$(pwd)/.claude/.prove.json"
+prove schema validate --file "$(pwd)/.claude/.prove.json"
 ```
 
 Present the output.
@@ -38,7 +38,7 @@ If no migration needed and no validation errors: "Configs are up to date and val
 ## Step 3: Present migration plan
 
 ```bash
-PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema migrate --file "$(pwd)/.claude/.prove.json" --dry-run
+prove schema migrate --file "$(pwd)/.claude/.prove.json" --dry-run
 ```
 
 Present changes, then `AskUserQuestion` (header: "Migration"):
@@ -50,9 +50,9 @@ Present changes, then `AskUserQuestion` (header: "Migration"):
 
 **Apply All:**
 ```bash
-PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema migrate --file "$(pwd)/.claude/.prove.json"
+prove schema migrate --file "$(pwd)/.claude/.prove.json"
 ```
-Creates `.claude/.prove.json.<timestamp>.bak` backup.
+Creates `.claude/.prove.<timestamp>.bak` backup.
 
 **Review Each:** Present each change individually. For each, `AskUserQuestion` (header: "Change"): "Apply" / "Skip". Apply only approved changes.
 
@@ -102,7 +102,7 @@ Skip this step entirely if all features are already configured.
 ## Step 6: Validate settings.json
 
 ```bash
-PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema validate --file "$(pwd)/.claude/settings.json"
+prove schema validate --file "$(pwd)/.claude/settings.json"
 ```
 
 Skip if file does not exist. If issues found, present and offer to fix.
@@ -110,7 +110,7 @@ Skip if file does not exist. If issues found, present and offer to fix.
 ## Step 7: Re-validate
 
 ```bash
-PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema validate --file "$(pwd)/.claude/.prove.json"
+prove schema validate --file "$(pwd)/.claude/.prove.json"
 ```
 
 Report: PASS/FAIL per config file, schema version, backup location (if applicable).

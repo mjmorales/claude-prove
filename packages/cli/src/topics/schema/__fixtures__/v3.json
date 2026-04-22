@@ -1,0 +1,20 @@
+{
+  "schema_version": "3",
+  "validators": [
+    { "name": "test", "command": "pytest", "phase": "test" }
+  ],
+  "scopes": {
+    "plugin": ".",
+    "tools": "tools/"
+  },
+  "claude_md": {
+    "references": []
+  },
+  "tools": {
+    "cafi": {
+      "enabled": true,
+      "config": { "excludes": ["*.log"] }
+    },
+    "schema": { "enabled": true }
+  }
+}

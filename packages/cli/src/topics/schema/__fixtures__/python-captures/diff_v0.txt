@@ -1,0 +1,39 @@
+=== Config Diff: .claude/.prove.json ===
+
+Validation Issues:
+  ERROR: schema_version: required field is missing
+
+Migration Changes:
+  + schema_version: set to "1"
+  ~ schema_version: "1" -> "2"
+  + claude_md: added with empty references (configure via /prove:init or /prove:update)
+  ~ schema_version: "2" -> "3"
+  + tools.cafi: added (disabled — no prior index config)
+
+Target config after migration:
+{
+  "schema_version": "3",
+  "validators": [
+    {
+      "name": "lint",
+      "command": "ruff check .",
+      "phase": "lint"
+    },
+    {
+      "name": "test",
+      "command": "pytest",
+      "phase": "test"
+    }
+  ],
+  "scopes": {
+    "plugin": "."
+  },
+  "claude_md": {
+    "references": []
+  },
+  "tools": {
+    "cafi": {
+      "enabled": false
+    }
+  }
+}
