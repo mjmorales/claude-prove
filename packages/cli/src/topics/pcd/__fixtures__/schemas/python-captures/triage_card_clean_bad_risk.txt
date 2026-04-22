@@ -1,0 +1,15 @@
+{
+  "name": "triage_card_clean_bad_risk",
+  "schema_key": "triage_card_clean",
+  "input": {
+    "file": "src/util.py",
+    "lines": 20,
+    "risk": "medium",
+    "confidence": 5,
+    "status": "clean"
+  },
+  "ok": false,
+  "errors": [
+    "risk: expected one of ['low'], got 'medium'"
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "name": "structural_map_bad_edge_type",
+  "schema_key": "structural_map",
+  "input": {
+    "version": 1,
+    "timestamp": "2026-03-28T00:00:00Z",
+    "generated_by": "deterministic",
+    "summary": {
+      "total_files": 0,
+      "total_lines": 0,
+      "languages": {}
+    },
+    "modules": [],
+    "clusters": [],
+    "dependency_edges": [
+      {
+        "from": "a",
+        "to": "b",
+        "type": "cross-module"
+      }
+    ]
+  },
+  "ok": false,
+  "errors": [
+    "dependency_edges[0].type: expected one of ['internal', 'external'], got 'cross-module'"
+  ]
+}

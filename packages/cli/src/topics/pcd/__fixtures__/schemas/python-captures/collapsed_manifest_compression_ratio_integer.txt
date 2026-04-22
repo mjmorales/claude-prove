@@ -1,0 +1,18 @@
+{
+  "name": "collapsed_manifest_compression_ratio_integer",
+  "schema_key": "collapsed_manifest",
+  "input": {
+    "version": 1,
+    "stats": {
+      "total_cards": 5,
+      "preserved": 5,
+      "collapsed": 0,
+      "compression_ratio": 0
+    },
+    "preserved_cards": [],
+    "collapsed_summaries": [],
+    "question_index": []
+  },
+  "ok": true,
+  "errors": []
+}

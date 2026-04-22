@@ -1,0 +1,473 @@
+[
+  {
+    "name": "structural_map_valid",
+    "schema_key": "structural_map",
+    "input": {
+      "version": 1,
+      "timestamp": "2026-03-28T00:00:00Z",
+      "generated_by": "deterministic",
+      "summary": { "total_files": 2, "total_lines": 100, "languages": { "python": 80 } },
+      "modules": [
+        {
+          "path": "src/main.py",
+          "lines": 80,
+          "language": "python",
+          "exports": ["main"],
+          "imports_from": ["src/util.py"],
+          "imported_by": [],
+          "cluster_id": 0
+        }
+      ],
+      "clusters": [
+        {
+          "id": 0,
+          "name": "core",
+          "files": ["src/main.py"],
+          "internal_edges": 1,
+          "external_edges": 0
+        }
+      ],
+      "dependency_edges": [{ "from": "src/main.py", "to": "src/util.py", "type": "internal" }]
+    }
+  },
+  {
+    "name": "structural_map_empty",
+    "schema_key": "structural_map",
+    "input": {}
+  },
+  {
+    "name": "structural_map_bad_generated_by",
+    "schema_key": "structural_map",
+    "input": {
+      "version": 1,
+      "timestamp": "2026-03-28T00:00:00Z",
+      "generated_by": "manual",
+      "summary": { "total_files": 0, "total_lines": 0, "languages": {} },
+      "modules": [],
+      "clusters": [],
+      "dependency_edges": []
+    }
+  },
+  {
+    "name": "structural_map_bad_edge_type",
+    "schema_key": "structural_map",
+    "input": {
+      "version": 1,
+      "timestamp": "2026-03-28T00:00:00Z",
+      "generated_by": "deterministic",
+      "summary": { "total_files": 0, "total_lines": 0, "languages": {} },
+      "modules": [],
+      "clusters": [],
+      "dependency_edges": [{ "from": "a", "to": "b", "type": "cross-module" }]
+    }
+  },
+  {
+    "name": "structural_map_version_string",
+    "schema_key": "structural_map",
+    "input": {
+      "version": "one",
+      "timestamp": "2026-03-28T00:00:00Z",
+      "generated_by": "deterministic",
+      "summary": { "total_files": 0, "total_lines": 0, "languages": {} },
+      "modules": [],
+      "clusters": [],
+      "dependency_edges": []
+    }
+  },
+  {
+    "name": "triage_card_valid",
+    "schema_key": "triage_card",
+    "input": {
+      "file": "src/main.py",
+      "lines": 80,
+      "risk": "high",
+      "confidence": 4,
+      "findings": [{ "category": "error_handling", "brief": "x", "line_range": [1, 2] }],
+      "questions": [
+        {
+          "id": "q-001",
+          "referencing_file": "src/main.py",
+          "referenced_symbol": "connect",
+          "referenced_files": ["src/db.py"],
+          "question_type": "error_handling",
+          "text": "?"
+        }
+      ]
+    }
+  },
+  {
+    "name": "triage_card_bad_risk",
+    "schema_key": "triage_card",
+    "input": {
+      "file": "src/main.py",
+      "lines": 80,
+      "risk": "extreme",
+      "confidence": 4,
+      "findings": [],
+      "questions": []
+    }
+  },
+  {
+    "name": "triage_card_bad_finding_category",
+    "schema_key": "triage_card",
+    "input": {
+      "file": "src/main.py",
+      "lines": 80,
+      "risk": "high",
+      "confidence": 4,
+      "findings": [{ "category": "style", "brief": "x", "line_range": [1, 2] }],
+      "questions": []
+    }
+  },
+  {
+    "name": "triage_card_bad_question_type",
+    "schema_key": "triage_card",
+    "input": {
+      "file": "src/main.py",
+      "lines": 80,
+      "risk": "high",
+      "confidence": 4,
+      "findings": [],
+      "questions": [
+        {
+          "id": "q",
+          "referencing_file": "a",
+          "referenced_symbol": "b",
+          "referenced_files": ["c"],
+          "question_type": "unknown",
+          "text": "?"
+        }
+      ]
+    }
+  },
+  {
+    "name": "triage_card_line_range_strings",
+    "schema_key": "triage_card",
+    "input": {
+      "file": "src/main.py",
+      "lines": 80,
+      "risk": "high",
+      "confidence": 4,
+      "findings": [{ "category": "error_handling", "brief": "x", "line_range": ["a", "b"] }],
+      "questions": []
+    }
+  },
+  {
+    "name": "triage_card_empty",
+    "schema_key": "triage_card",
+    "input": {}
+  },
+  {
+    "name": "triage_card_file_int",
+    "schema_key": "triage_card",
+    "input": {
+      "file": 123,
+      "lines": 80,
+      "risk": "high",
+      "confidence": 4,
+      "findings": [],
+      "questions": []
+    }
+  },
+  {
+    "name": "triage_card_clean_valid",
+    "schema_key": "triage_card_clean",
+    "input": {
+      "file": "src/util.py",
+      "lines": 20,
+      "risk": "low",
+      "confidence": 5,
+      "status": "clean"
+    }
+  },
+  {
+    "name": "triage_card_clean_bad_risk",
+    "schema_key": "triage_card_clean",
+    "input": {
+      "file": "src/util.py",
+      "lines": 20,
+      "risk": "medium",
+      "confidence": 5,
+      "status": "clean"
+    }
+  },
+  {
+    "name": "triage_card_clean_bad_status",
+    "schema_key": "triage_card_clean",
+    "input": {
+      "file": "src/util.py",
+      "lines": 20,
+      "risk": "low",
+      "confidence": 5,
+      "status": "dirty"
+    }
+  },
+  {
+    "name": "triage_manifest_valid",
+    "schema_key": "triage_manifest",
+    "input": {
+      "version": 1,
+      "stats": {
+        "files_reviewed": 1,
+        "high_risk": 0,
+        "medium_risk": 0,
+        "low_risk": 1,
+        "total_questions": 0
+      },
+      "cards": [],
+      "question_index": []
+    }
+  },
+  {
+    "name": "triage_manifest_missing_stats_field",
+    "schema_key": "triage_manifest",
+    "input": {
+      "version": 1,
+      "stats": { "files_reviewed": 1, "high_risk": 0, "medium_risk": 0, "low_risk": 1 },
+      "cards": [],
+      "question_index": []
+    }
+  },
+  {
+    "name": "triage_manifest_bad_question_index_type",
+    "schema_key": "triage_manifest",
+    "input": {
+      "version": 1,
+      "stats": {
+        "files_reviewed": 1,
+        "high_risk": 0,
+        "medium_risk": 0,
+        "low_risk": 1,
+        "total_questions": 0
+      },
+      "cards": [],
+      "question_index": [
+        {
+          "id": "q",
+          "from_file": "a",
+          "target_files": ["b"],
+          "question_type": "not-real"
+        }
+      ]
+    }
+  },
+  {
+    "name": "collapsed_manifest_valid",
+    "schema_key": "collapsed_manifest",
+    "input": {
+      "version": 1,
+      "stats": {
+        "total_cards": 5,
+        "preserved": 2,
+        "collapsed": 3,
+        "compression_ratio": 0.6
+      },
+      "preserved_cards": [],
+      "collapsed_summaries": [
+        {
+          "cluster_id": 1,
+          "file_count": 3,
+          "files": ["a.py", "b.py", "c.py"],
+          "max_risk": "low",
+          "aggregate_signals": ["ok"]
+        }
+      ],
+      "question_index": []
+    }
+  },
+  {
+    "name": "collapsed_manifest_compression_ratio_string",
+    "schema_key": "collapsed_manifest",
+    "input": {
+      "version": 1,
+      "stats": {
+        "total_cards": 5,
+        "preserved": 2,
+        "collapsed": 3,
+        "compression_ratio": "half"
+      },
+      "preserved_cards": [],
+      "collapsed_summaries": [],
+      "question_index": []
+    }
+  },
+  {
+    "name": "collapsed_manifest_compression_ratio_integer",
+    "schema_key": "collapsed_manifest",
+    "input": {
+      "version": 1,
+      "stats": {
+        "total_cards": 5,
+        "preserved": 5,
+        "collapsed": 0,
+        "compression_ratio": 0
+      },
+      "preserved_cards": [],
+      "collapsed_summaries": [],
+      "question_index": []
+    }
+  },
+  {
+    "name": "collapsed_manifest_summary_files_wrong_type",
+    "schema_key": "collapsed_manifest",
+    "input": {
+      "version": 1,
+      "stats": {
+        "total_cards": 1,
+        "preserved": 0,
+        "collapsed": 1,
+        "compression_ratio": 1.0
+      },
+      "preserved_cards": [],
+      "collapsed_summaries": [
+        {
+          "cluster_id": 1,
+          "file_count": 1,
+          "files": [1, 2],
+          "max_risk": "low",
+          "aggregate_signals": []
+        }
+      ],
+      "question_index": []
+    }
+  },
+  {
+    "name": "findings_batch_valid",
+    "schema_key": "findings_batch",
+    "input": {
+      "batch_id": 1,
+      "files_reviewed": ["a.py"],
+      "findings": [
+        {
+          "id": "f-001",
+          "severity": "critical",
+          "category": "error_handling",
+          "file": "a.py",
+          "line_range": [1, 2],
+          "title": "t",
+          "detail": "d",
+          "fix_sketch": "fix"
+        }
+      ],
+      "answers": [{ "question_id": "q", "status": "answered", "answer": "a" }],
+      "new_questions": []
+    }
+  },
+  {
+    "name": "findings_batch_bad_severity",
+    "schema_key": "findings_batch",
+    "input": {
+      "batch_id": 1,
+      "files_reviewed": [],
+      "findings": [
+        {
+          "id": "f",
+          "severity": "minor",
+          "category": "error_handling",
+          "file": "a.py",
+          "line_range": [1, 2],
+          "title": "t",
+          "detail": "d",
+          "fix_sketch": "fix"
+        }
+      ],
+      "answers": [],
+      "new_questions": []
+    }
+  },
+  {
+    "name": "findings_batch_bad_answer_status",
+    "schema_key": "findings_batch",
+    "input": {
+      "batch_id": 1,
+      "files_reviewed": [],
+      "findings": [],
+      "answers": [{ "question_id": "q", "status": "maybe", "answer": "a" }],
+      "new_questions": []
+    }
+  },
+  {
+    "name": "findings_batch_new_question_missing_fields",
+    "schema_key": "findings_batch",
+    "input": {
+      "batch_id": 1,
+      "files_reviewed": [],
+      "findings": [],
+      "answers": [],
+      "new_questions": [{ "id": "q", "referencing_file": "a" }]
+    }
+  },
+  {
+    "name": "batch_definition_valid",
+    "schema_key": "batch_definition",
+    "input": {
+      "batch_id": 1,
+      "files": ["a.py"],
+      "triage_cards": [],
+      "cluster_context": [
+        { "id": 0, "name": "core", "files": ["a.py"], "internal_edges": 1, "external_edges": 0 }
+      ],
+      "routed_questions": [{ "id": "q", "from_file": "a", "question": "?" }],
+      "estimated_tokens": 1000
+    }
+  },
+  {
+    "name": "batch_definition_estimated_tokens_bool",
+    "schema_key": "batch_definition",
+    "input": {
+      "batch_id": 1,
+      "files": [],
+      "triage_cards": [],
+      "cluster_context": [],
+      "routed_questions": [],
+      "estimated_tokens": true
+    }
+  },
+  {
+    "name": "batch_definition_routed_question_missing",
+    "schema_key": "batch_definition",
+    "input": {
+      "batch_id": 1,
+      "files": [],
+      "triage_cards": [],
+      "cluster_context": [],
+      "routed_questions": [{ "id": "q" }],
+      "estimated_tokens": 100
+    }
+  },
+  {
+    "name": "pipeline_status_valid",
+    "schema_key": "pipeline_status",
+    "input": {
+      "version": 1,
+      "started_at": "2026-03-28T00:00:00Z",
+      "rounds": {
+        "structural_map": { "status": "complete" }
+      }
+    }
+  },
+  {
+    "name": "pipeline_status_rounds_wrong_type",
+    "schema_key": "pipeline_status",
+    "input": {
+      "version": 1,
+      "started_at": "2026-03-28T00:00:00Z",
+      "rounds": []
+    }
+  },
+  {
+    "name": "unknown_schema_key",
+    "schema_key": "definitely-not-a-schema",
+    "input": { "x": 1 }
+  },
+  {
+    "name": "non_dict_input_list",
+    "schema_key": "structural_map",
+    "input": []
+  },
+  {
+    "name": "non_dict_input_null",
+    "schema_key": "triage_card",
+    "input": null
+  }
+]

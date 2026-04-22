@@ -1,0 +1,21 @@
+{
+  "name": "batch_definition_routed_question_missing",
+  "schema_key": "batch_definition",
+  "input": {
+    "batch_id": 1,
+    "files": [],
+    "triage_cards": [],
+    "cluster_context": [],
+    "routed_questions": [
+      {
+        "id": "q"
+      }
+    ],
+    "estimated_tokens": 100
+  },
+  "ok": false,
+  "errors": [
+    "routed_questions[0].from_file: required field is missing",
+    "routed_questions[0].question: required field is missing"
+  ]
+}

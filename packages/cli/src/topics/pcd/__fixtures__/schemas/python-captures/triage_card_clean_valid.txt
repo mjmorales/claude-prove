@@ -1,0 +1,13 @@
+{
+  "name": "triage_card_clean_valid",
+  "schema_key": "triage_card_clean",
+  "input": {
+    "file": "src/util.py",
+    "lines": 20,
+    "risk": "low",
+    "confidence": 5,
+    "status": "clean"
+  },
+  "ok": true,
+  "errors": []
+}

@@ -1,0 +1,29 @@
+{
+  "name": "triage_manifest_bad_question_index_type",
+  "schema_key": "triage_manifest",
+  "input": {
+    "version": 1,
+    "stats": {
+      "files_reviewed": 1,
+      "high_risk": 0,
+      "medium_risk": 0,
+      "low_risk": 1,
+      "total_questions": 0
+    },
+    "cards": [],
+    "question_index": [
+      {
+        "id": "q",
+        "from_file": "a",
+        "target_files": [
+          "b"
+        ],
+        "question_type": "not-real"
+      }
+    ]
+  },
+  "ok": false,
+  "errors": [
+    "question_index[0].question_type: expected one of ['error_handling', 'invariant', 'contract', 'side_effect', 'dependency'], got 'not-real'"
+  ]
+}

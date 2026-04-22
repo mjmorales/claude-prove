@@ -1,0 +1,13 @@
+{
+  "name": "pipeline_status_rounds_wrong_type",
+  "schema_key": "pipeline_status",
+  "input": {
+    "version": 1,
+    "started_at": "2026-03-28T00:00:00Z",
+    "rounds": []
+  },
+  "ok": false,
+  "errors": [
+    "rounds: expected dict, got list"
+  ]
+}

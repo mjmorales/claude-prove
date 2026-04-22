@@ -1,0 +1,35 @@
+{
+  "name": "findings_batch_valid",
+  "schema_key": "findings_batch",
+  "input": {
+    "batch_id": 1,
+    "files_reviewed": [
+      "a.py"
+    ],
+    "findings": [
+      {
+        "id": "f-001",
+        "severity": "critical",
+        "category": "error_handling",
+        "file": "a.py",
+        "line_range": [
+          1,
+          2
+        ],
+        "title": "t",
+        "detail": "d",
+        "fix_sketch": "fix"
+      }
+    ],
+    "answers": [
+      {
+        "question_id": "q",
+        "status": "answered",
+        "answer": "a"
+      }
+    ],
+    "new_questions": []
+  },
+  "ok": true,
+  "errors": []
+}

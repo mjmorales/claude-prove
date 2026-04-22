@@ -1,0 +1,19 @@
+{
+  "name": "triage_manifest_missing_stats_field",
+  "schema_key": "triage_manifest",
+  "input": {
+    "version": 1,
+    "stats": {
+      "files_reviewed": 1,
+      "high_risk": 0,
+      "medium_risk": 0,
+      "low_risk": 1
+    },
+    "cards": [],
+    "question_index": []
+  },
+  "ok": false,
+  "errors": [
+    "stats.total_questions: required field is missing"
+  ]
+}

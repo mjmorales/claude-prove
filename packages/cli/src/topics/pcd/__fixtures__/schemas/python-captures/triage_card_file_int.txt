@@ -1,0 +1,16 @@
+{
+  "name": "triage_card_file_int",
+  "schema_key": "triage_card",
+  "input": {
+    "file": 123,
+    "lines": 80,
+    "risk": "high",
+    "confidence": 4,
+    "findings": [],
+    "questions": []
+  },
+  "ok": false,
+  "errors": [
+    "file: expected str, got int"
+  ]
+}

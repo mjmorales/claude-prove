@@ -1,0 +1,32 @@
+{
+  "name": "collapsed_manifest_valid",
+  "schema_key": "collapsed_manifest",
+  "input": {
+    "version": 1,
+    "stats": {
+      "total_cards": 5,
+      "preserved": 2,
+      "collapsed": 3,
+      "compression_ratio": 0.6
+    },
+    "preserved_cards": [],
+    "collapsed_summaries": [
+      {
+        "cluster_id": 1,
+        "file_count": 3,
+        "files": [
+          "a.py",
+          "b.py",
+          "c.py"
+        ],
+        "max_risk": "low",
+        "aggregate_signals": [
+          "ok"
+        ]
+      }
+    ],
+    "question_index": []
+  },
+  "ok": true,
+  "errors": []
+}

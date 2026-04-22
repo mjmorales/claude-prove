@@ -1,0 +1,16 @@
+{
+  "name": "batch_definition_estimated_tokens_bool",
+  "schema_key": "batch_definition",
+  "input": {
+    "batch_id": 1,
+    "files": [],
+    "triage_cards": [],
+    "cluster_context": [],
+    "routed_questions": [],
+    "estimated_tokens": true
+  },
+  "ok": false,
+  "errors": [
+    "estimated_tokens: expected int, got bool"
+  ]
+}
