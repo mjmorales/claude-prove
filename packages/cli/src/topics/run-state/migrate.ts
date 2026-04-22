@@ -38,46 +38,38 @@
 
 import {
   existsSync,
-  mkdirSync,
   readFileSync,
   readdirSync,
-  renameSync,
   statSync,
-  writeFileSync,
 } from 'node:fs';
-import { dirname, join, relative, resolve, sep } from 'node:path';
-import { CURRENT_SCHEMA_VERSION, PLAN_SCHEMA, PRD_SCHEMA } from './schemas';
-import type { FieldSpec, Schema } from './validator-engine';
+import { join, relative, resolve, sep } from 'node:path';
+import { RunPaths as StateRunPaths } from './paths';
+import {
+  _clock,
+  deepCloneJson,
+  defaultsFromSchema,
+  type PlanData,
+  newPlan as stateNewPlan,
+  newPrd as stateNewPrd,
+  newState as stateNewState,
+  utcnowIso,
+  writeJsonAtomic,
+} from './state';
 
 // --------------------------------------------------------------------------
-// Time — centralized so tests can monkeypatch.
+// Re-exports — a single source of truth lives in state.ts. The alias
+// wrappers below keep the `migrate.*` import surface stable for callers
+// (Python tests used a local `migrate.utcnow_iso` monkeypatch, the TS
+// equivalent just reads through to `state._clock`).
 // --------------------------------------------------------------------------
+
+export { _clock, deepCloneJson, defaultsFromSchema, utcnowIso, writeJsonAtomic };
 
 /**
- * Indirection for `utcnowIso` so tests can substitute a frozen clock.
- * Python tests monkeypatch `tools.run_state.migrate.utcnow_iso`; the TS
- * equivalent is setting `_clock.now` from a test.
+ * Legacy path shape used by this module's `migrateRun` output for
+ * backwards-compat with the prior drop. New call sites should use
+ * `RunPaths` from `./paths` directly.
  */
-export const _clock: { now: () => string } = {
-  now: defaultUtcnowIso,
-};
-
-function defaultUtcnowIso(): string {
-  // Second-precision ISO-8601 UTC with Z suffix — matches Python's
-  // `datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")`.
-  const iso = new Date().toISOString();
-  return iso.replace(/\.\d+Z$/, 'Z');
-}
-
-export function utcnowIso(): string {
-  return _clock.now();
-}
-
-// --------------------------------------------------------------------------
-// RunPaths + atomic JSON I/O — inlined from state.py so migrate can run
-// before the state-engine port lands.
-// --------------------------------------------------------------------------
-
 export interface RunPaths {
   root: string;
   prd: string;
@@ -88,156 +80,53 @@ export interface RunPaths {
 }
 
 export function runPathsFor(runsRoot: string, branch: string, slug: string): RunPaths {
-  const root = join(runsRoot, branch, slug);
+  const p = StateRunPaths.forRun(runsRoot, branch, slug);
   return {
-    root,
-    prd: join(root, 'prd.json'),
-    plan: join(root, 'plan.json'),
-    state: join(root, 'state.json'),
-    stateLock: join(root, 'state.json.lock'),
-    reportsDir: join(root, 'reports'),
+    root: p.root,
+    prd: p.prd,
+    plan: p.plan,
+    state: p.state,
+    stateLock: p.state_lock,
+    reportsDir: p.reports_dir,
   };
 }
 
 /**
- * Atomic write with `.tmp` staging + rename. Mirrors Python's
- * `_write_json_atomic`: `json.dump(data, f, indent=2, sort_keys=False)`
- * plus a trailing newline.
+ * Build a fresh prd.json payload. Wraps the canonical factory in `state.ts`
+ * and widens the return type to the loose `Record<string, unknown>` the
+ * markdown-migration call sites were written against.
  */
-function writeJsonAtomic(path: string, data: unknown): void {
-  mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp`;
-  writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
-  renameSync(tmp, path);
-}
-
-// --------------------------------------------------------------------------
-// Factory helpers — byte-compatible with state.py `new_prd` / `new_plan` /
-// `new_state`. Key insertion order mirrors Python mutation order so
-// JSON.stringify output matches Python's json.dump.
-// --------------------------------------------------------------------------
-
-/**
- * Walk a schema's `fields` map and emit a dict populated with each
- * field's default (when declared). Matches `_defaults_from_schema` in
- * state.py. Returns a plain `Record<string, unknown>` — callers mutate
- * freely.
- */
-function defaultsFromSchema(schema: Schema): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  for (const [name, spec] of Object.entries(schema.fields)) {
-    if ('default' in spec) {
-      out[name] = deepCloneJson((spec as FieldSpec).default);
-    }
-  }
-  return out;
-}
-
-function deepCloneJson<T>(value: T): T {
-  if (value === null || typeof value !== 'object') return value;
-  if (Array.isArray(value)) return value.map(deepCloneJson) as unknown as T;
-  const obj = value as Record<string, unknown>;
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(obj)) {
-    out[k] = deepCloneJson(v);
-  }
-  return out as unknown as T;
-}
-
-/**
- * Build a fresh prd.json payload. `title` is positional because it's the
- * one required field with no schema default; extra fields (context,
- * goals, body_markdown, ...) arrive via `overrides` and preserve Python
- * key-insertion order (schema-declared first, then overrides).
- */
-export function newPrd(title: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  const prd = defaultsFromSchema(PRD_SCHEMA);
-  prd['schema_version'] = CURRENT_SCHEMA_VERSION;
-  prd['kind'] = 'prd';
-  prd['title'] = title;
-  for (const [k, v] of Object.entries(overrides)) {
-    prd[k] = v;
-  }
-  return prd;
+export function newPrd(
+  title: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return stateNewPrd(title, overrides) as unknown as Record<string, unknown>;
 }
 
 export function newPlan(tasks: unknown[], mode = 'simple'): Record<string, unknown> {
-  const plan = defaultsFromSchema(PLAN_SCHEMA);
-  plan['schema_version'] = CURRENT_SCHEMA_VERSION;
-  plan['kind'] = 'plan';
-  plan['mode'] = mode;
-  plan['tasks'] = tasks;
-  return plan;
+  return stateNewPlan(tasks as PlanData['tasks'], mode) as unknown as Record<string, unknown>;
 }
 
 /**
- * Initialize a state.json shell mirroring `plan` task/step structure.
- * Key order is hard-coded to match `state.py:new_state`, not derived
- * from STATE_SCHEMA — Python builds the dict inline with a literal
- * `{...}`, so the on-disk order follows that literal, not the schema.
+ * Markdown-tolerant `newState` wrapper. Accepts the untyped dict shape
+ * the markdown parsers produce; delegates to the canonical builder in
+ * `state.ts` so key order / on-disk bytes stay identical.
  */
 export function newState(
   slug: string,
   branch: string,
   plan: Record<string, unknown>,
 ): Record<string, unknown> {
-  const now = utcnowIso();
-  const tasksState: Record<string, unknown>[] = [];
-  const planTasks = Array.isArray(plan['tasks']) ? (plan['tasks'] as Record<string, unknown>[]) : [];
-
-  for (const task of planTasks) {
-    const stepsState: Record<string, unknown>[] = [];
-    const taskSteps = Array.isArray(task['steps']) ? (task['steps'] as Record<string, unknown>[]) : [];
-    for (const step of taskSteps) {
-      stepsState.push({
-        id: step['id'],
-        status: 'pending',
-        started_at: '',
-        ended_at: '',
-        commit_sha: '',
-        validator_summary: {
-          build: 'pending',
-          lint: 'pending',
-          test: 'pending',
-          custom: 'pending',
-          llm: 'pending',
-        },
-        halt_reason: '',
-      });
-    }
-    tasksState.push({
-      id: task['id'],
-      status: 'pending',
-      started_at: '',
-      ended_at: '',
-      review: {
-        verdict: 'pending',
-        notes: '',
-        reviewer: '',
-        reviewed_at: '',
-      },
-      steps: stepsState,
-    });
-  }
-
-  return {
-    schema_version: CURRENT_SCHEMA_VERSION,
-    kind: 'state',
-    run_status: 'pending',
-    slug,
-    branch,
-    current_task: '',
-    current_step: '',
-    started_at: '',
-    updated_at: now,
-    ended_at: '',
-    tasks: tasksState,
-    dispatch: { dispatched: [] },
-  };
+  return stateNewState(slug, branch, plan as unknown as PlanData) as unknown as Record<string, unknown>;
 }
 
 // --------------------------------------------------------------------------
 // Markdown regex primitives — mirrors migrate.py module-level regexes.
+//
+// WARNING: these regexes all carry the `g` flag and are safe only because
+// callers use `String.prototype.matchAll` (stateless). Do NOT switch to
+// `.exec()` in a loop — the global flag causes `lastIndex` to carry
+// between calls and produces silent misparses on the second pass.
 // --------------------------------------------------------------------------
 
 // H1 title: "# Task Plan: ..." or "# <anything>"

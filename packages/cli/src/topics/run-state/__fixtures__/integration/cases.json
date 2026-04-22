@@ -1,0 +1,42 @@
+{
+  "init_only": [
+    { "op": "init" }
+  ],
+  "step_start": [
+    { "op": "init" },
+    { "op": "step", "action": "start", "step_id": "1.1.1" }
+  ],
+  "validator_set": [
+    { "op": "init" },
+    { "op": "step", "action": "start", "step_id": "1.1.1" },
+    { "op": "validator_set", "step_id": "1.1.1", "phase": "build", "status": "pass" }
+  ],
+  "step_complete": [
+    { "op": "init" },
+    { "op": "step", "action": "start", "step_id": "1.1.1" },
+    { "op": "step", "action": "complete", "step_id": "1.1.1", "commit": "abc1234" }
+  ],
+  "task_review_approved": [
+    { "op": "init" },
+    { "op": "step", "action": "start", "step_id": "1.1.1" },
+    { "op": "step", "action": "complete", "step_id": "1.1.1" },
+    { "op": "step", "action": "start", "step_id": "1.1.2" },
+    { "op": "step", "action": "complete", "step_id": "1.1.2" },
+    { "op": "task_review", "task_id": "1.1", "verdict": "approved", "reviewer": "principal" }
+  ],
+  "dispatch_record": [
+    { "op": "init" },
+    { "op": "dispatch_record", "key": "k1", "event": "step-complete" }
+  ],
+  "step_halt": [
+    { "op": "init" },
+    { "op": "step", "action": "start", "step_id": "1.1.1" },
+    { "op": "step", "action": "halt", "step_id": "1.1.1", "reason": "validation failed" }
+  ],
+  "report_write": [
+    { "op": "init" },
+    { "op": "step", "action": "start", "step_id": "1.1.1" },
+    { "op": "step", "action": "complete", "step_id": "1.1.1", "commit": "abc1234" },
+    { "op": "report_write", "step_id": "1.1.1", "status": "completed", "commit": "abc1234" }
+  ]
+}

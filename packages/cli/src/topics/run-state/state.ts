@@ -170,14 +170,28 @@ export class StateError extends Error {
 // Time utilities — centralized so tests can stub.
 // ---------------------------------------------------------------------------
 
-/** ISO-8601 UTC timestamp with `Z` suffix, seconds precision. */
-export function utcnowIso(): string {
+/**
+ * Unified clock seam for state + migrate modules. Python tests monkeypatch
+ * `tools.run_state.state.utcnow_iso`; the TS equivalent is swapping
+ * `_clock.now`. Both `state.ts` and `migrate.ts` route through this single
+ * indirection so a single override covers both modules.
+ */
+export const _clock: { now: () => string } = {
+  now: defaultUtcnowIso,
+};
+
+function defaultUtcnowIso(): string {
   // Parity seam for capture.sh harnesses: PROVE_STATE_FROZEN_NOW lets Python
   // and TS sides emit identical timestamps. Not used in production.
   const frozen = process.env.PROVE_STATE_FROZEN_NOW;
   if (frozen) return frozen;
   // Match Python: datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
   return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+}
+
+/** ISO-8601 UTC timestamp with `Z` suffix, seconds precision. */
+export function utcnowIso(): string {
+  return _clock.now();
 }
 
 // ---------------------------------------------------------------------------
@@ -203,8 +217,10 @@ function readJson(path: string): Record<string, unknown> {
  * Atomic write via temp-file + rename. Python: `json.dump(indent=2) + '\n'`
  * then `os.replace`. We mirror exactly: 2-space indent, trailing newline,
  * no key sorting (construction order preserved).
+ *
+ * Exported so `migrate.ts` shares the exact same writer and stays byte-equal.
  */
-function writeJsonAtomic(path: string, data: unknown): void {
+export function writeJsonAtomic(path: string, data: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.tmp`;
   const body = `${JSON.stringify(data, null, 2)}\n`;
@@ -216,22 +232,33 @@ function writeJsonAtomic(path: string, data: unknown): void {
 // Defaults / factory helpers
 // ---------------------------------------------------------------------------
 
-function deepCopy<T>(value: T): T {
+/**
+ * JSON-only deep clone used by factory helpers to avoid sharing nested
+ * default arrays/dicts across fresh payloads. Exported so `migrate.ts`
+ * shares the exact same routine.
+ */
+export function deepCloneJson<T>(value: T): T {
   if (value === null || typeof value !== 'object') return value;
-  if (Array.isArray(value)) return value.map((v) => deepCopy(v)) as unknown as T;
+  if (Array.isArray(value)) return value.map((v) => deepCloneJson(v)) as unknown as T;
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    out[k] = deepCopy(v);
+    out[k] = deepCloneJson(v);
   }
   return out as unknown as T;
 }
 
-/** Render a minimal object populated with defaults for every field that has one. */
-function defaultsFromSchema(schema: Schema): Record<string, unknown> {
+/** Back-compat alias for call sites that used the shorter name. */
+const deepCopy = deepCloneJson;
+
+/**
+ * Render a minimal object populated with defaults for every field that has
+ * one. Exported so `migrate.ts` shares the exact same routine.
+ */
+export function defaultsFromSchema(schema: Schema): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [name, spec] of Object.entries(schema.fields) as Array<[string, FieldSpec]>) {
     if ('default' in spec) {
-      out[name] = deepCopy(spec.default);
+      out[name] = deepCloneJson(spec.default);
     }
   }
   return out;

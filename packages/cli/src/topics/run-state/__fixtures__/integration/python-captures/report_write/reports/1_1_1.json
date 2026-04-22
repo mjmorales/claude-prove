@@ -1,0 +1,18 @@
+{
+  "schema_version": "1",
+  "kind": "report",
+  "step_id": "1.1.1",
+  "task_id": "1.1",
+  "status": "completed",
+  "commit_sha": "abc1234",
+  "started_at": "",
+  "ended_at": "2026-04-22T12:00:00Z",
+  "diff_stats": {
+    "files_changed": 0,
+    "insertions": 0,
+    "deletions": 0
+  },
+  "validators": [],
+  "artifacts": [],
+  "notes": ""
+}
