@@ -49,11 +49,11 @@ Identify edge cases across input boundaries, state conditions, error scenarios. 
 
 After discovery, emit two JSON files under `.prove/runs/<branch>/<slug>/` — pick `<branch>` from the intent (`feature`, `fix`, `chore`, `refactor`, ...) and derive `<slug>` from a kebab-cased task name (max 40 chars).
 
-Both files are validated by a PostToolUse hook against `tools/run_state/schemas.py`. Invalid writes block.
+Both files are validated by a PostToolUse hook against `packages/cli/src/topics/run-state/schemas.ts`. Invalid writes block.
 
 ### prd.json
 
-Shape (see `tools/run_state/schemas.py::PRD_SCHEMA`):
+Shape (see `packages/cli/src/topics/run-state/schemas.ts` — `PRD_SCHEMA`):
 
 ```json
 {
@@ -77,7 +77,7 @@ Shape (see `tools/run_state/schemas.py::PRD_SCHEMA`):
 
 ### plan.json
 
-Shape (see `tools/run_state/schemas.py::PLAN_SCHEMA`):
+Shape (see `packages/cli/src/topics/run-state/schemas.ts` — `PLAN_SCHEMA`):
 
 ```json
 {
@@ -117,7 +117,7 @@ Shape (see `tools/run_state/schemas.py::PLAN_SCHEMA`):
 After writing `prd.json` + `plan.json`, initialize `state.json` with:
 
 ```bash
-python3 -m tools.run_state init \
+scripts/prove-run init \
   --branch <branch> --slug <slug> \
   --plan .prove/runs/<branch>/<slug>/plan.json \
   --prd .prove/runs/<branch>/<slug>/prd.json
@@ -135,7 +135,7 @@ Check `.claude/.prove.json` for configured validators — use those commands in 
 - `assets/task-planning-prompts.md` — prompt templates for planning sessions
 - `references/edge-cases-checklist.md` — edge case checklist by domain
 - `references/interaction-patterns.md` — AskUserQuestion vs free-form patterns
-- `tools/run_state/schemas.py` — authoritative JSON schemas
+- `packages/cli/src/topics/run-state/schemas.ts` — authoritative JSON schemas
 
 ## Committing
 

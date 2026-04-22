@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# prove-run — thin wrapper around `python3 -m tools.run_state` for agent use.
+# prove-run — thin wrapper around `prove run-state` (TS CLI) for agent use.
 #
 # Always operates from the main worktree root so .prove/runs/ paths resolve
 # correctly when an agent is inside a sub-worktree. Auto-detects slug from
@@ -40,11 +40,9 @@ _MAIN_ROOT="${_MAIN_ROOT:-$_WORK_DIR}"
 # then fall back to the main worktree for local dev.
 _PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_DIR:-$_MAIN_ROOT}}"
 
-export PYTHONPATH="${_PLUGIN_ROOT}:${PYTHONPATH:-}"
-
 _cli() {
   # Always run from main worktree so --runs-root defaults correctly
-  (cd "$_MAIN_ROOT" && python3 -m tools.run_state "$@")
+  (cd "$_MAIN_ROOT" && bun run "$_PLUGIN_ROOT/packages/cli/bin/run.ts" run-state "$@")
 }
 
 SUB="${1:-}"
@@ -103,7 +101,7 @@ HELP
   show-report)
     step_id="${1:?usage: prove-run show-report <step-id>}"
     shift
-    _cli report show "$step_id" "$@"
+    _cli show-report "$step_id" "$@"
     ;;
 
   summary)

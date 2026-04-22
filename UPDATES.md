@@ -6,6 +6,42 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v0.39.0 — run_state ported to TypeScript
+
+Phase 6 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`). The Python `tools/run_state/` module is retired; orchestrator state mutation now flows through `prove run-state` backed by `packages/cli/src/topics/run-state/`. Every Claude Code hook, shell script, and skill directive that previously invoked `python3 -m tools.run_state ...` now routes through the TS CLI (directly or via `scripts/prove-run`, whose public interface is unchanged).
+
+**Removed**:
+
+- `tools/run_state/` (all Python sources, hook entrypoints, tests, `tool.json`, `__main__.py`, `_validator.py`)
+- `python3 -m tools.run_state <cmd>` invocation path
+- `python3 tools/run_state/hook_*.py` commands in `.claude/settings.json` (PreToolUse, PostToolUse, SessionStart, Stop, SubagentStop)
+
+**Added**:
+
+- `prove run-state validate, init, show [--kind ...], show-report <id>, ls, summary, current, step <start|complete|fail|halt> <id>, step-info <id>, validator set <id> <phase> <status>, task review <id> --verdict <v>, dispatch <record|has>, report write <id> --status ..., migrate` — full TS port
+- `prove run-state hook <guard|validate|session-start|stop|subagent-stop>` — Claude Code hook entrypoints, read payload from stdin, exit with Python-compatible codes
+- `packages/cli/src/topics/run-state/{schemas,validate,validator-engine,paths,state,migrate,render}.ts` — 312 bun tests and 63+ byte-equal parity captures against the retired Python module
+- `packages/cli/src/topics/run-state/hooks/{guard,validate,session-start,stop,subagent-stop,dispatch,json-compat,types}.ts`
+- `packages/cli/src/topics/run-state/cli/*` — 13 per-action handlers
+
+**Migration**:
+
+1. Run `/prove:update` — picks up the new CLI and rewrites the five `.claude/settings.json` hook entries (PreToolUse + PostToolUse Write|Edit|MultiEdit, SessionStart resume|compact, Stop, SubagentStop general-purpose) in place.
+2. Manual fallback for each hook: command body becomes `bun run <plugin>/packages/cli/bin/run.ts run-state hook <event>`; timeouts preserved (3000ms SessionStart, 5000ms everywhere else).
+3. `scripts/prove-run` keeps its public interface unchanged; the body swaps to `bun run <plugin>/packages/cli/bin/run.ts run-state`. Agents calling `scripts/prove-run <subcmd>` need no changes.
+4. If scripts call `python3 -m tools.run_state …` directly, rewrite to `prove run-state …` (or `scripts/prove-run <subcmd>`).
+5. Schema path references: `tools/run_state/schemas.py` → `packages/cli/src/topics/run-state/schemas.ts`.
+
+**CLI shape divergences** (agents calling the underlying CLI directly — `scripts/prove-run` masks these):
+
+- Python `run_state report show <step_id>` is now `run-state show-report <step_id>` on the TS side. `scripts/prove-run show-report <id>` still works unchanged.
+- `run-state migrate` flags are kebab-case on the CLI (`--dry-run`, `--overwrite`) and camelCase internally. Downstream wrappers should pass kebab.
+- Exit codes mirror Python: 0 success, 1 usage/IO, 2 schema/invariant violation (hook-blocking), 3 dispatch miss.
+
+**Auto-adoption**: `/prove:update` swaps `.claude/settings.json` hook entries and refreshes `scripts/prove-run` body in place. No on-disk format migration required — state.json / plan.json / prd.json / reports/*.json schemas are unchanged (still `schema_version: "1"`).
+
+---
+
 ## v0.38.0 — CAFI ported to TypeScript
 
 Phase 5 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`). The Python `tools/cafi/` module is retired; the content-addressable file index is now a real TypeScript topic backed by `packages/cli/src/topics/cafi/` and the shared helpers in `packages/shared/src/`. The PreToolUse Glob|Grep hook that injects CAFI context now runs the TS gate. Config is now read from the post-v4 `tools.cafi.config` path — the retired top-level `index` key is no longer consulted, fixing a latent silent-fallback-to-defaults bug.
@@ -172,10 +208,12 @@ Override the Pre hook with `RUN_STATE_ALLOW_DIRECT=1` only for emergency recover
 ```bash
 # One-shot — converts every legacy run in-place, folds dispatch-state.json
 # into state.json, preserves markdown bodies under prd.body_markdown.
-python3 -m tools.run_state migrate
+# (Since v0.39.0 this runs through the TS CLI; prior versions shipped
+#  `python3 -m tools.run_state migrate`, retired with tools/run_state/.)
+prove run-state migrate
 
 # Review what changed first:
-python3 -m tools.run_state migrate --dry-run
+prove run-state migrate --dry-run
 
 # Then delete legacy md/json:
 find .prove/runs -type f \
@@ -215,7 +253,7 @@ python3 tools/registry.py install run_state
 
 ### Schema evolution
 
-Run-state JSON carries its own `schema_version` (currently `"1"`) independent from the `.claude/.prove.json` schema. Future breaking changes will increment and migrate via `tools/run_state/migrate.py`.
+Run-state JSON carries its own `schema_version` (currently `"1"`) independent from the `.claude/.prove.json` schema. Future breaking changes will increment and migrate via `packages/cli/src/topics/run-state/migrate.ts`.
 
 ---
 

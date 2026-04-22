@@ -5,8 +5,9 @@
 # events via scripts/dispatch-event.sh. Runs async — never blocks.
 #
 # Run state is read from .prove/runs/<branch>/<slug>/state.json (via the
-# run_state CLI). Commit messages carry a [WIP] marker for halted steps;
-# step completion pulls the current step id from state.json.
+# `prove run-state` CLI, invoked through scripts/prove-run). Commit messages
+# carry a [WIP] marker for halted steps; step completion pulls the current
+# step id from state.json.
 
 set -uo pipefail
 
@@ -51,8 +52,8 @@ if echo "$TOOL_INPUT" | grep -q 'git commit'; then
     STEP=""
     if [[ -n "$RUN_BRANCH" ]]; then
       STEP=$(PROVE_RUN_BRANCH="$RUN_BRANCH" PROVE_RUN_SLUG="$SLUG" \
-        python3 -m tools.run_state current --format json 2>/dev/null \
-        | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('current_step') or '')" 2>/dev/null || echo "")
+        "${SCRIPT_DIR}/../prove-run" current --format json 2>/dev/null \
+        | jq -r '.current_step // empty' 2>/dev/null || echo "")
     fi
 
     if echo "$TOOL_INPUT" | grep -q '\[WIP\]'; then
