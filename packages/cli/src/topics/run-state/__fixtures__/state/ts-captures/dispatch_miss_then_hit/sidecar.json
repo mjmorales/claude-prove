@@ -1,0 +1,25 @@
+{
+  "returns": [
+    {
+      "op": "dispatchHas",
+      "key": "step-complete:1.1.1",
+      "ret": false
+    },
+    {
+      "op": "dispatchRecord",
+      "key": "step-complete:1.1.1",
+      "ret": true
+    },
+    {
+      "op": "dispatchHas",
+      "key": "step-complete:1.1.1",
+      "ret": true
+    },
+    {
+      "op": "dispatchRecord",
+      "key": "step-complete:1.1.1",
+      "ret": false
+    }
+  ],
+  "errors": []
+}

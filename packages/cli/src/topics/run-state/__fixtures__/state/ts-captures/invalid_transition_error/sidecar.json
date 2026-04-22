@@ -1,0 +1,9 @@
+{
+  "returns": [],
+  "errors": [
+    {
+      "op": "stepComplete",
+      "message": "illegal transition: 'pending' -> 'completed' (allowed from 'pending': ['in_progress', 'skipped'])"
+    }
+  ]
+}
