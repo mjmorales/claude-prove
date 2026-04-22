@@ -21,6 +21,7 @@
  *   prove run-state dispatch <record|has> <key> [<event>]
  *   prove run-state report write <step_id> --status S [--commit SHA] [--json FILE] [--notes TEXT]
  *   prove run-state migrate [--dry-run] [--overwrite]
+ *   prove run-state hook <guard|validate|session-start|stop|subagent-stop>
  *
  * Exit codes mirror Python:
  *   0  success
@@ -28,11 +29,13 @@
  *   2  schema / state invariant violation (suitable for hook blocking)
  *   3  dispatch miss (`dispatch record` on dup key, `dispatch has` on absent)
  *
- * Hooks (`run-state hook <event>`) land in Task 6. Render-dependent md
- * views (`show --format md`, `show-report --format md`, `summary`,
- * `current --format text`) are stubbed to exit 2 with a pointer; they
- * wire into `render.ts` in the Task 4+5 post-merge pass. `--format json`
- * works today across all read paths.
+ * Render-dependent md views (`show --format md`, `show-report --format
+ * md`, `summary`, `current --format text`) wire into `render.ts`.
+ * `--format json` works across all read paths.
+ *
+ * Hooks (`run-state hook <event>`) read a Claude Code hook payload from
+ * stdin, dispatch to `./run-state/hooks/<event>.ts`, and exit with a
+ * Python-compatible code. See `./run-state/hooks/dispatch.ts`.
  */
 
 import type { CAC } from 'cac';
@@ -41,16 +44,12 @@ import { runInit } from './run-state/cli/init-cmd';
 import { runLs } from './run-state/cli/ls-cmd';
 import { runMigrate } from './run-state/cli/migrate-cmd';
 import { runReportWrite } from './run-state/cli/report-cmd';
-import {
-  runCurrent,
-  runShow,
-  runShowReport,
-  runSummary,
-} from './run-state/cli/show-cmd';
-import { runStep, type StepAction } from './run-state/cli/step-cmd';
+import { runCurrent, runShow, runShowReport, runSummary } from './run-state/cli/show-cmd';
+import { type StepAction, runStep } from './run-state/cli/step-cmd';
 import { runTaskReview } from './run-state/cli/task-cmd';
 import { runValidate } from './run-state/cli/validate-cmd';
 import { runValidatorSet } from './run-state/cli/validator-cmd';
+import { HOOK_EVENTS, isHookEvent, runHookFromStdin } from './run-state/hooks/dispatch';
 
 /**
  * Every flag the run-state command accepts, typed as a union — individual
@@ -91,7 +90,8 @@ type RunStateAction =
   | 'task'
   | 'dispatch'
   | 'report'
-  | 'migrate';
+  | 'migrate'
+  | 'hook';
 
 const ACTIONS: RunStateAction[] = [
   'validate',
@@ -107,6 +107,7 @@ const ACTIONS: RunStateAction[] = [
   'dispatch',
   'report',
   'migrate',
+  'hook',
 ];
 
 const STEP_ACTIONS = new Set<StepAction>(['start', 'complete', 'fail', 'halt']);
@@ -330,6 +331,24 @@ function dispatch(
         dryRun: flags.dryRun,
         overwrite: flags.overwrite,
       });
+
+    case 'hook': {
+      // run-state hook <event>  — reads Claude Code hook payload from stdin,
+      // dispatches to the TS hook module, writes stdout/stderr, returns exit.
+      const event = arg1;
+      if (!event) {
+        return usage(
+          `the following arguments are required: hook event (one of: ${HOOK_EVENTS.join(', ')})`,
+        );
+      }
+      if (!isHookEvent(event)) {
+        console.error(
+          `error: unknown hook event '${event}' (expected: ${HOOK_EVENTS.join(' | ')})`,
+        );
+        return 1;
+      }
+      return runHookFromStdin(event);
+    }
   }
 }
 

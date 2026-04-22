@@ -25,7 +25,6 @@ __fixtures__/
     sequences.json          <- shared mutator-sequence specs
     python-captures/<name>/ <- state.json, reports/*, sidecar.json
     ts-captures/<name>/     <- mirrors python-captures, asserted byte-equal
-<<<<<<< HEAD
   render/
     capture.sh              <- regenerates render markdown/JSON captures
     cases.json              <- view/format/input mapping
@@ -34,13 +33,16 @@ __fixtures__/
     python-captures/<n>.txt <- JSON captures (.txt skirts biome formatter)
     ts-captures/<n>.md
     ts-captures/<n>.txt
-=======
   integration/
     capture.sh              <- regenerates CLI integration captures
     cases.json              <- shared CLI-subcommand scenario specs
     python-captures/<name>/ <- final state.json + reports/* for each scenario
     ts-captures/<name>/     <- mirrors python-captures, asserted byte-equal
->>>>>>> task/run-state-topic/5
+  hooks/
+    capture.sh              <- regenerates hook stdout/stderr/exit captures
+    cases.json              <- per-hook payload + optional fs setup
+    python-captures/<name>/ <- stdout, stderr, exit for each case
+    ts-captures/<name>/     <- mirrors python-captures, asserted byte-equal
 ```
 
 ## Regeneration
@@ -49,19 +51,17 @@ __fixtures__/
 bash packages/cli/src/topics/run-state/__fixtures__/validator/capture.sh
 bash packages/cli/src/topics/run-state/__fixtures__/schemas/capture.sh
 bash packages/cli/src/topics/run-state/__fixtures__/state/capture.sh
-<<<<<<< HEAD
 bash packages/cli/src/topics/run-state/__fixtures__/render/capture.sh
-=======
 bash packages/cli/src/topics/run-state/__fixtures__/integration/capture.sh
->>>>>>> task/run-state-topic/5
+bash packages/cli/src/topics/run-state/__fixtures__/hooks/capture.sh
 ```
 
-Both scripts:
+Each script:
 
-1. Read the shared `cases.json`.
-2. Run the Python source against each case, serialize stringified errors
-   into `python-captures/<name>.json`.
-3. Run the TS port against each case, write `ts-captures/<name>.json`.
+1. Reads the shared `cases.json` (or scenarios spec).
+2. Runs the Python source against each case, serializing output into
+   `python-captures/<name>/...`.
+3. Runs the TS port against each case, writing `ts-captures/<name>/...`.
 
 Tests assert `python-captures/` and `ts-captures/` are byte-identical
 per case — regeneration must be deterministic.
@@ -107,7 +107,6 @@ identical output. Scenarios:
 | `report_write_twice_overwrites` | reportWrite is overwrite-in-place      |
 | `invalid_transition_error`      | StateError byte-parity on illegal FSM  |
 
-<<<<<<< HEAD
 Render captures (`render/`) cover every exported view (`renderPrd`,
 `renderPlan`, `renderState`, `renderReport`, `renderSummary`,
 `renderCurrent`) on canonical fixtures plus edge cases:
@@ -125,7 +124,7 @@ Render captures (`render/`) cover every exported view (`renderPrd`,
 | `report_completed`       | completed step report with diff stats + validators   |
 | `report_halted`          | halted step with fenced validator output block       |
 | `summary_*` / `current_*`| per-state summary text and current JSON/text branch  |
-=======
+
 Integration captures (`integration/`) drive the CLI end-to-end from
 both `python3 -m tools.run_state` and `bun run packages/cli/bin/run.ts
 run-state`. Python patches `utcnow_iso` in-process via a tiny wrapper
@@ -142,7 +141,35 @@ side. Scenarios:
 | `dispatch_record`       | dispatch record appends to ledger                |
 | `step_halt`             | step halt marks task/run halted, captures reason |
 | `report_write`          | report write serializes reports/<step_id>.json   |
->>>>>>> task/run-state-topic/5
+
+Hook captures (`hooks/`) drive each Claude Code hook event against both
+`tools/run_state/hook_*.py` and `bun run … run-state hook <event>` with
+a shared tmpdir layout so `PROJECT` placeholders substitute identically.
+Scenarios:
+
+| Scenario                             | Coverage                                |
+| ------------------------------------ | --------------------------------------- |
+| `guard/block_state`                  | deny Write on `state.json`              |
+| `guard/block_state_backslash`        | backslash path normalization            |
+| `guard/allow_non_state`              | `plan.json` writes pass                 |
+| `guard/multi_edit_state`             | MultiEdit tool also denied              |
+| `guard/non_mutating_tool`            | Read/Bash bypass the hook               |
+| `guard/malformed_payload`            | silent no-op on non-JSON stdin          |
+| `validate/valid_plan`                | valid plan.json → pass                  |
+| `validate/invalid_plan`              | missing tasks → block + findings        |
+| `validate/valid_prd`                 | valid prd.json → pass                   |
+| `validate/invalid_prd`               | missing title → block                   |
+| `validate/valid_report`              | reports/*.json schema match             |
+| `validate/non_run_state_path`        | ignore non-`.prove/runs/` paths         |
+| `validate/non_mutating_tool`         | ignore Bash tool                        |
+| `session_start/resume_active_run`    | emits `additionalContext`               |
+| `session_start/compact_active_run`   | halted run still surfaced               |
+| `session_start/no_active_run`        | silent when no runs exist               |
+| `session_start/skips_completed_runs` | completed runs filtered out             |
+| `stop/no_active_runs`                | silent when `.prove/runs/` missing      |
+| `stop/no_inprogress`                 | no change when nothing in progress      |
+| `subagent_stop/no_slug_marker`       | silent when no worktree marker found    |
+| `subagent_stop/no_payload`           | silent on empty stdin                   |
 
 ## Provenance
 
