@@ -151,7 +151,7 @@ The new TS workspace sits alongside the legacy Python tools:
 
 ```
 packages/
-├── cli/           # oclif v4 CLI — bin/run.ts, src/commands/<topic>/index.ts stubs
+├── cli/           # cac CLI — bin/run.ts, src/topics/<topic>.ts registrations
 └── shared/        # @claude-prove/shared — types, logger, cross-package utilities
 ```
 
@@ -176,11 +176,9 @@ bun build --compile \
   packages/cli/bin/run.ts
 ```
 
-**Known limitation (tracked for phase 3, `packages/store/`)**: in compiled binaries produced by
-`bun build --compile`, oclif's dynamic command discovery does not resolve paths through bun's
-virtual filesystem. The binary runs and exits cleanly but `--help` renders only the top-level
-chrome, not the topic list shown in dev mode. Full dispatch from the compiled binary is addressed
-when the first real topic (`store`) ports and needs runtime command invocation from the binary.
+The compiled binary runs identically to the dev-mode invocation — `--help` lists all topics and
+each stub command dispatches correctly. cac registers commands statically at startup, so there is
+no filesystem discovery or dynamic `import(path)` for `bun build --compile` to break.
 
 ### Workspace scripts
 

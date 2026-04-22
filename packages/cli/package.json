@@ -15,24 +15,6 @@
   },
   "dependencies": {
     "@claude-prove/shared": "workspace:*",
-    "@oclif/core": "^4.0.33"
-  },
-  "oclif": {
-    "bin": "prove",
-    "dirname": "prove",
-    "commands": "./src/commands",
-    "topicSeparator": " ",
-    "topics": {
-      "store": { "description": "Unified prove.db store operations (phase 2)" },
-      "schema": { "description": "Prove config schema migrations (phase 3)" },
-      "cafi": { "description": "Content-addressable file index (phase 4)" },
-      "run-state": { "description": "Orchestrator run state CRUD (phase 5)" },
-      "pcd": { "description": "Structural-map audits (phase 6)" },
-      "round-table": { "description": "Multi-agent deliberation (phase 7)" },
-      "acb": { "description": "Agent change brief review (phase 8)" },
-      "scrum": { "description": "Agentic task management (phase 11)" },
-      "hook": { "description": "Claude Code hook dispatch" },
-      "install": { "description": "Install Claude-side wiring" }
-    }
+    "cac": "^6.7.14"
   }
 }
