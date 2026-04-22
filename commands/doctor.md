@@ -74,11 +74,11 @@ PYTHONPATH="$PLUGIN_DIR" python3 "$PLUGIN_DIR/tools/registry.py" \
 Skip unless `tools.cafi.enabled` is true.
 
 ```bash
-python3 $PLUGIN_DIR/tools/cafi/__main__.py status 2>&1
+bun run $PLUGIN_DIR/packages/cli/bin/run.ts cafi status 2>&1
 ```
 
 - Pass: reports indexed files
-- Fail: errors or index missing — fix: `python3 $PLUGIN_DIR/tools/cafi/__main__.py index`
+- Fail: errors or index missing — fix: `bun run $PLUGIN_DIR/packages/cli/bin/run.ts cafi index`
 
 #### 2.3: Docker
 
@@ -133,11 +133,11 @@ For each enabled pack (check `kind` field in the status output), verify symlinks
 Skip unless CAFI configured and index exists.
 
 ```bash
-python3 $PLUGIN_DIR/tools/cafi/__main__.py status 2>&1
+bun run $PLUGIN_DIR/packages/cli/bin/run.ts cafi status 2>&1
 ```
 
 - Pass: up to date
-- Warn: N files changed — fix: `python3 $PLUGIN_DIR/tools/cafi/__main__.py index`
+- Warn: N files changed — fix: `bun run $PLUGIN_DIR/packages/cli/bin/run.ts cafi index`
 
 #### 3.2: Orphaned Worktrees
 

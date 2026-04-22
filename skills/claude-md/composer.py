@@ -111,8 +111,8 @@ def compose_subagent_context(scan: dict, plugin_dir: str | None = None) -> str:
     if cafi.get("available"):
         parts.append("")
         parts.append("**Discovery**: Before broad Glob/Grep searches, check the file index:")
-        parts.append(f"- `python3 {plugin_dir}/tools/cafi/__main__.py context` — full index with routing hints")
-        parts.append(f"- `python3 {plugin_dir}/tools/cafi/__main__.py get <path>` — single file description")
+        parts.append(f"- `bun run {plugin_dir}/packages/cli/bin/run.ts cafi context` — full index with routing hints")
+        parts.append(f"- `bun run {plugin_dir}/packages/cli/bin/run.ts cafi get <path>` — single file description")
 
     # Validation
     prove = scan.get("prove_config", {})
@@ -212,8 +212,8 @@ def _section_discovery(scan: dict, plugin_dir: str) -> str:
         "",
         "Before broad Glob/Grep searches, check the file index first:",
         "",
-        f"- `python3 {plugin_dir}/tools/cafi/__main__.py context` — full index with routing hints",
-        f"- `python3 {plugin_dir}/tools/cafi/__main__.py lookup <keyword>` — search by keyword",
+        f"- `bun run {plugin_dir}/packages/cli/bin/run.ts cafi context` — full index with routing hints",
+        f"- `bun run {plugin_dir}/packages/cli/bin/run.ts cafi lookup <keyword>` — search by keyword",
         "",
         "Only fall back to Glob/Grep when the index doesn't cover what you need.",
     ]

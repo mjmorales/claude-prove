@@ -15,9 +15,9 @@
  * `@claude-prove/shared` so the test does not depend on the Claude
  * CLI at all.
  *
- * The `gate` action is intentionally out of scope: its implementation
- * lives in task 3 (`gate.ts`) and will be wired by task 5's callers
- * sweep — see the TODO in `cafi.ts`.
+ * The `gate` action reads its payload from stdin, so its integration
+ * test pipes a canned Glob hook payload via `Bun.spawnSync`'s `stdin`
+ * option and asserts the injected `additionalContext` on stdout.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -43,6 +43,25 @@ function runCli(args: string[], env: Record<string, string> = {}): CliResult {
   // describer.ts.
   const proc = Bun.spawnSync({
     cmd: [process.execPath, 'run', CLI_ENTRY, 'cafi', ...args],
+    stdout: 'pipe',
+    stderr: 'pipe',
+    env: { ...process.env, ...env },
+  });
+  return {
+    stdout: proc.stdout.toString(),
+    stderr: proc.stderr.toString(),
+    exitCode: proc.exitCode ?? -1,
+  };
+}
+
+function runCliWithStdin(
+  args: string[],
+  stdin: string,
+  env: Record<string, string> = {},
+): CliResult {
+  const proc = Bun.spawnSync({
+    cmd: [process.execPath, 'run', CLI_ENTRY, 'cafi', ...args],
+    stdin: new TextEncoder().encode(stdin),
     stdout: 'pipe',
     stderr: 'pipe',
     env: { ...process.env, ...env },
@@ -289,5 +308,35 @@ describe('cafi CLI — error paths', () => {
     expect(exitCode).toBe(1);
     expect(stderr).toContain('Unknown cafi action: bogus');
     expect(stderr).toContain('Known: index, status, get, lookup, clear, context, gate');
+  });
+});
+
+describe('cafi CLI — gate', () => {
+  test('Glob payload with cached matches emits PreToolUse context on stdout', () => {
+    const root = makeProject('gate-hit');
+    try {
+      seedCache(root, {
+        'src/components/Button.tsx': 'Primary button component.',
+        'src/components/Modal.tsx': 'Accessible modal dialog.',
+        'src/server/index.ts': 'HTTP server entry point.',
+      });
+      const payload = JSON.stringify({
+        tool_name: 'Glob',
+        tool_input: { pattern: 'src/components/**/*.tsx' },
+        cwd: root,
+      });
+      const { stdout, exitCode } = runCliWithStdin(['gate', '--project-root', root], payload);
+      expect(exitCode).toBe(0);
+      expect(stdout).not.toBe('');
+      const parsed = JSON.parse(stdout);
+      expect(parsed.hookSpecificOutput.hookEventName).toBe('PreToolUse');
+      expect(parsed.hookSpecificOutput.permissionDecision).toBe('allow');
+      const ctx: string = parsed.hookSpecificOutput.additionalContext;
+      expect(ctx).toContain("CAFI index matches for 'components'");
+      expect(ctx).toContain('src/components/Button.tsx');
+      expect(ctx).not.toContain('src/server/index.ts');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
