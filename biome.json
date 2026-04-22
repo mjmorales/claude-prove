@@ -20,7 +20,6 @@
       ".claude/worktrees",
       "tools/review-ui",
       "tools/cafi",
-      "tools/pcd",
       "tools/acb",
       "tools/round-table",
       "tools/project-manager",

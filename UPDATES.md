@@ -6,6 +6,34 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v0.40.0 — PCD ported to TypeScript
+
+Phase 7 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`). The Python `tools/pcd/` module is retired; the Progressive Context Distillation deterministic rounds (structural map, collapse, batch formation) now run through `prove pcd` backed by `packages/cli/src/topics/pcd/`. Every steward skill directive that previously invoked `python3 $PLUGIN_DIR/tools/pcd/__main__.py ...` now routes through the TS CLI.
+
+**Removed**:
+
+- `tools/pcd/` (all Python sources, tests, `tool.json`, `README.md`, `__main__.py`, `__init__.py`, `schemas.py`, `import_parser.py`, `structural_map.py`, `collapse.py`, `batch_former.py`)
+- `python3 $PLUGIN_DIR/tools/pcd/__main__.py <cmd>` invocation path
+- `tools/pcd` lint-ignore entry in `biome.json`
+
+**Added**:
+
+- `prove pcd map [--project-root <path>] [--scope <files>]` — Round 0a structural map
+- `prove pcd collapse [--project-root <path>] [--token-budget <n>]` — triage manifest compression
+- `prove pcd batch [--project-root <path>] [--max-files <n>]` — Round 2 batch formation
+- `prove pcd status [--project-root <path>]` — artifact presence check
+- `packages/cli/src/topics/pcd/` — full TS port with bun test coverage and byte-parity fixtures under `__fixtures__/{structural-map,collapse,batch-former}/python-captures/`
+
+**Migration**:
+
+1. Run `/prove:update` — picks up the new CLI. No hook changes needed; no on-disk artifact migration (`.prove/steward/pcd/*.json` schemas unchanged).
+2. If external scripts call `python3 tools/pcd/__main__.py …` directly, rewrite to `prove pcd <map|collapse|batch|status>`.
+3. Steward skill invocations (`skills/steward/SKILL.md`, `skills/steward-review/SKILL.md`, `skills/auto-steward/SKILL.md`) and `agents/pcd/README-pcd.md` already carry the new `prove pcd` form — no user action required.
+
+**Auto-adoption**: None required — steward skill directives were rewritten in place. Existing artifact files under `.prove/steward/pcd/` are read back unchanged by the TS CLI.
+
+---
+
 ## v0.39.0 — run_state ported to TypeScript
 
 Phase 6 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`). The Python `tools/run_state/` module is retired; orchestrator state mutation now flows through `prove run-state` backed by `packages/cli/src/topics/run-state/`. Every Claude Code hook, shell script, and skill directive that previously invoked `python3 -m tools.run_state ...` now routes through the TS CLI (directly or via `scripts/prove-run`, whose public interface is unchanged).
