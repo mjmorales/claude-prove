@@ -46,7 +46,7 @@ Write approved config to `.claude/.prove.json`.
 
 - Merge mode: output from `--merge` already contains all sections with updated validators
 - Fresh mode: write detection output directly
-- Run `PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema migrate --file "$(pwd)/.claude/.prove.json"` after writing to ensure `schema_version` is set
+- Run `prove schema migrate --file "$(pwd)/.claude/.prove.json"` after writing to ensure `schema_version` is set
 
 ## Step 5: Update .gitignore
 
