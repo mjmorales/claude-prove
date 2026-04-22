@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "stats": {
+    "files_reviewed": 0,
+    "high_risk": 0,
+    "medium_risk": 0,
+    "low_risk": 0,
+    "total_questions": 0
+  },
+  "cards": [],
+  "question_index": []
+}

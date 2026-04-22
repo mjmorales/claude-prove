@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "stats": {
+    "files_reviewed": 5,
+    "high_risk": 0,
+    "medium_risk": 1,
+    "low_risk": 3,
+    "total_questions": 1
+  },
+  "cards": [
+    {
+      "file": "src/core/config.py",
+      "lines": 40,
+      "risk": "low",
+      "confidence": 5,
+      "status": "clean",
+      "cluster_id": 3
+    },
+    {
+      "file": "src/core/util.py",
+      "lines": 25,
+      "risk": "low",
+      "confidence": 5,
+      "cluster_id": 3,
+      "findings": [
+        {
+          "category": "dead_code",
+          "brief": "Unused helper",
+          "line_range": [10, 18]
+        }
+      ],
+      "questions": []
+    },
+    {
+      "file": "src/service/payments.py",
+      "lines": 180,
+      "risk": "medium",
+      "confidence": 4,
+      "findings": [
+        {
+          "category": "contract",
+          "brief": "Retry policy not documented",
+          "line_range": [90, 120]
+        }
+      ],
+      "questions": []
+    },
+    {
+      "file": "src/service/auth.py",
+      "lines": 220,
+      "risk": "critical",
+      "confidence": 5,
+      "findings": [
+        {
+          "category": "error_handling",
+          "brief": "Token expiry bypass",
+          "line_range": [40, 75]
+        }
+      ],
+      "questions": []
+    },
+    {
+      "file": "src/core/logger.py",
+      "lines": 15,
+      "risk": "low",
+      "confidence": 5,
+      "status": "clean",
+      "cluster_id": 3
+    }
+  ],
+  "question_index": [
+    {
+      "id": "q-001",
+      "from_file": "src/service/payments.py",
+      "target_files": ["src/core/config.py"],
+      "question_type": "contract"
+    }
+  ]
+}

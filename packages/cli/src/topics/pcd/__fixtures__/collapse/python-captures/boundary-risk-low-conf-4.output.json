@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "stats": {
+    "total_cards": 1,
+    "preserved": 0,
+    "collapsed": 1,
+    "compression_ratio": 1.0
+  },
+  "preserved_cards": [],
+  "collapsed_summaries": [
+    {
+      "cluster_id": 7,
+      "file_count": 1,
+      "files": [
+        "src/boundary.py"
+      ],
+      "max_risk": "low",
+      "aggregate_signals": [
+        "Ambiguous local variable name"
+      ]
+    }
+  ],
+  "question_index": []
+}

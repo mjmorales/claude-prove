@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "stats": {
+    "total_cards": 3,
+    "preserved": 0,
+    "collapsed": 3,
+    "compression_ratio": 1.0
+  },
+  "preserved_cards": [],
+  "collapsed_summaries": [
+    {
+      "cluster_id": 1,
+      "file_count": 2,
+      "files": [
+        "src/a.py",
+        "src/b.py"
+      ],
+      "max_risk": "low",
+      "aggregate_signals": []
+    },
+    {
+      "cluster_id": 2,
+      "file_count": 1,
+      "files": [
+        "lib/c.py"
+      ],
+      "max_risk": "low",
+      "aggregate_signals": []
+    }
+  ],
+  "question_index": []
+}

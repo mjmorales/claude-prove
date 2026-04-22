@@ -24,7 +24,8 @@
       "tools/acb",
       "tools/round-table",
       "tools/project-manager",
-      "tools/_lib"
+      "tools/_lib",
+      "packages/cli/src/topics/pcd/__fixtures__/collapse/python-captures"
     ]
   },
   "organizeImports": { "enabled": true },
