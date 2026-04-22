@@ -1,0 +1,115 @@
+[
+  {
+    "name": "prd_valid",
+    "kind": "prd",
+    "data": {
+      "schema_version": "1",
+      "kind": "prd",
+      "title": "Port run_state to TS"
+    }
+  },
+  {
+    "name": "prd_missing_title",
+    "kind": "prd",
+    "data": {
+      "schema_version": "1",
+      "kind": "prd"
+    }
+  },
+  {
+    "name": "plan_valid_minimal",
+    "kind": "plan",
+    "data": {
+      "schema_version": "1",
+      "kind": "plan",
+      "tasks": [
+        {
+          "id": "1.1",
+          "title": "t",
+          "wave": 1,
+          "steps": [{ "id": "1.1.1", "title": "first step" }]
+        }
+      ]
+    }
+  },
+  {
+    "name": "plan_wave_wrong_type",
+    "kind": "plan",
+    "data": {
+      "schema_version": "1",
+      "kind": "plan",
+      "tasks": [
+        {
+          "id": "1.1",
+          "title": "t",
+          "wave": "not-int",
+          "steps": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "state_valid_empty_tasks",
+    "kind": "state",
+    "data": {
+      "schema_version": "1",
+      "kind": "state",
+      "run_status": "pending",
+      "slug": "x",
+      "updated_at": "2026-04-22T00:00:00Z",
+      "tasks": []
+    }
+  },
+  {
+    "name": "state_bad_run_status",
+    "kind": "state",
+    "data": {
+      "schema_version": "1",
+      "kind": "state",
+      "run_status": "weird",
+      "slug": "x",
+      "updated_at": "2026-04-22T00:00:00Z",
+      "tasks": []
+    }
+  },
+  {
+    "name": "state_dispatch_missing_fields",
+    "kind": "state",
+    "data": {
+      "schema_version": "1",
+      "kind": "state",
+      "run_status": "pending",
+      "slug": "x",
+      "updated_at": "2026-04-22T00:00:00Z",
+      "tasks": [],
+      "dispatch": { "dispatched": [{ "event": "step-complete" }] }
+    }
+  },
+  {
+    "name": "report_valid_minimal",
+    "kind": "report",
+    "data": {
+      "schema_version": "1",
+      "kind": "report",
+      "step_id": "1.1.1",
+      "task_id": "1.1",
+      "status": "completed"
+    }
+  },
+  {
+    "name": "report_bad_status",
+    "kind": "report",
+    "data": {
+      "schema_version": "1",
+      "kind": "report",
+      "step_id": "1.1.1",
+      "task_id": "1.1",
+      "status": "definitely-not-a-status"
+    }
+  },
+  {
+    "name": "unknown_kind",
+    "kind": "nonexistent",
+    "data": { "x": 1 }
+  }
+]

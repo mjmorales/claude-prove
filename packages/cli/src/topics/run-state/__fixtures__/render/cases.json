@@ -1,0 +1,80 @@
+[
+  { "name": "prd_full_md", "view": "prd", "format": "md", "input": "prd_full.json" },
+  { "name": "prd_full_json", "view": "prd", "format": "json", "input": "prd_full.json" },
+  { "name": "prd_minimal_md", "view": "prd", "format": "md", "input": "prd_minimal.json" },
+  { "name": "plan_multi_wave_md", "view": "plan", "format": "md", "input": "plan_multi_wave.json" },
+  {
+    "name": "plan_multi_wave_json",
+    "view": "plan",
+    "format": "json",
+    "input": "plan_multi_wave.json"
+  },
+  { "name": "plan_empty_md", "view": "plan", "format": "md", "input": "plan_empty.json" },
+  { "name": "state_pending_md", "view": "state", "format": "md", "input": "state_pending.json" },
+  {
+    "name": "state_in_progress_md",
+    "view": "state",
+    "format": "md",
+    "input": "state_in_progress.json",
+    "plan": "plan_multi_wave.json"
+  },
+  {
+    "name": "state_completed_md",
+    "view": "state",
+    "format": "md",
+    "input": "state_completed.json",
+    "plan": "plan_multi_wave.json"
+  },
+  {
+    "name": "state_halted_md",
+    "view": "state",
+    "format": "md",
+    "input": "state_halted.json",
+    "plan": "plan_multi_wave.json"
+  },
+  {
+    "name": "state_completed_json",
+    "view": "state",
+    "format": "json",
+    "input": "state_completed.json"
+  },
+  {
+    "name": "report_completed_md",
+    "view": "report",
+    "format": "md",
+    "input": "report_completed.json"
+  },
+  { "name": "report_halted_md", "view": "report", "format": "md", "input": "report_halted.json" },
+  {
+    "name": "report_completed_json",
+    "view": "report",
+    "format": "json",
+    "input": "report_completed.json"
+  },
+  { "name": "summary_pending", "view": "summary", "format": "md", "input": "state_pending.json" },
+  {
+    "name": "summary_in_progress",
+    "view": "summary",
+    "format": "md",
+    "input": "state_in_progress.json"
+  },
+  {
+    "name": "summary_completed",
+    "view": "summary",
+    "format": "md",
+    "input": "state_completed.json"
+  },
+  { "name": "summary_halted", "view": "summary", "format": "md", "input": "state_halted.json" },
+  {
+    "name": "current_in_progress_md",
+    "view": "current",
+    "format": "md",
+    "input": "state_in_progress.json"
+  },
+  {
+    "name": "current_in_progress_json",
+    "view": "current",
+    "format": "json",
+    "input": "state_in_progress.json"
+  }
+]

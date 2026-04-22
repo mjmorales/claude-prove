@@ -1,5 +1,5 @@
-// JSON readers for prove v0.34.2 run artifacts.
-// Field names mirror tools/run_state/schemas.py in the claude-prove plugin.
+// JSON readers for prove run artifacts.
+// Field names mirror packages/cli/src/topics/run-state/schemas.ts in the claude-prove plugin.
 
 import fs from "node:fs/promises";
 import path from "node:path";

@@ -1,0 +1,67 @@
+{
+  "schema_version": "1",
+  "kind": "state",
+  "run_status": "pending",
+  "slug": "demo",
+  "branch": "feature",
+  "current_task": "",
+  "current_step": "",
+  "started_at": "",
+  "updated_at": "2026-04-22T12:00:00Z",
+  "ended_at": "",
+  "tasks": [
+    {
+      "id": "1.1",
+      "status": "pending",
+      "started_at": "",
+      "ended_at": "",
+      "review": {
+        "verdict": "pending",
+        "notes": "",
+        "reviewer": "",
+        "reviewed_at": ""
+      },
+      "steps": [
+        {
+          "id": "1.1.1",
+          "status": "pending",
+          "started_at": "",
+          "ended_at": "",
+          "commit_sha": "",
+          "validator_summary": {
+            "build": "pending",
+            "lint": "pending",
+            "test": "pending",
+            "custom": "pending",
+            "llm": "pending"
+          },
+          "halt_reason": ""
+        },
+        {
+          "id": "1.1.2",
+          "status": "pending",
+          "started_at": "",
+          "ended_at": "",
+          "commit_sha": "",
+          "validator_summary": {
+            "build": "pending",
+            "lint": "pending",
+            "test": "pending",
+            "custom": "pending",
+            "llm": "pending"
+          },
+          "halt_reason": ""
+        }
+      ]
+    }
+  ],
+  "dispatch": {
+    "dispatched": [
+      {
+        "key": "step-complete:1.1.1",
+        "event": "step-complete",
+        "timestamp": "2026-04-22T12:00:00Z"
+      }
+    ]
+  }
+}

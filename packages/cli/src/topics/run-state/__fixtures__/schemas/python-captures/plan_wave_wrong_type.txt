@@ -1,0 +1,9 @@
+{
+  "name": "plan_wave_wrong_type",
+  "kind": "plan",
+  "version": "1",
+  "ok": false,
+  "errors": [
+    "  ERROR: tasks[0].wave: expected int, got str"
+  ]
+}

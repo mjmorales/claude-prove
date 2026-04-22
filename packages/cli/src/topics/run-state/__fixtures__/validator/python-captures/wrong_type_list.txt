@@ -1,0 +1,6 @@
+{
+  "name": "wrong_type_list",
+  "errors": [
+    "  ERROR: tags: expected list, got str"
+  ]
+}

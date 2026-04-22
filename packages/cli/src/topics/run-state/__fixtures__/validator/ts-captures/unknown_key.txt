@@ -1,0 +1,6 @@
+{
+  "name": "unknown_key",
+  "errors": [
+    "  WARN: extra: unknown field (not in schema — may be from a tool or future version)"
+  ]
+}

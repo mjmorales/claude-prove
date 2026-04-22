@@ -1,0 +1,6 @@
+{
+  "name": "list_items_descent",
+  "errors": [
+    "  ERROR: tasks[1].wave: expected int, got str"
+  ]
+}

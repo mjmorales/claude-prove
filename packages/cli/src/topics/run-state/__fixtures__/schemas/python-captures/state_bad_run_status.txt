@@ -1,0 +1,9 @@
+{
+  "name": "state_bad_run_status",
+  "kind": "state",
+  "version": "1",
+  "ok": false,
+  "errors": [
+    "  ERROR: run_status: must be one of ['pending', 'running', 'completed', 'failed', 'halted'], got 'weird'"
+  ]
+}

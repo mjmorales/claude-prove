@@ -1,0 +1,263 @@
+{
+  "guard/block_state": {
+    "hook": "guard",
+    "payload": {
+      "tool_name": "Write",
+      "tool_input": {
+        "file_path": "PROJECT/.prove/runs/main/demo/state.json"
+      }
+    }
+  },
+  "guard/block_state_backslash": {
+    "hook": "guard",
+    "payload": {
+      "tool_name": "Edit",
+      "tool_input": {
+        "file_path": "PROJECT\\.prove\\runs\\main\\demo\\state.json"
+      }
+    }
+  },
+  "guard/allow_non_state": {
+    "hook": "guard",
+    "payload": {
+      "tool_name": "Write",
+      "tool_input": {
+        "file_path": "PROJECT/.prove/runs/main/demo/plan.json"
+      }
+    }
+  },
+  "guard/multi_edit_state": {
+    "hook": "guard",
+    "payload": {
+      "tool_name": "MultiEdit",
+      "tool_input": {
+        "file_path": "PROJECT/.prove/runs/main/demo/state.json"
+      }
+    }
+  },
+  "guard/non_mutating_tool": {
+    "hook": "guard",
+    "payload": {
+      "tool_name": "Read",
+      "tool_input": {
+        "file_path": "PROJECT/.prove/runs/main/demo/state.json"
+      }
+    }
+  },
+  "guard/malformed_payload": {
+    "hook": "guard",
+    "raw_stdin": "not-json"
+  },
+  "validate/valid_plan": {
+    "hook": "validate",
+    "setup": {
+      "write_file": "PROJECT/.prove/runs/main/demo/plan.json",
+      "content_json": {
+        "schema_version": "1",
+        "kind": "plan",
+        "mode": "simple",
+        "tasks": [
+          {
+            "id": "1.1",
+            "title": "T",
+            "wave": 1,
+            "deps": [],
+            "description": "",
+            "acceptance_criteria": [],
+            "steps": [{ "id": "1.1.1", "title": "S", "description": "", "acceptance_criteria": [] }]
+          }
+        ]
+      }
+    },
+    "payload": {
+      "tool_name": "Write",
+      "tool_input": { "file_path": "PROJECT/.prove/runs/main/demo/plan.json" }
+    }
+  },
+  "validate/invalid_plan": {
+    "hook": "validate",
+    "setup": {
+      "write_file": "PROJECT/.prove/runs/main/demo/plan.json",
+      "content_json": {
+        "schema_version": "1",
+        "kind": "plan"
+      }
+    },
+    "payload": {
+      "tool_name": "Write",
+      "tool_input": { "file_path": "PROJECT/.prove/runs/main/demo/plan.json" }
+    }
+  },
+  "validate/valid_prd": {
+    "hook": "validate",
+    "setup": {
+      "write_file": "PROJECT/.prove/runs/main/demo/prd.json",
+      "content_json": {
+        "schema_version": "1",
+        "kind": "prd",
+        "title": "T"
+      }
+    },
+    "payload": {
+      "tool_name": "Write",
+      "tool_input": { "file_path": "PROJECT/.prove/runs/main/demo/prd.json" }
+    }
+  },
+  "validate/invalid_prd": {
+    "hook": "validate",
+    "setup": {
+      "write_file": "PROJECT/.prove/runs/main/demo/prd.json",
+      "content_json": {
+        "schema_version": "1",
+        "kind": "prd"
+      }
+    },
+    "payload": {
+      "tool_name": "Write",
+      "tool_input": { "file_path": "PROJECT/.prove/runs/main/demo/prd.json" }
+    }
+  },
+  "validate/valid_report": {
+    "hook": "validate",
+    "setup": {
+      "write_file": "PROJECT/.prove/runs/main/demo/reports/1_1_1.json",
+      "content_json": {
+        "schema_version": "1",
+        "kind": "report",
+        "step_id": "1.1.1",
+        "task_id": "1.1",
+        "status": "completed"
+      }
+    },
+    "payload": {
+      "tool_name": "Write",
+      "tool_input": { "file_path": "PROJECT/.prove/runs/main/demo/reports/1_1_1.json" }
+    }
+  },
+  "validate/non_run_state_path": {
+    "hook": "validate",
+    "setup": {
+      "write_file": "PROJECT/other.json",
+      "content_json": { "foo": "bar" }
+    },
+    "payload": {
+      "tool_name": "Write",
+      "tool_input": { "file_path": "PROJECT/other.json" }
+    }
+  },
+  "validate/non_mutating_tool": {
+    "hook": "validate",
+    "payload": {
+      "tool_name": "Bash",
+      "tool_input": { "command": "ls" }
+    }
+  },
+  "session_start/resume_active_run": {
+    "hook": "session-start",
+    "setup": {
+      "write_file": "PROJECT/.prove/runs/feature/demo/state.json",
+      "content_json": {
+        "schema_version": "1",
+        "kind": "state",
+        "run_status": "running",
+        "slug": "demo",
+        "branch": "feature",
+        "updated_at": "t",
+        "current_step": "1.1.1",
+        "tasks": []
+      }
+    },
+    "payload": { "cwd": "PROJECT" }
+  },
+  "session_start/compact_active_run": {
+    "hook": "session-start",
+    "setup": {
+      "write_file": "PROJECT/.prove/runs/feature/demo/state.json",
+      "content_json": {
+        "schema_version": "1",
+        "kind": "state",
+        "run_status": "halted",
+        "slug": "demo",
+        "branch": "feature",
+        "updated_at": "t",
+        "current_step": "",
+        "tasks": []
+      }
+    },
+    "payload": { "cwd": "PROJECT" }
+  },
+  "session_start/no_active_run": {
+    "hook": "session-start",
+    "payload": { "cwd": "PROJECT" }
+  },
+  "session_start/skips_completed_runs": {
+    "hook": "session-start",
+    "setup": {
+      "write_file": "PROJECT/.prove/runs/main/done/state.json",
+      "content_json": {
+        "schema_version": "1",
+        "kind": "state",
+        "run_status": "completed",
+        "slug": "done",
+        "branch": "main",
+        "updated_at": "t",
+        "tasks": []
+      }
+    },
+    "payload": { "cwd": "PROJECT" }
+  },
+  "stop/no_active_runs": {
+    "hook": "stop",
+    "payload": { "cwd": "PROJECT" }
+  },
+  "subagent_stop/no_slug_marker": {
+    "hook": "subagent-stop",
+    "payload": { "cwd": "PROJECT" }
+  },
+  "subagent_stop/no_payload": {
+    "hook": "subagent-stop",
+    "raw_stdin": ""
+  },
+  "stop/no_inprogress": {
+    "hook": "stop",
+    "setup": {
+      "write_file": "PROJECT/.prove/runs/feature/demo/state.json",
+      "content_json": {
+        "schema_version": "1",
+        "kind": "state",
+        "run_status": "pending",
+        "slug": "demo",
+        "branch": "feature",
+        "updated_at": "t",
+        "tasks": [
+          {
+            "id": "1.1",
+            "status": "pending",
+            "started_at": "",
+            "ended_at": "",
+            "review": { "verdict": "pending", "notes": "", "reviewer": "", "reviewed_at": "" },
+            "steps": [
+              {
+                "id": "1.1.1",
+                "status": "pending",
+                "started_at": "",
+                "ended_at": "",
+                "commit_sha": "",
+                "validator_summary": {
+                  "build": "pending",
+                  "lint": "pending",
+                  "test": "pending",
+                  "custom": "pending",
+                  "llm": "pending"
+                },
+                "halt_reason": ""
+              }
+            ]
+          }
+        ],
+        "dispatch": { "dispatched": [] }
+      }
+    },
+    "payload": { "cwd": "PROJECT" }
+  }
+}

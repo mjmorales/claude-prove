@@ -1,0 +1,20 @@
+{
+  "name": "new_state_empty_plan",
+  "artifact": "state",
+  "data": {
+    "schema_version": "1",
+    "kind": "state",
+    "run_status": "pending",
+    "slug": "s",
+    "branch": "b",
+    "current_task": "",
+    "current_step": "",
+    "started_at": "",
+    "updated_at": "2026-04-22T00:00:00Z",
+    "ended_at": "",
+    "tasks": [],
+    "dispatch": {
+      "dispatched": []
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "report_bad_status",
+  "kind": "report",
+  "version": "1",
+  "ok": false,
+  "errors": [
+    "  ERROR: status: must be one of ['pending', 'in_progress', 'completed', 'failed', 'skipped', 'halted'], got 'definitely-not-a-status'"
+  ]
+}
