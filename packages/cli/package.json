@@ -6,6 +6,7 @@
   "bin": {
     "prove": "./bin/run.ts"
   },
+  "files": ["bin", "src"],
   "scripts": {
     "test": "bun test",
     "build": "tsc --build",

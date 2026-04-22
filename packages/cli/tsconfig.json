@@ -3,9 +3,10 @@
   "compilerOptions": {
     "outDir": "./dist",
     "rootDir": ".",
-    "composite": true
+    "composite": true,
+    "resolveJsonModule": true
   },
-  "include": ["bin/**/*", "src/**/*"],
+  "include": ["bin/**/*", "src/**/*", "package.json"],
   "exclude": ["**/*.test.ts", "dist", "test"],
   "references": [{ "path": "../shared" }]
 }

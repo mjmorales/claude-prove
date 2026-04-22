@@ -13,6 +13,7 @@ dist/
 *.tsbuildinfo
 .bun/
 bun-*.log
+.*.bun-build
 
 # Compiled CLI binaries (produced by `bun build --compile`)
 packages/cli/bin/prove
