@@ -1,4 +1,5 @@
 .prove/
+.prove-wt-slug.txt
 tools/cafi/__pycache__/
 .mypy_cache/
 .pytest_cache/
@@ -6,10 +7,19 @@ tools/cafi/__pycache__/
 __pycache__/
 *.bak
 
-# Node.js / TypeScript
+# Node.js / TypeScript / Bun
 node_modules/
 dist/
 *.tsbuildinfo
+.bun/
+bun-*.log
+
+# Compiled CLI binaries (produced by `bun build --compile`)
+packages/cli/bin/prove
+packages/cli/bin/prove-*
+
+# Biome
+.biome-cache/
 
 # Playwright MCP
 .playwright-mcp/

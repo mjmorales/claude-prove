@@ -4,6 +4,7 @@
     "agents": "agents/",
     "cache": "cache/",
     "commands": "commands/",
+    "packages": "packages/",
     "references": "references/",
     "skills": "skills/",
     "tools": "tools/",
