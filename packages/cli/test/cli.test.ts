@@ -21,7 +21,7 @@ const ALL_TOPICS = [
   'store',
 ];
 
-const STUB_TOPICS = ALL_TOPICS.filter((t) => t !== 'store');
+const STUB_TOPICS = ALL_TOPICS.filter((t) => !['store', 'schema', 'cafi'].includes(t));
 
 interface RunResult {
   stdout: string;
