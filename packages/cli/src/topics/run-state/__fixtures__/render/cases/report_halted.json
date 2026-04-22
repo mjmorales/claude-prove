@@ -1,0 +1,26 @@
+{
+  "schema_version": "1",
+  "kind": "report",
+  "step_id": "1.1.2",
+  "task_id": "1.1",
+  "status": "halted",
+  "commit_sha": "",
+  "started_at": "2026-04-22T12:05:00Z",
+  "ended_at": "2026-04-22T12:07:00Z",
+  "diff_stats": {
+    "files_changed": 0,
+    "insertions": 0,
+    "deletions": 0
+  },
+  "validators": [
+    {
+      "name": "lint",
+      "phase": "lint",
+      "status": "fail",
+      "duration_s": 1,
+      "output": "err: unused variable `foo`\nerr: unused variable `bar`\n"
+    }
+  ],
+  "artifacts": [],
+  "notes": ""
+}
