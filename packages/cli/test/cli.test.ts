@@ -22,7 +22,7 @@ const ALL_TOPICS = [
 ];
 
 const STUB_TOPICS = ALL_TOPICS.filter(
-  (t) => !['store', 'schema', 'cafi', 'run-state'].includes(t),
+  (t) => !['store', 'schema', 'cafi', 'run-state', 'pcd'].includes(t),
 );
 
 interface RunResult {
