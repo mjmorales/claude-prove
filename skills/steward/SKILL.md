@@ -21,7 +21,7 @@ Multi-round pipeline producing `findings.md` + `fix-plan.md` with progressive co
 ### 1a. Structural Map
 
 ```bash
-python3 $PLUGIN_DIR/tools/pcd/__main__.py --project-root "$PROJECT_ROOT" map [--scope <scope from Phase 0>]
+prove pcd map --project-root "$PROJECT_ROOT" [--scope <scope from Phase 0>]
 ```
 
 Produces `.prove/steward/pcd/structural-map.json` (file metadata, dependency edges, clusters).
@@ -53,7 +53,7 @@ Merge all batches into `.prove/steward/pcd/triage-manifest.json`:
 ### 1d. Collapse
 
 ```bash
-python3 $PLUGIN_DIR/tools/pcd/__main__.py --project-root "$PROJECT_ROOT" collapse
+prove pcd collapse --project-root "$PROJECT_ROOT"
 ```
 
 Compresses low-risk cards into `.prove/steward/pcd/collapsed-manifest.json`.
@@ -61,7 +61,7 @@ Compresses low-risk cards into `.prove/steward/pcd/collapsed-manifest.json`.
 ### 1e. Deep Review (Opus, max 3 concurrent)
 
 ```bash
-python3 $PLUGIN_DIR/tools/pcd/__main__.py --project-root "$PROJECT_ROOT" batch
+prove pcd batch --project-root "$PROJECT_ROOT"
 ```
 
 For each batch in `batch-definitions.json`, launch `pcd-reviewer` (`run_in_background: true`):

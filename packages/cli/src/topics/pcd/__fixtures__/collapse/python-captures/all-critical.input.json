@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "stats": {
+    "files_reviewed": 2,
+    "high_risk": 0,
+    "medium_risk": 0,
+    "low_risk": 0,
+    "total_questions": 1
+  },
+  "cards": [
+    {
+      "file": "src/auth.py",
+      "lines": 200,
+      "risk": "critical",
+      "confidence": 5,
+      "findings": [
+        {
+          "category": "error_handling",
+          "brief": "Missing auth check",
+          "line_range": [40, 80]
+        }
+      ],
+      "questions": []
+    },
+    {
+      "file": "src/db.py",
+      "lines": 350,
+      "risk": "critical",
+      "confidence": 4,
+      "findings": [
+        {
+          "category": "invariant",
+          "brief": "SQL injection vector",
+          "line_range": [120, 140]
+        }
+      ],
+      "questions": []
+    }
+  ],
+  "question_index": [
+    {
+      "id": "q-001",
+      "from_file": "src/auth.py",
+      "target_files": ["src/db.py"],
+      "question_type": "contract"
+    }
+  ]
+}

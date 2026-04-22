@@ -1,0 +1,11 @@
+{
+  "name": "unknown_schema_key",
+  "schema_key": "definitely-not-a-schema",
+  "input": {
+    "x": 1
+  },
+  "ok": false,
+  "errors": [
+    "unknown schema: 'definitely-not-a-schema' (valid: batch_definition, collapsed_manifest, findings_batch, pipeline_status, structural_map, triage_card, triage_card_clean, triage_manifest)"
+  ]
+}

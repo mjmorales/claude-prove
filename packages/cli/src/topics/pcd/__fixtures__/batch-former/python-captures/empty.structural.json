@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "timestamp": "2026-03-28T00:00:00+00:00",
+  "generated_by": "deterministic",
+  "summary": {
+    "total_files": 0,
+    "total_lines": 0,
+    "languages": {}
+  },
+  "modules": [],
+  "clusters": [],
+  "dependency_edges": []
+}

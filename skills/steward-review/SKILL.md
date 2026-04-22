@@ -46,7 +46,7 @@ Launch `code-steward` agent directly:
 Run PCD pipeline:
 
 ```bash
-python3 $PLUGIN_DIR/tools/pcd/__main__.py --project-root "$PROJECT_ROOT" map --scope <comma-separated changed files>
+prove pcd map --project-root "$PROJECT_ROOT" --scope <comma-separated changed files>
 ```
 
 Run Rounds 1-3 per the steward skill's Phase 1. Synthesizer output: `.prove/steward/session-review.md`.

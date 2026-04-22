@@ -1,0 +1,23 @@
+{
+  "name": "findings_batch_new_question_missing_fields",
+  "schema_key": "findings_batch",
+  "input": {
+    "batch_id": 1,
+    "files_reviewed": [],
+    "findings": [],
+    "answers": [],
+    "new_questions": [
+      {
+        "id": "q",
+        "referencing_file": "a"
+      }
+    ]
+  },
+  "ok": false,
+  "errors": [
+    "new_questions[0].referenced_symbol: required field is missing",
+    "new_questions[0].referenced_files: required field is missing",
+    "new_questions[0].question_type: required field is missing",
+    "new_questions[0].text: required field is missing"
+  ]
+}

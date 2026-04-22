@@ -1,0 +1,21 @@
+{
+  "name": "findings_batch_bad_answer_status",
+  "schema_key": "findings_batch",
+  "input": {
+    "batch_id": 1,
+    "files_reviewed": [],
+    "findings": [],
+    "answers": [
+      {
+        "question_id": "q",
+        "status": "maybe",
+        "answer": "a"
+      }
+    ],
+    "new_questions": []
+  },
+  "ok": false,
+  "errors": [
+    "answers[0].status: expected one of ['answered', 'deferred', 'not_applicable'], got 'maybe'"
+  ]
+}

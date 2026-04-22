@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "timestamp": "2026-03-28T00:00:00+00:00",
+  "generated_by": "deterministic",
+  "summary": {
+    "total_files": 3,
+    "total_lines": 150,
+    "languages": {"python": 3}
+  },
+  "modules": [
+    {"path": "src/a.py", "lines": 50, "language": "python", "exports": [], "imports_from": [], "imported_by": [], "cluster_id": 0},
+    {"path": "src/b.py", "lines": 50, "language": "python", "exports": [], "imports_from": [], "imported_by": [], "cluster_id": 1},
+    {"path": "src/c.py", "lines": 50, "language": "python", "exports": [], "imports_from": [], "imported_by": [], "cluster_id": 2}
+  ],
+  "clusters": [
+    {"id": 0, "name": "a", "files": ["src/a.py"], "internal_edges": 0, "external_edges": 0},
+    {"id": 1, "name": "b", "files": ["src/b.py"], "internal_edges": 0, "external_edges": 0},
+    {"id": 2, "name": "c", "files": ["src/c.py"], "internal_edges": 0, "external_edges": 0}
+  ],
+  "dependency_edges": []
+}

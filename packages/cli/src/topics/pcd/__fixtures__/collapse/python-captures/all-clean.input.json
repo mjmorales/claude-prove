@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "stats": {
+    "files_reviewed": 3,
+    "high_risk": 0,
+    "medium_risk": 0,
+    "low_risk": 3,
+    "total_questions": 0
+  },
+  "cards": [
+    {
+      "file": "src/a.py",
+      "lines": 20,
+      "risk": "low",
+      "confidence": 5,
+      "status": "clean",
+      "cluster_id": 1
+    },
+    {
+      "file": "src/b.py",
+      "lines": 15,
+      "risk": "low",
+      "confidence": 5,
+      "status": "clean",
+      "cluster_id": 1
+    },
+    {
+      "file": "lib/c.py",
+      "lines": 40,
+      "risk": "low",
+      "confidence": 4,
+      "status": "clean",
+      "cluster_id": 2
+    }
+  ],
+  "question_index": []
+}

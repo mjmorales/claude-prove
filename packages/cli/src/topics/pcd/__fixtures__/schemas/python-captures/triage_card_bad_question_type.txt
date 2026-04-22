@@ -1,0 +1,27 @@
+{
+  "name": "triage_card_bad_question_type",
+  "schema_key": "triage_card",
+  "input": {
+    "file": "src/main.py",
+    "lines": 80,
+    "risk": "high",
+    "confidence": 4,
+    "findings": [],
+    "questions": [
+      {
+        "id": "q",
+        "referencing_file": "a",
+        "referenced_symbol": "b",
+        "referenced_files": [
+          "c"
+        ],
+        "question_type": "unknown",
+        "text": "?"
+      }
+    ]
+  },
+  "ok": false,
+  "errors": [
+    "questions[0].question_type: expected one of ['error_handling', 'invariant', 'contract', 'side_effect', 'dependency'], got 'unknown'"
+  ]
+}

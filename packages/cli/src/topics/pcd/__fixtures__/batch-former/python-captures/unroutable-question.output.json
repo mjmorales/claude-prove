@@ -1,0 +1,84 @@
+[
+  {
+    "batch_id": 1,
+    "files": [
+      "src/main.py"
+    ],
+    "triage_cards": [
+      {
+        "file": "src/main.py",
+        "lines": 100,
+        "risk": "high",
+        "confidence": 4,
+        "findings": [
+          {
+            "category": "error_handling",
+            "brief": "Issue in src/main.py",
+            "line_range": [
+              1,
+              10
+            ]
+          }
+        ],
+        "questions": []
+      }
+    ],
+    "cluster_context": [
+      {
+        "id": 0,
+        "name": "main",
+        "files": [
+          "src/main.py"
+        ],
+        "internal_edges": 0,
+        "external_edges": 0
+      }
+    ],
+    "routed_questions": [
+      {
+        "id": "q-missing",
+        "from_file": "src/main.py",
+        "question": "What does the missing module do?"
+      }
+    ],
+    "estimated_tokens": 4000
+  },
+  {
+    "batch_id": 2,
+    "files": [
+      "lib/helper.py"
+    ],
+    "triage_cards": [
+      {
+        "file": "lib/helper.py",
+        "lines": 40,
+        "risk": "high",
+        "confidence": 4,
+        "findings": [
+          {
+            "category": "error_handling",
+            "brief": "Issue in lib/helper.py",
+            "line_range": [
+              1,
+              10
+            ]
+          }
+        ],
+        "questions": []
+      }
+    ],
+    "cluster_context": [
+      {
+        "id": 1,
+        "name": "helper",
+        "files": [
+          "lib/helper.py"
+        ],
+        "internal_edges": 0,
+        "external_edges": 0
+      }
+    ],
+    "routed_questions": [],
+    "estimated_tokens": 4000
+  }
+]

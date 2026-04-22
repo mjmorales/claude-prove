@@ -1,0 +1,32 @@
+{
+  "name": "collapsed_manifest_summary_files_wrong_type",
+  "schema_key": "collapsed_manifest",
+  "input": {
+    "version": 1,
+    "stats": {
+      "total_cards": 1,
+      "preserved": 0,
+      "collapsed": 1,
+      "compression_ratio": 1.0
+    },
+    "preserved_cards": [],
+    "collapsed_summaries": [
+      {
+        "cluster_id": 1,
+        "file_count": 1,
+        "files": [
+          1,
+          2
+        ],
+        "max_risk": "low",
+        "aggregate_signals": []
+      }
+    ],
+    "question_index": []
+  },
+  "ok": false,
+  "errors": [
+    "collapsed_summaries[0].files[0]: expected str, got int",
+    "collapsed_summaries[0].files[1]: expected str, got int"
+  ]
+}

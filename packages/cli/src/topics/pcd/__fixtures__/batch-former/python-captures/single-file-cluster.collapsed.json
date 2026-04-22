@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "stats": {
+    "total_cards": 3,
+    "preserved": 3,
+    "collapsed": 0,
+    "compression_ratio": 0.0
+  },
+  "preserved_cards": [
+    {
+      "file": "src/a.py",
+      "lines": 50,
+      "risk": "high",
+      "confidence": 4,
+      "findings": [{"category": "error_handling", "brief": "Issue in src/a.py", "line_range": [1, 10]}],
+      "questions": []
+    },
+    {
+      "file": "src/b.py",
+      "lines": 50,
+      "risk": "high",
+      "confidence": 4,
+      "findings": [{"category": "error_handling", "brief": "Issue in src/b.py", "line_range": [1, 10]}],
+      "questions": []
+    },
+    {
+      "file": "src/c.py",
+      "lines": 50,
+      "risk": "high",
+      "confidence": 4,
+      "findings": [{"category": "error_handling", "brief": "Issue in src/c.py", "line_range": [1, 10]}],
+      "questions": []
+    }
+  ],
+  "collapsed_summaries": [],
+  "question_index": []
+}

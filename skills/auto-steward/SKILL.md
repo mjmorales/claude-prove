@@ -90,7 +90,7 @@ Re-audit only files modified in the previous pass (excluding tests). No modified
 
 For **>= 5 files**: run the full PCD pipeline scoped to modified files:
 ```bash
-python3 $PLUGIN_DIR/tools/pcd/__main__.py --project-root "$PROJECT_ROOT" map --scope <comma-separated files>
+prove pcd map --project-root "$PROJECT_ROOT" --scope <comma-separated files>
 ```
 Then rounds 1-3 as in Phase 1b.
 

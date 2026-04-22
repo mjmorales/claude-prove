@@ -1,0 +1,18 @@
+{
+  "name": "triage_manifest_valid",
+  "schema_key": "triage_manifest",
+  "input": {
+    "version": 1,
+    "stats": {
+      "files_reviewed": 1,
+      "high_risk": 0,
+      "medium_risk": 0,
+      "low_risk": 1,
+      "total_questions": 0
+    },
+    "cards": [],
+    "question_index": []
+  },
+  "ok": true,
+  "errors": []
+}

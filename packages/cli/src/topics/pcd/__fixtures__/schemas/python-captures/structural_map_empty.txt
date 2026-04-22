@@ -1,0 +1,15 @@
+{
+  "name": "structural_map_empty",
+  "schema_key": "structural_map",
+  "input": {},
+  "ok": false,
+  "errors": [
+    "version: required field is missing",
+    "timestamp: required field is missing",
+    "generated_by: required field is missing",
+    "summary: required field is missing",
+    "modules: required field is missing",
+    "clusters: required field is missing",
+    "dependency_edges: required field is missing"
+  ]
+}

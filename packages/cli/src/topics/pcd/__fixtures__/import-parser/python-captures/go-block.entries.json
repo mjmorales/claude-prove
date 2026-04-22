@@ -1,0 +1,14 @@
+[
+  {
+    "source_file": "main.go",
+    "imported_module": "fmt",
+    "import_type": "stdlib",
+    "raw_line": "import (\n    \"fmt\"\n    \"github.com/pkg/errors\"\n)"
+  },
+  {
+    "source_file": "main.go",
+    "imported_module": "github.com/pkg/errors",
+    "import_type": "external",
+    "raw_line": "import (\n    \"fmt\"\n    \"github.com/pkg/errors\"\n)"
+  }
+]

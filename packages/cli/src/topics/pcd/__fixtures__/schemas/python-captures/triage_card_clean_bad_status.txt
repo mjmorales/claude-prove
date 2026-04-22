@@ -1,0 +1,15 @@
+{
+  "name": "triage_card_clean_bad_status",
+  "schema_key": "triage_card_clean",
+  "input": {
+    "file": "src/util.py",
+    "lines": 20,
+    "risk": "low",
+    "confidence": 5,
+    "status": "dirty"
+  },
+  "ok": false,
+  "errors": [
+    "status: expected one of ['clean'], got 'dirty'"
+  ]
+}

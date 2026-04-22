@@ -1,0 +1,29 @@
+{
+  "name": "findings_batch_bad_severity",
+  "schema_key": "findings_batch",
+  "input": {
+    "batch_id": 1,
+    "files_reviewed": [],
+    "findings": [
+      {
+        "id": "f",
+        "severity": "minor",
+        "category": "error_handling",
+        "file": "a.py",
+        "line_range": [
+          1,
+          2
+        ],
+        "title": "t",
+        "detail": "d",
+        "fix_sketch": "fix"
+      }
+    ],
+    "answers": [],
+    "new_questions": []
+  },
+  "ok": false,
+  "errors": [
+    "findings[0].severity: expected one of ['critical', 'important', 'improvement'], got 'minor'"
+  ]
+}

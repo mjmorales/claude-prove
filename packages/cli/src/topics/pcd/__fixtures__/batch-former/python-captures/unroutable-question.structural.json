@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "timestamp": "2026-03-28T00:00:00+00:00",
+  "generated_by": "deterministic",
+  "summary": {
+    "total_files": 2,
+    "total_lines": 140,
+    "languages": {"python": 2}
+  },
+  "modules": [
+    {"path": "src/main.py", "lines": 100, "language": "python", "exports": [], "imports_from": [], "imported_by": [], "cluster_id": 0},
+    {"path": "lib/helper.py", "lines": 40, "language": "python", "exports": [], "imports_from": [], "imported_by": [], "cluster_id": 1}
+  ],
+  "clusters": [
+    {"id": 0, "name": "main", "files": ["src/main.py"], "internal_edges": 0, "external_edges": 0},
+    {"id": 1, "name": "helper", "files": ["lib/helper.py"], "internal_edges": 0, "external_edges": 0}
+  ],
+  "dependency_edges": []
+}

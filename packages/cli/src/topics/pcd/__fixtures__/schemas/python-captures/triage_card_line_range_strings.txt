@@ -1,0 +1,26 @@
+{
+  "name": "triage_card_line_range_strings",
+  "schema_key": "triage_card",
+  "input": {
+    "file": "src/main.py",
+    "lines": 80,
+    "risk": "high",
+    "confidence": 4,
+    "findings": [
+      {
+        "category": "error_handling",
+        "brief": "x",
+        "line_range": [
+          "a",
+          "b"
+        ]
+      }
+    ],
+    "questions": []
+  },
+  "ok": false,
+  "errors": [
+    "findings[0].line_range[0]: expected int, got str",
+    "findings[0].line_range[1]: expected int, got str"
+  ]
+}

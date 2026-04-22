@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "stats": {
+    "total_cards": 5,
+    "preserved": 5,
+    "collapsed": 0,
+    "compression_ratio": 0.0
+  },
+  "preserved_cards": [
+    {
+      "file": "src/a/mod0.py",
+      "lines": 50,
+      "risk": "high",
+      "confidence": 4,
+      "findings": [{"category": "error_handling", "brief": "Issue in src/a/mod0.py", "line_range": [1, 10]}],
+      "questions": []
+    },
+    {
+      "file": "src/a/mod1.py",
+      "lines": 50,
+      "risk": "high",
+      "confidence": 4,
+      "findings": [{"category": "error_handling", "brief": "Issue in src/a/mod1.py", "line_range": [1, 10]}],
+      "questions": []
+    },
+    {
+      "file": "src/a/mod2.py",
+      "lines": 50,
+      "risk": "high",
+      "confidence": 4,
+      "findings": [{"category": "error_handling", "brief": "Issue in src/a/mod2.py", "line_range": [1, 10]}],
+      "questions": []
+    },
+    {
+      "file": "src/b/mod3.py",
+      "lines": 50,
+      "risk": "high",
+      "confidence": 4,
+      "findings": [{"category": "error_handling", "brief": "Issue in src/b/mod3.py", "line_range": [1, 10]}],
+      "questions": []
+    },
+    {
+      "file": "src/b/mod4.py",
+      "lines": 50,
+      "risk": "high",
+      "confidence": 4,
+      "findings": [{"category": "error_handling", "brief": "Issue in src/b/mod4.py", "line_range": [1, 10]}],
+      "questions": []
+    }
+  ],
+  "collapsed_summaries": [],
+  "question_index": []
+}

@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "stats": {
+    "total_cards": 1,
+    "preserved": 1,
+    "collapsed": 0,
+    "compression_ratio": 0.0
+  },
+  "preserved_cards": [
+    {
+      "file": "src/boundary.py",
+      "lines": 80,
+      "risk": "low",
+      "confidence": 3,
+      "findings": [
+        {
+          "category": "naming",
+          "brief": "Ambiguous local variable name",
+          "line_range": [
+            12,
+            12
+          ]
+        }
+      ],
+      "questions": []
+    }
+  ],
+  "collapsed_summaries": [],
+  "question_index": []
+}
