@@ -1,0 +1,57 @@
+{
+  "name": "plan_from_md",
+  "artifact": "plan",
+  "data": {
+    "schema_version": "1",
+    "kind": "plan",
+    "mode": "full",
+    "tasks": [
+      {
+        "id": "1.1",
+        "title": "First task",
+        "wave": 1,
+        "deps": [],
+        "description": "**Worktree:** /tmp/wt1\n**Branch:** orch/demo-1\n\nDo the first thing.\n\n#### Step 1.1.1: Edit files\nEdit the files.\n\n#### Step 1.1.2: Run tests\nRun the tests.",
+        "acceptance_criteria": [],
+        "worktree": {
+          "path": "/tmp/wt1",
+          "branch": "orch/demo-1"
+        },
+        "steps": [
+          {
+            "id": "1.1.1",
+            "title": "Edit files",
+            "description": "Edit the files.",
+            "acceptance_criteria": []
+          },
+          {
+            "id": "1.1.2",
+            "title": "Run tests",
+            "description": "Run the tests.",
+            "acceptance_criteria": []
+          }
+        ]
+      },
+      {
+        "id": "2.1",
+        "title": "Second task",
+        "wave": 2,
+        "deps": [],
+        "description": "**Worktree:** /tmp/wt2\n\nDo the second thing (single implicit step).",
+        "acceptance_criteria": [],
+        "worktree": {
+          "path": "/tmp/wt2",
+          "branch": ""
+        },
+        "steps": [
+          {
+            "id": "2.1.1",
+            "title": "Second task",
+            "description": "**Worktree:** /tmp/wt2\n\nDo the second thing (single implicit step).",
+            "acceptance_criteria": []
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,659 @@
+/**
+ * One-shot migrators for legacy `.prove/runs/<branch>/<slug>/` layouts.
+ *
+ * Ported 1:1 from `tools/run_state/migrate.py`. Converts the legacy
+ * markdown-first structure
+ *
+ *   .prove/runs/<branch>/<slug>/
+ *     PRD.md
+ *     TASK_PLAN.md
+ *     PROGRESS.md           (optional)
+ *     dispatch-state.json   (optional)
+ *     reports/              (preserved as-is)
+ *
+ * into the JSON-first shape
+ *
+ *   .prove/runs/<branch>/<slug>/
+ *     prd.json
+ *     plan.json
+ *     state.json
+ *     reports/              (new JSON reports added alongside legacy files)
+ *
+ * Markdown parsing is deliberately tolerant — extract what we can and
+ * preserve the original body under `body_markdown` / `description` so no
+ * information is lost. Legacy files are NOT deleted; callers decide.
+ *
+ * This module is standalone on purpose — it inlines `newPrd` / `newPlan`
+ * / `newState` / `utcnowIso` / `_writeJsonAtomic` from `state.py` so the
+ * migrate entrypoint has zero dependency on the still-in-flight state
+ * port (Task 2). The factory helpers mirror Python construction order
+ * exactly so JSON key order matches byte-for-byte.
+ *
+ * Note: the task brief described a schema-version migration chain. The
+ * actual Python source is a markdown→JSON converter, not a chain — there
+ * is one schema version (v1) and no `MIGRATIONS` registry. This port
+ * preserves Python semantics faithfully; see `tools/run_state/migrate.py`
+ * and `.prove/decisions/2026-04-17-prove-runs-json-first.md` for intent.
+ */
+
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join, relative, resolve, sep } from 'node:path';
+import { CURRENT_SCHEMA_VERSION, PLAN_SCHEMA, PRD_SCHEMA } from './schemas';
+import type { FieldSpec, Schema } from './validator-engine';
+
+// --------------------------------------------------------------------------
+// Time — centralized so tests can monkeypatch.
+// --------------------------------------------------------------------------
+
+/**
+ * Indirection for `utcnowIso` so tests can substitute a frozen clock.
+ * Python tests monkeypatch `tools.run_state.migrate.utcnow_iso`; the TS
+ * equivalent is setting `_clock.now` from a test.
+ */
+export const _clock: { now: () => string } = {
+  now: defaultUtcnowIso,
+};
+
+function defaultUtcnowIso(): string {
+  // Second-precision ISO-8601 UTC with Z suffix — matches Python's
+  // `datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")`.
+  const iso = new Date().toISOString();
+  return iso.replace(/\.\d+Z$/, 'Z');
+}
+
+export function utcnowIso(): string {
+  return _clock.now();
+}
+
+// --------------------------------------------------------------------------
+// RunPaths + atomic JSON I/O — inlined from state.py so migrate can run
+// before the state-engine port lands.
+// --------------------------------------------------------------------------
+
+export interface RunPaths {
+  root: string;
+  prd: string;
+  plan: string;
+  state: string;
+  stateLock: string;
+  reportsDir: string;
+}
+
+export function runPathsFor(runsRoot: string, branch: string, slug: string): RunPaths {
+  const root = join(runsRoot, branch, slug);
+  return {
+    root,
+    prd: join(root, 'prd.json'),
+    plan: join(root, 'plan.json'),
+    state: join(root, 'state.json'),
+    stateLock: join(root, 'state.json.lock'),
+    reportsDir: join(root, 'reports'),
+  };
+}
+
+/**
+ * Atomic write with `.tmp` staging + rename. Mirrors Python's
+ * `_write_json_atomic`: `json.dump(data, f, indent=2, sort_keys=False)`
+ * plus a trailing newline.
+ */
+function writeJsonAtomic(path: string, data: unknown): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+  renameSync(tmp, path);
+}
+
+// --------------------------------------------------------------------------
+// Factory helpers — byte-compatible with state.py `new_prd` / `new_plan` /
+// `new_state`. Key insertion order mirrors Python mutation order so
+// JSON.stringify output matches Python's json.dump.
+// --------------------------------------------------------------------------
+
+/**
+ * Walk a schema's `fields` map and emit a dict populated with each
+ * field's default (when declared). Matches `_defaults_from_schema` in
+ * state.py. Returns a plain `Record<string, unknown>` — callers mutate
+ * freely.
+ */
+function defaultsFromSchema(schema: Schema): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [name, spec] of Object.entries(schema.fields)) {
+    if ('default' in spec) {
+      out[name] = deepCloneJson((spec as FieldSpec).default);
+    }
+  }
+  return out;
+}
+
+function deepCloneJson<T>(value: T): T {
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(deepCloneJson) as unknown as T;
+  const obj = value as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) {
+    out[k] = deepCloneJson(v);
+  }
+  return out as unknown as T;
+}
+
+/**
+ * Build a fresh prd.json payload. `title` is positional because it's the
+ * one required field with no schema default; extra fields (context,
+ * goals, body_markdown, ...) arrive via `overrides` and preserve Python
+ * key-insertion order (schema-declared first, then overrides).
+ */
+export function newPrd(title: string, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  const prd = defaultsFromSchema(PRD_SCHEMA);
+  prd['schema_version'] = CURRENT_SCHEMA_VERSION;
+  prd['kind'] = 'prd';
+  prd['title'] = title;
+  for (const [k, v] of Object.entries(overrides)) {
+    prd[k] = v;
+  }
+  return prd;
+}
+
+export function newPlan(tasks: unknown[], mode = 'simple'): Record<string, unknown> {
+  const plan = defaultsFromSchema(PLAN_SCHEMA);
+  plan['schema_version'] = CURRENT_SCHEMA_VERSION;
+  plan['kind'] = 'plan';
+  plan['mode'] = mode;
+  plan['tasks'] = tasks;
+  return plan;
+}
+
+/**
+ * Initialize a state.json shell mirroring `plan` task/step structure.
+ * Key order is hard-coded to match `state.py:new_state`, not derived
+ * from STATE_SCHEMA — Python builds the dict inline with a literal
+ * `{...}`, so the on-disk order follows that literal, not the schema.
+ */
+export function newState(
+  slug: string,
+  branch: string,
+  plan: Record<string, unknown>,
+): Record<string, unknown> {
+  const now = utcnowIso();
+  const tasksState: Record<string, unknown>[] = [];
+  const planTasks = Array.isArray(plan['tasks']) ? (plan['tasks'] as Record<string, unknown>[]) : [];
+
+  for (const task of planTasks) {
+    const stepsState: Record<string, unknown>[] = [];
+    const taskSteps = Array.isArray(task['steps']) ? (task['steps'] as Record<string, unknown>[]) : [];
+    for (const step of taskSteps) {
+      stepsState.push({
+        id: step['id'],
+        status: 'pending',
+        started_at: '',
+        ended_at: '',
+        commit_sha: '',
+        validator_summary: {
+          build: 'pending',
+          lint: 'pending',
+          test: 'pending',
+          custom: 'pending',
+          llm: 'pending',
+        },
+        halt_reason: '',
+      });
+    }
+    tasksState.push({
+      id: task['id'],
+      status: 'pending',
+      started_at: '',
+      ended_at: '',
+      review: {
+        verdict: 'pending',
+        notes: '',
+        reviewer: '',
+        reviewed_at: '',
+      },
+      steps: stepsState,
+    });
+  }
+
+  return {
+    schema_version: CURRENT_SCHEMA_VERSION,
+    kind: 'state',
+    run_status: 'pending',
+    slug,
+    branch,
+    current_task: '',
+    current_step: '',
+    started_at: '',
+    updated_at: now,
+    ended_at: '',
+    tasks: tasksState,
+    dispatch: { dispatched: [] },
+  };
+}
+
+// --------------------------------------------------------------------------
+// Markdown regex primitives — mirrors migrate.py module-level regexes.
+// --------------------------------------------------------------------------
+
+// H1 title: "# Task Plan: ..." or "# <anything>"
+const H1_RE = /^#\s+(.+)$/m;
+
+// "### Task 1.2: Something"
+const TASK_RE = /^###\s+Task\s+(\d+(?:\.\d+)+):\s*(.+?)\s*$/gm;
+
+// "#### Step 1.2.3: Something" (optional sub-steps)
+const STEP_RE = /^####\s+Step\s+(\d+(?:\.\d+)+):\s*(.+?)\s*$/gm;
+
+// "**Worktree:** /path/to/worktree"
+const WORKTREE_RE = /^\*\*Worktree:\*\*\s*(.+?)\s*$/m;
+const BRANCH_RE = /^\*\*Branch:\*\*\s*(.+?)\s*$/m;
+const DEPS_RE = /^\*\*(?:Depends on|Dependencies):\*\*\s*(.+?)\s*$/m;
+
+// "## Section Heading"
+const SECTION_RE = /^##\s+(.+?)\s*$/gm;
+
+// "- bullet" or "* bullet"
+const BULLET_RE = /^\s*[-*]\s+(.+?)\s*$/gm;
+
+// Progress line: "- [x] Task 1.2 ..."
+const CHECK_TASK_RE = /^- \[([ x!H~\-])\]\s+(?:Task\s+)?(\d+(?:\.\d+)+)/gm;
+
+// --------------------------------------------------------------------------
+// PRD
+// --------------------------------------------------------------------------
+
+/** Parse a legacy PRD.md into the prd.json shape (loose heuristics). */
+export function parsePrdMd(text: string): Record<string, unknown> {
+  const titleMatch = text.match(H1_RE);
+  const title = titleMatch?.[1] ? titleMatch[1].trim() : 'Untitled Run';
+
+  const sections = splitSections(text);
+  const context = firstPresent(sections, ['Context', 'Problem', 'Background', 'Summary']);
+  const goals = extractBullets(firstPresent(sections, ['Goals', 'Objectives']) ?? '');
+  const inScope = extractBullets(firstPresent(sections, ['In Scope', 'Scope / In']) ?? '');
+  const outScope = extractBullets(firstPresent(sections, ['Out of Scope', 'Out-of-Scope']) ?? '');
+  const acceptance = extractBullets(
+    firstPresent(sections, ['Acceptance Criteria', 'Acceptance']) ?? '',
+  );
+  const testStrategy = firstPresent(sections, ['Test Strategy', 'Testing', 'Tests']) ?? '';
+
+  return newPrd(title, {
+    context: context ?? '',
+    goals,
+    scope: { in: inScope, out: outScope },
+    acceptance_criteria: acceptance,
+    test_strategy: testStrategy,
+    body_markdown: text.trim(),
+  });
+}
+
+// --------------------------------------------------------------------------
+// Plan
+// --------------------------------------------------------------------------
+
+/** Parse a legacy TASK_PLAN.md into the plan.json shape. */
+export function parsePlanMd(text: string): Record<string, unknown> {
+  const matches = Array.from(text.matchAll(TASK_RE));
+  const tasks: Record<string, unknown>[] = [];
+
+  for (let i = 0; i < matches.length; i++) {
+    const m = matches[i];
+    if (!m || m.index === undefined) continue;
+    const taskId = (m[1] ?? '').trim();
+    const title = (m[2] ?? '').trim();
+    const start = m.index + m[0].length;
+    const nextMatch = matches[i + 1];
+    const end = nextMatch && nextMatch.index !== undefined ? nextMatch.index : text.length;
+    const body = text.slice(start, end).trim();
+
+    const wave = Number.parseInt(taskId.split('.')[0] ?? '0', 10);
+
+    const wtMatch = body.match(WORKTREE_RE);
+    const brMatch = body.match(BRANCH_RE);
+    const depsMatch = body.match(DEPS_RE);
+    const deps = depsMatch?.[1]
+      ? depsMatch[1]
+          .split(',')
+          .map((d) => d.trim())
+          .filter((d) => d.length > 0)
+      : [];
+
+    // Sub-steps inside the task body (optional)
+    const stepMatches = Array.from(body.matchAll(STEP_RE));
+    const steps: Record<string, unknown>[] = [];
+
+    if (stepMatches.length > 0) {
+      for (let j = 0; j < stepMatches.length; j++) {
+        const sm = stepMatches[j];
+        if (!sm || sm.index === undefined) continue;
+        const sId = (sm[1] ?? '').trim();
+        const sTitle = (sm[2] ?? '').trim();
+        const sStart = sm.index + sm[0].length;
+        const nextStep = stepMatches[j + 1];
+        const sEnd = nextStep && nextStep.index !== undefined ? nextStep.index : body.length;
+        const sDesc = body.slice(sStart, sEnd).trim();
+        steps.push({
+          id: sId,
+          title: sTitle,
+          description: sDesc,
+          acceptance_criteria: [],
+        });
+      }
+    } else {
+      // One implicit step — whole task body is the step description.
+      steps.push({
+        id: `${taskId}.1`,
+        title,
+        description: body,
+        acceptance_criteria: [],
+      });
+    }
+
+    tasks.push({
+      id: taskId,
+      title,
+      wave,
+      deps,
+      description: body,
+      acceptance_criteria: [],
+      worktree: {
+        path: wtMatch?.[1] ? wtMatch[1].trim() : '',
+        branch: brMatch?.[1] ? brMatch[1].trim() : '',
+      },
+      steps,
+    });
+  }
+
+  const mode = tasks.some((t) => Number(t['wave']) > 1) ? 'full' : 'simple';
+  return newPlan(tasks, mode);
+}
+
+// --------------------------------------------------------------------------
+// State (from PROGRESS.md checklist + plan)
+// --------------------------------------------------------------------------
+
+/**
+ * Best-effort translation of a PROGRESS.md checklist into state.json.
+ * Unmatched tasks keep their default `pending` status.
+ */
+export function deriveStateFromProgress(
+  progressText: string,
+  plan: Record<string, unknown>,
+  slug: string,
+  branch: string,
+): Record<string, unknown> {
+  const state = newState(slug, branch, plan);
+
+  // Parse checkmarks into a {taskId: status} map.
+  const statuses: Record<string, string> = {};
+  for (const m of progressText.matchAll(CHECK_TASK_RE)) {
+    const mark = m[1] ?? ' ';
+    const tid = m[2];
+    if (!tid) continue;
+    statuses[tid] = markToStatus(mark);
+  }
+
+  let anyInProgress = false;
+  const stateTasks = state['tasks'] as Record<string, unknown>[];
+
+  for (const task of stateTasks) {
+    const s = statuses[task['id'] as string];
+    if (!s) continue;
+    task['status'] = s;
+    // Propagate a sensible default to steps: completed tasks mark steps
+    // completed, in_progress leaves steps pending, failed/halted mark
+    // the task end-time but leave steps for the caller.
+    if (s === 'completed') {
+      for (const step of task['steps'] as Record<string, unknown>[]) {
+        step['status'] = 'completed';
+        step['ended_at'] = utcnowIso();
+      }
+      task['ended_at'] = utcnowIso();
+    } else if (s === 'in_progress') {
+      anyInProgress = true;
+    } else if (s === 'failed' || s === 'halted') {
+      task['ended_at'] = utcnowIso();
+    }
+  }
+
+  if (anyInProgress) {
+    state['run_status'] = 'running';
+  } else if (
+    stateTasks.length > 0 &&
+    stateTasks.every((t) => t['status'] === 'completed')
+  ) {
+    state['run_status'] = 'completed';
+    state['ended_at'] = utcnowIso();
+  }
+
+  return state;
+}
+
+function markToStatus(mark: string): string {
+  switch (mark) {
+    case ' ':
+      return 'pending';
+    case 'x':
+      return 'completed';
+    case '!':
+      return 'failed';
+    case 'H':
+      return 'halted';
+    case '~':
+      return 'in_progress';
+    case '-':
+      return 'skipped';
+    default:
+      return 'pending';
+  }
+}
+
+// --------------------------------------------------------------------------
+// Migration driver
+// --------------------------------------------------------------------------
+
+export interface MigrationResult {
+  runDir: string;
+  prdWritten: boolean;
+  planWritten: boolean;
+  stateWritten: boolean;
+  tasksFound: number;
+  stepsFound: number;
+}
+
+export interface MigrateRunOptions {
+  branch: string;
+  slug: string;
+  dryRun?: boolean;
+  overwrite?: boolean;
+}
+
+/** Convert a single run directory to the JSON-first layout. */
+export function migrateRun(runDir: string, opts: MigrateRunOptions): MigrationResult {
+  const { branch, slug, dryRun = false, overwrite = false } = opts;
+
+  const prdMd = join(runDir, 'PRD.md');
+  const planMd = join(runDir, 'TASK_PLAN.md');
+  const progressMd = join(runDir, 'PROGRESS.md');
+  const dispatchLegacy = join(runDir, 'dispatch-state.json');
+
+  const paths: RunPaths = {
+    root: runDir,
+    prd: join(runDir, 'prd.json'),
+    plan: join(runDir, 'plan.json'),
+    state: join(runDir, 'state.json'),
+    stateLock: join(runDir, 'state.json.lock'),
+    reportsDir: join(runDir, 'reports'),
+  };
+
+  // PRD
+  let prdWritten = false;
+  if (existsSync(prdMd) && (!existsSync(paths.prd) || overwrite)) {
+    const prd = parsePrdMd(readFileSync(prdMd, 'utf8'));
+    if (!dryRun) writeJsonAtomic(paths.prd, prd);
+    prdWritten = true;
+  }
+
+  // Plan
+  let plan: Record<string, unknown> | null = null;
+  let planWritten = false;
+  if (existsSync(planMd) && (!existsSync(paths.plan) || overwrite)) {
+    plan = parsePlanMd(readFileSync(planMd, 'utf8'));
+    if (!dryRun) writeJsonAtomic(paths.plan, plan);
+    planWritten = true;
+  } else if (existsSync(paths.plan)) {
+    plan = JSON.parse(readFileSync(paths.plan, 'utf8')) as Record<string, unknown>;
+  }
+
+  // State
+  let stateWritten = false;
+  if (plan !== null && (!existsSync(paths.state) || overwrite)) {
+    const state = existsSync(progressMd)
+      ? deriveStateFromProgress(readFileSync(progressMd, 'utf8'), plan, slug, branch)
+      : newState(slug, branch, plan);
+
+    // Fold legacy dispatch-state.json into state.dispatch.
+    if (existsSync(dispatchLegacy)) {
+      try {
+        const legacy = JSON.parse(readFileSync(dispatchLegacy, 'utf8')) as Record<string, unknown>;
+        if (Array.isArray(legacy['dispatched'])) {
+          const dispatch = (state['dispatch'] ??= { dispatched: [] }) as Record<string, unknown>;
+          const dispatched = (dispatch['dispatched'] as unknown[]) ?? [];
+          dispatch['dispatched'] = [...dispatched, ...(legacy['dispatched'] as unknown[])];
+        }
+      } catch {
+        // Malformed legacy file — skip silently, mirrors Python's except JSONDecodeError.
+      }
+    }
+
+    if (!dryRun) writeJsonAtomic(paths.state, state);
+    stateWritten = true;
+  }
+
+  const planTasks = plan ? ((plan['tasks'] as unknown[]) ?? []) : [];
+  const tasksFound = planTasks.length;
+  let stepsFound = 0;
+  for (const t of planTasks) {
+    const steps = (t as Record<string, unknown>)['steps'];
+    if (Array.isArray(steps)) stepsFound += steps.length;
+  }
+
+  return { runDir, prdWritten, planWritten, stateWritten, tasksFound, stepsFound };
+}
+
+export interface MigrateAllOptions {
+  dryRun?: boolean;
+  overwrite?: boolean;
+}
+
+/**
+ * Walk `.prove/runs/` and migrate every leaf run directory found.
+ * A leaf is any directory containing `TASK_PLAN.md` or `PRD.md`. The
+ * branch is the first path component below `runsRoot`; the slug is the
+ * run directory name.
+ */
+export function migrateAll(runsRoot: string, opts: MigrateAllOptions = {}): MigrationResult[] {
+  const results: MigrationResult[] = [];
+  if (!existsSync(runsRoot)) return results;
+
+  const absRoot = resolve(runsRoot);
+  const leaves = iterRunDirs(absRoot).sort();
+
+  for (const path of leaves) {
+    const rel = relative(absRoot, path).split(sep).filter(Boolean);
+    let branch: string;
+    let slug: string;
+    if (rel.length === 1) {
+      // legacy top-level run (no branch namespace)
+      branch = 'main';
+      slug = rel[0] ?? '';
+    } else {
+      branch = rel[0] ?? 'main';
+      slug = rel[rel.length - 1] ?? '';
+    }
+    results.push(
+      migrateRun(path, {
+        branch,
+        slug,
+        dryRun: opts.dryRun,
+        overwrite: opts.overwrite,
+      }),
+    );
+  }
+
+  return results;
+}
+
+function iterRunDirs(root: string): string[] {
+  const out: string[] = [];
+  walk(root, out);
+  return out;
+}
+
+function walk(dir: string, acc: string[]): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return;
+  }
+  const hasLegacy =
+    existsSync(join(dir, 'TASK_PLAN.md')) || existsSync(join(dir, 'PRD.md'));
+  if (hasLegacy) acc.push(dir);
+  for (const name of entries) {
+    const child = join(dir, name);
+    let st;
+    try {
+      st = statSync(child);
+    } catch {
+      continue;
+    }
+    if (st.isDirectory()) walk(child, acc);
+  }
+}
+
+// --------------------------------------------------------------------------
+// Markdown section helpers
+// --------------------------------------------------------------------------
+
+/** Split markdown by `##` headings; return `{heading: body}`. */
+function splitSections(text: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const matches = Array.from(text.matchAll(SECTION_RE));
+  for (let i = 0; i < matches.length; i++) {
+    const m = matches[i];
+    if (!m || m.index === undefined) continue;
+    const heading = (m[1] ?? '').trim();
+    const start = m.index + m[0].length;
+    const next = matches[i + 1];
+    const end = next && next.index !== undefined ? next.index : text.length;
+    out[heading] = text.slice(start, end).trim();
+  }
+  return out;
+}
+
+function firstPresent(sections: Record<string, string>, candidates: string[]): string | null {
+  for (const name of candidates) {
+    const hit = sections[name];
+    if (hit !== undefined) return hit;
+  }
+  // Case-insensitive fallback
+  const lower: Record<string, string> = {};
+  for (const [k, v] of Object.entries(sections)) {
+    lower[k.toLowerCase()] = v;
+  }
+  for (const name of candidates) {
+    const hit = lower[name.toLowerCase()];
+    if (hit !== undefined) return hit;
+  }
+  return null;
+}
+
+function extractBullets(text: string): string[] {
+  return Array.from(text.matchAll(BULLET_RE)).map((m) => (m[1] ?? '').trim());
+}
