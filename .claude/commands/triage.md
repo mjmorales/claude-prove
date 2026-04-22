@@ -55,7 +55,7 @@ For each issue (or the single requested issue), read the full body and comments,
    - `medium` — incorrect behavior with workaround
    - `low` — cosmetic, docs, nice-to-have
 3. **Security check**: If the issue involves credential exposure, injection, or unauthorized access, apply the `security` label. Do NOT discuss reproduction details in public comments.
-4. **Identify affected components**: Which commands, skills, agents, or tools are involved? Use directory names as component labels (e.g., `commands`, `agents`, `tools/cafi`).
+4. **Identify affected components**: Which commands, skills, agents, or tools are involved? Use directory names as component labels (e.g., `commands`, `agents`, `packages/cli/src/topics/cafi`).
 5. **Estimate scope**: quick fix (< 30 min), medium task, or needs planning.
 6. **Check for duplicates**: Search existing open issues for similar reports before accepting.
 

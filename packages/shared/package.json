@@ -7,7 +7,10 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./cache": "./src/cache.ts",
+    "./file-walker": "./src/file-walker.ts",
     "./logger": "./src/logger.ts",
+    "./tool-config": "./src/tool-config.ts",
     "./types": "./src/types.ts"
   },
   "scripts": {

@@ -1,0 +1,5 @@
+# Project File Index
+
+- `README.md`: stub description for README.md
+- `src/main.ts`: stub description for src/main.ts
+- `src/util.ts`: stub description for src/util.ts

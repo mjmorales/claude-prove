@@ -24,8 +24,8 @@ JavaScript/TypeScript (npm)
 
 Before broad Glob/Grep searches, check the file index first:
 
-- `python3 /Users/manuelmorales/dev/claude-prove/tools/cafi/__main__.py context` — full index with routing hints
-- `python3 /Users/manuelmorales/dev/claude-prove/tools/cafi/__main__.py lookup <keyword>` — search by keyword
+- `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts cafi context` — full index with routing hints
+- `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts cafi lookup <keyword>` — search by keyword
 
 Only fall back to Glob/Grep when the index doesn't cover what you need.
 ## Tool Directives

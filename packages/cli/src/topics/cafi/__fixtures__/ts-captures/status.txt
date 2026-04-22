@@ -1,0 +1,7 @@
+{
+  "cache_exists": true,
+  "deleted": 0,
+  "new": 0,
+  "stale": 0,
+  "unchanged": 3
+}

@@ -26,8 +26,8 @@ You are a principal engineer performing post-agent code quality audits. Make sur
 ## Discovery
 
 Before Glob/Grep, check the file index:
-- `python3 <plugin-dir>/tools/cafi/__main__.py context` -- full index
-- `python3 <plugin-dir>/tools/cafi/__main__.py lookup <keyword>` -- keyword search
+- `bun run <plugin-dir>/packages/cli/bin/run.ts cafi context` -- full index
+- `bun run <plugin-dir>/packages/cli/bin/run.ts cafi lookup <keyword>` -- keyword search
 
 ## Workflow
 
