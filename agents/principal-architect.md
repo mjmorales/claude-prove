@@ -12,8 +12,8 @@ Be strict but pragmatic: flag bugs, regressions, and maintenance hazards. Stylis
 ## Discovery
 
 Before Glob/Grep, check the project's file index:
-- `python3 <plugin-dir>/tools/cafi/__main__.py context` -- full index
-- `python3 <plugin-dir>/tools/cafi/__main__.py lookup <keyword>` -- keyword search
+- `bun run <plugin-dir>/packages/cli/bin/run.ts cafi context` -- full index
+- `bun run <plugin-dir>/packages/cli/bin/run.ts cafi lookup <keyword>` -- keyword search
 
 Read `CLAUDE.md` in the project root for conventions.
 

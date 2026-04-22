@@ -6,6 +6,38 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v0.38.0 — CAFI ported to TypeScript
+
+Phase 5 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`). The Python `tools/cafi/` module is retired; the content-addressable file index is now a real TypeScript topic backed by `packages/cli/src/topics/cafi/` and the shared helpers in `packages/shared/src/`. The PreToolUse Glob|Grep hook that injects CAFI context now runs the TS gate. Config is now read from the post-v4 `tools.cafi.config` path — the retired top-level `index` key is no longer consulted, fixing a latent silent-fallback-to-defaults bug.
+
+**Removed**:
+
+- `tools/cafi/` (all Python sources, tests, `tool.json`, README)
+- `python3 -m tools.cafi` / `python3 $PLUGIN_DIR/tools/cafi/__main__.py` invocation path
+- Python `cafi_gate.py` PreToolUse hook command
+
+**Added**:
+
+- `prove cafi index [--force] [--project-root <path>]`
+- `prove cafi status [--project-root <path>]`
+- `prove cafi get <path> [--project-root <path>]`
+- `prove cafi lookup <keyword> [--project-root <path>]`
+- `prove cafi clear [--project-root <path>]`
+- `prove cafi context [--project-root <path>]`
+- `prove cafi gate` — PreToolUse hook dispatcher; reads the Claude Code hook payload from stdin
+- `packages/shared/src/{cache,file-walker,tool-config}.ts` — shared helpers reusable by PCD in phase 7
+- `packages/cli/src/topics/cafi/` — full TS port with bun test coverage and parity fixtures under `__fixtures__/`
+- Fix: config is now read from `tools.cafi.config` (post-v4 path); the retired top-level `index` key is no longer consulted (silent fallback-to-defaults bug resolved)
+
+**Migration**:
+
+1. Run `/prove:update` — picks up the new CLI and rewrites the `.claude/settings.json` PreToolUse Glob|Grep hook automatically.
+2. Manual fallback for the hook entry: invoke becomes `bun run <plugin>/packages/cli/bin/run.ts cafi gate` with `_tool: "cafi"` ownership and `timeout: 10000`.
+3. If scripts call `python3 tools/cafi/__main__.py …`, rewrite to `bun run <plugin>/packages/cli/bin/run.ts cafi …`.
+4. No on-disk cache migration required — `.prove/file-index.json` format is unchanged (still cache v1).
+
+**Auto-adoption**: `/prove:update` refreshes the hook command in place; existing cache files are read and re-indexed without user intervention.
+
 ## v0.37.0 — Schema topic ported to TypeScript (breaking config migration)
 
 Phase 4 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`). The Python `tools/schema/` module is retired; `prove schema` is now a real TypeScript topic backed by `packages/cli/src/topics/schema/`. `.claude/.prove.json` migrates from v3 to v4.

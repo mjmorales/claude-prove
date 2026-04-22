@@ -14,7 +14,7 @@ Reference captures for the CAFI topic. Two consumers use this directory:
 __fixtures__/
   README.md             <- this file
   capture.sh            <- regenerates captures against a synthetic project
-  python-captures/      <- output of `python3 tools/cafi/__main__.py <action>`
+  python-captures/      <- historical captures from the retired Python CLI (pre-v0.38.0)
   ts-captures/          <- output of the TS indexer (via capture.sh harness)
 ```
 
