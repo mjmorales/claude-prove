@@ -1,0 +1,183 @@
+{
+  "version": 1,
+  "timestamp": "CAPTURED",
+  "generated_by": "deterministic",
+  "summary": {
+    "total_files": 9,
+    "total_lines": 38,
+    "languages": {
+      "python": 4,
+      "rust": 2,
+      "typescript": 3
+    }
+  },
+  "modules": [
+    {
+      "path": "py/__init__.py",
+      "lines": 0,
+      "language": "python",
+      "exports": [],
+      "imports_from": [],
+      "imported_by": [],
+      "cluster_id": 0
+    },
+    {
+      "path": "py/app.py",
+      "lines": 8,
+      "language": "python",
+      "exports": [],
+      "imports_from": [
+        "py/models.py",
+        "py/utils.py"
+      ],
+      "imported_by": [],
+      "cluster_id": 1
+    },
+    {
+      "path": "py/models.py",
+      "lines": 3,
+      "language": "python",
+      "exports": [],
+      "imports_from": [],
+      "imported_by": [
+        "py/app.py"
+      ],
+      "cluster_id": 1
+    },
+    {
+      "path": "py/utils.py",
+      "lines": 2,
+      "language": "python",
+      "exports": [],
+      "imports_from": [],
+      "imported_by": [
+        "py/app.py"
+      ],
+      "cluster_id": 1
+    },
+    {
+      "path": "rs/src/main.rs",
+      "lines": 6,
+      "language": "rust",
+      "exports": [],
+      "imports_from": [],
+      "imported_by": [],
+      "cluster_id": 2
+    },
+    {
+      "path": "rs/src/parser.rs",
+      "lines": 3,
+      "language": "rust",
+      "exports": [],
+      "imports_from": [],
+      "imported_by": [],
+      "cluster_id": 3
+    },
+    {
+      "path": "ts/index.ts",
+      "lines": 8,
+      "language": "typescript",
+      "exports": [],
+      "imports_from": [],
+      "imported_by": [],
+      "cluster_id": 4
+    },
+    {
+      "path": "ts/logger.ts",
+      "lines": 5,
+      "language": "typescript",
+      "exports": [],
+      "imports_from": [],
+      "imported_by": [],
+      "cluster_id": 5
+    },
+    {
+      "path": "ts/math.ts",
+      "lines": 3,
+      "language": "typescript",
+      "exports": [],
+      "imports_from": [],
+      "imported_by": [],
+      "cluster_id": 6
+    }
+  ],
+  "clusters": [
+    {
+      "id": 0,
+      "name": "py",
+      "files": [
+        "py/__init__.py"
+      ],
+      "internal_edges": 0,
+      "external_edges": 0
+    },
+    {
+      "id": 1,
+      "name": "py",
+      "files": [
+        "py/app.py",
+        "py/models.py",
+        "py/utils.py"
+      ],
+      "internal_edges": 2,
+      "external_edges": 0
+    },
+    {
+      "id": 2,
+      "name": "rs/src",
+      "files": [
+        "rs/src/main.rs"
+      ],
+      "internal_edges": 0,
+      "external_edges": 0
+    },
+    {
+      "id": 3,
+      "name": "rs/src",
+      "files": [
+        "rs/src/parser.rs"
+      ],
+      "internal_edges": 0,
+      "external_edges": 0
+    },
+    {
+      "id": 4,
+      "name": "ts",
+      "files": [
+        "ts/index.ts"
+      ],
+      "internal_edges": 0,
+      "external_edges": 0
+    },
+    {
+      "id": 5,
+      "name": "ts",
+      "files": [
+        "ts/logger.ts"
+      ],
+      "internal_edges": 0,
+      "external_edges": 0
+    },
+    {
+      "id": 6,
+      "name": "ts",
+      "files": [
+        "ts/math.ts"
+      ],
+      "internal_edges": 0,
+      "external_edges": 0
+    }
+  ],
+  "dependency_edges": [
+    {
+      "from": "py/app.py",
+      "to": "py/models.py",
+      "type": "internal"
+    },
+    {
+      "from": "py/app.py",
+      "to": "py/utils.py",
+      "type": "internal"
+    }
+  ]
+}

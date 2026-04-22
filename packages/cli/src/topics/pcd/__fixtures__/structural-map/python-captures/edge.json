@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "timestamp": "CAPTURED",
+  "generated_by": "deterministic",
+  "summary": {
+    "total_files": 1,
+    "total_lines": 4,
+    "languages": {
+      "python": 1
+    }
+  },
+  "modules": [
+    {
+      "path": "solo.py",
+      "lines": 4,
+      "language": "python",
+      "exports": [],
+      "imports_from": [],
+      "imported_by": [],
+      "cluster_id": 0
+    }
+  ],
+  "clusters": [
+    {
+      "id": 0,
+      "name": "solo",
+      "files": [
+        "solo.py"
+      ],
+      "internal_edges": 0,
+      "external_edges": 0
+    }
+  ],
+  "dependency_edges": []
+}
