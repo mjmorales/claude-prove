@@ -1,0 +1,43 @@
+=== Config Diff: .claude/.prove.json ===
+
+Validation Issues:
+  ERROR: validators[0].phase: required field is missing
+  WARN: validators[0].stage: unknown field (not in schema — may be from a tool or future version)
+  ERROR: validators[1].phase: required field is missing
+  WARN: validators[1].stage: unknown field (not in schema — may be from a tool or future version)
+
+Migration Changes:
+  ~ schema_version: "1" -> "2"
+  ~ validators[lint].stage: renamed "stage" -> "phase"
+  ~ validators[test].stage: renamed "stage" -> "phase"
+  + claude_md: added with empty references (configure via /prove:init or /prove:update)
+  ~ schema_version: "2" -> "3"
+  + tools.cafi: added (disabled — no prior index config)
+
+Target config after migration:
+{
+  "schema_version": "3",
+  "validators": [
+    {
+      "name": "lint",
+      "command": "ruff check .",
+      "phase": "lint"
+    },
+    {
+      "name": "test",
+      "command": "pytest",
+      "phase": "test"
+    }
+  ],
+  "scopes": {
+    "plugin": "."
+  },
+  "claude_md": {
+    "references": []
+  },
+  "tools": {
+    "cafi": {
+      "enabled": false
+    }
+  }
+}

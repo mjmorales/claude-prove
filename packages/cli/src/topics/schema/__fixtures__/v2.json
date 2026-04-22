@@ -1,0 +1,17 @@
+{
+  "schema_version": "2",
+  "validators": [
+    { "name": "test", "command": "pytest", "phase": "test" }
+  ],
+  "scopes": {
+    "plugin": "."
+  },
+  "claude_md": {
+    "references": []
+  },
+  "index": {
+    "excludes": ["*.log"],
+    "max_file_size": 102400,
+    "concurrency": 3
+  }
+}

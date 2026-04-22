@@ -1,0 +1,9 @@
+{
+  "validators": [
+    { "name": "lint", "command": "ruff check .", "phase": "lint" },
+    { "name": "test", "command": "pytest", "phase": "test" }
+  ],
+  "scopes": {
+    "plugin": "."
+  }
+}

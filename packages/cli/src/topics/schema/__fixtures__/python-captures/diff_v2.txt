@@ -1,0 +1,39 @@
+=== Config Diff: .claude/.prove.json ===
+
+Validation Issues:
+  WARN: index: unknown field (not in schema — may be from a tool or future version)
+
+Migration Changes:
+  ~ schema_version: "2" -> "3"
+  ~ index: moved to tools.cafi.config
+  + tools: added tool registry section
+
+Target config after migration:
+{
+  "schema_version": "3",
+  "validators": [
+    {
+      "name": "test",
+      "command": "pytest",
+      "phase": "test"
+    }
+  ],
+  "scopes": {
+    "plugin": "."
+  },
+  "claude_md": {
+    "references": []
+  },
+  "tools": {
+    "cafi": {
+      "enabled": true,
+      "config": {
+        "excludes": [
+          "*.log"
+        ],
+        "max_file_size": 102400,
+        "concurrency": 3
+      }
+    }
+  }
+}

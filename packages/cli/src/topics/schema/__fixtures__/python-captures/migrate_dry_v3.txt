@@ -1,0 +1,1 @@
+No migration needed — <FIXTURE_PATH> is at schema v3

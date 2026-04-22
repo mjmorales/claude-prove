@@ -1,0 +1,6 @@
+Migration plan for <FIXTURE_PATH> (v0 -> v3):
+  + schema_version: set to "1"
+  ~ schema_version: "1" -> "2"
+  + claude_md: added with empty references (configure via /prove:init or /prove:update)
+  ~ schema_version: "2" -> "3"
+  + tools.cafi: added (disabled — no prior index config)
