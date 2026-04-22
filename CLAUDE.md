@@ -94,11 +94,11 @@ When adding/removing/renaming `PROVE_SCHEMA` fields:
 3. Add `_migrate_vN_to_vM(config)` in `packages/cli/src/topics/schema/migrate.ts` -- hardcode target version, NEVER reference `CURRENT_SCHEMA_VERSION`
 4. Register in the `MIGRATIONS` map as `'N_to_M': _migrate_vN_to_vM`
 5. Add tests in `packages/cli/src/topics/schema/migrate.test.ts`: version bump, defaults, data preservation, full chain from v0
-6. Run `bun run packages/cli/bin/run.ts schema migrate` against `.claude/.prove.json` at the repo root to apply the new hop
+6. Run `prove schema migrate --file .claude/.prove.json` at the repo root; commit the updated file and delete the generated `.bak`
 7. Add `## vX.Y.Z` entry in `UPDATES.md` with migration instructions
 
 ## Tool vs Pack Boundary
 
-- **Infrastructure tools** (CAFI, ACB, PCD): `kind: "tool"` (default); skills/agents/commands live at plugin top level. Do NOT refactor these to pack model.
+- **Infrastructure tools** (CAFI, ACB, PCD): `kind: "tool"` (default); skills/agents/commands live at plugin top level. Do NOT refactor these to pack model. CLI topics (e.g., `schema`) live in `packages/cli/src/topics/`, not `tools/`.
 - **Workflow packs** (project-manager, etc.): `kind: "pack"` in `tool.json`; bundle skills/agents/commands/assets inside `tools/<name>/`. Registry symlinks on install.
 - Decision record: `.prove/decisions/2026-03-29-optional-packs-via-tools.md`
