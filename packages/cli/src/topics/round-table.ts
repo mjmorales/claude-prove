@@ -1,7 +1,10 @@
-import type { StubTopic } from '../stub-topic';
+import type { CAC } from 'cac';
+import { registerStubTopic } from '../stub-topic';
 
-export const topic: StubTopic = {
-  name: 'round-table',
-  description: 'Multi-agent deliberation (not yet implemented)',
-  phase: 8,
-};
+export function register(cli: CAC): void {
+  registerStubTopic(cli, {
+    name: 'round-table',
+    description: 'Multi-agent deliberation (not yet implemented)',
+    phase: 8,
+  });
+}

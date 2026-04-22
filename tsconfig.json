@@ -1,4 +1,8 @@
 {
   "files": [],
-  "references": [{ "path": "./packages/shared" }, { "path": "./packages/cli" }]
+  "references": [
+    { "path": "./packages/shared" },
+    { "path": "./packages/store" },
+    { "path": "./packages/cli" }
+  ]
 }

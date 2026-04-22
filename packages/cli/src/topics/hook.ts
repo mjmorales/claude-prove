@@ -1,7 +1,10 @@
-import type { StubTopic } from '../stub-topic';
+import type { CAC } from 'cac';
+import { registerStubTopic } from '../stub-topic';
 
-export const topic: StubTopic = {
-  name: 'hook',
-  description: 'Claude Code hook dispatch (not yet implemented)',
-  phase: 3,
-};
+export function register(cli: CAC): void {
+  registerStubTopic(cli, {
+    name: 'hook',
+    description: 'Claude Code hook dispatch (not yet implemented)',
+    phase: 3,
+  });
+}

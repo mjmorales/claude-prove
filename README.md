@@ -152,20 +152,41 @@ The new TS workspace sits alongside the legacy Python tools:
 ```
 packages/
 ├── cli/           # cac CLI — bin/run.ts, src/topics/<topic>.ts registrations
-└── shared/        # @claude-prove/shared — types, logger, cross-package utilities
+├── shared/        # @claude-prove/shared — types, logger, cross-package utilities
+└── store/         # @claude-prove/store — unified bun:sqlite connection, schema registry, migrations
 ```
 
 Each port phase replaces one `tools/<name>/` Python module with a `packages/<name>/` TypeScript
 implementation (or folds it into `packages/cli/src/topics/<topic>/`). Until the final phase lands,
 both toolchains coexist; hooks and slash commands migrate incrementally.
 
+### Topic registration pattern
+
+Every CLI topic file (`packages/cli/src/topics/<topic>.ts`) exports a single `register(cli: CAC)`
+function. Stub topics wrap `registerStubTopic` inside `register()`; real topics (starting with
+`store` in phase 2) call `cli.command(...)` directly. `bin/run.ts` imports each topic's `register`
+and calls them in canonical port order. A port phase replaces only the body of one topic's
+`register()` — no other file changes.
+
 ### Running the CLI locally
 
 ```bash
 bun install
-bun run packages/cli/bin/run.ts --help    # topic tree
-bun run packages/cli/bin/run.ts store     # stub command (prints phase notice)
+bun run packages/cli/bin/run.ts --help              # topic tree
+bun run packages/cli/bin/run.ts store migrate       # apply pending migrations
+bun run packages/cli/bin/run.ts store info          # db path + registered domains
+bun run packages/cli/bin/run.ts store reset --confirm   # drop all domain tables
 ```
+
+Example `prove store info` output in a fresh git repo:
+
+```
+db path: /Users/<you>/src/<repo>/.prove/prove.db
+no domains registered
+```
+
+Domains register themselves via side-effect imports once their phase ports (scrum, acb, pcd,
+decisions, handoff); until then, `store migrate` is a well-defined no-op.
 
 ### Compiling a standalone binary
 
@@ -176,9 +197,10 @@ bun build --compile \
   packages/cli/bin/run.ts
 ```
 
-The compiled binary runs identically to the dev-mode invocation — `--help` lists all topics and
-each stub command dispatches correctly. cac registers commands statically at startup, so there is
-no filesystem discovery or dynamic `import(path)` for `bun build --compile` to break.
+The compiled binary runs identically to the dev-mode invocation — `--help` lists all topics,
+every stub command dispatches correctly, and the `store` topic reads/writes `<git-root>/.prove/prove.db`.
+cac registers commands statically at startup, so there is no filesystem discovery or dynamic
+`import(path)` for `bun build --compile` to break.
 
 ### Workspace scripts
 
