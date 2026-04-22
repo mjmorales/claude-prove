@@ -1,0 +1,24 @@
+{
+  "name": "prd_from_md",
+  "artifact": "prd",
+  "data": {
+    "schema_version": "1",
+    "kind": "prd",
+    "context": "Reasons for this run.",
+    "goals": [
+      "Deliver A",
+      "Deliver B"
+    ],
+    "scope": {
+      "in": [],
+      "out": []
+    },
+    "acceptance_criteria": [
+      "All tests pass",
+      "No regressions"
+    ],
+    "test_strategy": "Run pytest and manually verify edge cases.",
+    "body_markdown": "# Example PRD\n\n## Context\n\nReasons for this run.\n\n## Goals\n\n- Deliver A\n- Deliver B\n\n## Scope\n\n### In\n- foo\n- bar\n\n## Acceptance Criteria\n\n- All tests pass\n- No regressions\n\n## Test Strategy\n\nRun pytest and manually verify edge cases.",
+    "title": "Example PRD"
+  }
+}
