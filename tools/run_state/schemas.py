@@ -1,6 +1,6 @@
 """Schema definitions for .prove/runs/<branch>/<slug>/ artifact files.
 
-Schemas reuse the field-spec DSL from ``tools/schema/schemas.py``:
+Schemas use the field-spec DSL vendored in ``tools/run_state/_validator.py``:
   - type: "str" | "int" | "bool" | "list" | "dict" | "any"
   - required: bool (default False)
   - items: field spec for list items

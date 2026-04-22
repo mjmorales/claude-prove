@@ -23,7 +23,6 @@
       "tools/pcd",
       "tools/acb",
       "tools/run_state",
-      "tools/schema",
       "tools/round-table",
       "tools/project-manager",
       "tools/_lib"
