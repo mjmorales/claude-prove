@@ -10,9 +10,9 @@
  *   prove cafi lookup  <keyword> [--project-root <path>]
  *   prove cafi clear   [--project-root <path>]
  *   prove cafi context [--project-root <path>]
- *   prove cafi gate    (placeholder — see task 3)
+ *   prove cafi gate
  *
- * Semantics mirror `tools/cafi/__main__.py`:
+ * Sub-action semantics:
  *   - index: run full/incremental index; stdout prints JSON summary; on
  *     `summary.errors > 0`, stderr gets the "Claude CLI may be
  *     unavailable" warning. Exit 0.
