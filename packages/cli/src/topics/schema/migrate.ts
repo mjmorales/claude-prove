@@ -173,6 +173,53 @@ function migrateV2ToV3(config: ProveConfig): [ProveConfig, MigrationChange[]] {
 }
 
 /**
+ * v3 -> v4: bump schema_version and drop the two fields that no longer
+ * belong in the unified config:
+ *   - `scopes.tools` — tool registry lives under `tools.*` since v3.
+ *   - `tools.schema` — the schema CLI is built-in and not a toggleable tool.
+ *
+ * Every other `scopes` entry and every other `tools` entry (incl. nested
+ * `config` objects like `tools.cafi.config`) is preserved byte-for-byte.
+ */
+function migrateV3ToV4(config: ProveConfig): [ProveConfig, MigrationChange[]] {
+  const changes: MigrationChange[] = [];
+  const result: ProveConfig = { ...config };
+
+  result['schema_version'] = '4';
+  changes.push(new MigrationChange('change', 'schema_version', '"3" -> "4"'));
+
+  const scopes = result['scopes'];
+  if (isPlainObject(scopes) && 'tools' in scopes) {
+    const nextScopes: Record<string, unknown> = { ...scopes };
+    delete nextScopes['tools'];
+    result['scopes'] = nextScopes;
+    changes.push(
+      new MigrationChange(
+        'remove',
+        'scopes.tools',
+        'tools registry lives under top-level tools.* since v3',
+      ),
+    );
+  }
+
+  const tools = result['tools'];
+  if (isPlainObject(tools) && 'schema' in tools) {
+    const nextTools: Record<string, unknown> = { ...tools };
+    delete nextTools['schema'];
+    result['tools'] = nextTools;
+    changes.push(
+      new MigrationChange(
+        'remove',
+        'tools.schema',
+        'schema CLI is built-in — no toggleable tool entry',
+      ),
+    );
+  }
+
+  return [result, changes];
+}
+
+/**
  * Migration registry. Keys are `"<from>_to_<to>"` strings; `planMigration`
  * walks them sequentially from the detected version to CURRENT_SCHEMA_VERSION.
  */
@@ -180,6 +227,7 @@ export const MIGRATIONS: Record<string, MigrationFn> = {
   '0_to_1': migrateV0ToV1,
   '1_to_2': migrateV1ToV2,
   '2_to_3': migrateV2ToV3,
+  '3_to_4': migrateV3ToV4,
 };
 
 /**
