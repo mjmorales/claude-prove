@@ -1,0 +1,25 @@
+{
+  "name": "triage_card_bad_finding_category",
+  "schema_key": "triage_card",
+  "input": {
+    "file": "src/main.py",
+    "lines": 80,
+    "risk": "high",
+    "confidence": 4,
+    "findings": [
+      {
+        "category": "style",
+        "brief": "x",
+        "line_range": [
+          1,
+          2
+        ]
+      }
+    ],
+    "questions": []
+  },
+  "ok": false,
+  "errors": [
+    "findings[0].category: expected one of ['error_handling', 'invariant', 'contract', 'side_effect', 'dependency', 'performance', 'naming', 'dead_code'], got 'style'"
+  ]
+}

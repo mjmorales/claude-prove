@@ -1,0 +1,34 @@
+{
+  "name": "triage_card_valid",
+  "schema_key": "triage_card",
+  "input": {
+    "file": "src/main.py",
+    "lines": 80,
+    "risk": "high",
+    "confidence": 4,
+    "findings": [
+      {
+        "category": "error_handling",
+        "brief": "x",
+        "line_range": [
+          1,
+          2
+        ]
+      }
+    ],
+    "questions": [
+      {
+        "id": "q-001",
+        "referencing_file": "src/main.py",
+        "referenced_symbol": "connect",
+        "referenced_files": [
+          "src/db.py"
+        ],
+        "question_type": "error_handling",
+        "text": "?"
+      }
+    ]
+  },
+  "ok": true,
+  "errors": []
+}

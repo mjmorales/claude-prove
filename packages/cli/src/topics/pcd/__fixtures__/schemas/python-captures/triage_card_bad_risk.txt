@@ -1,0 +1,16 @@
+{
+  "name": "triage_card_bad_risk",
+  "schema_key": "triage_card",
+  "input": {
+    "file": "src/main.py",
+    "lines": 80,
+    "risk": "extreme",
+    "confidence": 4,
+    "findings": [],
+    "questions": []
+  },
+  "ok": false,
+  "errors": [
+    "risk: expected one of ['critical', 'high', 'medium', 'low'], got 'extreme'"
+  ]
+}

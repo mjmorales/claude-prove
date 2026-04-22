@@ -1,0 +1,21 @@
+{
+  "name": "structural_map_version_string",
+  "schema_key": "structural_map",
+  "input": {
+    "version": "one",
+    "timestamp": "2026-03-28T00:00:00Z",
+    "generated_by": "deterministic",
+    "summary": {
+      "total_files": 0,
+      "total_lines": 0,
+      "languages": {}
+    },
+    "modules": [],
+    "clusters": [],
+    "dependency_edges": []
+  },
+  "ok": false,
+  "errors": [
+    "version: expected int, got str"
+  ]
+}

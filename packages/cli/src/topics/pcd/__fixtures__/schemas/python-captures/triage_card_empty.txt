@@ -1,0 +1,14 @@
+{
+  "name": "triage_card_empty",
+  "schema_key": "triage_card",
+  "input": {},
+  "ok": false,
+  "errors": [
+    "file: required field is missing",
+    "lines: required field is missing",
+    "risk: required field is missing",
+    "confidence: required field is missing",
+    "findings: required field is missing",
+    "questions: required field is missing"
+  ]
+}

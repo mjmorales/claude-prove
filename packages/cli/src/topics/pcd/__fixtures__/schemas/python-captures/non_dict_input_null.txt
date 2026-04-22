@@ -1,0 +1,9 @@
+{
+  "name": "non_dict_input_null",
+  "schema_key": "triage_card",
+  "input": null,
+  "ok": false,
+  "errors": [
+    "expected dict, got NoneType"
+  ]
+}

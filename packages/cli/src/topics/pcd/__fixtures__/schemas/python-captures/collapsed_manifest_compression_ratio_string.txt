@@ -1,0 +1,20 @@
+{
+  "name": "collapsed_manifest_compression_ratio_string",
+  "schema_key": "collapsed_manifest",
+  "input": {
+    "version": 1,
+    "stats": {
+      "total_cards": 5,
+      "preserved": 2,
+      "collapsed": 3,
+      "compression_ratio": "half"
+    },
+    "preserved_cards": [],
+    "collapsed_summaries": [],
+    "question_index": []
+  },
+  "ok": false,
+  "errors": [
+    "stats.compression_ratio: expected float, got str"
+  ]
+}
