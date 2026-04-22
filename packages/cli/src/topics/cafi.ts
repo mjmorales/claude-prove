@@ -24,10 +24,12 @@
  *   - clear: stdout prints whether the cache was removed. Exit 0.
  *   - context: stdout prints the Markdown block; exit 1 with stderr
  *     message when the cache is empty.
- *   - gate: no-op pending task 3 merge (see TODO below).
+ *   - gate: reads a PreToolUse hook payload from stdin, writes the
+ *     injected context (if any) to stdout, exits 0.
  */
 
 import type { CAC } from 'cac';
+import { runGate } from './cafi/gate';
 import {
   buildIndex,
   clearCache,
@@ -88,7 +90,7 @@ async function dispatch(
     case 'context':
       return cmdContext(root);
     case 'gate':
-      return cmdGate();
+      return cmdGate(root);
   }
 }
 
@@ -158,10 +160,11 @@ function cmdContext(root: string): number {
   return 0;
 }
 
-function cmdGate(): number {
-  // TODO(phase-5, task-3): runGate lands with gate.ts. Until task 3's
-  // merge reaches orchestrator, this action is a silent no-op so
-  // `prove cafi gate` doesn't error. Task 5 (callers-sweep) flips this
-  // to the real call.
+async function cmdGate(root: string): Promise<number> {
+  const rawStdin = await Bun.stdin.text();
+  const result = runGate(rawStdin, { cwd: root });
+  if (result.stdout !== '') {
+    process.stdout.write(result.stdout);
+  }
   return 0;
 }
