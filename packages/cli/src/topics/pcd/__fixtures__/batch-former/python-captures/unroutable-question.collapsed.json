@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "stats": {
+    "total_cards": 2,
+    "preserved": 2,
+    "collapsed": 0,
+    "compression_ratio": 0.0
+  },
+  "preserved_cards": [
+    {
+      "file": "src/main.py",
+      "lines": 100,
+      "risk": "high",
+      "confidence": 4,
+      "findings": [{"category": "error_handling", "brief": "Issue in src/main.py", "line_range": [1, 10]}],
+      "questions": []
+    },
+    {
+      "file": "lib/helper.py",
+      "lines": 40,
+      "risk": "high",
+      "confidence": 4,
+      "findings": [{"category": "error_handling", "brief": "Issue in lib/helper.py", "line_range": [1, 10]}],
+      "questions": []
+    }
+  ],
+  "collapsed_summaries": [],
+  "question_index": [
+    {
+      "id": "q-missing",
+      "from_file": "src/main.py",
+      "target_files": ["src/nonexistent.py"],
+      "question_type": "contract",
+      "text": "What does the missing module do?"
+    }
+  ]
+}

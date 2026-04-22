@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "stats": {
+    "total_cards": 3,
+    "preserved": 2,
+    "collapsed": 1,
+    "compression_ratio": 0.3333333333333333
+  },
+  "preserved_cards": [
+    {
+      "file": "src/main.py",
+      "lines": 100,
+      "risk": "high",
+      "confidence": 4,
+      "findings": [
+        {
+          "category": "error_handling",
+          "brief": "Issue in src/main.py",
+          "line_range": [1, 10]
+        }
+      ],
+      "questions": []
+    },
+    {
+      "file": "src/util.py",
+      "lines": 100,
+      "risk": "high",
+      "confidence": 4,
+      "findings": [
+        {
+          "category": "error_handling",
+          "brief": "Issue in src/util.py",
+          "line_range": [1, 10]
+        }
+      ],
+      "questions": []
+    }
+  ],
+  "collapsed_summaries": [],
+  "question_index": []
+}

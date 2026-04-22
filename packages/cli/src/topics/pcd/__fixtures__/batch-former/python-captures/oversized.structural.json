@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "timestamp": "2026-03-28T00:00:00+00:00",
+  "generated_by": "deterministic",
+  "summary": {
+    "total_files": 5,
+    "total_lines": 250,
+    "languages": {"python": 5}
+  },
+  "modules": [
+    {"path": "src/a/mod0.py", "lines": 50, "language": "python", "exports": [], "imports_from": [], "imported_by": [], "cluster_id": 0},
+    {"path": "src/a/mod1.py", "lines": 50, "language": "python", "exports": [], "imports_from": [], "imported_by": [], "cluster_id": 0},
+    {"path": "src/a/mod2.py", "lines": 50, "language": "python", "exports": [], "imports_from": [], "imported_by": [], "cluster_id": 0},
+    {"path": "src/b/mod3.py", "lines": 50, "language": "python", "exports": [], "imports_from": [], "imported_by": [], "cluster_id": 0},
+    {"path": "src/b/mod4.py", "lines": 50, "language": "python", "exports": [], "imports_from": [], "imported_by": [], "cluster_id": 0}
+  ],
+  "clusters": [
+    {
+      "id": 0,
+      "name": "big_cluster",
+      "files": ["src/a/mod0.py", "src/a/mod1.py", "src/a/mod2.py", "src/b/mod3.py", "src/b/mod4.py"],
+      "internal_edges": 0,
+      "external_edges": 0
+    }
+  ],
+  "dependency_edges": []
+}
