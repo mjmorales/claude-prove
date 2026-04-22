@@ -1,6 +1,6 @@
 """Schema validation for .prove/runs artifact JSON files.
 
-Thin wrapper around the DSL-based validator from ``tools/schema/validate.py``
+Thin wrapper around the DSL-based validator vendored in ``_validator.py``,
 parameterized by the per-kind schemas in ``schemas.py``.
 """
 
@@ -10,8 +10,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from tools.run_state._validator import ValidationError, validate_config
 from tools.run_state.schemas import SCHEMA_BY_KIND, infer_kind
-from tools.schema.validate import ValidationError, validate_config
 
 
 def validate_data(

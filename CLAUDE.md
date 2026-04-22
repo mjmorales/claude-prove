@@ -89,16 +89,16 @@ Feature-branch commits must carry an ACB v0.2 intent manifest; the PostToolUse h
 
 When adding/removing/renaming `PROVE_SCHEMA` fields:
 
-1. Add field to `PROVE_SCHEMA` in `tools/schema/schemas.py` with `description` and `default`
-2. Increment `CURRENT_SCHEMA_VERSION` (integer string: `"2"` -> `"3"`)
-3. Add `_migrate_vN_to_vM(config)` in `tools/schema/migrate.py` -- hardcode target version, NEVER reference `CURRENT_SCHEMA_VERSION`
-4. Register in `MIGRATIONS` dict as `"N_to_M": _migrate_vN_to_vM`
-5. Add tests in `tools/schema/test_migrate.py`: version bump, defaults, data preservation, full chain from v0
-6. Update `.claude/.prove.json` at repo root
+1. Add field to `PROVE_SCHEMA` in `packages/cli/src/topics/schema/schemas.ts` with `description` and `default`
+2. Increment `CURRENT_SCHEMA_VERSION` in the same file (string: `'4'` -> `'5'`)
+3. Add `_migrate_vN_to_vM(config)` in `packages/cli/src/topics/schema/migrate.ts` -- hardcode target version, NEVER reference `CURRENT_SCHEMA_VERSION`
+4. Register in the `MIGRATIONS` map as `'N_to_M': _migrate_vN_to_vM`
+5. Add tests in `packages/cli/src/topics/schema/migrate.test.ts`: version bump, defaults, data preservation, full chain from v0
+6. Run `prove schema migrate --file .claude/.prove.json` at the repo root; commit the updated file and delete the generated `.bak`
 7. Add `## vX.Y.Z` entry in `UPDATES.md` with migration instructions
 
 ## Tool vs Pack Boundary
 
-- **Infrastructure tools** (CAFI, ACB, PCD, schema): `kind: "tool"` (default); skills/agents/commands live at plugin top level. Do NOT refactor these to pack model.
+- **Infrastructure tools** (CAFI, ACB, PCD): `kind: "tool"` (default); skills/agents/commands live at plugin top level. Do NOT refactor these to pack model. CLI topics (e.g., `schema`) live in `packages/cli/src/topics/`, not `tools/`.
 - **Workflow packs** (project-manager, etc.): `kind: "pack"` in `tool.json`; bundle skills/agents/commands/assets inside `tools/<name>/`. Registry symlinks on install.
 - Decision record: `.prove/decisions/2026-03-29-optional-packs-via-tools.md`

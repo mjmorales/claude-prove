@@ -29,7 +29,7 @@ Core checks gate all subsequent tiers. On any failure, skip Steps 2-3 and go to 
 #### 1.1: .claude/.prove.json
 
 ```bash
-PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema validate --file "$(pwd)/.claude/.prove.json" 2>&1
+prove schema validate --file "$(pwd)/.claude/.prove.json" 2>&1
 ```
 
 - Pass: valid JSON, no schema errors
@@ -95,11 +95,11 @@ docker info >/dev/null 2>&1
 #### 2.4: Schema Validator
 
 ```bash
-PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema validate --help 2>&1
+prove schema validate --help 2>&1
 ```
 
-- Pass: module loads
-- Fail: import errors — not auto-fixable, report the error
+- Pass: CLI loads
+- Fail: command errors — not auto-fixable, report the error
 
 #### 2.5: Reporters
 
@@ -156,7 +156,7 @@ Compare `.claude/.prove.json` mtime vs `CLAUDE.md` mtime.
 #### 3.4: Schema Version
 
 ```bash
-PYTHONPATH="$PLUGIN_DIR" python3 -m tools.schema migrate --file "$(pwd)/.claude/.prove.json" --dry-run 2>&1
+prove schema migrate --file "$(pwd)/.claude/.prove.json" --dry-run 2>&1
 ```
 
 - Pass: latest schema version
