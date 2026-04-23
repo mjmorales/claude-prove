@@ -6,6 +6,54 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v1.0.2 — Skill/command consolidation
+
+Aggressive consolidation after the phase-13 CLI unification. Twenty-five skills collapse to thirteen, thirty-five commands collapse to sixteen. Each merge group routes by a mode flag or subcommand; no functional capability is lost. Description fields on the new skills absorb every trigger phrase from the retired skills so description-matched invocations still route correctly for a release while muscle memory adjusts.
+
+**Merged skills** (N → 1 with dispatch):
+
+- `/prove:steward` — absorbs `auto-steward`, `steward-review`. Modes: `--review` (default, session diff), `--full [scope]` (PCD pipeline + fixes), `--auto [--max-passes N]` (iterative loop).
+- `/prove:create` — absorbs `skill-creator`, `slash-command-creator`, `subagent-creator`, `spec-writer`. Dispatch: `--type skill|command|agent|spec`.
+- `/prove:docs` — absorbs `docs-writer`, `agentic-doc-writer`, `auto-docs`, `claude-md`. Subcommands: `human`, `agent`, `both` (default), `claude-md generate`, `claude-md update <directive>`.
+- `/prove:prompting` — absorbs `prompting-craft`, `prompting-cache`, `prompting-token-count`. Subcommands: `craft`, `cache`, `token-count`.
+- `/prove:plan` — absorbs `plan-step`, `task-planner`. Modes: `--task [desc]`, `--step <id>`.
+- `/prove:notify` — absorbs `notify-setup`. Subcommands: `setup [platform]`, `test [--reporter name]`.
+- `/prove:task` — absorbs `handoff`, `cleanup` + lifecycle commands. Subcommands: `handoff`, `pickup`, `progress`, `complete <slug>`, `cleanup <slug>`.
+- `/prove:orchestrator` — absorbs autopilot/full-auto as flags. Modes: `--autopilot [plan-id]`, `--full [desc]`, auto-detect default.
+
+**Removed**:
+
+- Skill dirs: `auto-steward`, `steward-review`, `skill-creator`, `slash-command-creator`, `subagent-creator`, `spec-writer`, `docs-writer`, `agentic-doc-writer`, `auto-docs`, `claude-md`, `prompting-craft`, `prompting-cache`, `prompting-token-count`, `plan-step`, `task-planner`, `notify-setup`, `handoff`, `cleanup`.
+- Command files (wrappers + subdirs): `spec.md`, `claude-md-update.md`, `plan-step.md`, `plan-task.md`, `handoff.md`, `pickup.md`, `progress.md`, `complete-task.md`, `task-cleanup.md`, `autopilot.md`, `full-auto.md`, `commit.md`, `brainstorm.md`, `comprehend.md`, `index.md`, `prep-permissions.md`, plus `commands/{steward,create,docs,prompting,notify}/` subdirs in full.
+- `skills/handoff/scripts/gather-context.sh` relocated to `skills/task/scripts/gather-context.sh`.
+
+**Unchanged** (load-bearing, not merged): agents under `agents/` (delegation targets); CLI topics under `packages/cli/src/topics/`; `skills/{brainstorm,commit,comprehend,index,orchestrator,prep-permissions}`; `commands/{scrum,init,update,doctor,install-skills,report-issue,review-ui,bug-fix}.md`.
+
+**Migration**:
+
+1. Update slash-command muscle memory — old paths are gone with no aliases:
+   - `/prove:autopilot <plan>` → `/prove:orchestrator --autopilot <plan>`
+   - `/prove:full-auto [desc]` → `/prove:orchestrator --full [desc]`
+   - `/prove:handoff` → `/prove:task handoff`
+   - `/prove:pickup` → `/prove:task pickup`
+   - `/prove:progress` → `/prove:task progress`
+   - `/prove:complete-task <slug>` → `/prove:task complete <slug>`
+   - `/prove:task-cleanup <slug>` → `/prove:task cleanup <slug>`
+   - `/prove:plan-task <desc>` → `/prove:plan --task <desc>`
+   - `/prove:plan-step <id>` → `/prove:plan --step <id>`
+   - `/prove:create:create-{skill,command,agent}` → `/prove:create --type {skill,command,agent}`
+   - `/prove:spec` → `/prove:create --type spec`
+   - `/prove:docs:{auto-docs,agentic-docs,claude-md}` → `/prove:docs {both,agent,claude-md}`
+   - `/prove:claude-md-update <directive>` → `/prove:docs claude-md update <directive>`
+   - `/prove:steward:{auto-steward,steward-review}` → `/prove:steward {--auto,--review}`
+   - `/prove:prompting:{craft,cache,token-count}` → `/prove:prompting {craft,cache,token-count}` (path flattens)
+   - `/prove:notify:{notify-setup,notify-test}` → `/prove:notify {setup,test}`
+2. Description-matched invocations ("audit this code", "write docs for X", "craft a prompt for Y") continue to work — the new skills' frontmatter descriptions aggregate every trigger phrase from the retired ones.
+3. External automation or scripts that shelled into `skills/handoff/scripts/gather-context.sh` must update the path to `skills/task/scripts/gather-context.sh`.
+4. No schema change; no `/prove:update` action required beyond the normal managed-block refresh.
+
+---
+
 ## v1.0.1 — Python removal (phase 13)
 
 Post-cutover cleanup. Phase 13 retires the last shell/python bridges that still embedded business logic: every `python3 -c`, `jq`, or `awk` heredoc that read `.claude/.prove.json`, `plan.json`, or `prd.json` now runs through a typed `prove <topic>` subcommand. Four wrapper scripts are deleted outright; three skill/command markdown files migrate to the CLI surface; the final grep sweep confirms zero `python3` invocations remain in `agents/`, `commands/`, `skills/`, `references/`, `scripts/`, or top-level docs.

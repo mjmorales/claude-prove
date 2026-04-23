@@ -20,17 +20,17 @@ Standard entry point. Reads `.prove/runs/<branch>/<slug>/plan.json` and/or `.pro
 
 If a matching `orchestrator/<task-slug>` branch already exists, it asks whether to resume from the last commit or start fresh.
 
-### `/prove:autopilot`
+### `/prove:orchestrator --autopilot`
 
 Identical behavior to `/prove:orchestrator` but accepts an optional argument to target a specific plan when multiple plans are present.
 
 ```
-/prove:autopilot
-/prove:autopilot 2
-/prove:autopilot "add user authentication"
+/prove:orchestrator --autopilot
+/prove:orchestrator --autopilot 2
+/prove:orchestrator --autopilot "add user authentication"
 ```
 
-### `/prove:full-auto`
+### `/prove:orchestrator --full`
 
 End-to-end mode. Starts from a plain-language feature description rather than an existing plan:
 
@@ -41,7 +41,7 @@ End-to-end mode. Starts from a plain-language feature description rather than an
 5. **Execution** — runs full mode orchestration
 
 ```
-/prove:full-auto add a CSV export feature to the reports page
+/prove:orchestrator --full add a CSV export feature to the reports page
 ```
 
 ## Simple vs Full Mode
@@ -163,12 +163,12 @@ See `skills/orchestrator/references/handoff-protocol.md` for the full protocol.
 
 During execution the orchestrator mutates `.prove/runs/<branch>/<slug>/state.json` — the single source of truth for run status, per-task/step lifecycle, validator outcomes, review verdicts, and the dispatch ledger. Mutations go exclusively through `scripts/prove-run` (a PreToolUse hook blocks direct edits). Views render JIT — no markdown status files are persisted. Each run has its own namespaced directory (`<branch>/<slug>/`), so concurrent runs stay isolated.
 
-### `/prove:progress`
+### `/prove:task progress`
 
 Check the current run status at any time without interrupting execution:
 
 ```
-/prove:progress
+/prove:task progress
 ```
 
 Reports overall status, current wave, task statuses, review verdicts, and blockers. Read-only — never modifies progress files.
@@ -193,7 +193,7 @@ Configure reporters in `.claude/.prove.json`:
 
 Reporter commands receive event context via environment variables: `PROVE_EVENT`, `PROVE_TASK`, `PROVE_STEP`, `PROVE_STATUS`, `PROVE_BRANCH`, `PROVE_DETAIL`.
 
-Run `/prove:notify:notify-setup` to configure reporters interactively.
+Run `/prove:notify setup` to configure reporters interactively.
 
 See `skills/orchestrator/references/reporter-protocol.md` for the full reporter interface.
 

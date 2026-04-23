@@ -60,4 +60,4 @@ When adding to a plugin, ensure the relevant scope exists in `.claude/.prove.jso
 
 ## Prompt Quality Standard
 
-The project's CLAUDE.md mandates all LLM-fed text be reviewed by the `llm-prompt-engineer` agent before shipping. Creator skills apply a lightweight self-check (step 3 above) during generation. For high-stakes prompts, recommend the user run `/prove:prompting:craft` for full optimization after creation.
+The project's CLAUDE.md mandates all LLM-fed text be reviewed by the `llm-prompt-engineer` agent before shipping. Creator skills apply a lightweight self-check (step 3 above) during generation. For high-stakes prompts, recommend the user run `/prove:prompting craft` for full optimization after creation.

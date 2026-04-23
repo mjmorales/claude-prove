@@ -155,7 +155,7 @@ describe('compose', () => {
     scan.core_commands = [];
     const r = compose(scan);
     expect(r).toContain('## Prove Commands');
-    expect(r).toContain('/prove:docs:claude-md');
+    expect(r).toContain('/prove:docs claude-md');
   });
 
   test('minimal project suppresses all optional sections', () => {

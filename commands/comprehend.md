@@ -7,4 +7,4 @@ summary: Socratic quiz on recent diffs to build code comprehension
 
 Comprehend scope: $ARGUMENTS
 
-Load and follow the comprehend skill (`skills/comprehend/SKILL.md` from the workflow plugin).
+Load and follow the comprehend skill (`skills/comprehend/SKILL.md`).

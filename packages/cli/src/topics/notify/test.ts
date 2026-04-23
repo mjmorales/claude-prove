@@ -35,7 +35,7 @@ export function runNotifyTest(opts: NotifyTestOpts): number {
 
   if (!existsSync(configPath)) {
     process.stdout.write(`ERROR: ${configPath} not found.\n`);
-    process.stdout.write('Run /prove:notify:notify-setup to configure reporters.\n');
+    process.stdout.write('Run /prove:notify setup to configure reporters.\n');
     return 1;
   }
 
@@ -49,7 +49,7 @@ export function runNotifyTest(opts: NotifyTestOpts): number {
     const total = countAllReporters(configPath);
     if (total <= 0) {
       process.stdout.write(`No reporters configured in ${configPath}.\n`);
-      process.stdout.write('Run /prove:notify:notify-setup to add reporters.\n');
+      process.stdout.write('Run /prove:notify setup to add reporters.\n');
       return 1;
     }
     process.stdout.write(`No reporters matched event '${event}' — nothing to test.\n`);

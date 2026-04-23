@@ -95,7 +95,7 @@ prove schema validate --help 2>&1
 Skip unless `.claude/.prove.json` has a `reporters` section. Check each reporter's `run` command exists and is executable.
 
 - Pass: script exists
-- Warn: configured but script not found — fix: `/prove:notify:notify-setup`
+- Warn: configured but script not found — fix: `/prove:notify setup`
 
 ## Step 3: Health Checks
 

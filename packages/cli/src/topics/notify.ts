@@ -9,7 +9,7 @@
  * `dispatch` replaces `scripts/dispatch-event.sh` — the orchestrator hook
  * layer invokes it whenever a step lifecycle event fires. `test` replaces
  * `scripts/notify-test.sh` — operator-facing probe invoked via
- * `/prove:notify:notify-test`.
+ * `/prove:notify test`.
  *
  * Exit codes:
  *   0  success (dispatch is best-effort and always returns 0)

@@ -2,7 +2,7 @@
  * Parity tests for `prove claude-md validators`.
  *
  * Covers the output format formerly produced by the inline Python in
- * `skills/handoff/scripts/gather-context.sh`:
+ * `skills/task/scripts/gather-context.sh`:
  *   - one line per validator with non-empty `command`
  *   - format: `- <phase>: \`<command>\``
  *   - missing file / missing key / bad JSON → empty output, exit 0

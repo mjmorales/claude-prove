@@ -40,10 +40,6 @@
   },
   "core_commands": [
     {
-      "name": "autopilot",
-      "summary": "Autonomous execution with validation gates"
-    },
-    {
       "name": "brainstorm",
       "summary": "Explore options and record decisions"
     },
@@ -56,8 +52,12 @@
       "summary": "Update the file index (run after significant changes)"
     },
     {
-      "name": "plan-task",
-      "summary": "Plan implementation for a task"
+      "name": "orchestrator",
+      "summary": "Unified entry point for orchestrator, autopilot, and full-auto execution"
+    },
+    {
+      "name": "plan",
+      "summary": "Plan a task or a specific step from the active plan.json"
     },
     {
       "name": "review-ui",
@@ -68,6 +68,6 @@
       "summary": "Operate the scrum store backed by `.prove/prove.db` (tasks, milestones, tags, run-links)"
     }
   ],
-  "plugin_version": "1.0.1",
+  "plugin_version": "1.0.2",
   "plugin_dir": "__PLUGIN_DIR__"
 }

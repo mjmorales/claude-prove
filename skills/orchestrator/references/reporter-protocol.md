@@ -117,4 +117,4 @@ The dispatcher records fired events in `state.json.dispatch.dispatched[]` via `p
 
 ## Reporter Configuration
 
-Reporter schema and environment variables are defined in `references/validation-config.md`. Setup interactively via `/prove:notify:notify-setup`.
+Reporter schema and environment variables are defined in `references/validation-config.md`. Setup interactively via `/prove:notify setup`.

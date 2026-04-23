@@ -64,12 +64,12 @@ Agentic task management on `.prove/prove.db` (schema v5+). Hook-driven: SessionS
 
 ## Prove Commands
 
-- `/prove:autopilot` — Autonomous execution with validation gates
+- `/prove:orchestrator` — Autonomous execution with mode dispatch (`--autopilot`, `--full`, auto-detect)
 - `/prove:brainstorm` — Explore options and record decisions
 - `/prove:comprehend` — Socratic quiz on recent diffs to build code comprehension
 - `/prove:index` — Update the file index (run after significant changes)
-- `/prove:plan-task` — Plan implementation for a task
-- `/prove:tools` — Manage prove tools — list, install, remove, status
+- `/prove:plan` — Plan implementation (`--task <desc>` or `--step <id>`)
+- `/prove:task` — Task lifecycle (`handoff|pickup|progress|complete|cleanup`)
 
 <!-- prove:managed:end -->
 

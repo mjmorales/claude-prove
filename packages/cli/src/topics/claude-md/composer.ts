@@ -217,7 +217,7 @@ function renderTools(coreCommands: CoreCommand[]): string {
       lines.push(`- \`/prove:${cmd.name}\` — ${cmd.summary}`);
     }
   } else {
-    lines.push('- `/prove:docs:claude-md` — Regenerate this file');
+    lines.push('- `/prove:docs claude-md` — Regenerate this file');
   }
   lines.push('');
   return lines.join('\n');

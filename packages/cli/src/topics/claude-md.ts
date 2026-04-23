@@ -1,10 +1,11 @@
 /**
  * Register the `claude-md` topic on the cac instance.
  *
- * Mirrors `skills/claude-md/__main__.py` 1:1 (plus `validators`, used as a
- * plugin-dir-less fallback in `skills/handoff/scripts/gather-context.sh`).
- * Hooks, the skill body, and `/prove:docs:claude-md` call `prove claude-md`
- * — never `python3 skills/claude-md/__main__.py`:
+ * Historic parity: ported from the retired `skills/claude-md/__main__.py`
+ * (plus `validators`, used as a plugin-dir-less fallback in the gather-context
+ * script now at `skills/task/scripts/gather-context.sh`).
+ * Hooks, the docs skill's `claude-md` subcommand, and direct invocations
+ * call `prove claude-md`:
  *
  *   prove claude-md generate         [--project-root R] [--plugin-dir P]
  *   prove claude-md scan             [--project-root R] [--plugin-dir P]

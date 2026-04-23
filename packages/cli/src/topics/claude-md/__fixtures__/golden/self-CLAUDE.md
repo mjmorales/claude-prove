@@ -1,8 +1,8 @@
 <!-- prove:managed:start -->
 # claude-prove
 
-<!-- prove:plugin-version:1.0.1 -->
-**Prove plugin v1.0.1** — if the installed plugin version (`cat __PLUGIN_DIR__/.claude-plugin/plugin.json | grep version`) does not match v1.0.1, run `/prove:update` to sync.
+<!-- prove:plugin-version:1.0.2 -->
+**Prove plugin v1.0.2** — if the installed plugin version (`cat __PLUGIN_DIR__/.claude-plugin/plugin.json | grep version`) does not match v1.0.2, run `/prove:update` to sync.
 
 JavaScript/TypeScript (npm)
 
@@ -43,11 +43,11 @@ JavaScript/TypeScript (npm)
 
 ## Prove Commands
 
-- `/prove:autopilot` — Autonomous execution with validation gates
 - `/prove:brainstorm` — Explore options and record decisions
 - `/prove:comprehend` — Socratic quiz on recent diffs to build code comprehension
 - `/prove:index` — Update the file index (run after significant changes)
-- `/prove:plan-task` — Plan implementation for a task
+- `/prove:orchestrator` — Unified entry point for orchestrator, autopilot, and full-auto execution
+- `/prove:plan` — Plan a task or a specific step from the active plan.json
 - `/prove:review-ui` — Docker-based review UI for inspecting prove runs, ACB intent groups, and verdicts
 - `/prove:scrum` — Operate the scrum store backed by `.prove/prove.db` (tasks, milestones, tags, run-links)
 

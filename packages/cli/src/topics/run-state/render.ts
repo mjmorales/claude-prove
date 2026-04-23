@@ -1,7 +1,7 @@
 /**
  * JIT markdown rendering for run-state artifacts.
  *
- * Every human-readable view (`/prove:progress`, run summary, handoff
+ * Every human-readable view (`/prove:task progress`, run summary, handoff
  * context) is materialized from the underlying JSON. No markdown is
  * persisted — presentations are derived on demand so the JSON stays the
  * single source of truth.
@@ -452,7 +452,7 @@ export function renderReport(report: ReportData, options: RenderReportOptions = 
 }
 
 // ---------------------------------------------------------------------------
-// Summary view — single-block text used by /prove:progress.
+// Summary view — single-block text used by /prove:task progress.
 // ---------------------------------------------------------------------------
 
 type CountKey = 'pending' | 'in_progress' | 'completed' | 'failed' | 'halted';

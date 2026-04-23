@@ -1,15 +1,17 @@
 ---
 name: orchestrator
 description: >
-  Autonomous task orchestrator that auto-scales between simple mode (<=3 steps,
-  sequential, no worktrees) and full mode (4+ steps, parallel worktrees with
-  mandatory principal-architect review). Each run stores state as JSON under
+  Autonomous task orchestrator with mode dispatch. Absorbs autopilot
+  (plan-exists, skip PRD) and full-auto (no plan, requirements-first) as
+  invocation modes. Auto-scales between simple mode (<=3 steps, sequential, no
+  worktrees) and full mode (4+ steps, parallel worktrees with mandatory
+  principal-architect review). Each run stores state as JSON under
   .prove/runs/<branch>/<slug>/ (prd.json, plan.json, state.json, reports/*.json)
   and is mutated only through the run_state CLI. Creates feature branches, runs
-  validation gates, commits per step, and supports rollback via git. Use when a
-  .prove/runs/<branch>/<slug>/plan.json exists and the user wants hands-off
-  execution. Triggers on "orchestrate", "autopilot", "full auto", "run
-  autonomously", "implement without me", "hands-off mode".
+  validation gates, commits per step, and supports rollback via git. Triggers on
+  "orchestrate", "orchestrator", "autopilot", "full auto", "full-auto",
+  "autonomous execution", "run autonomously", "hands-off", "hands-off mode",
+  "implement without me".
 ---
 
 # Orchestrator Skill
@@ -17,7 +19,35 @@ description: >
 **Simple mode** (<=3 steps): sequential, no worktrees, lightweight reporting.
 **Full mode** (4+ steps): parallel worktrees, architect review, full tracking.
 
-Requires `.prove/runs/<branch>/<slug>/plan.json`. If missing, suggest `/prove:plan-task` first.
+Requires `.prove/runs/<branch>/<slug>/plan.json` for execution. If missing and the user wants a plan-first flow, use `--full` (starts with PRD phase) or run `/prove:plan --task` first.
+
+---
+
+## Mode Dispatch
+
+The skill is entered via `$ARGUMENTS`. Parse the first token as a mode flag:
+
+| Flag | Meaning | Entry Point |
+|------|---------|-------------|
+| `--autopilot [plan-id]` | Plan already exists; skip PRD phase. Derive slug from arg (or active run), locate `.prove/runs/<branch>/<slug>/plan.json`, begin execution. | Phase 0 |
+| `--full [task-desc]` | No plan yet; gather requirements first. `task-desc` seeds the PRD. | "Full Mode: Requirements Gathering (PRD)" |
+| *(none)* | Auto-detect (see below). | Resolved mode |
+
+### Auto-Detect (no flag)
+
+1. Resolve current branch and look for any `.prove/runs/<branch>/<slug>/` with a `plan.json`. If exactly one exists → act as `--autopilot` with that slug.
+2. If none exists → `AskUserQuestion` header "Mode":
+   - **Full (start from requirements)** — no plan yet; run PRD + plan before execution.
+   - **Autopilot (plan exists)** — point me at the slug.
+3. If multiple runs exist for the branch → `AskUserQuestion` listing slugs, plus a "Full (new run)" option.
+
+### Slug Resolution (autopilot)
+
+- Argument is a slug → use directly.
+- Argument is free text → kebab-case it (max 40 chars) and match against existing run dirs; if ambiguous, ask.
+- No argument → resolve from `.prove-wt-slug.txt` in the current worktree, or from the single run dir on the branch.
+
+After mode + slug are resolved, proceed to the appropriate phase. All downstream phases (Initialization, Plan Review, Execution Loop, Completion, Merge & Cleanup) are identical across modes — only the entry point differs.
 
 All run artifacts are JSON and live under `.prove/runs/<branch>/<slug>/`:
 
@@ -37,7 +67,7 @@ All `.prove/...` paths resolve from the **main worktree** (`$MAIN_ROOT`), not th
    - slug: kebab-case, max 40 chars
    - branch: `feature`, `fix`, `chore` (default `feature`) — matches the task's intent, not the git branch
 
-2. **Verify plan exists**: `.prove/runs/<branch>/<slug>/plan.json`. If missing → stop, suggest `/prove:plan-task`.
+2. **Verify plan exists**: `.prove/runs/<branch>/<slug>/plan.json`. If missing → stop, suggest `/prove:plan --task`.
 
 3. **Initialize run state** (if not already done):
    ```bash
@@ -312,7 +342,7 @@ Runs after user review and approval. Skip if execution halted.
 AskUserQuestion header "Merge & Cleanup":
 - "Merge & Clean" — merge, archive, delete branch
 - "Merge Only" — merge, keep artifacts
-- "Skip" — manual merge (remind user to run `/prove:task-cleanup`)
+- "Skip" — manual merge (remind user to run `/prove:task cleanup`)
 
 ### 4.2 Merge to Main
 
@@ -332,7 +362,7 @@ Archives to `.prove/archive/<date>_<slug>/`, removes run directory, worktree, br
 
 ### 4.4 Confirm
 
-Present: merge SHA, archived location, skipped items. If "Skip": remind to run `/prove:task-cleanup <slug>`.
+Present: merge SHA, archived location, skipped items. If "Skip": remind to run `/prove:task cleanup <slug>`.
 
 ---
 
@@ -357,7 +387,7 @@ All artifacts live in the run directory. Concurrent runs stay isolated under dif
 
 | Scenario | Action |
 |----------|--------|
-| No plan found | Stop, suggest `/prove:plan-task` |
+| No plan found | Stop, suggest `/prove:plan --task` |
 | Branch exists | AskUserQuestion: Resume / Start Fresh |
 | Build/test fails | One retry, then `step halt`, commit WIP, halt |
 | Subagent produces no changes | Log in report, skip commit, continue |

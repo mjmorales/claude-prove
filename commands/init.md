@@ -163,4 +163,4 @@ bash "$PLUGIN_DIR/scripts/install-skills.sh"
 Report what was created or updated. Suggest next steps:
 - Review and customize validators in `$TARGET_CWD/.claude/.prove.json`
 - Commit `.claude/.prove.json` and `.gitignore`
-- Run `/prove:plan-task` or `/prove:autopilot`
+- Run `/prove:plan --task` or `/prove:orchestrator --autopilot`

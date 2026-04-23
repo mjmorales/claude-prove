@@ -2,7 +2,7 @@
  * `run-state step-info <step_id>` — emit {task, step, task_state, step_state} as JSON.
  *
  * Mirrors `tools/run_state/__main__.py::cmd_step_info` exactly. Consumed by
- * `skills/plan-step` to surface plan + state context for a single step
+ * `skills/plan` (--step mode) to surface plan + state context for a single step
  * before the orchestrator kicks off implementation. JSON-only output (the
  * Python version ignored --format); task_state / step_state are `null` when
  * state.json is absent or the step hasn't been touched yet.

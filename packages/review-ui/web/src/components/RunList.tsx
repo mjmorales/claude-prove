@@ -95,7 +95,7 @@ export function RunList() {
           <div className="px-4 py-10 text-center text-[13px] text-fg-dim">
             No runs yet.
             <div className="text-[12px] text-fg-faint mt-1">
-              Launch <code className="mono text-phos">/prove:full-auto</code> to get started.
+              Launch <code className="mono text-phos">/prove:orchestrator --full</code> to get started.
             </div>
           </div>
         )}

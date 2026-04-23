@@ -2,13 +2,13 @@
 
 Claude Code sessions have a finite context window. As a session grows longer — through conversation history, tool calls, and file reads — the model's effective attention degrades and eventually the session must end. Prove provides three commands to manage this boundary cleanly:
 
-- `/prove:handoff` — Capture context before ending a session
-- `/prove:pickup` — Resume from a handoff in a fresh session
+- `/prove:task handoff` — Capture context before ending a session
+- `/prove:task pickup` — Resume from a handoff in a fresh session
 - `/prove:comprehend` — Build comprehension of agent-generated code
 
 ## Handoff
 
-**Command:** `/prove:handoff [optional note]`
+**Command:** `/prove:task handoff [optional note]`
 
 Creates `.prove/handoff.md` — a focused, self-contained prompt that a fresh session can load directly to resume your work without rediscovery or context loss.
 
@@ -27,29 +27,29 @@ The pickup note is the only LLM-generated part. Everything else is assembled det
 
 ### Agent recommendation
 
-After gathering context, `/prove:handoff` reads your `agents/` directory and recommends the right agent for the next session:
+After gathering context, `/prove:task handoff` reads your `agents/` directory and recommends the right agent for the next session:
 
 - If an existing agent matches the remaining work, it recommends `claude --agent agents/<name>.md --prompt-file .prove/handoff.md`
-- If the work is specialized but no agent fits, it suggests creating one with `/prove:create:create-agent` first
+- If the work is specialized but no agent fits, it suggests creating one with `/prove:create --type agent` first
 - If general-purpose is sufficient, it recommends `claude --prompt-file .prove/handoff.md`
 
 ### Usage
 
 ```bash
-/prove:handoff
-/prove:handoff finishing the auth middleware -- tests failing in src/auth/middleware.test.ts
+/prove:task handoff
+/prove:task handoff finishing the auth middleware -- tests failing in src/auth/middleware.test.ts
 ```
 
 The optional note is incorporated into the pickup note. You don't need to provide one — the command gathers context from the conversation and artifacts automatically.
 
 ## Pickup
 
-**Command:** `/prove:pickup`
+**Command:** `/prove:task pickup`
 
 Resumes work from a handoff in a fresh session. Run this as the first command in a new Claude Code session.
 
 ```bash
-/prove:pickup
+/prove:task pickup
 ```
 
 1. Reads `.prove/handoff.md`
@@ -59,7 +59,7 @@ Resumes work from a handoff in a fresh session. Run this as the first command in
 5. Deletes `.prove/handoff.md`
 6. Starts working
 
-You can also bypass `/prove:pickup` and pass the handoff file directly:
+You can also bypass `/prove:task pickup` and pass the handoff file directly:
 
 ```bash
 claude --prompt-file .prove/handoff.md
@@ -117,18 +117,18 @@ A typical multi-session workflow:
 Session 1: Plan
    /prove:task-planner add rate limiting to the API gateway
    (long conversation about architecture decisions)
-   /prove:handoff rate limiting plan finalized, ready to implement
+   /prove:task handoff rate limiting plan finalized, ready to implement
 
 Session 2: Execute
-   /prove:pickup
+   /prove:task pickup
    /prove:prep-permissions
    /prove:orchestrator
-   /prove:handoff implementation complete, tests passing
+   /prove:task handoff implementation complete, tests passing
 
 Session 3: Review and Learn
-   /prove:pickup
+   /prove:task pickup
    /prove:comprehend HEAD~5..HEAD
-   /prove:steward:steward-review
+   /prove:steward --review
    /prove:review-ui
    /prove:cleanup rate-limiting
 ```

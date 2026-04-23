@@ -2,7 +2,7 @@
  * Run-slug resolution for ACB manifests and orchestrator-aware tools.
  *
  * Ported from `tools/acb/_slug.py`. A `run_slug` ties a manifest/commit to
- * a specific orchestrator run (`/prove:full-auto`, `/prove:autopilot`).
+ * a specific orchestrator run (`/prove:orchestrator --full`, `/prove:orchestrator --autopilot`).
  * Consumers (orchestrator-review, ACB) query by slug to reconstruct
  * per-run activity.
  *
