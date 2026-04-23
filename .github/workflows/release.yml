@@ -9,12 +9,20 @@ on:
     paths-ignore:
       - 'tools/review-ui/**'
       - '.github/workflows/review-ui-image.yml'
+    # Tag pushes trigger the binary build + GH Release asset upload matrix
+    # below. The `release` job (version bump + tag cut) gates itself on
+    # branch pushes via `if:`; the `build-release-binary` matrix gates on
+    # tag pushes via `if:`.
+    tags: ['v*']
 
 permissions:
   contents: write
 
 jobs:
   release:
+    # Cut a new version + tag on pushes to main. Skipped on tag pushes so
+    # we don't recursively try to re-release.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/')
     runs-on: ubuntu-latest
     steps:
       - name: Generate App token
@@ -213,3 +221,66 @@ jobs:
           generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+
+  build-release-binary:
+    # Triggered only by tag pushes matching v*. The `release` job above
+    # pushes the tag, which fires this workflow a second time via the
+    # `tags: ['v*']` trigger. Matrix builds a compiled Bun binary for each
+    # of the 4 supported targets and uploads each as a named GH Release
+    # asset.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    name: Build ${{ matrix.artifact }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macos-latest is arm64 (Apple Silicon) as of the GH runner
+          # images in April 2026.
+          - os: macos-latest
+            arch: arm64
+            target: bun-darwin-arm64
+            artifact: prove-darwin-arm64
+          # macos-13 is the last Intel x64 macOS runner image.
+          - os: macos-13
+            arch: x64
+            target: bun-darwin-x64
+            artifact: prove-darwin-x64
+          - os: ubuntu-latest
+            arch: x64
+            target: bun-linux-x64
+            artifact: prove-linux-x64
+          # ubuntu-24.04-arm is GH's provided arm64 linux runner. If this
+          # label becomes unavailable, fall back to `ubuntu-latest` +
+          # QEMU/docker-buildx cross-compilation (see bun-linux-arm64
+          # target — bun natively cross-compiles so QEMU is unnecessary
+          # for the build step itself, only for smoke-testing).
+          - os: ubuntu-24.04-arm
+            arch: arm64
+            target: bun-linux-arm64
+            artifact: prove-linux-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.22
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Compile ${{ matrix.artifact }}
+        run: |
+          bun build --compile \
+            --target=${{ matrix.target }} \
+            packages/cli/bin/run.ts \
+            --outfile prove
+          mv prove ${{ matrix.artifact }}
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: ${{ matrix.artifact }}
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
