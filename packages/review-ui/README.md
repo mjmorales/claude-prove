@@ -1,9 +1,10 @@
 # @claude-prove/review-ui
 
-Review UI scaffolded into the monorepo (phase 11). Task 3 rewired the server
+Review UI absorbed into the monorepo (phase 11). Task 3 rewired the server
 onto `@claude-prove/store` (`bun:sqlite`) and flattened the workspace graph.
-Subsequent phase-11 waves add `react-router-dom` to the web, swap the
-Dockerfile to a Bun base, and delete `tools/review-ui/`.
+Subsequent phase-11 waves added `react-router-dom` to the web, swapped the
+Dockerfile to a Bun base, and retired the legacy standalone copy under
+`tools/` — `packages/review-ui/` is now the canonical home.
 
 ## Workspace shape: flattened (task 3 change)
 
@@ -39,7 +40,8 @@ monorepo `tsc --build` graph is a later-wave concern.
 
 - Task 1: scaffold packages/review-ui, copy sources verbatim.
 - Task 2: web sources landed.
-- Task 3 (this): server ported to `@claude-prove/store`; `group_verdicts`
+- Task 3: server ported to `@claude-prove/store`; `group_verdicts`
   absorbed into the acb domain as `acb_group_verdicts` (migration v2 with
   idempotent backfill from legacy bare tables).
-- Later waves: react-router, Bun Dockerfile, delete tools/review-ui/.
+- Later waves: react-router, Bun Dockerfile, retirement of the legacy
+  standalone copy under `tools/` (task 8).
