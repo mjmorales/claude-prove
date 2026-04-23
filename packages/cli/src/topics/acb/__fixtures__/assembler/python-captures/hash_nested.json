@@ -1,0 +1,34 @@
+{
+  "kind": "hash",
+  "name": "hash_nested",
+  "input": {
+    "acb_version": "0.2",
+    "id": "fixed-uuid",
+    "change_set_ref": {
+      "base_ref": "main",
+      "head_ref": "HEAD"
+    },
+    "intent_groups": [
+      {
+        "id": "g1",
+        "title": "Group One",
+        "classification": "explicit",
+        "file_refs": [
+          {
+            "path": "a.py",
+            "ranges": [
+              "1-10",
+              "20-30"
+            ]
+          }
+        ],
+        "annotations": [],
+        "ambiguity_tags": [
+          "assumption"
+        ]
+      }
+    ],
+    "manifest_count": 2
+  },
+  "hash": "6794bdabc26d84bb027bf8ab75a5f6b910cec301bdd07bbe32464c3b226a121c"
+}

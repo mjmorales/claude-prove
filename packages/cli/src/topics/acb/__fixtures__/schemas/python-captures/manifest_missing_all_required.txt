@@ -1,0 +1,11 @@
+{
+  "name": "manifest_missing_all_required",
+  "validator": "manifest",
+  "input": {},
+  "errors": [
+    "Missing required field: acb_manifest_version",
+    "Missing required field: commit_sha",
+    "Missing required field: timestamp",
+    "Missing required field: intent_groups"
+  ]
+}

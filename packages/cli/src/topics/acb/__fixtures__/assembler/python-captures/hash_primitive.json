@@ -1,0 +1,9 @@
+{
+  "kind": "hash",
+  "name": "hash_primitive",
+  "input": {
+    "id": "test",
+    "intent_groups": []
+  },
+  "hash": "827054869c59b20a9b9778edc00624d89560b8c729aa9594acb5c12a20bc058c"
+}

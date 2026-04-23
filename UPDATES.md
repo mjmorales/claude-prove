@@ -6,6 +6,42 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v0.41.0 — ACB ported to TypeScript + unified store migration
+
+Phase 9 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`) combined with ACB v2.1 of the unified-store plan (see `.prove/decisions/2026-04-21-unified-prove-store.md`). The Python `tools/acb/` module is retired; the Agent Change Brief assembler, PostToolUse hook, SQLite schema, and CLI now run through `prove acb` backed by `packages/cli/src/topics/acb/`. ACB storage moved from the standalone `.prove/acb.db` to the unified `.prove/prove.db` with `acb_*`-prefixed tables; the first `prove acb` invocation transparently auto-imports any legacy rows and deletes `.prove/acb.db`.
+
+**Removed**:
+
+- `tools/acb/` (all Python sources, tests, `tool.json`, `templates/`, `__main__.py`, `hook.py`, `assembler.py`, `store.py`, `schemas.py`, `_git.py`, `_slug.py`)
+- Standalone `.prove/acb.db` — auto-imported into `.prove/prove.db` on first `prove acb` call, then deleted
+- `python3 -m tools.acb ...` / `python3 $PLUGIN_DIR/tools/acb/hook.py ...` invocation paths
+- `tools/acb` lint-ignore entry in `biome.json`
+
+**Added**:
+
+- `prove acb save-manifest [--branch B] [--sha S] [--slug G] [--workspace-root W]` — reads intent manifest JSON on stdin, validates, inserts into `.prove/prove.db`
+- `prove acb assemble [--branch B] [--base main]` — merges branch manifests into an ACB document, upserts `acb_acb_documents` row, clears manifests
+- `prove acb hook post-commit --workspace-root W` — Claude Code PostToolUse hook (reads payload on stdin)
+- `prove acb migrate-legacy-db [--workspace-root W]` — user-triggered legacy-db importer (auto-invoke runs transparently on first non-migrate call)
+- `packages/cli/src/topics/acb/` — full TS port with bun test coverage
+- `packages/shared/src/{git,run-slug}.ts` — cross-topic helpers (git subprocess wrappers, 5-tier run-slug resolver) extracted from `tools/acb/_git.py` and `tools/acb/_slug.py`
+- `acb` domain in the unified store — `acb_manifests`, `acb_acb_documents`, `acb_review_state` tables registered via `@claude-prove/store`
+
+**Migration**:
+
+1. Run `/prove:update` — rewrites `.claude/settings.json` PostToolUse hook command to the TS form. No other manual steps.
+2. The next `prove acb save-manifest`, `prove acb assemble`, or `prove acb hook post-commit` invocation auto-imports `.prove/acb.db` into `.prove/prove.db` and deletes the legacy file. One stderr line announces the import count.
+3. If the review UI container is running, restart it so the server process opens the new `.prove/prove.db`. The HTTP/response shapes are unchanged.
+4. External scripts that invoked `python3 -m tools.acb save-manifest` must switch to `prove acb save-manifest` (same stdin contract).
+
+**Auto-adoption**:
+
+- `.claude/settings.json` hook swap is applied by `/prove:update`.
+- Legacy-db import runs transparently; no user action required.
+- Review UI reads the new db on next container restart.
+
+---
+
 ## v0.40.0 — PCD ported to TypeScript
 
 Phase 7 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`). The Python `tools/pcd/` module is retired; the Progressive Context Distillation deterministic rounds (structural map, collapse, batch formation) now run through `prove pcd` backed by `packages/cli/src/topics/pcd/`. Every steward skill directive that previously invoked `python3 $PLUGIN_DIR/tools/pcd/__main__.py ...` now routes through the TS CLI.

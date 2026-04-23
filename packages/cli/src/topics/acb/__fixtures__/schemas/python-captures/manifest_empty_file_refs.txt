@@ -1,0 +1,20 @@
+{
+  "name": "manifest_empty_file_refs",
+  "validator": "manifest",
+  "input": {
+    "acb_manifest_version": "0.2",
+    "commit_sha": "abc1234",
+    "timestamp": "2026-03-29T12:00:00Z",
+    "intent_groups": [
+      {
+        "id": "x",
+        "title": "t",
+        "classification": "explicit",
+        "file_refs": []
+      }
+    ]
+  },
+  "errors": [
+    "intent_groups[0]: file_refs must be a non-empty array"
+  ]
+}

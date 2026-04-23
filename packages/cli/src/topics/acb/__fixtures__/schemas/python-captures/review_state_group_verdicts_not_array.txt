@@ -1,0 +1,16 @@
+{
+  "name": "review_state_group_verdicts_not_array",
+  "validator": "review_state",
+  "input": {
+    "acb_version": "0.2",
+    "acb_hash": "deadbeef",
+    "acb_id": "test-id",
+    "group_verdicts": {
+      "not": "array"
+    },
+    "overall_verdict": "pending"
+  },
+  "errors": [
+    "group_verdicts must be an array"
+  ]
+}

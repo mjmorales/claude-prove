@@ -28,7 +28,7 @@ export function HelpOverlay({ onClose }: { onClose: () => void }) {
           <Row k="?" v="This map" />
         </div>
         <div className="px-5 pb-5 text-[11.5px] text-fg-dim leading-relaxed">
-          Verdicts persist to <code className="mono text-phos">.prove/acb.db</code>. Implicit
+          Verdicts persist to <code className="mono text-phos">.prove/prove.db</code>. Implicit
           groups (no manifest) show a hazard rail on the card.
         </div>
       </div>

@@ -1,0 +1,12 @@
+{
+  "name": "review_state_missing_all_required",
+  "validator": "review_state",
+  "input": {},
+  "errors": [
+    "Missing required field: acb_version",
+    "Missing required field: acb_hash",
+    "Missing required field: acb_id",
+    "Missing required field: group_verdicts",
+    "Missing required field: overall_verdict"
+  ]
+}

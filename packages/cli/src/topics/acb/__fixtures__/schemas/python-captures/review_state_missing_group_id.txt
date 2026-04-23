@@ -1,0 +1,18 @@
+{
+  "name": "review_state_missing_group_id",
+  "validator": "review_state",
+  "input": {
+    "acb_version": "0.2",
+    "acb_hash": "deadbeef",
+    "acb_id": "test-id",
+    "group_verdicts": [
+      {
+        "verdict": "accepted"
+      }
+    ],
+    "overall_verdict": "pending"
+  },
+  "errors": [
+    "group_verdicts[0]: missing group_id"
+  ]
+}
