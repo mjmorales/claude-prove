@@ -9,7 +9,9 @@
     ".": "./src/index.ts",
     "./cache": "./src/cache.ts",
     "./file-walker": "./src/file-walker.ts",
+    "./git": "./src/git.ts",
     "./logger": "./src/logger.ts",
+    "./run-slug": "./src/run-slug.ts",
     "./tool-config": "./src/tool-config.ts",
     "./types": "./src/types.ts"
   },

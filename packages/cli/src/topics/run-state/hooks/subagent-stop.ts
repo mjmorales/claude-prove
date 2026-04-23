@@ -15,6 +15,7 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { headSha } from '@claude-prove/shared';
 import { RunPaths } from '../paths';
 import {
   type ReconcileChange,
@@ -86,18 +87,6 @@ function mainWorktree(cwd: string): string {
     }
   }
   return cwd;
-}
-
-function latestCommit(cwd: string): string | null {
-  const proc = Bun.spawnSync({
-    cmd: ['git', 'rev-parse', 'HEAD'],
-    cwd,
-    stdout: 'pipe',
-    stderr: 'ignore',
-  });
-  if (proc.exitCode !== 0) return null;
-  const sha = proc.stdout.toString().trim();
-  return sha || null;
 }
 
 /** `true` iff HEAD's commit timestamp is >= the step's `started_at`.
@@ -185,7 +174,7 @@ export function runSubagentStop(payload: Record<string, unknown> | null): HookRe
   if (inprogress.length === 0) return EMPTY_HOOK_RESULT;
 
   const scopeIds = new Set(inprogress.map(([, sid]) => sid));
-  const latestSha = latestCommit(cwd);
+  const latestSha = headSha(cwd);
 
   let anyNewCommit = false;
   for (const [, sid] of inprogress) {
