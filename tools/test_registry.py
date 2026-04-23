@@ -69,13 +69,13 @@ SAMPLE_MANIFEST_CAFI = {
 }
 
 SAMPLE_MANIFEST_PACK = {
-    "name": "project-manager",
+    "name": "sample-pack",
     "version": "1.0.0",
     "description": "Project management pack",
     "requires": ["python3"],
     "provides": {
-        "commands": ["project-manager"],
-        "skills": ["project-manager"],
+        "commands": ["sample-pack"],
+        "skills": ["sample-pack"],
     },
 }
 
@@ -161,7 +161,7 @@ class TestList:
     def test_list_includes_kind_field(self, capsys: pytest.CaptureFixture[str]) -> None:
         """Manifest with kind: 'pack' appears in output with correct kind."""
         pack_manifest = {
-            "name": "project-manager",
+            "name": "sample-pack",
             "version": "1.0.0",
             "kind": "pack",
             "description": "Project management pack",
@@ -169,7 +169,7 @@ class TestList:
         with tempfile.TemporaryDirectory() as tmp:
             plugin_root, project_root = _make_env(
                 tmp,
-                manifests={"acb": SAMPLE_MANIFEST_ACB, "project-manager": pack_manifest},
+                manifests={"acb": SAMPLE_MANIFEST_ACB, "sample-pack": pack_manifest},
             )
             registry.main([
                 "--plugin-root", str(plugin_root),
@@ -178,7 +178,7 @@ class TestList:
             ])
             data = json.loads(capsys.readouterr().out)
             by_name = {t["name"]: t for t in data["tools"]}
-            assert by_name["project-manager"]["kind"] == "pack"
+            assert by_name["sample-pack"]["kind"] == "pack"
             assert by_name["acb"]["kind"] == "tool"
 
     def test_list_defaults_kind_to_tool(self, capsys: pytest.CaptureFixture[str]) -> None:
@@ -595,17 +595,17 @@ class TestSymlinks:
         with tempfile.TemporaryDirectory() as tmp:
             plugin_root, project_root = _make_env(
                 tmp,
-                manifests={"project-manager": SAMPLE_MANIFEST_PACK},
-                pack_content={"project-manager": {
-                    "skills": ["project-manager/SKILL.md"],
+                manifests={"sample-pack": SAMPLE_MANIFEST_PACK},
+                pack_content={"sample-pack": {
+                    "skills": ["sample-pack/SKILL.md"],
                 }},
             )
             registry.main([
                 "--plugin-root", str(plugin_root),
                 "--project-root", str(project_root),
-                "install", "project-manager",
+                "install", "sample-pack",
             ])
-            link = plugin_root / "skills" / "project-manager"
+            link = plugin_root / "skills" / "sample-pack"
             assert link.is_symlink()
             assert link.is_dir()
             assert (link / "SKILL.md").exists()
@@ -618,17 +618,17 @@ class TestSymlinks:
         with tempfile.TemporaryDirectory() as tmp:
             plugin_root, project_root = _make_env(
                 tmp,
-                manifests={"project-manager": SAMPLE_MANIFEST_PACK},
-                pack_content={"project-manager": {
-                    "agents": ["product-owner.md"],
+                manifests={"sample-pack": SAMPLE_MANIFEST_PACK},
+                pack_content={"sample-pack": {
+                    "agents": ["sample-agent.md"],
                 }},
             )
             registry.main([
                 "--plugin-root", str(plugin_root),
                 "--project-root", str(project_root),
-                "install", "project-manager",
+                "install", "sample-pack",
             ])
-            link = plugin_root / "agents" / "product-owner.md"
+            link = plugin_root / "agents" / "sample-agent.md"
             assert link.is_symlink()
             assert link.is_file()
             raw_target = os.readlink(str(link))
@@ -639,17 +639,17 @@ class TestSymlinks:
         with tempfile.TemporaryDirectory() as tmp:
             plugin_root, project_root = _make_env(
                 tmp,
-                manifests={"project-manager": SAMPLE_MANIFEST_PACK},
-                pack_content={"project-manager": {
-                    "commands": ["project-manager.md"],
+                manifests={"sample-pack": SAMPLE_MANIFEST_PACK},
+                pack_content={"sample-pack": {
+                    "commands": ["sample-pack.md"],
                 }},
             )
             registry.main([
                 "--plugin-root", str(plugin_root),
                 "--project-root", str(project_root),
-                "install", "project-manager",
+                "install", "sample-pack",
             ])
-            link = plugin_root / "commands" / "project-manager.md"
+            link = plugin_root / "commands" / "sample-pack.md"
             assert link.is_symlink()
             assert link.is_file()
             raw_target = os.readlink(str(link))
@@ -675,33 +675,33 @@ class TestSymlinks:
         with tempfile.TemporaryDirectory() as tmp:
             plugin_root, project_root = _make_env(
                 tmp,
-                manifests={"project-manager": SAMPLE_MANIFEST_PACK},
-                pack_content={"project-manager": {
-                    "skills": ["project-manager/SKILL.md"],
-                    "agents": ["product-owner.md"],
-                    "commands": ["project-manager.md"],
+                manifests={"sample-pack": SAMPLE_MANIFEST_PACK},
+                pack_content={"sample-pack": {
+                    "skills": ["sample-pack/SKILL.md"],
+                    "agents": ["sample-agent.md"],
+                    "commands": ["sample-pack.md"],
                 }},
             )
             # Install.
             registry.main([
                 "--plugin-root", str(plugin_root),
                 "--project-root", str(project_root),
-                "install", "project-manager",
+                "install", "sample-pack",
             ])
             capsys.readouterr()  # drain install output
-            assert (plugin_root / "skills" / "project-manager").is_symlink()
-            assert (plugin_root / "agents" / "product-owner.md").is_symlink()
-            assert (plugin_root / "commands" / "project-manager.md").is_symlink()
+            assert (plugin_root / "skills" / "sample-pack").is_symlink()
+            assert (plugin_root / "agents" / "sample-agent.md").is_symlink()
+            assert (plugin_root / "commands" / "sample-pack.md").is_symlink()
 
             # Remove.
             registry.main([
                 "--plugin-root", str(plugin_root),
                 "--project-root", str(project_root),
-                "remove", "project-manager",
+                "remove", "sample-pack",
             ])
-            assert not (plugin_root / "skills" / "project-manager").exists()
-            assert not (plugin_root / "agents" / "product-owner.md").exists()
-            assert not (plugin_root / "commands" / "project-manager.md").exists()
+            assert not (plugin_root / "skills" / "sample-pack").exists()
+            assert not (plugin_root / "agents" / "sample-agent.md").exists()
+            assert not (plugin_root / "commands" / "sample-pack.md").exists()
 
             data = json.loads(capsys.readouterr().out)
             assert data["symlinks_removed"] == 3
@@ -711,16 +711,16 @@ class TestSymlinks:
         with tempfile.TemporaryDirectory() as tmp:
             plugin_root, project_root = _make_env(
                 tmp,
-                manifests={"project-manager": SAMPLE_MANIFEST_PACK},
-                pack_content={"project-manager": {
-                    "skills": ["project-manager/SKILL.md"],
+                manifests={"sample-pack": SAMPLE_MANIFEST_PACK},
+                pack_content={"sample-pack": {
+                    "skills": ["sample-pack/SKILL.md"],
                 }},
             )
             # Install the pack to create symlinks.
             registry.main([
                 "--plugin-root", str(plugin_root),
                 "--project-root", str(project_root),
-                "install", "project-manager",
+                "install", "sample-pack",
             ])
             capsys.readouterr()
 
@@ -736,7 +736,7 @@ class TestSymlinks:
             registry.main([
                 "--plugin-root", str(plugin_root),
                 "--project-root", str(project_root),
-                "remove", "project-manager",
+                "remove", "sample-pack",
             ])
 
             # Foreign symlink must survive.
@@ -748,16 +748,16 @@ class TestSymlinks:
         with tempfile.TemporaryDirectory() as tmp:
             plugin_root, project_root = _make_env(
                 tmp,
-                manifests={"project-manager": SAMPLE_MANIFEST_PACK},
-                pack_content={"project-manager": {
-                    "skills": ["project-manager/SKILL.md"],
-                    "agents": ["product-owner.md"],
+                manifests={"sample-pack": SAMPLE_MANIFEST_PACK},
+                pack_content={"sample-pack": {
+                    "skills": ["sample-pack/SKILL.md"],
+                    "agents": ["sample-agent.md"],
                 }},
             )
             registry.main([
                 "--plugin-root", str(plugin_root),
                 "--project-root", str(project_root),
-                "install", "project-manager",
+                "install", "sample-pack",
             ])
             data = json.loads(capsys.readouterr().out)
             assert data["symlinks_created"] == 2
@@ -860,14 +860,14 @@ class TestSync:
         with tempfile.TemporaryDirectory() as tmp:
             plugin_root, project_root = _make_env(
                 tmp,
-                manifests={"project-manager": SAMPLE_MANIFEST_PACK},
-                prove_tools={"project-manager": {"enabled": True}},
-                pack_content={"project-manager": {
-                    "skills": ["project-manager/SKILL.md"],
+                manifests={"sample-pack": SAMPLE_MANIFEST_PACK},
+                prove_tools={"sample-pack": {"enabled": True}},
+                pack_content={"sample-pack": {
+                    "skills": ["sample-pack/SKILL.md"],
                 }},
             )
             # No symlinks exist yet (tool was enabled in config but not installed via CLI)
-            assert not (plugin_root / "skills" / "project-manager").exists()
+            assert not (plugin_root / "skills" / "sample-pack").exists()
 
             registry.main([
                 "--plugin-root", str(plugin_root),
@@ -875,7 +875,7 @@ class TestSync:
                 "sync",
             ])
             # Symlink should now exist
-            assert (plugin_root / "skills" / "project-manager").is_symlink()
+            assert (plugin_root / "skills" / "sample-pack").is_symlink()
 
             data = json.loads(capsys.readouterr().out)
             assert data["symlinks_created"] == 1

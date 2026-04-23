@@ -6,7 +6,7 @@
  * stop, subagent-stop) pipe findings to stderr where agents read them. Any
  * drift from the Python wording breaks observability.
  *
- * Field-spec DSL (mirrors schemas.py):
+ * Field-spec DSL (mirrors schemas.py, plus TS-only extensions noted below):
  *   - `type`:        "str" | "int" | "bool" | "list" | "dict" | "any"
  *   - `required`:    must-be-present on the parent dict (default false)
  *   - `items`:       child spec for list elements (descent on lists)
@@ -15,6 +15,9 @@
  *   - `enum`:        allowed literal values (scalars only)
  *   - `description`: human-readable, ignored by the validator
  *   - `default`:     supplied to migrators/initializers, ignored here
+ *   - `minLength`:   TS-only — minimum length for `str` (1 = non-empty). No
+ *                    Python counterpart; introduced for optional-but-non-empty
+ *                    fields like plan.task_id.
  *
  * Emits one `ValidationError` per finding. Type mismatches short-circuit
  * further checks on that node (so enum + items + fields are only evaluated
@@ -34,6 +37,8 @@ export interface FieldSpec {
   description?: string;
   default?: unknown;
   enum?: readonly (string | number | boolean)[];
+  /** TS-only: minimum length for `str` fields. `1` enforces non-empty. */
+  minLength?: number;
 }
 
 /** Top-level schema envelope: a kind tag, version, and root fields map. */
@@ -163,6 +168,15 @@ function validateValueInternal(value: unknown, spec: FieldSpec, path: string): V
         `must be one of ${formatEnum(spec.enum)}, got ${formatValue(value)}`,
       ),
     );
+  }
+
+  if (expected === 'str' && spec.minLength !== undefined) {
+    const str = value as string;
+    if (str.length < spec.minLength) {
+      const label =
+        spec.minLength === 1 ? 'non-empty string' : `string of length >= ${spec.minLength}`;
+      errors.push(new ValidationError(path, `must be a ${label}, got ${formatValue(value)}`));
+    }
   }
 
   if (expected === 'list' && spec.items) {

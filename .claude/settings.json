@@ -60,6 +60,17 @@
           }
         ],
         "_tool": "run_state"
+      },
+      {
+        "matcher": "startup|resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts scrum hook session-start",
+            "timeout": 3000
+          }
+        ],
+        "_tool": "scrum"
       }
     ],
     "Stop": [
@@ -73,6 +84,17 @@
           }
         ],
         "_tool": "run_state"
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts scrum hook stop",
+            "timeout": 3000
+          }
+        ],
+        "_tool": "scrum"
       }
     ],
     "SubagentStop": [
@@ -86,6 +108,17 @@
           }
         ],
         "_tool": "run_state"
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts scrum hook subagent-stop",
+            "timeout": 5000
+          }
+        ],
+        "_tool": "scrum"
       }
     ]
   }

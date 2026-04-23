@@ -9,7 +9,9 @@
   "exports": {
     "./schema/detect": "./src/topics/schema/detect.ts",
     "./schema/schemas": "./src/topics/schema/schemas.ts",
-    "./acb/store": "./src/topics/acb/store.ts"
+    "./acb/store": "./src/topics/acb/store.ts",
+    "./scrum/store": "./src/topics/scrum/store.ts",
+    "./scrum/types": "./src/topics/scrum/types.ts"
   },
   "files": ["bin", "src"],
   "scripts": {

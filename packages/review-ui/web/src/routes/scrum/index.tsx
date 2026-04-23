@@ -1,25 +1,37 @@
+import { Navigate, Route, Routes } from "react-router-dom";
+import { ScrumLayout } from "./layout";
+import { ScrumNowView } from "./now";
+import { ScrumBoardView } from "./board";
+import { ScrumMilestonesView } from "./milestones";
+import { ScrumAlertsView } from "./alerts";
+import { ScrumTaskDetailView } from "./task/[id]";
+
 /**
- * Scrum dashboard placeholder. Real UI lands in phase 12; this stub exists so
- * routing can be wired up now without blocking the ACB refactor.
+ * Scrum dashboard route tree. Mounted under `/scrum/*` from App.tsx.
+ *
+ *   /scrum            -> redirect to /scrum/now
+ *   /scrum/now        -> Now view
+ *   /scrum/board      -> Board view
+ *   /scrum/task/:id   -> Task detail
+ *   /scrum/milestones -> Milestones view
+ *   /scrum/alerts     -> Alerts view
+ *
+ * The layout owns the top tabbar + `useScrumUrlState` sync; all children
+ * render inside its <Outlet />. Read-only by design: no POST/PUT/DELETE
+ * fetches occur in this subtree.
  */
 export function ScrumRoute() {
   return (
-    <div className="h-full flex items-center justify-center bg-bg-void text-fg-base">
-      <div className="max-w-xl px-6 py-8 text-center">
-        <h1 className="text-2xl font-semibold text-fg-bright mb-3">Scrum dashboard</h1>
-        <p className="text-fg-faint mb-4">
-          The scrum dashboard ships in phase 12. This route is reserved so the /scrum URL resolves
-          cleanly while the ACB review UI (see /acb) remains the default experience.
-        </p>
-        <a
-          href="https://github.com/mjmorales/claude-prove/blob/main/.prove/decisions/2026-04-21-scrum-architecture.md"
-          target="_blank"
-          rel="noreferrer"
-          className="text-phos hover:underline"
-        >
-          Read the scrum architecture decision (.prove/decisions/2026-04-21-scrum-architecture.md)
-        </a>
-      </div>
-    </div>
+    <Routes>
+      <Route element={<ScrumLayout />}>
+        <Route index element={<Navigate to="/scrum/now" replace />} />
+        <Route path="now" element={<ScrumNowView />} />
+        <Route path="board" element={<ScrumBoardView />} />
+        <Route path="task/:id" element={<ScrumTaskDetailView />} />
+        <Route path="milestones" element={<ScrumMilestonesView />} />
+        <Route path="alerts" element={<ScrumAlertsView />} />
+        <Route path="*" element={<Navigate to="/scrum/now" replace />} />
+      </Route>
+    </Routes>
   );
 }
