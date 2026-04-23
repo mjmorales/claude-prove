@@ -1,0 +1,21 @@
+{
+  "name": "manifest_multiple_errors",
+  "validator": "manifest",
+  "input": {
+    "intent_groups": [
+      {
+        "id": "x",
+        "title": "t",
+        "classification": "bogus",
+        "file_refs": []
+      }
+    ]
+  },
+  "errors": [
+    "Missing required field: acb_manifest_version",
+    "Missing required field: commit_sha",
+    "Missing required field: timestamp",
+    "intent_groups[0]: invalid classification 'bogus'",
+    "intent_groups[0]: file_refs must be a non-empty array"
+  ]
+}

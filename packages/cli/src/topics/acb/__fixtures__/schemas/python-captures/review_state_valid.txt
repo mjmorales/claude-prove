@@ -1,0 +1,17 @@
+{
+  "name": "review_state_valid",
+  "validator": "review_state",
+  "input": {
+    "acb_version": "0.2",
+    "acb_hash": "deadbeef",
+    "acb_id": "test-id",
+    "group_verdicts": [
+      {
+        "group_id": "feat-auth",
+        "verdict": "pending"
+      }
+    ],
+    "overall_verdict": "pending"
+  },
+  "errors": []
+}
