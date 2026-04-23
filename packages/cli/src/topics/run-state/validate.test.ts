@@ -89,6 +89,89 @@ describe('validateData', () => {
     expect(r.errors).toEqual(['  ERROR: : top-level value must be a JSON object']);
   });
 
+  test('plan validates when task_id is absent (back-compat)', () => {
+    const r = validateData(
+      {
+        schema_version: '1',
+        kind: 'plan',
+        tasks: [
+          {
+            id: '1.1',
+            title: 't',
+            wave: 1,
+            steps: [{ id: '1.1.1', title: 's' }],
+          },
+        ],
+      },
+      'plan',
+    );
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
+  });
+
+  test('plan validates when task_id is a non-empty string', () => {
+    const r = validateData(
+      {
+        schema_version: '1',
+        kind: 'plan',
+        task_id: 'SCRUM-42',
+        tasks: [
+          {
+            id: '1.1',
+            title: 't',
+            wave: 1,
+            steps: [{ id: '1.1.1', title: 's' }],
+          },
+        ],
+      },
+      'plan',
+    );
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
+  });
+
+  test('plan rejects empty task_id', () => {
+    const r = validateData(
+      {
+        schema_version: '1',
+        kind: 'plan',
+        task_id: '',
+        tasks: [
+          {
+            id: '1.1',
+            title: 't',
+            wave: 1,
+            steps: [{ id: '1.1.1', title: 's' }],
+          },
+        ],
+      },
+      'plan',
+    );
+    expect(r.ok).toBe(false);
+    expect(r.errors).toContain("  ERROR: task_id: must be a non-empty string, got ''");
+  });
+
+  test('plan rejects non-string task_id', () => {
+    const r = validateData(
+      {
+        schema_version: '1',
+        kind: 'plan',
+        task_id: 42,
+        tasks: [
+          {
+            id: '1.1',
+            title: 't',
+            wave: 1,
+            steps: [{ id: '1.1.1', title: 's' }],
+          },
+        ],
+      },
+      'plan',
+    );
+    expect(r.ok).toBe(false);
+    expect(r.errors).toContain('  ERROR: task_id: expected str, got int');
+  });
+
   test('minimal valid report', () => {
     const r = validateData(
       {
