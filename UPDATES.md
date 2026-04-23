@@ -6,6 +6,43 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v0.42.0 — installer package + `prove install` CLI + binary release workflow
+
+Phase 10 of the TypeScript CLI unification (see `.prove/decisions/2026-04-23-phase-10-installer.md`). A new `packages/installer/` workspace package centralises plugin-root resolution, settings-hook wiring, and `.prove.json` bootstrap. The `prove install <action>` CLI topic (`init`, `init-hooks`, `init-config`, `doctor`, `upgrade`) replaces the legacy bash installers; dev checkouts and compiled binaries are handled by a single `detectMode` helper. `scripts/install.sh` is now a 30-line bootstrap that fetches a platform-specific binary from GitHub Releases and hands off to `prove install init`. `/prove:init` delegates stack detection + `.prove.json` emission to `prove install init-config`; the AskUserQuestion UX for scope and validator customization is preserved.
+
+**Added**:
+
+- `packages/installer/` workspace package: `detectMode`, `resolvePluginRoot`, `resolveBinaryPath`, `writeSettingsHooks` (idempotent `.claude/settings.json` merge via `_tool` markers), `bootstrapProveJson` (stack-detected `.prove.json` emission)
+- `prove install <action>` CLI topic: `init`, `init-hooks`, `init-config`, `doctor`, `upgrade` — unified dispatch over the installer package
+- `.github/workflows/release.yml`: four-target `bun build --compile` matrix (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`) uploading artifacts to GitHub Releases on tag push
+- `packages/cli/src/topics/schema/detect.ts`: ported `scripts/init-config.sh` detector logic to TS with public `detectValidators(cwd)` + `DETECTED_VALIDATOR_NAMES` exports, subpath-exported via `@claude-prove/cli/schema/detect` and consumed by `prove install init-config`
+
+**Removed**:
+
+- `scripts/init-config.sh` — detection logic ported to `packages/cli/src/topics/schema/detect.ts`, consumed by `prove install init-config`
+- `scripts/setup-tools.sh` — superseded by `/prove:tools` command + `tools/registry.py`
+- `scripts/hooks/{post-tool-use,session-stop,subagent-stop}.sh` — hook dispatch now lives under `prove <topic> hook <event>`
+- Legacy 170-line `scripts/install.sh` — replaced with a 30-line bootstrap that fetches the compiled binary and hands off to `prove install init`
+
+**Behavior changes**:
+
+- `/prove:init` slash command delegates stack detection + `.prove.json` emission to `prove install init-config`. Dev checkouts run `bun run <pluginRoot>/packages/cli/bin/run.ts install init-config`; installed users run `prove install init-config` from PATH.
+- `.claude/settings.json` hook command paths are owned by `writeSettingsHooks` and resolved by `detectMode` — dev checkouts use `bun run <pluginRoot>/packages/cli/bin/run.ts <topic> hook <event>`; installed users use the compiled binary path (`~/.local/bin/prove` by default).
+- First release to ship binary artifacts: `darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`.
+
+**Migration**:
+
+1. Dev users (plugin authors): no action required — `detectMode` keeps hook commands as `bun run <repo>/packages/cli/bin/run.ts ...`.
+2. Installed users: run `/prove:update` — it invokes `prove install init --force` to rewrite any stale absolute paths in `.claude/settings.json` to the current install location.
+3. New users: `curl -fsSL https://raw.githubusercontent.com/mjmorales/claude-prove/main/scripts/install.sh | bash` — fetches the platform binary, runs `prove install init` to wire hooks and bootstrap `.prove.json`, and optionally registers with Claude Code via `claude plugin install`.
+
+**Auto-adoption**:
+
+- Non-breaking: all reads and writes remain schema-compatible with v0.41.0 `.prove.json` and `.claude/settings.json` shapes. No `PROVE_SCHEMA` or `CURRENT_SCHEMA_VERSION` bump was required for phase 10.
+- `v1.0.0` remains reserved for phase 12 (scrum) per `.prove/decisions/2026-04-21-typescript-cli-unification.md`.
+
+---
+
 ## v0.41.0 — ACB ported to TypeScript + unified store migration
 
 Phase 9 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`) combined with ACB v2.1 of the unified-store plan (see `.prove/decisions/2026-04-21-unified-prove-store.md`). The Python `tools/acb/` module is retired; the Agent Change Brief assembler, PostToolUse hook, SQLite schema, and CLI now run through `prove acb` backed by `packages/cli/src/topics/acb/`. ACB storage moved from the standalone `.prove/acb.db` to the unified `.prove/prove.db` with `acb_*`-prefixed tables; the first `prove acb` invocation transparently auto-imports any legacy rows and deletes `.prove/acb.db`.
