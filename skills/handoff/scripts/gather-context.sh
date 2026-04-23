@@ -143,33 +143,21 @@ fi
 echo ""
 
 # --- Discovery Block ---
-# Try to generate compose_subagent_context() output
-if [[ -n "$PLUGIN_DIR" && -f "$PLUGIN_DIR/skills/claude-md/composer.py" ]]; then
-  DISCOVERY=$(PYTHONPATH="$PLUGIN_DIR/skills/claude-md" python3 -c "
-import sys
-sys.path.insert(0, '$PLUGIN_DIR/skills/claude-md')
-from scanner import scan_project
-from composer import compose_subagent_context
-scan = scan_project('$PROJECT_ROOT', '$PLUGIN_DIR')
-print(compose_subagent_context(scan, '$PLUGIN_DIR'))
-" 2>/dev/null || true)
+# Primary: full compose_subagent_context via the TS port.
+# Fallback: `prove claude-md validators` (plugin-dir-less, reads .claude/.prove.json only).
+if [[ -n "$PLUGIN_DIR" && -f "$PLUGIN_DIR/packages/cli/bin/run.ts" ]]; then
+  DISCOVERY=$(bun run "$PLUGIN_DIR/packages/cli/bin/run.ts" claude-md subagent-context \
+    --project-root "$PROJECT_ROOT" --plugin-dir "$PLUGIN_DIR" 2>/dev/null || true)
 
   if [[ -n "$DISCOVERY" ]]; then
     echo "## Discovery"
     echo ""
     echo "$DISCOVERY"
   fi
-elif [[ -f .claude/.prove.json ]]; then
-  # Fallback: extract validators directly from .claude/.prove.json
+elif [[ -f .claude/.prove.json ]] && command -v prove >/dev/null 2>&1; then
   echo "## Discovery"
   echo ""
-  VALIDATORS=$(python3 -c "
-import json
-with open('.claude/.prove.json') as f:
-    cfg = json.load(f)
-for v in cfg.get('validators', []):
-    print(f\"- {v['phase']}: \`{v['command']}\`\")
-" 2>/dev/null || true)
+  VALIDATORS=$(prove claude-md validators --project-root "$PROJECT_ROOT" 2>/dev/null || true)
   if [[ -n "$VALIDATORS" ]]; then
     echo "**Validation**: Run before committing:"
     echo "$VALIDATORS"

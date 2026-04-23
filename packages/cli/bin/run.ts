@@ -7,6 +7,8 @@ import { register as registerClaudeMd } from '../src/topics/claude-md';
 import { register as registerCommit } from '../src/topics/commit';
 import { register as registerHook } from '../src/topics/hook';
 import { register as registerInstall } from '../src/topics/install';
+import { register as registerNotify } from '../src/topics/notify';
+import { register as registerOrchestrator } from '../src/topics/orchestrator';
 import { register as registerPcd } from '../src/topics/pcd';
 import { register as registerPrompting } from '../src/topics/prompting';
 import { register as registerReviewUi } from '../src/topics/review-ui';
@@ -34,6 +36,8 @@ registerReviewUi(cli);
 registerScrum(cli);
 registerCommit(cli);
 registerClaudeMd(cli);
+registerOrchestrator(cli);
+registerNotify(cli);
 registerHook(cli);
 
 cli.help();

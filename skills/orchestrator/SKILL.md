@@ -113,8 +113,8 @@ For each task in the wave:
 2. Generate the agent prompt from JSON:
    ```bash
    RUN_DIR=".prove/runs/<branch>/<slug>"
-   PROMPT=$(bash skills/orchestrator/scripts/generate-task-prompt.sh \
-     "$RUN_DIR" <task-id> <project-root> "$WT_PATH")
+   PROMPT=$(bun run "$PLUGIN_DIR/packages/cli/bin/run.ts" orchestrator task-prompt \
+     --run-dir "$RUN_DIR" --task-id <task-id> --project-root <project-root> --worktree "$WT_PATH")
    ```
 3. Launch agent (worktree already exists — do NOT pass `isolation: "worktree"`):
    ```
@@ -160,8 +160,8 @@ REVIEW LOOP (max 3 iterations per task):
 1. Build review prompt:
    WT_PATH=$(bash skills/orchestrator/scripts/manage-worktree.sh path <slug> <task-id>)
    RUN_DIR=".prove/runs/<branch>/<slug>"
-   REVIEW_PROMPT=$(bash skills/orchestrator/scripts/generate-review-prompt.sh \
-     "$WT_PATH" <task-id> "$RUN_DIR" <base-branch>)
+   REVIEW_PROMPT=$(bun run "$PLUGIN_DIR/packages/cli/bin/run.ts" orchestrator review-prompt \
+     --worktree "$WT_PATH" --task-id <task-id> --run-dir "$RUN_DIR" --base-branch <base-branch>)
 
 2. Launch review:
    Agent(subagent_type: "principal-architect", prompt: $REVIEW_PROMPT)
@@ -397,8 +397,8 @@ All artifacts live in the run directory. Concurrent runs stay isolated under dif
 | Script | Purpose |
 |--------|---------|
 | `scripts/prove-run` | Agent wrapper around the run_state CLI — all JSON mutations and renders go through this |
-| `skills/orchestrator/scripts/generate-task-prompt.sh` | Prompt for worktree implementation agents |
-| `skills/orchestrator/scripts/generate-review-prompt.sh` | Review prompt for principal-architect |
+| `prove orchestrator task-prompt` | Prompt for worktree implementation agents (CLI subcommand) |
+| `prove orchestrator review-prompt` | Review prompt for principal-architect (CLI subcommand) |
 | `skills/orchestrator/scripts/manage-worktree.sh` | Create/remove/list sub-task worktrees (writes `.prove-wt-slug.txt`) |
 | `scripts/cleanup.sh` | Archive and remove run artifacts |
 
