@@ -25,6 +25,16 @@ Parse `$ARGUMENTS` for:
 
 If `$ARGUMENTS` is empty, use defaults resolved from config.
 
+## Preconditions
+
+Run these checks first. Bail with a clear error on failure.
+
+1. **`prove` installed**: `command -v prove >/dev/null` — if missing, print: "`prove` CLI not found on PATH. Install via \`curl -fsSL https://raw.githubusercontent.com/mjmorales/claude-prove/main/scripts/install.sh | bash\`, or run from a dev checkout with \`bun run packages/cli/bin/run.ts\` on PATH." Stop.
+2. **`jq` installed**: `command -v jq >/dev/null` — if missing, say "`jq` not found on PATH. Install via your package manager (`brew install jq`, `apt install jq`, etc.)." Stop.
+3. **Docker installed**: `command -v docker >/dev/null` — if missing, tell the user to install Docker Desktop / colima / podman-compat and stop.
+4. **Docker daemon running**: `docker info >/dev/null 2>&1` — if it fails, say "Docker daemon isn't running. Start Docker Desktop (or `colima start`) and retry." Stop.
+5. **Inside a git repo**: `git rev-parse --show-toplevel` — if it fails, warn that the UI will show an empty runs list, but proceed if the user confirms via AskUserQuestion (options: `Proceed anyway`, `Cancel`).
+
 ## Config resolution
 
 Port, image, and tag resolve in this order (first non-empty wins):
@@ -34,33 +44,21 @@ Port, image, and tag resolve in this order (first non-empty wins):
 3. `.claude/.prove.json` — keys `tools.acb.config.review_ui_port`, `review_ui_image`, `review_ui_tag`
 4. Hard-coded defaults: `5174`, `ghcr.io/mjmorales/claude-prove/review-ui`, `latest`
 
-Read the config with:
+The `prove review-ui config` subcommand emits `{port, image, tag}` as a single JSON line, filling any missing key with the hardcoded default. So the shell resolution drops one fallback layer — `$CFG_*` is guaranteed non-empty and already carries the default when the config file is absent or incomplete.
 
 ```bash
-CONFIG="$(git rev-parse --show-toplevel 2>/dev/null)/.claude/.prove.json"
-CFG_PORT=""
-CFG_IMAGE=""
-CFG_TAG=""
-if [ -f "$CONFIG" ]; then
-  CFG_PORT=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("tools",{}).get("acb",{}).get("config",{}).get("review_ui_port",""))' "$CONFIG")
-  CFG_IMAGE=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("tools",{}).get("acb",{}).get("config",{}).get("review_ui_image",""))' "$CONFIG")
-  CFG_TAG=$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("tools",{}).get("acb",{}).get("config",{}).get("review_ui_tag",""))' "$CONFIG")
-fi
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+CFG_JSON=$(prove review-ui config --cwd "$REPO_ROOT")
+CFG_PORT=$(echo "$CFG_JSON" | jq -r '.port')
+CFG_IMAGE=$(echo "$CFG_JSON" | jq -r '.image')
+CFG_TAG=$(echo "$CFG_JSON" | jq -r '.tag')
 
-PORT="${FLAG_PORT:-${PROVE_REVIEW_PORT:-${CFG_PORT:-5174}}}"
-IMAGE="${FLAG_IMAGE:-${PROVE_REVIEW_IMAGE:-${CFG_IMAGE:-ghcr.io/mjmorales/claude-prove/review-ui}}}"
-TAG="${FLAG_TAG:-${PROVE_REVIEW_TAG:-${CFG_TAG:-latest}}}"
+PORT="${FLAG_PORT:-${PROVE_REVIEW_PORT:-$CFG_PORT}}"
+IMAGE="${FLAG_IMAGE:-${PROVE_REVIEW_IMAGE:-$CFG_IMAGE}}"
+TAG="${FLAG_TAG:-${PROVE_REVIEW_TAG:-$CFG_TAG}}"
 ```
 
 If the resolved port is occupied by something other than `prove-review`, scan upward for the next free port and warn the user.
-
-## Preconditions
-
-Run these checks first. Bail with a clear error on failure.
-
-1. **Docker installed**: `command -v docker >/dev/null` — if missing, tell the user to install Docker Desktop / colima / podman-compat and stop.
-2. **Docker daemon running**: `docker info >/dev/null 2>&1` — if it fails, say "Docker daemon isn't running. Start Docker Desktop (or `colima start`) and retry." Stop.
-3. **Inside a git repo**: `git rev-parse --show-toplevel` — if it fails, warn that the UI will show an empty runs list, but proceed if the user confirms via AskUserQuestion (options: `Proceed anyway`, `Cancel`).
 
 ## Flow
 
@@ -74,13 +72,9 @@ docker rm -f prove-review 2>/dev/null && echo "Stopped." || echo "Not running."
 
 Exit.
 
-### Resolve the repo root
+### Bind-mount source
 
-```bash
-REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-```
-
-Use `$REPO_ROOT` as the bind-mount source. Never use `$(pwd)` — the container expects the whole repo available at `/repo`.
+`$REPO_ROOT` was already resolved during Config resolution. Use it as the bind-mount source. Never use `$(pwd)` — the container expects the whole repo available at `/repo`.
 
 ### Detect existing container
 
@@ -157,13 +151,13 @@ prove-review
   url:     http://localhost:$PORT
   repo:    $REPO_ROOT
   image:   $IMAGE:$TAG
-  source:  flag | env | config | default
+  source:  flag | env | config
 
 Stop:    /prove:review-ui --stop   (or: docker stop prove-review)
 Logs:    docker logs -f prove-review
 ```
 
-The `source` line tells the user where `$PORT` came from so they can pin it via `.claude/.prove.json` → `tools.acb.config.review_ui_port` if they want the new value to stick.
+The `source` line tells the user where `$PORT` came from so they can pin it via `.claude/.prove.json` → `tools.acb.config.review_ui_port` if they want the new value to stick. Report `config` whenever the value came from `$CFG_PORT` — since `prove review-ui config` now fills missing keys with hardcoded defaults, `default` collapses into `config` at this layer. Run `prove review-ui config --cwd "$REPO_ROOT"` to inspect the resolved config JSON directly.
 
 ## Notes
 
