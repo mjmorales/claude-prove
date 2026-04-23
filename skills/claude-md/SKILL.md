@@ -11,7 +11,7 @@ description: >
 # claude-md
 
 1. Parse argument to determine subcommand (default: `generate`)
-2. Resolve absolute path to `skills/claude-md/__main__.py` relative to this SKILL.md
+2. Resolve absolute path to the prove CLI at `$PLUGIN/packages/cli/bin/run.ts`
 3. Run from the user's cwd (the target project, not the plugin directory)
 4. Display output in human-friendly format
 
@@ -21,9 +21,9 @@ description: >
 
 | Subcommand | Purpose | Command |
 |------------|---------|---------|
-| `generate` (default) | Scan project, write CLAUDE.md | `python3 $PLUGIN/skills/claude-md/__main__.py generate --project-root $CWD --plugin-dir $PLUGIN` |
-| `scan` | Scanner only, output JSON | `python3 $PLUGIN/skills/claude-md/__main__.py scan --project-root $CWD --plugin-dir $PLUGIN` |
-| `subagent-context` | Compact context for subagent injection | `python3 $PLUGIN/skills/claude-md/__main__.py subagent-context --project-root $CWD --plugin-dir $PLUGIN` |
+| `generate` (default) | Scan project, write CLAUDE.md | `bun run $PLUGIN/packages/cli/bin/run.ts claude-md generate --project-root $CWD --plugin-dir $PLUGIN` |
+| `scan` | Scanner only, output JSON | `bun run $PLUGIN/packages/cli/bin/run.ts claude-md scan --project-root $CWD --plugin-dir $PLUGIN` |
+| `subagent-context` | Compact context for subagent injection | `bun run $PLUGIN/packages/cli/bin/run.ts claude-md subagent-context --project-root $CWD --plugin-dir $PLUGIN` |
 
 ### Flag Defaults
 
