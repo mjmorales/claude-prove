@@ -1,9 +1,9 @@
 /**
  * Project file walker — shared by CAFI and PCD.
  *
- * Ported from `tools/_lib/file_walker.py`. Walks the project tree
- * respecting .gitignore (via `git ls-files` + `git check-ignore`), binary
- * detection, size limits, and caller-supplied exclude patterns.
+ * Walks the project tree respecting .gitignore (via `git ls-files` +
+ * `git check-ignore`), binary detection, size limits, and caller-supplied
+ * exclude patterns.
  *
  * When git is unavailable the walker falls back to a manual recursive
  * `readdirSync`, skipping dot-dirs and `.prove/`.
