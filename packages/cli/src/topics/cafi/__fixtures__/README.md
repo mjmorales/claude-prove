@@ -70,7 +70,6 @@ bash packages/cli/src/topics/cafi/__fixtures__/capture.sh
 ## Capture provenance
 
 - Date captured: 2026-04-22
-- Python: `python3` (3.13+ on Darwin arm64)
 - Bun: workspace pinned (`bun@1.2.22` per root `package.json`)
 - Plugin version at capture: v0.37.0+ (`package.json` at repo root)
 - Cache schema: v1 (`CACHE_VERSION = 1` in `@claude-prove/shared/cache`)
