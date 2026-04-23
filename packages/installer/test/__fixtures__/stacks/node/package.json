@@ -1,0 +1,1 @@
+{ "name": "x", "scripts": { "test": "bun test", "build": "tsc" } }

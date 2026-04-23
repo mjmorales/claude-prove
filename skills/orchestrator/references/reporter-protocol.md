@@ -32,68 +32,88 @@ scripts/prove-run summary        # one-line
 Reporter dispatch is automatic via Claude Code hooks — the orchestrator never invokes reporters manually.
 
 ```
-Hook Event -> Hook Script -> dispatch-event.sh -> .claude/.prove.json reporters
+Hook Event -> prove run-state hook <event> -> .claude/.prove.json reporters
 ```
 
 ### Hook → Event Mapping
 
 | Claude Code Hook | Matcher | Event | Detection |
 |---|---|---|---|
-| `PostToolUse` | `Bash` | `step-complete` | Git commit with `orchestrator:` pattern |
-| `PostToolUse` | `Bash` | `step-halted` | Git commit with `[WIP]` pattern |
-| `PostToolUse` | `Bash` | `wave-complete` | Git merge with orchestrator branch |
-| `SubagentStop` | `principal-architect` | `review-approved` | APPROVED in agent output |
-| `SubagentStop` | `principal-architect` | `review-rejected` | CHANGES_REQUIRED in agent output |
-| `SubagentStop` | `validation-agent` | `validation-pass` | PASS in agent output |
-| `SubagentStop` | `validation-agent` | `validation-fail` | FAIL in agent output |
-| `Stop` | (all) | `execution-complete` | Active run (state.json not completed) |
+| `PostToolUse` | `Bash` (`if: Bash(git commit*)`) | commit audit | `prove acb hook post-commit` records the intent manifest |
+| `PostToolUse` | `Write\|Edit\|MultiEdit` | `step-complete` / `step-halted` | `prove run-state hook validate` reads state.json, emits step events |
+| `PreToolUse` | `Write\|Edit\|MultiEdit` | guard | `prove run-state hook guard` blocks edits that violate run state |
+| `SessionStart` | `resume\|compact` | session-start | `prove run-state hook session-start` rehydrates the active run |
+| `Stop` | (all) | `execution-complete` | `prove run-state hook stop` dispatches when a session ends with a live run |
+| `SubagentStop` | `general-purpose` | review / validation verdicts | `prove run-state hook subagent-stop` parses agent output for APPROVED / CHANGES_REQUIRED / PASS / FAIL |
 
 ### Hook Configuration (`.claude/settings.json`)
+
+Prove-owned blocks are tagged with `_tool` and scaffolded by `prove install init-hooks` (or `prove install init`). They resolve the runtime prefix from the active plugin root (dev: `bun run <pluginRoot>/packages/cli/bin/run.ts`; compiled: `prove`) and emit canonical blocks:
 
 ```json
 {
   "hooks": {
-    "PostToolUse": [{
-      "matcher": "Bash",
-      "hooks": [{
-        "type": "command",
-        "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/post-tool-use.sh\"",
-        "async": true, "timeout": 30
-      }]
-    }],
-    "SubagentStop": [{
-      "matcher": "principal-architect|prove:principal-architect|validation-agent|prove:validation-agent",
-      "hooks": [{
-        "type": "command",
-        "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/subagent-stop.sh\"",
-        "async": true, "timeout": 30
-      }]
-    }],
-    "Stop": [{
-      "matcher": "",
-      "hooks": [{
-        "type": "command",
-        "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/hooks/session-stop.sh\"",
-        "async": true, "timeout": 30
-      }]
-    }]
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "if": "Bash(git commit*)", "command": "<prefix> acb hook post-commit --workspace-root $CLAUDE_PROJECT_DIR", "timeout": 10000 }],
+        "_tool": "acb"
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [{ "type": "command", "command": "<prefix> run-state hook validate", "timeout": 5000 }],
+        "_tool": "run_state"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [{ "type": "command", "command": "<prefix> run-state hook guard", "timeout": 5000 }],
+        "_tool": "run_state"
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "resume|compact",
+        "hooks": [{ "type": "command", "command": "<prefix> run-state hook session-start", "timeout": 3000 }],
+        "_tool": "run_state"
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [{ "type": "command", "command": "<prefix> run-state hook stop", "timeout": 5000 }],
+        "_tool": "run_state"
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "general-purpose",
+        "hooks": [{ "type": "command", "command": "<prefix> run-state hook subagent-stop", "timeout": 5000 }],
+        "_tool": "run_state"
+      }
+    ]
   }
 }
 ```
 
+The canonical block list lives in `packages/installer/src/write-settings-hooks.ts` (`PROVE_HOOK_BLOCKS`). User-authored blocks (no `_tool` key) are preserved byte-for-byte across re-runs.
+
 ### Deduplication
 
-`dispatch-event.sh` records dispatched events in `state.json.dispatch.dispatched[]` via `scripts/prove-run dispatch-record`. Each `(event, step)` tuple dispatched at most once per run. Slug auto-resolved from `.prove-wt-slug.txt`; branch derived from the run directory layout.
+The dispatcher records fired events in `state.json.dispatch.dispatched[]` via `prove run-state dispatch record`. Each `(event, step)` tuple dispatches at most once per run. Slug auto-resolved from `.prove-wt-slug.txt`; branch derived from the run directory layout.
 
-### Scripts
+### Commands
 
-| Script | Purpose |
+| Command | Purpose |
 |--------|---------|
-| `scripts/prove-run` | Agent wrapper for all run_state mutations and queries |
-| `scripts/dispatch-event.sh` | Core dispatcher — reads `.claude/.prove.json`, fires matching reporters, dedupes via state.json |
-| `scripts/hooks/post-tool-use.sh` | Detects orchestrator git commits/merges from Bash tool calls |
-| `scripts/hooks/subagent-stop.sh` | Detects review/validation verdicts from subagent completions |
-| `scripts/hooks/session-stop.sh` | Dispatches `execution-complete` when a session ends with a live run |
+| `prove run-state <action>` | All run_state mutations and queries — show, step, validator, review, report, dispatch |
+| `prove run-state hook validate` | PostToolUse `Write\|Edit\|MultiEdit` — advances step state and fires `step-complete` / `step-halted` |
+| `prove run-state hook guard` | PreToolUse `Write\|Edit\|MultiEdit` — blocks edits incompatible with the active step |
+| `prove run-state hook subagent-stop` | SubagentStop `general-purpose` — fires review / validation verdicts |
+| `prove run-state hook session-start` | SessionStart `resume\|compact` — rehydrates run context |
+| `prove run-state hook stop` | Stop — fires `execution-complete` when the session ends with a live run |
+| `prove acb hook post-commit` | PostToolUse `Bash` (`if: Bash(git commit*)`) — records ACB intent manifest |
 
 ## Reporter Configuration
 
