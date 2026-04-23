@@ -66,10 +66,6 @@
     {
       "name": "scrum",
       "summary": "Operate the scrum store backed by `.prove/prove.db` (tasks, milestones, tags, run-links)"
-    },
-    {
-      "name": "tools",
-      "summary": "Manage prove tools — list, install, remove, status"
     }
   ],
   "plugin_version": "1.0.0",
