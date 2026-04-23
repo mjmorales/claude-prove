@@ -1,6 +1,6 @@
 /**
- * 1:1 port of tools/schema/test_migrate.py plus new v3 -> v4 cases and a
- * full v0 -> v4 chain test.
+ * 1:1 port of tools/schema/test_migrate.py plus v3 -> v4 + v4 -> v5 cases
+ * and a full v0 -> v5 chain test.
  *
  * Test-name mapping (Python class/method -> TS test name):
  *
@@ -40,12 +40,17 @@
  *
  *   TestRoundTrip.test_validate_after_migrate_passes    -> 'validate after migrate passes'
  *
- * New v3 -> v4 + full-chain cases (not in the Python source):
+ * New v3 -> v4 + v4 -> v5 + full-chain cases (not in the Python source):
  *   'v3 to v4 drops scopes.tools'
  *   'v3 to v4 drops tools.schema'
  *   'v3 to v4 preserves other scopes and tools entries'
  *   'v3 to v4 no-op when neither key present'
- *   'full v0 to v4 chain applies all hops in order'
+ *   'v4 to v5 adds tools.scrum defaults'
+ *   'v4 to v5 preserves existing tools.scrum (idempotent)'
+ *   'v4 to v5 preserves acb/pcd/cafi/run_state entries'
+ *   'v4 to v5 bumps version only when no other changes apply'
+ *   'v4 to v5 seeds tools when tools key absent'
+ *   'full v0 to v5 chain applies all hops in order'
  *   'backup filename follows Python with_suffix semantics'
  */
 
@@ -370,7 +375,9 @@ describe('TestV3ToV4', () => {
     };
     const [target, changes] = planMigration(config);
 
-    expect(target['schema_version']).toBe('4');
+    // planMigration chains to CURRENT_SCHEMA_VERSION ('5' after Phase 12
+    // Task 2) — assert the final version AND that the v3->v4 hop fired.
+    expect(target['schema_version']).toBe(CURRENT_SCHEMA_VERSION);
     const scopes = target['scopes'] as Record<string, unknown>;
     expect('tools' in scopes).toBe(false);
     expect(scopes['plugin']).toBe('.');
@@ -387,7 +394,7 @@ describe('TestV3ToV4', () => {
     };
     const [target, changes] = planMigration(config);
 
-    expect(target['schema_version']).toBe('4');
+    expect(target['schema_version']).toBe(CURRENT_SCHEMA_VERSION);
     const tools = target['tools'] as Record<string, Record<string, unknown>>;
     expect('schema' in tools).toBe(false);
     expect(tools['cafi']!['enabled']).toBe(true);
@@ -427,17 +434,133 @@ describe('TestV3ToV4', () => {
     };
     const [target, changes] = planMigration(config);
 
-    expect(target['schema_version']).toBe('4');
+    expect(target['schema_version']).toBe(CURRENT_SCHEMA_VERSION);
     expect(target['scopes']).toEqual({ plugin: '.' });
-    expect(target['tools']).toEqual({ cafi: { enabled: false } });
-    // The only change should be the schema_version bump.
+    // v4 -> v5 seeds tools.scrum, so cafi is preserved alongside scrum.
+    expect((target['tools'] as Record<string, unknown>)['cafi']).toEqual({ enabled: false });
+    expect((target['tools'] as Record<string, unknown>)['scrum']).toEqual({
+      enabled: true,
+      scope: 'user',
+      config: {},
+    });
+    // v3->v4 emits only the schema_version bump; v4->v5 emits schema_version + tools.scrum.
+    const nonV3V4Changes = changes.filter(
+      (c) => !(c.path === 'schema_version' || c.path === 'tools.scrum'),
+    );
+    expect(nonV3V4Changes).toEqual([]);
+  });
+});
+
+describe('TestV4ToV5', () => {
+  test('v4 to v5 adds tools.scrum defaults', () => {
+    const config = { schema_version: '4', tools: {} };
+    const [target, changes] = planMigration(config);
+
+    expect(target['schema_version']).toBe('5');
+    const tools = target['tools'] as Record<string, unknown>;
+    expect(tools['scrum']).toEqual({
+      enabled: true,
+      scope: 'user',
+      config: {},
+    });
+    expect(
+      changes.some((c) => c.path === 'tools.scrum' && c.action === 'add'),
+    ).toBe(true);
+  });
+
+  test('v4 to v5 preserves existing tools.scrum (idempotent)', () => {
+    const existing = { enabled: false, scope: 'project', config: { velocity: 8 } };
+    const config = {
+      schema_version: '4',
+      tools: { scrum: existing },
+    };
+    const [target, changes] = planMigration(config);
+
+    expect(target['schema_version']).toBe('5');
+    const tools = target['tools'] as Record<string, unknown>;
+    // Existing scrum block is preserved byte-for-byte.
+    expect(tools['scrum']).toEqual(existing);
+    // No add-change for tools.scrum when it already existed.
+    expect(changes.some((c) => c.path === 'tools.scrum')).toBe(false);
+    // Only schema_version bump change is emitted.
     const nonVersionChanges = changes.filter((c) => c.path !== 'schema_version');
     expect(nonVersionChanges).toEqual([]);
+  });
+
+  test('v4 to v5 preserves acb/pcd/cafi/run_state entries', () => {
+    const config = {
+      schema_version: '4',
+      tools: {
+        pcd: { enabled: true },
+        acb: {
+          enabled: true,
+          scope: 'user',
+          config: { base_branch: 'main', review_ui_port: 5174 },
+        },
+        cafi: {
+          enabled: true,
+          scope: 'user',
+          config: { excludes: [], max_file_size: 102400, concurrency: 3 },
+        },
+        run_state: { enabled: true, scope: 'user' },
+      },
+    };
+    const [target] = planMigration(config);
+
+    expect(target['schema_version']).toBe('5');
+    const tools = target['tools'] as Record<string, Record<string, unknown>>;
+    expect(tools['pcd']).toEqual({ enabled: true });
+    expect(tools['acb']).toEqual({
+      enabled: true,
+      scope: 'user',
+      config: { base_branch: 'main', review_ui_port: 5174 },
+    });
+    expect(tools['cafi']).toEqual({
+      enabled: true,
+      scope: 'user',
+      config: { excludes: [], max_file_size: 102400, concurrency: 3 },
+    });
+    expect(tools['run_state']).toEqual({ enabled: true, scope: 'user' });
+    expect(tools['scrum']).toEqual({
+      enabled: true,
+      scope: 'user',
+      config: {},
+    });
+  });
+
+  test('v4 to v5 bumps version only when no other changes apply', () => {
+    const config = {
+      schema_version: '4',
+      tools: { scrum: { enabled: true, scope: 'user', config: {} } },
+    };
+    const [target, changes] = planMigration(config);
+
+    expect(target['schema_version']).toBe('5');
+    // Only a version-bump change — no tools.scrum add, no other mutations.
+    expect(changes.length).toBe(1);
+    expect(changes[0]!.action).toBe('change');
+    expect(changes[0]!.path).toBe('schema_version');
+    // Keys outside schema_version and tools are untouched.
+    const keys = Object.keys(target).filter((k) => k !== 'schema_version' && k !== 'tools');
+    const origKeys = Object.keys(config).filter(
+      (k) => k !== 'schema_version' && k !== 'tools',
+    );
+    expect(keys).toEqual(origKeys);
+  });
+
+  test('v4 to v5 seeds tools when tools key absent', () => {
+    const config = { schema_version: '4' };
+    const [target] = planMigration(config);
+
+    expect(target['schema_version']).toBe('5');
+    expect(target['tools']).toEqual({
+      scrum: { enabled: true, scope: 'user', config: {} },
+    });
   });
 });
 
 describe('TestFullChain', () => {
-  test('full v0 to v4 chain applies all hops in order', () => {
+  test('full v0 to v5 chain applies all hops in order', () => {
     const config = {
       validators: [{ name: 'lint', command: 'ruff', stage: 'lint' }],
       scopes: { plugin: '.', tools: 'tools/' },
@@ -447,7 +570,7 @@ describe('TestFullChain', () => {
     const [target, changes] = planMigration(config);
 
     // Final schema_version.
-    expect(target['schema_version']).toBe('4');
+    expect(target['schema_version']).toBe('5');
 
     // Ordered hop signatures — each hop emits at least one change whose
     // path or description identifies it.
@@ -456,11 +579,13 @@ describe('TestFullChain', () => {
     const idxClaude = changeText.findIndex((s) => s.includes('claude_md'));
     const idxIndex = changeText.findIndex((s) => s.includes('moved to tools.cafi.config'));
     const idxScopesTools = changeText.findIndex((s) => s.includes('scopes.tools'));
+    const idxScrum = changeText.findIndex((s) => s.includes('tools.scrum'));
 
     expect(idxAdd).toBeGreaterThanOrEqual(0);
     expect(idxClaude).toBeGreaterThan(idxAdd);
     expect(idxIndex).toBeGreaterThan(idxClaude);
     expect(idxScopesTools).toBeGreaterThan(idxIndex);
+    expect(idxScrum).toBeGreaterThan(idxScopesTools);
 
     // v1->v2 renames stage -> phase
     const validators = target['validators'] as Record<string, unknown>[];
@@ -481,6 +606,13 @@ describe('TestFullChain', () => {
     expect('tools' in scopes).toBe(false);
     expect(scopes['plugin']).toBe('.');
     expect('schema' in tools).toBe(false);
+
+    // v4->v5 seeds tools.scrum with defaults
+    expect(tools['scrum']).toEqual({
+      enabled: true,
+      scope: 'user',
+      config: {},
+    });
   });
 });
 

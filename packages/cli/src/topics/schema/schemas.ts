@@ -12,8 +12,9 @@
  *   - `description`: documentation; not validator input
  *   - `default`:     default value used by migrations
  *
- * `CURRENT_SCHEMA_VERSION` ships as `"4"` here even though the Python source
- * still reports `"3"` — the v3 -> v4 migration lands in Task 2 of this topic.
+ * `CURRENT_SCHEMA_VERSION` ships as `"5"` here even though the Python source
+ * still reports `"3"` — the v3 -> v4 migration landed in an earlier task and
+ * the v4 -> v5 migration (adds `tools.scrum`) lands in Phase 12 Task 2.
  */
 
 export type FieldType = 'str' | 'int' | 'bool' | 'list' | 'dict' | 'any';
@@ -39,7 +40,40 @@ export interface Schema {
   fields: Record<string, FieldSpec>;
 }
 
-export const CURRENT_SCHEMA_VERSION = '4';
+export const CURRENT_SCHEMA_VERSION = '5';
+
+/**
+ * Shape of `tools.scrum` introduced in schema v5. The v4 -> v5 migration
+ * seeds this block when absent with `{ enabled: true, scope: 'user',
+ * config: {} }`. Kept as a named export so consumers (migrations, docs,
+ * downstream skills) can reference the canonical scrum defaults without
+ * re-deriving them from the generic `tools.values` shape.
+ */
+export const TOOL_SCRUM_SCHEMA: FieldSpec = {
+  type: 'dict',
+  required: false,
+  fields: {
+    enabled: {
+      type: 'bool',
+      required: true,
+      description: 'scrum task management',
+      default: true,
+    },
+    scope: {
+      type: 'str',
+      required: false,
+      description: 'Activation scope (user or project)',
+      default: 'user',
+    },
+    config: {
+      type: 'dict',
+      required: false,
+      description: 'Tool-specific configuration overrides',
+      default: {},
+    },
+  },
+  description: 'Scrum task management tool activation (added in schema v5)',
+};
 
 // --- .claude/.prove.json schema ---
 
@@ -155,6 +189,11 @@ export const PROVE_SCHEMA: Schema = {
             description: 'Whether this tool is active in the project',
             default: true,
           },
+          scope: {
+            type: 'str',
+            required: false,
+            description: 'Activation scope (user or project)',
+          },
           config: {
             type: 'dict',
             required: false,
@@ -162,7 +201,10 @@ export const PROVE_SCHEMA: Schema = {
           },
         },
       },
-      description: 'Tool activation state and configuration overrides',
+      description:
+        'Tool activation state and configuration overrides. Known entries: ' +
+        'acb, cafi, pcd, run_state, scrum (see TOOL_SCRUM_SCHEMA). Each entry ' +
+        "has { enabled: bool, scope?: 'user' | 'project', config?: object }.",
     },
   },
 };

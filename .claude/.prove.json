@@ -1,5 +1,5 @@
 {
-  "schema_version": "4",
+  "schema_version": "5",
   "scopes": {
     "agents": "agents/",
     "cache": "cache/",
@@ -59,6 +59,11 @@
     "run_state": {
       "enabled": true,
       "scope": "user"
+    },
+    "scrum": {
+      "enabled": true,
+      "scope": "user",
+      "config": {}
     }
   }
 }

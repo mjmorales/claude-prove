@@ -1,4 +1,4 @@
-Migration plan for <FIXTURE_PATH> (v1 -> v4):
+Migration plan for <FIXTURE_PATH> (v1 -> v5):
   ~ schema_version: "1" -> "2"
   ~ validators[lint].stage: renamed "stage" -> "phase"
   ~ validators[test].stage: renamed "stage" -> "phase"
@@ -6,3 +6,5 @@ Migration plan for <FIXTURE_PATH> (v1 -> v4):
   ~ schema_version: "2" -> "3"
   + tools.cafi: added (disabled — no prior index config)
   ~ schema_version: "3" -> "4"
+  ~ schema_version: "4" -> "5"
+  + tools.scrum: added (scrum task management — enabled, scope 'user', empty config)

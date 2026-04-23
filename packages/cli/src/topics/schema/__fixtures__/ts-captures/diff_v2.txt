@@ -7,10 +7,12 @@ Migration Changes:
   ~ schema_version: "2" -> "3"
   ~ index: moved to tools.cafi.config
   ~ schema_version: "3" -> "4"
+  ~ schema_version: "4" -> "5"
+  + tools.scrum: added (scrum task management — enabled, scope 'user', empty config)
 
 Target config after migration:
 {
-  "schema_version": "4",
+  "schema_version": "5",
   "validators": [
     {
       "name": "test",
@@ -34,6 +36,11 @@ Target config after migration:
         "max_file_size": 102400,
         "concurrency": 3
       }
+    },
+    "scrum": {
+      "enabled": true,
+      "scope": "user",
+      "config": {}
     }
   }
 }

@@ -220,6 +220,46 @@ function migrateV3ToV4(config: ProveConfig): [ProveConfig, MigrationChange[]] {
 }
 
 /**
+ * v4 -> v5: bump schema_version and seed `tools.scrum` with its defaults when
+ * absent. Idempotent — if `tools.scrum` already exists, it is preserved
+ * byte-for-byte and only the version bump change is emitted. All other
+ * `tools.*` entries (acb, cafi, pcd, run_state, ...) pass through untouched.
+ *
+ * Hardcodes target version '5'. Do NOT reference CURRENT_SCHEMA_VERSION —
+ * migrations are frozen-in-time; later version bumps must not retroactively
+ * change what this migration does.
+ */
+function migrateV4ToV5(config: ProveConfig): [ProveConfig, MigrationChange[]] {
+  const changes: MigrationChange[] = [];
+  const result: ProveConfig = { ...config };
+
+  result['schema_version'] = '5';
+  changes.push(new MigrationChange('change', 'schema_version', '"4" -> "5"'));
+
+  const existingTools = result['tools'];
+  const tools: Record<string, unknown> = isPlainObject(existingTools)
+    ? { ...existingTools }
+    : {};
+
+  if (!('scrum' in tools)) {
+    const scrumDefaults = { enabled: true, scope: 'user', config: {} };
+    tools['scrum'] = scrumDefaults;
+    changes.push(
+      new MigrationChange(
+        'add',
+        'tools.scrum',
+        "added (scrum task management — enabled, scope 'user', empty config)",
+        scrumDefaults,
+      ),
+    );
+  }
+
+  result['tools'] = tools;
+
+  return [result, changes];
+}
+
+/**
  * Migration registry. Keys are `"<from>_to_<to>"` strings; `planMigration`
  * walks them sequentially from the detected version to CURRENT_SCHEMA_VERSION.
  */
@@ -228,6 +268,7 @@ export const MIGRATIONS: Record<string, MigrationFn> = {
   '1_to_2': migrateV1ToV2,
   '2_to_3': migrateV2ToV3,
   '3_to_4': migrateV3ToV4,
+  '4_to_5': migrateV4ToV5,
 };
 
 /**
