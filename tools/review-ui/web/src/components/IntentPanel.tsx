@@ -29,7 +29,7 @@ export function IntentPanel() {
         <div className="max-w-md text-[13px] leading-relaxed">
           No intent manifest recorded. Generate with{" "}
           <code className="font-mono text-phos bg-bg-panel px-1.5 py-0.5 rounded border border-bg-line">
-            python3 -m tools.acb save-manifest
+            prove acb save-manifest
           </code>{" "}
           before each feature-branch commit.
         </div>
