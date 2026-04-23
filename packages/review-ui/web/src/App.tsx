@@ -14,9 +14,9 @@ import { ScrumRoute } from "./routes/scrum";
  * plus global hotkeys/SSE, then delegates the main surface to route children.
  *
  * Routes:
- *   /        -> redirect to /acb
- *   /acb/*   -> ACB review experience (Shell + Sidebar + RightPane or ReviewSession)
- *   /scrum   -> placeholder stub (phase 12)
+ *   /         -> redirect to /acb
+ *   /acb/*    -> ACB review experience (Shell + Sidebar + RightPane or ReviewSession)
+ *   /scrum/*  -> Scrum operator dashboard (read-only; phase 12)
  */
 export function App() {
   useEventStream();
@@ -48,7 +48,7 @@ export function App() {
         <Routes>
           <Route path="/" element={<Navigate to="/acb" replace />} />
           <Route path="/acb/*" element={<AcbRoute />} />
-          <Route path="/scrum" element={<ScrumRoute />} />
+          <Route path="/scrum/*" element={<ScrumRoute />} />
         </Routes>
       </div>
       <StatusBar />
