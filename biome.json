@@ -25,7 +25,8 @@
       "packages/cli/src/topics/acb/__fixtures__/hook-prompts",
       "packages/cli/src/topics/acb/__fixtures__/assembler/python-captures",
       "packages/cli/src/topics/acb/__fixtures__/schemas/python-captures",
-      "packages/installer/test/__fixtures__/settings/malformed.json"
+      "packages/installer/test/__fixtures__/settings/malformed.json",
+      "packages/cli/src/topics/claude-md/__fixtures__/golden"
     ]
   },
   "organizeImports": { "enabled": true },

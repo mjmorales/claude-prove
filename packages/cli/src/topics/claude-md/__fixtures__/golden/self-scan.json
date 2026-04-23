@@ -1,0 +1,98 @@
+{
+  "project": {
+    "name": "claude-prove"
+  },
+  "tech_stack": {
+    "languages": [
+      "JavaScript/TypeScript"
+    ],
+    "frameworks": [],
+    "build_systems": [
+      "npm"
+    ]
+  },
+  "key_dirs": {
+    "agents": "Agent definitions",
+    "commands": "Slash commands",
+    "docs": "Documentation",
+    "scripts": "Build/utility scripts",
+    "skills": "Plugin skills"
+  },
+  "conventions": {
+    "naming": "kebab-case",
+    "test_patterns": [
+      "*.test.ext (dot)"
+    ],
+    "primary_extensions": [
+      ".ts"
+    ]
+  },
+  "prove_config": {
+    "exists": true,
+    "validators": [],
+    "has_index": false,
+    "references": [
+      {
+        "path": "references/llm-coding-standards.md",
+        "label": "LLM-Optimized Coding Standards"
+      },
+      {
+        "path": "references/interaction-patterns.md",
+        "label": "Interaction Patterns"
+      },
+      {
+        "path": "references/validation-config.md",
+        "label": "Validation Configuration"
+      },
+      {
+        "path": "references/creator-conventions.md",
+        "label": "Creator Conventions"
+      },
+      {
+        "path": "references/prompt-engineering-guide.md",
+        "label": "Prompt Engineering Guide"
+      }
+    ],
+    "tool_directives": []
+  },
+  "cafi": {
+    "available": false,
+    "file_count": 0
+  },
+  "core_commands": [
+    {
+      "name": "autopilot",
+      "summary": "Autonomous execution with validation gates"
+    },
+    {
+      "name": "brainstorm",
+      "summary": "Explore options and record decisions"
+    },
+    {
+      "name": "comprehend",
+      "summary": "Socratic quiz on recent diffs to build code comprehension"
+    },
+    {
+      "name": "index",
+      "summary": "Update the file index (run after significant changes)"
+    },
+    {
+      "name": "plan-task",
+      "summary": "Plan implementation for a task"
+    },
+    {
+      "name": "review-ui",
+      "summary": "Docker-based review UI for inspecting prove runs, ACB intent groups, and verdicts"
+    },
+    {
+      "name": "scrum",
+      "summary": "Operate the scrum store backed by `.prove/prove.db` (tasks, milestones, tags, run-links)"
+    },
+    {
+      "name": "tools",
+      "summary": "Manage prove tools — list, install, remove, status"
+    }
+  ],
+  "plugin_version": "1.0.0",
+  "plugin_dir": "__PLUGIN_DIR__"
+}
