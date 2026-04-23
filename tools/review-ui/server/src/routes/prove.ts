@@ -268,7 +268,7 @@ export function registerProveRoutes(app: FastifyInstance, repoRoot: string) {
     };
   });
 
-  // Assembled ACB document for a branch (if `python3 -m tools.acb assemble` ran).
+  // Assembled ACB document for a branch (if `prove acb assemble` ran).
   app.get<{ Params: { branch: string } }>("/api/branches/:branch/acb", async (req) => {
     return { branch: req.params.branch, doc: getAcbDocument(repoRoot, req.params.branch) };
   });

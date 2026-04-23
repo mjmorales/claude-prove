@@ -1,6 +1,6 @@
 # review-ui
 
-Browser-based review UI for prove runs. Inspects the `.prove/runs/<branch>/<slug>/` JSON layout plus the ACB intent store (`.prove/acb.db`), surfaces intent groups with diffs + annotations, and records verdicts (approve / reject / discuss / rework).
+Browser-based review UI for prove runs. Inspects the `.prove/runs/<branch>/<slug>/` JSON layout plus the ACB intent store (unified `.prove/prove.db`, `acb_*` tables), surfaces intent groups with diffs + annotations, and records verdicts (approve / reject / discuss / rework).
 
 Published as a Docker image at `ghcr.io/mjmorales/claude-prove/review-ui`. The Claude Code plugin ships a `/prove:review-ui` command that handles the container lifecycle.
 
@@ -79,7 +79,7 @@ Prove ≥ 0.34 writes a run at `.prove/runs/<branch>/<slug>/`:
 - `reports/<step_id>.json` — per-step validator results + diff stats
 - `review.json` — per-group verdicts written by the review session
 
-ACB intent manifests and assembled docs live at `.prove/acb.db` (SQLite).
+ACB intent manifests and assembled docs live in the unified `.prove/prove.db` (SQLite) under the `acb_manifests` / `acb_acb_documents` / `acb_review_state` tables.
 
 ### URL key
 
@@ -100,4 +100,4 @@ Every run-scoped API route uses a composite `<branch>/<slug>` as the `:slug` par
 
 ## Review session
 
-In the UI, press `⇧R` (or click "Review") once a run is selected. Keys: `j`/`k` (↑/↓) navigate groups, `a` approve, `r` reject, `d` discuss (opens drawer), `f` rework (opens fix-brief drawer), `u` undo, `v` toggle diff, `e` exit, `?` key map. Verdicts persist to `.prove/acb.db`.
+In the UI, press `⇧R` (or click "Review") once a run is selected. Keys: `j`/`k` (↑/↓) navigate groups, `a` approve, `r` reject, `d` discuss (opens drawer), `f` rework (opens fix-brief drawer), `u` undo, `v` toggle diff, `e` exit, `?` key map. Verdicts persist to `.prove/prove.db` (`group_verdicts` table).

@@ -3,7 +3,7 @@
  *
  * Ported from `tools/acb/_git.py`. Centralizes resolution of the current
  * branch, HEAD SHA, the current worktree root, and the main worktree root.
- * ACB writes to the main worktree's `.prove/acb.db` so that all manifests
+ * ACB writes to the main worktree's `.prove/prove.db` so that all manifests
  * for a session are visible from the repository root, regardless of which
  * worktree produced the commit.
  *

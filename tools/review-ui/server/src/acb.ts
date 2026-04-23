@@ -29,7 +29,7 @@ export type GroupVerdictRecord = {
 };
 
 function dbPath(repoRoot: string): string {
-  return path.join(repoRoot, ".prove/acb.db");
+  return path.join(repoRoot, ".prove/prove.db");
 }
 
 function openDb(repoRoot: string): Database.Database | null {
@@ -76,7 +76,7 @@ export function getManifestForCommit(
     const row = db
       .prepare(
         `SELECT branch, commit_sha, timestamp, data, created_at
-         FROM manifests
+         FROM acb_manifests
          WHERE commit_sha LIKE ? || '%'
          ORDER BY id DESC
          LIMIT 1`,
@@ -115,7 +115,7 @@ export function listManifestsForBranches(
     const rows = db
       .prepare(
         `SELECT branch, commit_sha, timestamp, data, created_at
-         FROM manifests
+         FROM acb_manifests
          WHERE branch IN (${placeholders})
          ORDER BY id ASC`,
       )
@@ -156,7 +156,7 @@ export function listManifestsForCommits(
     const rows = db
       .prepare(
         `SELECT branch, commit_sha, timestamp, data, created_at
-         FROM manifests
+         FROM acb_manifests
          WHERE commit_sha IN (${placeholders})
          ORDER BY id ASC`,
       )
@@ -195,7 +195,7 @@ export function listManifestsForSlug(
     const rows = db
       .prepare(
         `SELECT branch, commit_sha, timestamp, data, created_at
-         FROM manifests
+         FROM acb_manifests
          WHERE branch = ? OR branch LIKE ?
          ORDER BY id ASC`,
       )
@@ -225,7 +225,7 @@ export function listManifestsForBranch(repoRoot: string, branch: string): Intent
     const rows = db
       .prepare(
         `SELECT branch, commit_sha, timestamp, data, created_at
-         FROM manifests
+         FROM acb_manifests
          WHERE branch = ?
          ORDER BY id ASC`,
       )
@@ -253,7 +253,7 @@ export function getAcbDocument(repoRoot: string, branch: string): AcbDocument | 
   if (!db) return null;
   try {
     const row = db
-      .prepare(`SELECT branch, data, created_at, updated_at FROM acb_documents WHERE branch = ?`)
+      .prepare(`SELECT branch, data, created_at, updated_at FROM acb_acb_documents WHERE branch = ?`)
       .get(branch) as
       | { branch: string; data: string; created_at: string; updated_at: string }
       | undefined;
