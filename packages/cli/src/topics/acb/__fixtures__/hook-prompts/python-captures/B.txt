@@ -1,0 +1,39 @@
+ACTION REQUIRED — commit defdefdefdef on `task/foo/1` (run `some-slug`) has no intent manifest. Your next tool call MUST be this exact Bash invocation (no variations, no prefix commands):
+
+```bash
+PYTHONPATH=/plugin/root python3 -m tools.acb save-manifest --workspace-root /workspace --branch task/foo/1 --sha defdefdefdefdefdefdefdefdefdefdefdefdefabc --slug some-slug <<'MANIFEST'
+{
+  "acb_manifest_version": "0.2",
+  "commit_sha": "defdefdefdefdefdefdefdefdefdefdefdefdefabc",
+  "timestamp": "2026-04-22T12:00:00+00:00",
+  "intent_groups": [
+    {
+      "id": "<slug-for-this-group>",
+      "title": "<what-this-group-does>",
+      "classification": "explicit",
+      "file_refs": [
+        {"path": "<path/to/file>", "ranges": ["<start>-<end>"]}
+      ],
+      "annotations": [
+        {"id": "ann-1", "type": "judgment_call", "body": "<why-if-non-obvious>"}
+      ]
+    }
+  ]
+}
+MANIFEST
+```
+
+Rules for filling in `intent_groups` (everything else above is fixed — do NOT edit the flags, PYTHONPATH, or JSON keys):
+1. One group per logical unit of change. Group related file edits together.
+2. Every file in the diff below MUST appear in at least one group's `file_refs`.
+3. `classification` ∈ `explicit` (user asked for it), `inferred` (logically required), `speculative` (beyond asked).
+4. `ranges` is optional — omit for whole-file changes; use `"<start>-<end>"` for partial.
+5. Add a `judgment_call` annotation only for non-obvious decisions; omit `annotations` entirely if none.
+
+Diff for defdefdefdef:
+```
+ README.md | 2 +-
+ 1 file changed
+```
+
+Do not run any other command until the manifest is saved. The hook will re-fire on the next commit for its own SHA.
