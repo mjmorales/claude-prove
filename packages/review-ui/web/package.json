@@ -1,5 +1,5 @@
 {
-  "name": "web",
+  "name": "@claude-prove/review-ui-web",
   "private": true,
   "version": "0.1.0",
   "type": "module",
