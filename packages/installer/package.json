@@ -1,0 +1,20 @@
+{
+  "name": "@claude-prove/installer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./bootstrap-prove-json": "./src/bootstrap-prove-json.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "build": "tsc --build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@claude-prove/cli": "workspace:*"
+  }
+}
