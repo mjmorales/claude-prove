@@ -4,7 +4,9 @@ description: Detect project tech stack and generate .claude/.prove.json configur
 
 # Initialize .claude/.prove.json
 
-Detect tech stack, generate or update `.claude/.prove.json`. Operates section-by-section — only `validators` is updated; `reporters`, `scopes`, and `index` are preserved.
+Delegate stack detection and validator emission to `prove install init-config`, then layer interactive UX for scope, validator review, `.gitignore`, tools, references, and CLAUDE.md.
+
+`prove install init-config` is the source of truth for validator detection. It writes `<cwd>/.claude/.prove.json`, preserves user-custom validators, and carries every other top-level key (`scopes`, `reporters`, `claude_md`, `tools`, ...) across re-runs.
 
 ## Step 0: Guard
 
@@ -13,67 +15,101 @@ Detect tech stack, generate or update `.claude/.prove.json`. Operates section-by
 
 Stop on any failure.
 
-## Step 1: Detect tech stack
+## Step 1: Scope selection
+
+`AskUserQuestion` (header: "Scope"):
+- "Project (Recommended)" — target `$(pwd)/.claude/.prove.json`
+- "User Global" — target `$HOME/.claude/.prove.json`
+
+Bind the chosen directory to `$TARGET_CWD`. Default: `$(pwd)`.
+
+## Step 2: Resolve CLI invocation
+
+Dev mode ships CLI sources; compiled mode ships a `prove` binary.
 
 ```bash
-# Existing config — merge detected validators, preserve everything else
-bash "$PLUGIN_DIR/scripts/init-config.sh" --merge "$(pwd)"
-
-# No config — generate fresh
-bash "$PLUGIN_DIR/scripts/init-config.sh" "$(pwd)"
+if [ -d "$PLUGIN_DIR/packages/cli/src" ]; then
+  PROVE_CLI=(bun run "$PLUGIN_DIR/packages/cli/bin/run.ts")
+else
+  PROVE_CLI=(prove)
+fi
 ```
 
-## Step 2: Show existing config context
+Use `"${PROVE_CLI[@]}"` for every downstream call.
 
-If `.claude/.prove.json` exists, summarize current sections:
-
-```
-Existing .claude/.prove.json sections:
-  - validators: 3 entries (updated with detected config)
-  - scopes: 6 entries (preserved)
-  - reporters: 1 entry (preserved)
-  - index: configured (preserved)
-```
-
-## Step 3: Confirm detected validators
-
-Present detected validators, then `AskUserQuestion` (header: "Validators"):
-- "Approve" / "Modify" / "Keep Current" (last option only when existing validators present)
-
-## Step 4: Write configuration
-
-Write approved config to `.claude/.prove.json`.
-
-- Merge mode: output from `--merge` already contains all sections with updated validators
-- Fresh mode: write detection output directly
-- Run `prove schema migrate --file "$(pwd)/.claude/.prove.json"` after writing to ensure `schema_version` is set
-
-## Step 5: Update .gitignore
+## Step 3: Detect + write validators
 
 ```bash
+"${PROVE_CLI[@]}" install init-config --cwd "$TARGET_CWD"
+```
+
+Behavior:
+- Fresh (`$TARGET_CWD/.claude/.prove.json` absent): writes schema-versioned config with auto-detected validators.
+- Existing: no-op unless `--force` is passed. With `--force`, auto-detected validators are refreshed and user-custom validators + other sections are preserved.
+
+If the file already existed, `AskUserQuestion` (header: "Merge"):
+- "Re-detect" — rerun with `--force`
+- "Keep Current" — skip re-detection
+
+On "Re-detect":
+```bash
+"${PROVE_CLI[@]}" install init-config --cwd "$TARGET_CWD" --force
+```
+
+## Step 4: Show sections
+
+After the CLI returns, summarize `$TARGET_CWD/.claude/.prove.json`:
+
+```
+$TARGET_CWD/.claude/.prove.json:
+  - validators: N entries (auto-detected + user-custom)
+  - scopes: N entries (preserved)
+  - reporters: N entries (preserved)
+  - claude_md.references: N entries (preserved)
+```
+
+## Step 5: Validator review
+
+Show the `validators` array that was written. `AskUserQuestion` (header: "Validators"):
+- "Approve" — keep as-is
+- "Edit" — open `$TARGET_CWD/.claude/.prove.json` for manual edits
+
+On "Edit": instruct the user to modify the `validators` array and save. No further automated action.
+
+## Step 6: Update .gitignore
+
+```bash
+cd "$TARGET_CWD"
 grep -qxF '.prove/' .gitignore 2>/dev/null || echo '.prove/' >> .gitignore
 ```
 
-## Step 6: Set up plugin tools
+## Step 7: Set up plugin tools
 
 ```bash
-bash "$PLUGIN_DIR/scripts/setup-tools.sh" --list --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"
+PYTHONPATH="$PLUGIN_DIR" python3 "$PLUGIN_DIR/tools/registry.py" \
+  --plugin-root "$PLUGIN_DIR" --project-root "$TARGET_CWD" available
 ```
 
-If any tools are "not configured", `AskUserQuestion` (header: "Tools"): "Setup" / "Skip".
+If any tools report "available but not installed", `AskUserQuestion` (header: "Tools"):
+- "Setup"
+- "Skip"
 
-On "Setup":
+On "Setup", direct the user to `/prove:tools install <name>` for each tool they want, or run:
+
 ```bash
-bash "$PLUGIN_DIR/scripts/setup-tools.sh" --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"
+PYTHONPATH="$PLUGIN_DIR" python3 "$PLUGIN_DIR/tools/registry.py" \
+  --plugin-root "$PLUGIN_DIR" --project-root "$TARGET_CWD" sync
 ```
 
-## Step 7: External references for CLAUDE.md
+to reconcile hooks + symlinks for all currently enabled tools.
 
-Collect candidate references from two sources.
+## Step 8: External references for CLAUDE.md
+
+Collect candidates from two sources.
 
 #### Source 1: Bundled references
 
-Scan `$PLUGIN_DIR/references/` for `.md` files. Use `$PLUGIN_DIR` as path variable so references resolve regardless of install location.
+Scan `$PLUGIN_DIR/references/` for `.md` files. Use `$PLUGIN_DIR` as the path variable so references resolve regardless of install location.
 
 #### Source 2: User's global CLAUDE.md
 
@@ -93,14 +129,14 @@ Global references (from ~/.claude/CLAUDE.md):
 Already configured: (none)
 ```
 
-`AskUserQuestion` (header: "External References"): "Include All (Recommended)" / "Select" / "Add Custom" / "Skip".
+`AskUserQuestion` (header: "References"):
+- "Include All (Recommended)" — add all candidates to `claude_md.references`
+- "Select" — user picks which to include
+- "Add Custom" — user types additional paths, then confirm
+- "Skip" — no changes
 
-- **Include All**: add all candidates to `claude_md.references`
-- **Select**: user picks which to include
-- **Add Custom**: user types additional paths, then confirm
-- **Skip**: no changes
+Write to `$TARGET_CWD/.claude/.prove.json` under `claude_md.references`. Use `$PLUGIN_DIR` prefix for bundled, literal paths for user-specified:
 
-Write to `.claude/.prove.json` under `claude_md.references`. Use `$PLUGIN_DIR` prefix for bundled, literal paths for user-specified:
 ```json
 {
   "claude_md": {
@@ -113,32 +149,38 @@ Write to `.claude/.prove.json` under `claude_md.references`. Use `$PLUGIN_DIR` p
 
 Merge into existing config — preserve all other sections.
 
-## Step 8: Generate CLAUDE.md
+## Step 9: Generate CLAUDE.md
 
-If `CLAUDE.md` exists, `AskUserQuestion` (header: "CLAUDE.md"): "Regenerate" / "Keep Existing". Skip generation on "Keep Existing".
+If `$TARGET_CWD/CLAUDE.md` exists, `AskUserQuestion` (header: "CLAUDE.md"):
+- "Regenerate"
+- "Keep Existing"
+
+Skip generation on "Keep Existing".
 
 ```bash
-python3 "$PLUGIN_DIR/skills/claude-md/__main__.py" generate --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"
+python3 "$PLUGIN_DIR/skills/claude-md/__main__.py" generate --project-root "$TARGET_CWD" --plugin-dir "$PLUGIN_DIR"
 ```
 
 Show summary of generated sections.
 
-## Step 9: Install community skills
+## Step 10: Install community skills
 
 ```bash
 bash "$PLUGIN_DIR/scripts/install-skills.sh" --list
 ```
 
-`AskUserQuestion` (header: "Skills"): "Install" / "Skip".
+`AskUserQuestion` (header: "Skills"):
+- "Install"
+- "Skip"
 
 On "Install":
 ```bash
 bash "$PLUGIN_DIR/scripts/install-skills.sh"
 ```
 
-## Step 10: Summary
+## Step 11: Summary
 
-Report what was created/updated. Suggest next steps:
-- Review and customize validators
+Report what was created or updated. Suggest next steps:
+- Review and customize validators in `$TARGET_CWD/.claude/.prove.json`
 - Commit `.claude/.prove.json` and `.gitignore`
-- Run `/prove:task-planner` or `/prove:orchestrator`
+- Run `/prove:plan-task` or `/prove:autopilot`
