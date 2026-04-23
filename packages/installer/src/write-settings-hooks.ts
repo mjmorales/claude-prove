@@ -119,6 +119,27 @@ export const PROVE_HOOK_BLOCKS: readonly ProveHookSpec[] = [
     commandSuffix: 'run-state hook subagent-stop',
     timeout: 5000,
   },
+  {
+    event: 'SessionStart',
+    matcher: 'startup|resume|compact',
+    tool: 'scrum',
+    commandSuffix: 'scrum hook session-start',
+    timeout: 3000,
+  },
+  {
+    event: 'Stop',
+    matcher: '',
+    tool: 'scrum',
+    commandSuffix: 'scrum hook stop',
+    timeout: 3000,
+  },
+  {
+    event: 'SubagentStop',
+    matcher: '',
+    tool: 'scrum',
+    commandSuffix: 'scrum hook subagent-stop',
+    timeout: 5000,
+  },
 ] as const;
 
 /**
