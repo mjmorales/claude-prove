@@ -146,4 +146,4 @@ Built-in Claude Code agents are 285-636 tokens. Skill SKILL.md files should aim 
 - **Interactive skills** (gather + execute): 500-1200 tokens
 - **Complex skills** (multi-phase orchestration): 1200-2500 tokens
 
-Use `python3 $PLUGIN_DIR/scripts/token-count.py <file>` to measure.
+Use `prove prompting token-count <file>` to measure.
