@@ -30,4 +30,9 @@ registerHook(cli);
 
 cli.help();
 cli.version(pjson.version);
-cli.parse();
+
+// Parse with run: false so we can await async action handlers (install
+// upgrade needs to fetch the release binary). Sync handlers still work
+// unchanged — `runMatchedCommand()` just returns undefined for them.
+cli.parse(process.argv, { run: false });
+await cli.runMatchedCommand();

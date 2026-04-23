@@ -6,6 +6,5 @@
     "composite": true
   },
   "include": ["src/**/*"],
-  "exclude": ["**/*.test.ts", "dist", "test"],
-  "references": [{ "path": "../cli" }]
+  "exclude": ["**/*.test.ts", "dist", "test"]
 }
