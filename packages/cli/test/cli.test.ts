@@ -22,7 +22,7 @@ const ALL_TOPICS = [
 ];
 
 const STUB_TOPICS = ALL_TOPICS.filter(
-  (t) => !['store', 'schema', 'cafi', 'run-state', 'pcd'].includes(t),
+  (t) => !['store', 'schema', 'cafi', 'run-state', 'pcd', 'acb'].includes(t),
 );
 
 interface RunResult {
@@ -73,25 +73,35 @@ describe('prove CLI stub topics', () => {
 });
 
 describe('prove store subcommands', () => {
-  test('store migrate prints "no pending migrations" when no domains are registered', () => {
+  test('store migrate applies registered domain migrations', () => {
+    // Every `prove` invocation imports the topic tree, which side-effect
+    // registers the `acb` schema via `topics/acb.ts`. On a fresh db the
+    // acb v1 migration therefore runs on the first `store migrate` call.
     const repo = makeTmpGitRepo();
     try {
       const { stdout, status } = runBin(['store', 'migrate'], repo);
       expect(status).toBe(0);
-      expect(stdout).toContain('no pending migrations');
+      expect(stdout).toContain('applied acb v1');
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
   });
 
-  test('store info prints the db path and "no domains registered"', () => {
+  test('store info lists the db path and registered domains', () => {
     const repo = makeTmpGitRepo();
     try {
+      // info reads _migrations_log; a bare repo has none until `store
+      // migrate` runs. Migrate first so the info path has a real db to
+      // report on.
+      const migrate = runBin(['store', 'migrate'], repo);
+      expect(migrate.status).toBe(0);
+
       const { stdout, status } = runBin(['store', 'info'], repo);
       expect(status).toBe(0);
       expect(stdout).toContain('db path:');
       expect(stdout).toContain(join(repo, '.prove', 'prove.db'));
-      expect(stdout).toContain('no domains registered');
+      // `acb` is registered at import time (see topics/acb.ts -> store.ts).
+      expect(stdout).toContain('acb');
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
