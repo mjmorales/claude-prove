@@ -14,7 +14,6 @@ const ALL_TOPICS = [
   'hook',
   'install',
   'pcd',
-  'round-table',
   'run-state',
   'schema',
   'scrum',
