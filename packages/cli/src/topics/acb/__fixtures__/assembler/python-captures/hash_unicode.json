@@ -1,0 +1,9 @@
+{
+  "kind": "hash",
+  "name": "hash_unicode",
+  "input": {
+    "note": "h\u00e9llo \u2014 w\u00f6rld \ud83c\udf89",
+    "ascii": "plain"
+  },
+  "hash": "bf06c7f20c9555e6c46edf8974330f4c9294e38305328b753f783635dc7d3973"
+}
