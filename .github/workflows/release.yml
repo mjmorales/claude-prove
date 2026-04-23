@@ -7,7 +7,7 @@ on:
     # by .github/workflows/review-ui-image.yml). Pushes that only touch
     # review-ui files should not cut a new plugin release.
     paths-ignore:
-      - 'tools/review-ui/**'
+      - 'packages/review-ui/**'
       - '.github/workflows/review-ui-image.yml'
     # Tag pushes trigger the binary build + GH Release asset upload matrix
     # below. The `release` job (version bump + tag cut) gates itself on
@@ -59,8 +59,8 @@ jobs:
           # Analyze commits since last tag, EXCLUDING commits that only touch
           # the review UI — that path has its own Docker-image release channel.
           # `:(exclude)` pathspec filters out commits that changed only
-          # tools/review-ui/ or the review-ui workflow file.
-          EXCLUDES=(':(exclude)tools/review-ui' ':(exclude).github/workflows/review-ui-image.yml')
+          # packages/review-ui/ or the review-ui workflow file.
+          EXCLUDES=(':(exclude)packages/review-ui' ':(exclude).github/workflows/review-ui-image.yml')
           if [ "$LATEST_TAG" = "v0.0.0" ]; then
             COMMITS=$(git log --pretty=format:"%s%n%b" HEAD -- . "${EXCLUDES[@]}")
           else
@@ -116,7 +116,7 @@ jobs:
 
           # Match the bump step: keep review-ui commits out of the plugin
           # CHANGELOG. They ship separately via the GHCR image.
-          EXCLUDES=(':(exclude)tools/review-ui' ':(exclude).github/workflows/review-ui-image.yml')
+          EXCLUDES=(':(exclude)packages/review-ui' ':(exclude).github/workflows/review-ui-image.yml')
 
           {
             echo "changelog<<CHANGELOG_EOF"

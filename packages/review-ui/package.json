@@ -1,0 +1,14 @@
+{
+  "name": "@claude-prove/review-ui",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c cyan,magenta \"cd server && bun run dev\" \"cd web && bun run dev\"",
+    "build": "cd server && bun run build && cd ../web && bun run build",
+    "start": "cd server && bun run start"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

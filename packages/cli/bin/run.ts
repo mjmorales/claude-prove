@@ -6,6 +6,7 @@ import { register as registerCafi } from '../src/topics/cafi';
 import { register as registerHook } from '../src/topics/hook';
 import { register as registerInstall } from '../src/topics/install';
 import { register as registerPcd } from '../src/topics/pcd';
+import { register as registerReviewUi } from '../src/topics/review-ui';
 import { register as registerRunState } from '../src/topics/run-state';
 import { register as registerSchema } from '../src/topics/schema';
 import { register as registerScrum } from '../src/topics/scrum';
@@ -25,6 +26,7 @@ registerRunState(cli);
 registerPcd(cli);
 registerAcb(cli);
 registerInstall(cli);
+registerReviewUi(cli);
 registerScrum(cli);
 registerHook(cli);
 

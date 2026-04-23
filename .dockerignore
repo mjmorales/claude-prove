@@ -1,0 +1,61 @@
+# Applies when the monorepo root is the build context
+# (packages/review-ui/Dockerfile uses -f with context='.').
+
+# Never ship installed deps — they're reinstalled in the build stage
+node_modules
+**/node_modules
+
+# Build outputs — rebuilt inside the image
+**/dist
+**/.vite
+**/*.tsbuildinfo
+**/.bun
+**/bun-*.log
+
+# Version control + CI + editor noise
+.git
+.github
+.gitignore
+.pre-commit-config.yaml
+.DS_Store
+*.log
+
+# Prove runtime state (can be huge; never part of the image)
+.prove
+.prove-wt-slug.txt
+
+# Claude harness state (includes all worktrees — would inflate context massively)
+.claude
+.claude-envs
+.claude-plugin
+
+# Local MCP / playwright captures
+.mcp.json
+.playwright-mcp
+review-ui-*.png
+review-ui-*.jpeg
+page-*.yml
+console-*.log
+
+# Caches
+cache
+.biome-cache
+.mypy_cache
+.pytest_cache
+.ruff_cache
+__pycache__
+
+# Compiled CLI binaries (not needed inside the review-ui image)
+packages/cli/bin/prove
+packages/cli/bin/prove-*
+
+# Test artifacts
+coverage
+**/test_*
+**/*.test.ts
+**/*.test.tsx
+**/__fixtures__
+
+# Docs + docker infra unrelated to review-ui
+docs
+docker

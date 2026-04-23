@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.36.0",
   "type": "module",
-  "workspaces": ["packages/*"],
+  "workspaces": ["packages/*", "packages/review-ui/server", "packages/review-ui/web"],
   "scripts": {
     "test": "bun test",
     "lint": "biome check .",
