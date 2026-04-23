@@ -8,12 +8,26 @@ on:
   push:
     branches: [main]
     paths:
-      - 'tools/review-ui/**'
+      - 'packages/review-ui/**'
+      - 'packages/shared/**'
+      - 'packages/store/**'
+      - 'packages/cli/**'
+      - 'packages/installer/**'
+      - 'package.json'
+      - 'bun.lock'
+      - '.dockerignore'
       - '.github/workflows/review-ui-image.yml'
     tags: ['review-ui-v*']
   pull_request:
     paths:
-      - 'tools/review-ui/**'
+      - 'packages/review-ui/**'
+      - 'packages/shared/**'
+      - 'packages/store/**'
+      - 'packages/cli/**'
+      - 'packages/installer/**'
+      - 'package.json'
+      - 'bun.lock'
+      - '.dockerignore'
       - '.github/workflows/review-ui-image.yml'
   workflow_dispatch:
 
@@ -60,7 +74,10 @@ jobs:
         id: build
         uses: docker/build-push-action@v5
         with:
-          context: tools/review-ui
+          # Build context is the monorepo root so workspace deps resolve.
+          # The Dockerfile lives under packages/review-ui/ per phase 11 task 5.
+          context: .
+          file: packages/review-ui/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
