@@ -1,13 +1,15 @@
 /**
  * Register the `claude-md` topic on the cac instance.
  *
- * Mirrors `skills/claude-md/__main__.py` 1:1 so the skill body, hooks, and
- * `/prove:docs:claude-md` can migrate from `python3 skills/claude-md/__main__.py`
- * to `prove claude-md` without interface drift:
+ * Mirrors `skills/claude-md/__main__.py` 1:1 (plus `validators`, used as a
+ * plugin-dir-less fallback in `skills/handoff/scripts/gather-context.sh`).
+ * Hooks, the skill body, and `/prove:docs:claude-md` call `prove claude-md`
+ * — never `python3 skills/claude-md/__main__.py`:
  *
  *   prove claude-md generate         [--project-root R] [--plugin-dir P]
  *   prove claude-md scan             [--project-root R] [--plugin-dir P]
  *   prove claude-md subagent-context [--project-root R] [--plugin-dir P]
+ *   prove claude-md validators       [--project-root R]
  *
  * Subcommand dispatch follows the `schema` / `acb` pattern — a single
  * `claude-md <action>` command with an action enum. Default action is
@@ -20,11 +22,11 @@
  */
 
 import type { CAC } from 'cac';
-import { runGenerate, runScan, runSubagentContext } from './claude-md/cli/generate-cmd';
+import { runGenerate, runScan, runSubagentContext, runValidators } from './claude-md/cli/generate-cmd';
 
-type ClaudeMdAction = 'generate' | 'scan' | 'subagent-context';
+type ClaudeMdAction = 'generate' | 'scan' | 'subagent-context' | 'validators';
 
-const CLAUDE_MD_ACTIONS: ClaudeMdAction[] = ['generate', 'scan', 'subagent-context'];
+const CLAUDE_MD_ACTIONS: ClaudeMdAction[] = ['generate', 'scan', 'subagent-context', 'validators'];
 
 interface ClaudeMdFlags {
   projectRoot?: string;
@@ -35,7 +37,7 @@ export function register(cli: CAC): void {
   cli
     .command(
       'claude-md [action]',
-      'Generate or inspect an LLM-optimized CLAUDE.md (action: generate | scan | subagent-context)',
+      'Generate or inspect an LLM-optimized CLAUDE.md (action: generate | scan | subagent-context | validators)',
     )
     .option('--project-root <r>', 'Target project root (default: cwd)')
     .option('--plugin-dir <p>', 'Path to the prove plugin directory (default: auto-derived)')
@@ -65,5 +67,7 @@ function dispatch(action: ClaudeMdAction, flags: ClaudeMdFlags): number {
       return runScan(opts);
     case 'subagent-context':
       return runSubagentContext(opts);
+    case 'validators':
+      return runValidators(opts);
   }
 }

@@ -5,10 +5,10 @@ argument-hint: "[event-type]"
 
 # Notify Test
 
-Run the test script for configured reporters:
+Run the test pipeline for configured reporters:
 
 ```bash
-bash "$PLUGIN_DIR/scripts/notify-test.sh" $ARGUMENTS
+bun run "$PLUGIN_DIR/packages/cli/bin/run.ts" notify test $ARGUMENTS
 ```
 
 If `$ARGUMENTS` is empty, defaults to `step-complete`.
