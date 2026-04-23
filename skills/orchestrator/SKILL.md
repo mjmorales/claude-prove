@@ -257,35 +257,12 @@ Repeat 2a-2e for subsequent waves.
 
 ### Validation Gate (both modes)
 
-Run validators in phase order: build → lint → test → custom → llm.
+Run validators in phase order:
+
+1. **build**, **lint**, **test**, **custom** — command validators, inline
+2. **llm** — prompt validators dispatched via `validation-agent` subagent; see `references/llm-validator-protocol.md` for launch contract, diff scope, and failure handling
 
 Validators load per `references/validation-config.md`.
-
-#### LLM Validator Execution
-
-For each prompt validator in `.claude/.prove.json`:
-
-1. Read the prompt file
-2. Generate diff (`git diff HEAD~1` simple, `git diff <base>...HEAD` full)
-3. Launch:
-   ```
-   Agent(
-     subagent_type: "validation-agent", model: "haiku",
-     prompt: """
-       ## Validation Prompt
-       {prompt markdown content}
-
-       ## Changes to Validate
-       ```diff
-       {diff}
-       ```
-
-       ## Instructions
-       Evaluate against the prompt criteria. Return PASS/FAIL with findings.
-     """
-   )
-   ```
-4. PASS → log and continue. FAIL → same retry cycle as command validators.
 
 #### Failure Protocol
 
@@ -368,18 +345,10 @@ Present: merge SHA, archived location, skipped items. If "Skip": remind to run `
 
 ## Full Mode: Requirements Gathering (PRD)
 
-When triggered with "full auto" and no existing plan:
+Triggered by `--full` without an existing plan. Gathers PRD + plan via a requirements subagent, then gates on two `AskUserQuestion` approvals (PRD, Plan) before handing off to Phase 0 (Initialization).
 
-1. Derive slug + branch namespace; create `.prove/runs/<branch>/<slug>/`
-2. Read project context (`CLAUDE.md`, `README.md`, `docs/`, recent git history)
-3. Launch requirements-gathering subagent (user stories, acceptance criteria, non-goals, constraints, verification)
-4. Write `prd.json` via the task-planner skill (which emits valid JSON matching `packages/cli/src/topics/run-state/schemas.ts`)
-5. AskUserQuestion header "PRD" — "Approve" / "Request Changes"
-6. Generate `plan.json` (wave-based task graph, every task has `id`, `wave`, `deps`, `steps[]`)
-7. AskUserQuestion header "Plan" — "Approve" / "Request Changes"
-8. Run `scripts/prove-run init --branch <b> --slug <s> --plan ... --prd ...` to generate `state.json`
-
-All artifacts live in the run directory. Concurrent runs stay isolated under different `<branch>/<slug>` paths.
+- Workflow (steps + gates + subagent dispatch): `references/prd-workflow.md`
+- PRD field shape: `references/prd-template.md`
 
 ---
 
@@ -436,7 +405,9 @@ All artifacts live in the run directory. Concurrent runs stay isolated under dif
 
 | File | Purpose |
 |------|---------|
+| `references/prd-workflow.md` | Full-mode PRD + plan generation workflow |
 | `references/prd-template.md` | PRD field reference |
+| `references/llm-validator-protocol.md` | Prompt validator dispatch contract |
 | `references/handoff-protocol.md` | Phase handoff |
 | `references/reporter-protocol.md` | Reporter dispatch |
 | `references/validation-config.md` | Validators (schema, auto-detect, execution order) |
