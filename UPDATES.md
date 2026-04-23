@@ -6,6 +6,47 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v1.0.1 — Python removal (phase 13)
+
+Post-cutover cleanup. Phase 13 retires the last shell/python bridges that still embedded business logic: every `python3 -c`, `jq`, or `awk` heredoc that read `.claude/.prove.json`, `plan.json`, or `prd.json` now runs through a typed `prove <topic>` subcommand. Four wrapper scripts are deleted outright; three skill/command markdown files migrate to the CLI surface; the final grep sweep confirms zero `python3` invocations remain in `agents/`, `commands/`, `skills/`, `references/`, `scripts/`, or top-level docs.
+
+**Added**:
+
+- `prove notify dispatch <event>` — reporter event dispatcher; dedupes via `state.json.dispatch.dispatched[]` through the run_state API, fires matching reporter commands with the `PROVE_*` env surface, prefixes each reporter's combined stdout/stderr with `  [<name>] `. Best-effort: always exits 0.
+- `prove notify test [event]` — notification pipeline probe; reports match counts and invokes `runNotifyDispatch` with synthesized test env.
+- `prove orchestrator task-prompt --run-dir --task-id --project-root [--worktree]` — emits the worktree implementation-agent prompt markdown directly (no sentinel+awk indirection).
+- `prove orchestrator review-prompt --run-dir --task-id --worktree --base-branch` — emits the principal-architect review prompt; runs `git diff <base>...HEAD` inside the worktree via `child_process`.
+- `prove claude-md validators [--project-root]` — emits `- <phase>: \`<command>\`` lines from `.claude/.prove.json`; plugin-dir-less fallback used by `skills/handoff/scripts/gather-context.sh`.
+- 19 parity tests covering the new CLI surface (validators output, notify dispatch dedup + reporter firing, task/review-prompt rendering).
+
+**Changed**:
+
+- `skills/orchestrator/SKILL.md` — the `generate-{task,review}-prompt.sh` bash invocations are now `bun run "$PLUGIN_DIR/packages/cli/bin/run.ts" orchestrator <task-prompt|review-prompt> ...` with explicit flags.
+- `skills/handoff/scripts/gather-context.sh` — discovery block calls `prove claude-md subagent-context` (primary) or `prove claude-md validators` (fallback via `command -v prove`); no more inline python3 reading `.claude/.prove.json`.
+- `commands/notify/notify-test.md` — invokes `prove notify test` directly.
+- `commands/doctor.md` — Tooling tier renumbered 2.1-2.4 (CAFI, Docker, Schema, Reporters); Step 2.1 Tool Registry Health and Step 2.6 Pack Symlink Health dropped; python3 → bun run for claude-md regen.
+- `commands/init.md` — Step 7 (tool registry setup) dropped; subsequent steps renumbered 7-10; python3 → bun run for claude-md generate.
+- `commands/update.md` — Step 5 subsection 3 (new-tools discovery) dropped; python3 → bun run for CLAUDE.md regen.
+- Plugin version → `1.0.1`; CLAUDE.md managed-block version header → v1.0.1.
+
+**Removed**:
+
+- `scripts/dispatch-event.sh`, `scripts/notify-test.sh`, `skills/orchestrator/scripts/generate-task-prompt.sh`, `skills/orchestrator/scripts/generate-review-prompt.sh` — wholesale deletions; all callers migrated to `prove <topic>` subcommands.
+- `commands/tools.md` + `/prove:tools` slash command — the underlying `tools/registry.py` pack registry was retired with the phase 11 tools/ deletion and has no TS replacement.
+
+**Migration**:
+
+1. Run `/prove:update` — refreshes the managed CLAUDE.md block to v1.0.1 and regenerates any scrum/ACB/run-state hook blocks if drift is detected. Schema version unchanged (still v5); no data migration required.
+2. External automation that shelled out to `scripts/dispatch-event.sh`, `scripts/notify-test.sh`, or the two orchestrator prompt generators must migrate to `prove notify dispatch|test` or `prove orchestrator task-prompt|review-prompt` (same stdin/stdout contracts).
+3. The `/prove:tools` slash command is gone. Tool install/remove/status have no replacement in v1.0.1 because the pack model itself was retired in phase 11; projects that installed community packs before the cutover should bundle them directly under `tools/<pack>/` and wire hooks manually if still needed.
+
+**Auto-adoption**:
+
+- Plugin version header auto-refreshes on first `/prove:update` after pull.
+- New CLI subcommands are available immediately after pulling v1.0.1; callers in user-space skills/commands migrate at their own pace (the retired shell wrappers no longer exist, so stale callers fail loudly rather than silently).
+
+---
+
 ## v1.0.0 — scrum + TypeScript unification complete
 
 Cutover release. The TypeScript CLI unification (phases 6-11, see `.prove/decisions/2026-04-21-typescript-cli-unification.md`) is complete — every Python tool now runs through `prove <topic>` backed by `packages/cli/`. Phase 12 lands the scrum system top-to-bottom: schema, reconciler, hooks, CLI, agents, slash command, and read-only UI. From v1.0.0 forward, the public CLI shape is semver-stable: breaking changes require a major bump. See `.prove/decisions/2026-04-21-scrum-architecture.md` for the scrum architecture.
