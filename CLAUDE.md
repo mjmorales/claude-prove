@@ -1,8 +1,8 @@
 <!-- prove:managed:start -->
 # claude-prove
 
-<!-- prove:plugin-version:0.43.0 -->
-**Prove plugin v0.43.0** — if the installed plugin version (`cat /Users/manuelmorales/dev/claude-prove/.claude-plugin/plugin.json | grep version`) does not match v0.43.0, run `/prove:update` to sync.
+<!-- prove:plugin-version:1.0.0 -->
+**Prove plugin v1.0.0** — if the installed plugin version (`cat /Users/manuelmorales/dev/claude-prove/.claude-plugin/plugin.json | grep version`) does not match v1.0.0, run `/prove:update` to sync.
 
 JavaScript/TypeScript (npm)
 
@@ -33,6 +33,12 @@ Only fall back to Glob/Grep when the index doesn't cover what you need.
 ### acb
 
 Feature-branch commits must carry an ACB v0.2 intent manifest; the PostToolUse hook on `git commit` supplies the exact save command. Review via `/prove:review-ui` (Docker-based UI; image at `ghcr.io/mjmorales/claude-prove/review-ui`).
+
+### scrum
+
+Agentic task management on `.prove/prove.db` (schema v5+). Hook-driven: SessionStart, SubagentStop, and Stop hooks invoke `prove scrum hook <event>`, which reconciles task state at task boundaries — not per commit. Orchestrator runs couple to scrum tasks via the optional `task_id` field in `plan.json`; unlinked runs surface as alerts in `/scrum alerts`.
+
+`/scrum` is the operator entry point: `init|status|next` are direct CLI passthroughs; `task|milestone|tag|link|alerts` delegate to the `scrum-master` agent (operational — hook + interactive flows). `product-visionary` is user-invoked only for strategic milestone shaping and VISION.md alignment; never hook-driven. Architecture: `.prove/decisions/2026-04-21-scrum-architecture.md`.
 
 ## References
 

@@ -6,6 +6,46 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v1.0.0 — scrum + TypeScript unification complete
+
+Cutover release. The TypeScript CLI unification (phases 6-11, see `.prove/decisions/2026-04-21-typescript-cli-unification.md`) is complete — every Python tool now runs through `prove <topic>` backed by `packages/cli/`. Phase 12 lands the scrum system top-to-bottom: schema, reconciler, hooks, CLI, agents, slash command, and read-only UI. From v1.0.0 forward, the public CLI shape is semver-stable: breaking changes require a major bump. See `.prove/decisions/2026-04-21-scrum-architecture.md` for the scrum architecture.
+
+**Added**:
+
+- Scrum system on `.prove/prove.db` (schema v5): `scrum_tasks`, `scrum_milestones`, `scrum_tags`, `scrum_task_tags`, `scrum_deps`, `scrum_run_links`, `scrum_context_bundles` — all managed through `prove scrum` and reconciled by `packages/cli/src/topics/scrum/reconcile.ts`
+- `/scrum` slash command — `init|status|next` as direct `prove scrum` passthroughs; `task|milestone|tag|link|alerts` delegate to the `scrum-master` agent
+- `prove scrum` CLI topic — subcommands: `init`, `status`, `next-ready`, `task`, `milestone`, `tag`, `link-run`, `hook`
+- `scrum-master` agent (model: sonnet) — operational: hook-invoked (SessionStart/SubagentStop/Stop) and user-invoked via `/scrum` routes; owns task-state transitions, dep-graph edits, run/decision linkage
+- `product-visionary` agent (model: opus) — strategic: user-invoked only; owns milestone shaping, VISION.md alignment, macro dep-chain leverage
+- `/scrum` UI routes under `packages/review-ui/web/src/routes/scrum/` — 5 read-only views (overview, tasks, milestones, dep-graph, alerts) served by `/api/scrum/*` GET endpoints
+- `plan.json` `task_id` optional field — couples orchestrator runs to scrum tasks; surfaced as linked/unlinked runs in `/scrum alerts`
+- `.claude/settings.json` scrum hooks — three entries tagged `_tool: "scrum"`: SessionStart (`startup|resume|compact`), SubagentStop, Stop — all invoking `prove scrum hook <event>`
+
+**Changed**:
+
+- `.claude/.prove.json` schema v4 → v5 (adds `tools.scrum` block with `enabled` and `config.*` defaults). Auto-migrated via `/prove:update` or `prove schema migrate --file .claude/.prove.json`; full v0-to-v5 chain is covered by `packages/cli/src/topics/schema/migrate.test.ts`
+- `/prove:task-planner` now prompts for `task_id` when `tools.scrum.enabled` is true and surfaces `prove scrum next-ready` as the picker source
+- `commands/update.md` step 5 grew a **Scrum hooks** note: on schema v5+, `/prove:update` idempotently registers the three scrum hook entries in `.claude/settings.json` when they're missing
+
+**Removed**:
+
+- `tools/project-manager/` pack (wholesale) — superseded by the scrum CLI + agents. Legacy `planning/ROADMAP.md`, `planning/BACKLOG.md`, and `planning/ship-log.md` (if present in a consuming project) are absorbed by `/scrum init` on first run
+- `product-owner` agent — replaced by `product-visionary` (opus; strategic scope, no transactional writes)
+
+**Migration**:
+
+1. Run `/prove:update` — applies the v4 → v5 schema migration, registers the three scrum hooks in `.claude/settings.json`, and refreshes the managed CLAUDE.md block.
+2. Run `/scrum init` once — imports any legacy `planning/*` artifacts (`VISION.md`, `ROADMAP.md`, `BACKLOG.md`, `ship-log.md`) into scrum tasks/milestones/tags; safe to re-run.
+3. Existing orchestrator plans without `task_id` keep working — they run unchanged and surface as unlinked-run alerts in `/scrum alerts`. Backfill via `prove scrum link-run --run <slug> --task <id>` when desired.
+
+**Auto-adoption**:
+
+- v1.0.0 signals CLI-shape stability — `prove <topic> <subcommand>` contracts are covered by semver from this release forward.
+- Scrum hooks land automatically via `/prove:update` (idempotent by `_tool: "scrum"` marker). No manual `.claude/settings.json` edits required.
+- Plan files without `task_id` remain valid input for the orchestrator; scrum coupling is opt-in per run.
+
+---
+
 ## v0.43.0 — review-ui absorbed into the monorepo + Bun Docker runtime
 
 Phase 11 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`). The standalone `tools/review-ui/` tree is retired; the review UI now lives at `packages/review-ui/` as a bun workspace, the Docker image runs on `oven/bun:1-alpine` (322MB → 110MB, same `ghcr.io/mjmorales/claude-prove/review-ui` name), and `/prove:review-ui` has shed its `python3` dependency in favour of `prove review-ui config | jq`. The web shell is now route-based: `/acb/*` (existing review flows) and a `/scrum` placeholder for phase 12. The server reads SQLite through `@claude-prove/store` (`bun:sqlite`) — `better-sqlite3` is gone.
