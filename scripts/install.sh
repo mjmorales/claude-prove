@@ -1,173 +1,52 @@
 #!/usr/bin/env bash
-# install.sh — Install the prove plugin for Claude Code
+# install.sh — Install the prove plugin for Claude Code.
+#
+# Fetches the compiled `prove` binary from GitHub Releases for the host
+# platform, drops it under $PREFIX (default ~/.local/bin), then hands off
+# to `prove install init` for Claude-side wiring. Falls back to a shallow
+# git clone + bun invocation when the binary fetch fails (offline, 404 on
+# an unreleased version).
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/mjmorales/claude-prove/main/scripts/install.sh | bash
-#   # or
-#   bash scripts/install.sh
+#   bash scripts/install.sh [--prefix <dir>] [--project]
 #
-# Options:
-#   --dir DIR     Install location (default: ~/.claude/plugins/prove)
-#   --user        Install as user-level plugin (default)
-#   --project     Install as project-level plugin (uses current directory)
+#   --prefix <dir>  override binary install directory (default ~/.local/bin)
+#   --project       scope the optional `claude plugin install` to this project
 
-set -eo pipefail
+set -euo pipefail
 
-REPO_URL="https://github.com/mjmorales/claude-prove.git"
-MARKETPLACE_ID="mjmorales/claude-prove"
-INSTALL_DIR=""
-SCOPE="user"
+PREFIX="${HOME}/.local/bin"; SCOPE="user"
+while [[ $# -gt 0 ]]; do case "$1" in
+  --prefix) PREFIX="$2"; shift 2 ;;
+  --project) SCOPE="project"; shift ;;
+  *) echo "unknown arg: $1" >&2; exit 1 ;;
+esac; done
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --dir)     INSTALL_DIR="$2"; shift 2 ;;
-    --user)    SCOPE="user"; shift ;;
-    --project) SCOPE="project"; shift ;;
-    *)         echo "Unknown arg: $1"; exit 1 ;;
-  esac
-done
+TARGET="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
+URL="https://github.com/mjmorales/claude-prove/releases/latest/download/prove-${TARGET}"
+DEST="${PREFIX}/prove"; TMP="${PREFIX}/.prove.tmp.$$"; CLONE="${HOME}/.claude/plugins/prove"
+mkdir -p "$PREFIX"
 
-# === Prompt for scope if interactive ===
-
-if [[ -t 0 && -t 1 && -z "$INSTALL_DIR" ]]; then
-  echo "prove — Plan, Research, Orchestrate, Validate, Execute"
-  echo ""
-  echo "Install scope:"
-  echo "  1) User   — available in all projects"
-  echo "  2) Project — available only in this project"
-  echo ""
-  printf "Choose [1]: "
-  read -r choice
-  case "$choice" in
-    2) SCOPE="project" ;;
-    *) SCOPE="user" ;;
-  esac
-fi
-
-# === Determine install directory ===
-
-if [[ -z "$INSTALL_DIR" ]]; then
-  INSTALL_DIR="${HOME}/.claude/plugins/prove"
-fi
-
-# === Clone or update ===
-# Use sparse-checkout so only plugin-runtime files are on disk.
-# This prevents files like CLAUDE.md and .claude/.prove.json (which
-# belong to the plugin's own development) from appearing in the install
-# directory where they could confuse the LLM.
-
-SPARSE_PATHS=(
-  .claude-plugin
-  agents
-  commands
-  references
-  scripts
-  skills
-  tools
-)
-
-# === Resolve latest release tag ===
-
-resolve_latest_tag() {
-  local tag
-  tag=$(git ls-remote --tags --sort=-v:refname "$REPO_URL" 'v*' 2>/dev/null \
-    | head -1 | sed 's|.*refs/tags/||; s|\^{}||')
-  echo "$tag"
-}
-
-RELEASE_TAG=$(resolve_latest_tag)
-
-if [[ -n "$RELEASE_TAG" ]]; then
-  echo "Latest release: $RELEASE_TAG"
-  CHECKOUT_REF="$RELEASE_TAG"
+if curl -fsSL "$URL" -o "$TMP" && [[ -s "$TMP" ]]; then
+  chmod +x "$TMP"; mv "$TMP" "$DEST"; CMD=("$DEST")
+  echo ":: wrote $DEST for target $TARGET"
 else
-  echo "No release tags found — using main branch."
-  CHECKOUT_REF="main"
+  rm -f "$TMP"
+  echo ":: curl fetch failed for $URL — falling back to git clone" >&2
+  [[ -d "$CLONE/.git" ]] || git clone --depth 1 https://github.com/mjmorales/claude-prove.git "$CLONE"
+  CMD=(bun run "${CLONE}/packages/cli/bin/run.ts")
 fi
 
-if [[ -d "$INSTALL_DIR/.git" ]]; then
-  echo "Updating existing installation at $INSTALL_DIR..."
-  git -C "$INSTALL_DIR" fetch --tags --quiet
-  RELEASE_TAG=$(git -C "$INSTALL_DIR" tag --sort=-v:refname | head -1)
-  if [[ -n "$RELEASE_TAG" ]]; then
-    echo "Checking out $RELEASE_TAG..."
-    git -C "$INSTALL_DIR" checkout --quiet "$RELEASE_TAG"
-  else
-    git -C "$INSTALL_DIR" pull --quiet
-  fi
+case ":$PATH:" in *":${PREFIX}:"*) ;; *) echo ":: warning: ${PREFIX} not on PATH — append: export PATH=\"${PREFIX}:\$PATH\" (${SHELL##*/} rc file)" >&2 ;; esac
+
+"${CMD[@]}" install init --project "$PWD"
+
+if command -v claude >/dev/null 2>&1; then
+  claude plugin marketplace add mjmorales/claude-prove --scope "$SCOPE" 2>/dev/null || true
+  claude plugin install prove@prove --scope "$SCOPE" 2>/dev/null || true
 else
-  echo "Cloning prove to $INSTALL_DIR..."
-  mkdir -p "$(dirname "$INSTALL_DIR")"
-  git clone --quiet --no-checkout "$REPO_URL" "$INSTALL_DIR"
-  git -C "$INSTALL_DIR" sparse-checkout init --no-cone
-  # Prefix each path with / and suffix with / for directory matching
-  sparse_patterns=()
-  for p in "${SPARSE_PATHS[@]}"; do
-    sparse_patterns+=("/$p/")
-  done
-  git -C "$INSTALL_DIR" sparse-checkout set "${sparse_patterns[@]}"
-  git -C "$INSTALL_DIR" checkout --quiet "$CHECKOUT_REF"
+  printf ':: claude CLI not found — run manually:\n   claude plugin marketplace add mjmorales/claude-prove --scope %s\n   claude plugin install prove@prove --scope %s\n' "$SCOPE" "$SCOPE"
 fi
 
-# === Check for claude CLI ===
-
-if ! command -v claude &>/dev/null; then
-  echo ""
-  echo "WARNING: 'claude' CLI not found in PATH."
-  echo "Install Claude Code first, then run:"
-  echo "  claude plugin marketplace add $MARKETPLACE_ID --scope $SCOPE"
-  echo "  claude plugin install prove@prove --scope $SCOPE"
-  exit 0
-fi
-
-# === Register as marketplace and install plugin ===
-
-SCOPE_FLAG="--scope $SCOPE"
-
-# Register the GitHub repo as marketplace source (not the local dir)
-# so that `claude plugin update` fetches from GitHub.
-if claude plugin marketplace list 2>/dev/null | grep -q "prove"; then
-  echo "Marketplace 'prove' already registered."
-else
-  echo "Registering prove marketplace..."
-  if claude plugin marketplace add "$MARKETPLACE_ID" $SCOPE_FLAG 2>/dev/null; then
-    echo "Marketplace registered."
-  else
-    echo ""
-    echo "WARNING: Could not register marketplace automatically."
-    echo "Run manually:"
-    echo "  claude plugin marketplace add $MARKETPLACE_ID $SCOPE_FLAG"
-    echo "  claude plugin install prove@prove $SCOPE_FLAG"
-    exit 0
-  fi
-fi
-
-# Install the plugin from the marketplace
-if claude plugin list 2>/dev/null | grep -q "prove@prove"; then
-  echo "Plugin 'prove' already installed."
-else
-  echo "Installing prove plugin..."
-  if claude plugin install prove@prove $SCOPE_FLAG 2>/dev/null; then
-    echo "Plugin installed."
-  else
-    echo ""
-    echo "WARNING: Could not install plugin automatically."
-    echo "Run manually:"
-    echo "  claude plugin install prove@prove $SCOPE_FLAG"
-    exit 0
-  fi
-fi
-
-# === Done ===
-
-echo ""
-echo "=== prove installed ==="
-echo "Location: $INSTALL_DIR"
-echo "Scope:    $SCOPE"
-echo ""
-echo "If Claude Code is running, restart it for the plugin to take effect."
-echo ""
-echo "Get started:"
-echo "  /prove:init          — Initialize validation config for your project"
-echo "  /prove:brainstorm    — Start brainstorming a feature"
-echo "  /prove:task-planner  — Plan an implementation"
+echo ":: prove installed"
