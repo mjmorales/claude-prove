@@ -1,0 +1,14 @@
+[
+  {
+    "path": "packages/cli/src/topics/prompting/__fixtures__/agent-sample.md",
+    "tokens": 830,
+    "lines": 70,
+    "chars": 3862
+  },
+  {
+    "path": "packages/cli/src/topics/prompting/__fixtures__/command-sample.md",
+    "tokens": 22,
+    "lines": 3,
+    "chars": 87
+  }
+]
