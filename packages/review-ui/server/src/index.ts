@@ -13,6 +13,7 @@ import { registerEventsRoute } from "./routes/events.js";
 import { registerProveRoutes } from "./routes/prove.js";
 import { registerManifestRoute } from "./routes/manifest.js";
 import { registerReviewRoutes } from "./routes/review.js";
+import { registerScrumRoutes } from "./scrum.js";
 
 const PORT = Number(process.env.PORT ?? 5174);
 const HOST = process.env.HOST ?? "127.0.0.1";
@@ -56,6 +57,7 @@ async function main() {
   registerProveRoutes(app, repoRoot);
   registerManifestRoute(app, repoRoot);
   registerReviewRoutes(app, repoRoot);
+  registerScrumRoutes(app, repoRoot);
 
   if (webRoot) {
     await app.register(fastifyStatic, {
