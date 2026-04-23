@@ -1,0 +1,72 @@
+{
+  "kind": "merge",
+  "name": "merge_distinct_groups",
+  "manifests": [
+    {
+      "acb_manifest_version": "0.2",
+      "commit_sha": "0",
+      "timestamp": "2026-03-29T12:00:00Z",
+      "intent_groups": [
+        {
+          "id": "g1",
+          "title": "G1",
+          "classification": "explicit",
+          "file_refs": [
+            {
+              "path": "a.py"
+            }
+          ],
+          "annotations": [],
+          "ambiguity_tags": []
+        }
+      ]
+    },
+    {
+      "acb_manifest_version": "0.2",
+      "commit_sha": "1",
+      "timestamp": "2026-03-29T12:01:00Z",
+      "intent_groups": [
+        {
+          "id": "g2",
+          "title": "G2",
+          "classification": "explicit",
+          "file_refs": [
+            {
+              "path": "b.py"
+            }
+          ],
+          "annotations": [],
+          "ambiguity_tags": []
+        }
+      ]
+    }
+  ],
+  "expected": [
+    {
+      "id": "g1",
+      "title": "G1",
+      "classification": "explicit",
+      "ambiguity_tags": [],
+      "task_grounding": "",
+      "file_refs": [
+        {
+          "path": "a.py"
+        }
+      ],
+      "annotations": []
+    },
+    {
+      "id": "g2",
+      "title": "G2",
+      "classification": "explicit",
+      "ambiguity_tags": [],
+      "task_grounding": "",
+      "file_refs": [
+        {
+          "path": "b.py"
+        }
+      ],
+      "annotations": []
+    }
+  ]
+}
