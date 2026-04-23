@@ -6,6 +6,43 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v0.43.0 — review-ui absorbed into the monorepo + Bun Docker runtime
+
+Phase 11 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`). The standalone `tools/review-ui/` tree is retired; the review UI now lives at `packages/review-ui/` as a bun workspace, the Docker image runs on `oven/bun:1-alpine` (322MB → 110MB, same `ghcr.io/mjmorales/claude-prove/review-ui` name), and `/prove:review-ui` has shed its `python3` dependency in favour of `prove review-ui config | jq`. The web shell is now route-based: `/acb/*` (existing review flows) and a `/scrum` placeholder for phase 12. The server reads SQLite through `@claude-prove/store` (`bun:sqlite`) — `better-sqlite3` is gone.
+
+**Added**:
+
+- `packages/review-ui/` — monorepo home for the review UI as a bun workspace (`server/` + `web/` flattened into the root `workspaces` list)
+- `prove review-ui config [--cwd <path>]` — CLI subcommand that emits `{port, image, tag}` as a single JSON line with hardcoded defaults filled for missing keys, consumed by `/prove:review-ui`
+- `react-router-dom` in the web shell with `/acb/*` (existing review flows) and `/scrum` (phase 12 placeholder) routes
+
+**Changed**:
+
+- Docker runtime: `node:20-alpine` → `oven/bun:1-alpine`; image name unchanged (`ghcr.io/mjmorales/claude-prove/review-ui`); image size 322MB → 110MB
+- `.github/workflows/review-ui-image.yml` — path filter and build context repointed from `tools/review-ui/` to `packages/review-ui/`
+- `/prove:review-ui` slash command — config resolution now uses `prove review-ui config | jq -r '.<key>'` instead of `python3 -c 'import json...'`; the `python3` precondition is gone
+- Review UI server SQLite access migrated to `@claude-prove/store` (`bun:sqlite`), replacing `better-sqlite3`
+
+**Removed**:
+
+- `tools/review-ui/` — fully migrated to `packages/review-ui/`
+- `better-sqlite3` + `@types/better-sqlite3` from the server package
+- `python3` dependency from `/prove:review-ui` (jq + prove CLI replace it)
+
+**Migration**:
+
+1. Image users: `docker pull ghcr.io/mjmorales/claude-prove/review-ui:latest`. Name is unchanged; the next `/prove:review-ui` pulls the Bun-based image transparently.
+2. Dev contributors: `bun install` at the repo root after pulling main. The previous `cd tools/review-ui && npm install` flow is gone — `packages/review-ui/server` and `packages/review-ui/web` are now leaf bun workspaces hoisted into the root `node_modules`.
+3. External scripts that referenced `tools/review-ui/**` paths must repoint to `packages/review-ui/**`.
+
+**Auto-adoption**:
+
+- Non-breaking — `/prove:review-ui` UX is unchanged (same flags, env vars, `.claude/.prove.json` `tools.acb.config.review_ui_{port,image,tag}` keys).
+- No `PROVE_SCHEMA` or `CURRENT_SCHEMA_VERSION` bump; on-disk `.prove/prove.db` shape is unchanged.
+- `v1.0.0` remains reserved for phase 12 (scrum) per `.prove/decisions/2026-04-21-typescript-cli-unification.md`.
+
+---
+
 ## v0.42.0 — installer package + `prove install` CLI + binary release workflow
 
 Phase 10 of the TypeScript CLI unification (see `.prove/decisions/2026-04-23-phase-10-installer.md`). A new `packages/installer/` workspace package centralises plugin-root resolution, settings-hook wiring, and `.prove.json` bootstrap. The `prove install <action>` CLI topic (`init`, `init-hooks`, `init-config`, `doctor`, `upgrade`) replaces the legacy bash installers; dev checkouts and compiled binaries are handled by a single `detectMode` helper. `scripts/install.sh` is now a 30-line bootstrap that fetches a platform-specific binary from GitHub Releases and hands off to `prove install init`. `/prove:init` delegates stack detection + `.prove.json` emission to `prove install init-config`; the AskUserQuestion UX for scope and validator customization is preserved.
