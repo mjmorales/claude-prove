@@ -8,7 +8,8 @@
   },
   "exports": {
     "./schema/detect": "./src/topics/schema/detect.ts",
-    "./schema/schemas": "./src/topics/schema/schemas.ts"
+    "./schema/schemas": "./src/topics/schema/schemas.ts",
+    "./acb/store": "./src/topics/acb/store.ts"
   },
   "files": ["bin", "src"],
   "scripts": {

@@ -1,6 +1,26 @@
-import Database from "better-sqlite3";
-import path from "node:path";
-import fs from "node:fs";
+/**
+ * Review-UI ACB storage adapter.
+ *
+ * Thin wrapper around `@claude-prove/cli`'s `AcbStore` (which is itself
+ * backed by `@claude-prove/store` over `bun:sqlite`). The exports here
+ * preserve the exact function names, signatures, and return shapes the
+ * server routes consumed before phase 11, so swapping sqlite backends
+ * costs zero changes under `server/src/routes/`.
+ *
+ * Open/close policy: every exported function opens a short-lived AcbStore,
+ * does its one operation, and closes it — mirrors the legacy open-on-each-
+ * call lifecycle. Migrations run on every open, but the `_migrations_log`
+ * table makes subsequent opens cheap no-ops.
+ */
+
+import path from 'node:path';
+import fs from 'node:fs';
+import {
+  AcbStore,
+  type GroupVerdict,
+  type GroupVerdictRecord,
+  openAcbStore,
+} from '@claude-prove/cli/acb/store';
 
 export type IntentManifest = {
   commitSha: string;
@@ -17,124 +37,91 @@ export type AcbDocument = {
   updatedAt: string;
 };
 
-export type GroupVerdict = "pending" | "approved" | "rejected" | "discuss" | "rework";
-
-export type GroupVerdictRecord = {
-  slug: string;
-  groupId: string;
-  verdict: GroupVerdict;
-  note: string | null;
-  fixPrompt: string | null;
-  updatedAt: string;
-};
+export type { GroupVerdict, GroupVerdictRecord };
 
 function dbPath(repoRoot: string): string {
-  return path.join(repoRoot, ".prove/prove.db");
+  return path.join(repoRoot, '.prove/prove.db');
 }
 
-function openDb(repoRoot: string): Database.Database | null {
-  const p = dbPath(repoRoot);
-  if (!fs.existsSync(p)) return null;
-  return new Database(p, { readonly: true, fileMustExist: true });
-}
-
-function openWritableDb(repoRoot: string): Database.Database {
+/**
+ * Open a writable AcbStore rooted at `repoRoot/.prove/prove.db`. Runs every
+ * pending acb migration on first open. Ensures the parent directory exists
+ * (matches pre-swap behavior of `openWritableDb`).
+ */
+function openStore(repoRoot: string): AcbStore {
   const p = dbPath(repoRoot);
   const dir = path.dirname(p);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  const db = new Database(p);
-  db.pragma("journal_mode = WAL");
-  db.pragma("synchronous = NORMAL");
-  return db;
+  return openAcbStore({ override: p });
 }
 
-let verdictTableReady = false;
-function ensureVerdictTable(db: Database.Database): void {
-  if (verdictTableReady) return;
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS group_verdicts (
-      slug        TEXT NOT NULL,
-      group_id    TEXT NOT NULL,
-      verdict     TEXT NOT NULL,
-      note        TEXT,
-      fix_prompt  TEXT,
-      updated_at  TEXT NOT NULL,
-      PRIMARY KEY (slug, group_id)
-    );
-    CREATE INDEX IF NOT EXISTS idx_group_verdicts_slug ON group_verdicts(slug);
-  `);
-  verdictTableReady = true;
+/**
+ * Open an AcbStore if the db file exists; return null otherwise. Matches
+ * the previous `openDb` semantics where read-only callers short-circuit
+ * for missing dbs rather than auto-creating one.
+ *
+ * Note: we still run migrations on open so the schema matches the reader's
+ * expectations. `runMigrations` is a no-op when the log is already current.
+ */
+function openStoreIfExists(repoRoot: string): AcbStore | null {
+  const p = dbPath(repoRoot);
+  if (!fs.existsSync(p)) return null;
+  return openAcbStore({ override: p });
 }
 
-export function getManifestForCommit(
-  repoRoot: string,
-  sha: string
-): IntentManifest | null {
-  const db = openDb(repoRoot);
-  if (!db) return null;
+type ManifestRow = {
+  branch: string;
+  commit_sha: string;
+  timestamp: string;
+  data: string;
+  created_at: string;
+};
+
+function rowToManifest(row: ManifestRow): IntentManifest {
+  return {
+    branch: row.branch,
+    commitSha: row.commit_sha,
+    timestamp: row.timestamp,
+    data: safeParse(row.data),
+    createdAt: row.created_at,
+  };
+}
+
+export function getManifestForCommit(repoRoot: string, sha: string): IntentManifest | null {
+  const acb = openStoreIfExists(repoRoot);
+  if (!acb) return null;
   try {
-    const row = db
-      .prepare(
-        `SELECT branch, commit_sha, timestamp, data, created_at
-         FROM acb_manifests
-         WHERE commit_sha LIKE ? || '%'
-         ORDER BY id DESC
-         LIMIT 1`,
-      )
-      .get(sha) as
-      | {
-          branch: string;
-          commit_sha: string;
-          timestamp: string;
-          data: string;
-          created_at: string;
-        }
-      | undefined;
-    if (!row) return null;
-    return {
-      branch: row.branch,
-      commitSha: row.commit_sha,
-      timestamp: row.timestamp,
-      data: safeParse(row.data),
-      createdAt: row.created_at,
-    };
+    const rows = acb.getStore().all<ManifestRow>(
+      `SELECT branch, commit_sha, timestamp, data, created_at
+       FROM acb_manifests
+       WHERE commit_sha LIKE ? || '%'
+       ORDER BY id DESC
+       LIMIT 1`,
+      [sha],
+    );
+    const row = rows[0];
+    return row ? rowToManifest(row) : null;
   } finally {
-    db.close();
+    acb.close();
   }
 }
 
-export function listManifestsForBranches(
-  repoRoot: string,
-  branches: string[],
-): IntentManifest[] {
+export function listManifestsForBranches(repoRoot: string, branches: string[]): IntentManifest[] {
   if (branches.length === 0) return [];
-  const db = openDb(repoRoot);
-  if (!db) return [];
+  const acb = openStoreIfExists(repoRoot);
+  if (!acb) return [];
   try {
-    const placeholders = branches.map(() => "?").join(",");
-    const rows = db
-      .prepare(
-        `SELECT branch, commit_sha, timestamp, data, created_at
-         FROM acb_manifests
-         WHERE branch IN (${placeholders})
-         ORDER BY id ASC`,
-      )
-      .all(...branches) as Array<{
-      branch: string;
-      commit_sha: string;
-      timestamp: string;
-      data: string;
-      created_at: string;
-    }>;
-    return rows.map((r) => ({
-      branch: r.branch,
-      commitSha: r.commit_sha,
-      timestamp: r.timestamp,
-      data: safeParse(r.data),
-      createdAt: r.created_at,
-    }));
+    const placeholders = branches.map(() => '?').join(',');
+    const rows = acb.getStore().all<ManifestRow>(
+      `SELECT branch, commit_sha, timestamp, data, created_at
+       FROM acb_manifests
+       WHERE branch IN (${placeholders})
+       ORDER BY id ASC`,
+      branches,
+    );
+    return rows.map(rowToManifest);
   } finally {
-    db.close();
+    acb.close();
   }
 }
 
@@ -144,38 +131,22 @@ export function listManifestsForBranches(
  * branches are gone but their manifests are still keyed by SHA and the
  * commits themselves remain reachable via the orchestrator branch.
  */
-export function listManifestsForCommits(
-  repoRoot: string,
-  shas: string[],
-): IntentManifest[] {
+export function listManifestsForCommits(repoRoot: string, shas: string[]): IntentManifest[] {
   if (shas.length === 0) return [];
-  const db = openDb(repoRoot);
-  if (!db) return [];
+  const acb = openStoreIfExists(repoRoot);
+  if (!acb) return [];
   try {
-    const placeholders = shas.map(() => "?").join(",");
-    const rows = db
-      .prepare(
-        `SELECT branch, commit_sha, timestamp, data, created_at
-         FROM acb_manifests
-         WHERE commit_sha IN (${placeholders})
-         ORDER BY id ASC`,
-      )
-      .all(...shas) as Array<{
-      branch: string;
-      commit_sha: string;
-      timestamp: string;
-      data: string;
-      created_at: string;
-    }>;
-    return rows.map((r) => ({
-      branch: r.branch,
-      commitSha: r.commit_sha,
-      timestamp: r.timestamp,
-      data: safeParse(r.data),
-      createdAt: r.created_at,
-    }));
+    const placeholders = shas.map(() => '?').join(',');
+    const rows = acb.getStore().all<ManifestRow>(
+      `SELECT branch, commit_sha, timestamp, data, created_at
+       FROM acb_manifests
+       WHERE commit_sha IN (${placeholders})
+       ORDER BY id ASC`,
+      shas,
+    );
+    return rows.map(rowToManifest);
   } finally {
-    db.close();
+    acb.close();
   }
 }
 
@@ -185,78 +156,54 @@ export function listManifestsForCommits(
  * prove uses: `orchestrator/<slug>` and `task/<slug>/<task-id>`. Useful for
  * merged runs whose task branches have been deleted.
  */
-export function listManifestsForSlug(
-  repoRoot: string,
-  slug: string,
-): IntentManifest[] {
-  const db = openDb(repoRoot);
-  if (!db) return [];
+export function listManifestsForSlug(repoRoot: string, slug: string): IntentManifest[] {
+  const acb = openStoreIfExists(repoRoot);
+  if (!acb) return [];
   try {
-    const rows = db
-      .prepare(
-        `SELECT branch, commit_sha, timestamp, data, created_at
-         FROM acb_manifests
-         WHERE branch = ? OR branch LIKE ?
-         ORDER BY id ASC`,
-      )
-      .all(`orchestrator/${slug}`, `task/${slug}/%`) as Array<{
-      branch: string;
-      commit_sha: string;
-      timestamp: string;
-      data: string;
-      created_at: string;
-    }>;
-    return rows.map((r) => ({
-      branch: r.branch,
-      commitSha: r.commit_sha,
-      timestamp: r.timestamp,
-      data: safeParse(r.data),
-      createdAt: r.created_at,
-    }));
+    const rows = acb.getStore().all<ManifestRow>(
+      `SELECT branch, commit_sha, timestamp, data, created_at
+       FROM acb_manifests
+       WHERE branch = ? OR branch LIKE ?
+       ORDER BY id ASC`,
+      [`orchestrator/${slug}`, `task/${slug}/%`],
+    );
+    return rows.map(rowToManifest);
   } finally {
-    db.close();
+    acb.close();
   }
 }
 
 export function listManifestsForBranch(repoRoot: string, branch: string): IntentManifest[] {
-  const db = openDb(repoRoot);
-  if (!db) return [];
+  const acb = openStoreIfExists(repoRoot);
+  if (!acb) return [];
   try {
-    const rows = db
-      .prepare(
-        `SELECT branch, commit_sha, timestamp, data, created_at
-         FROM acb_manifests
-         WHERE branch = ?
-         ORDER BY id ASC`,
-      )
-      .all(branch) as Array<{
-      branch: string;
-      commit_sha: string;
-      timestamp: string;
-      data: string;
-      created_at: string;
-    }>;
-    return rows.map((r) => ({
-      branch: r.branch,
-      commitSha: r.commit_sha,
-      timestamp: r.timestamp,
-      data: safeParse(r.data),
-      createdAt: r.created_at,
-    }));
+    const rows = acb.getStore().all<ManifestRow>(
+      `SELECT branch, commit_sha, timestamp, data, created_at
+       FROM acb_manifests
+       WHERE branch = ?
+       ORDER BY id ASC`,
+      [branch],
+    );
+    return rows.map(rowToManifest);
   } finally {
-    db.close();
+    acb.close();
   }
 }
 
 export function getAcbDocument(repoRoot: string, branch: string): AcbDocument | null {
-  const db = openDb(repoRoot);
-  if (!db) return null;
+  const acb = openStoreIfExists(repoRoot);
+  if (!acb) return null;
   try {
-    const row = db
-      .prepare(`SELECT branch, data, created_at, updated_at FROM acb_acb_documents WHERE branch = ?`)
-      .get(branch) as
-      | { branch: string; data: string; created_at: string; updated_at: string }
-      | undefined;
+    const rows = acb.getStore().all<{
+      branch: string;
+      data: string;
+      created_at: string;
+      updated_at: string;
+    }>(
+      'SELECT branch, data, created_at, updated_at FROM acb_acb_documents WHERE branch = ?',
+      [branch],
+    );
+    const row = rows[0];
     if (!row) return null;
     return {
       branch: row.branch,
@@ -265,7 +212,7 @@ export function getAcbDocument(repoRoot: string, branch: string): AcbDocument | 
       updatedAt: row.updated_at,
     };
   } finally {
-    db.close();
+    acb.close();
   }
 }
 
@@ -278,33 +225,11 @@ function safeParse(s: string): unknown {
 }
 
 export function listVerdicts(repoRoot: string, slug: string): GroupVerdictRecord[] {
-  const db = openWritableDb(repoRoot);
+  const acb = openStore(repoRoot);
   try {
-    ensureVerdictTable(db);
-    const rows = db
-      .prepare(
-        `SELECT slug, group_id, verdict, note, fix_prompt, updated_at
-         FROM group_verdicts
-         WHERE slug = ?`,
-      )
-      .all(slug) as Array<{
-      slug: string;
-      group_id: string;
-      verdict: string;
-      note: string | null;
-      fix_prompt: string | null;
-      updated_at: string;
-    }>;
-    return rows.map((r) => ({
-      slug: r.slug,
-      groupId: r.group_id,
-      verdict: r.verdict as GroupVerdict,
-      note: r.note,
-      fixPrompt: r.fix_prompt,
-      updatedAt: r.updated_at,
-    }));
+    return acb.listGroupVerdicts(slug);
   } finally {
-    db.close();
+    acb.close();
   }
 }
 
@@ -316,31 +241,19 @@ export function upsertVerdict(
   note: string | null,
   fixPrompt: string | null,
 ): GroupVerdictRecord {
-  const db = openWritableDb(repoRoot);
+  const acb = openStore(repoRoot);
   try {
-    ensureVerdictTable(db);
-    const updatedAt = new Date().toISOString();
-    db.prepare(
-      `INSERT INTO group_verdicts (slug, group_id, verdict, note, fix_prompt, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(slug, group_id) DO UPDATE SET
-         verdict    = excluded.verdict,
-         note       = excluded.note,
-         fix_prompt = excluded.fix_prompt,
-         updated_at = excluded.updated_at`,
-    ).run(slug, groupId, verdict, note, fixPrompt, updatedAt);
-    return { slug, groupId, verdict, note, fixPrompt, updatedAt };
+    return acb.upsertGroupVerdict(slug, groupId, verdict, note, fixPrompt);
   } finally {
-    db.close();
+    acb.close();
   }
 }
 
 export function clearVerdict(repoRoot: string, slug: string, groupId: string): void {
-  const db = openWritableDb(repoRoot);
+  const acb = openStore(repoRoot);
   try {
-    ensureVerdictTable(db);
-    db.prepare(`DELETE FROM group_verdicts WHERE slug = ? AND group_id = ?`).run(slug, groupId);
+    acb.clearGroupVerdict(slug, groupId);
   } finally {
-    db.close();
+    acb.close();
   }
 }

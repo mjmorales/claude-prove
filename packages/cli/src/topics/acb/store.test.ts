@@ -77,7 +77,12 @@ describe('acb domain registration', () => {
           "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'acb_%' ORDER BY name",
         )
         .map((r) => r.name);
-      expect(tables).toEqual(['acb_acb_documents', 'acb_manifests', 'acb_review_state']);
+      expect(tables).toEqual([
+        'acb_acb_documents',
+        'acb_group_verdicts',
+        'acb_manifests',
+        'acb_review_state',
+      ]);
 
       const indexes = raw
         .all<{ name: string }>(
@@ -85,13 +90,14 @@ describe('acb domain registration', () => {
         )
         .map((r) => r.name);
       expect(indexes).toEqual([
+        'idx_acb_group_verdicts_slug',
         'idx_acb_manifests_branch',
         'idx_acb_manifests_branch_sha',
         'idx_acb_manifests_run_slug',
       ]);
 
       const log = raw.all<{ domain: string; version: number; description: string }>(
-        'SELECT domain, version, description FROM _migrations_log WHERE domain = ?',
+        'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['acb'],
       );
       expect(log).toEqual([
@@ -99,6 +105,11 @@ describe('acb domain registration', () => {
           domain: 'acb',
           version: 1,
           description: 'create acb_manifests + acb_acb_documents + acb_review_state',
+        },
+        {
+          domain: 'acb',
+          version: 2,
+          description: 'create acb_group_verdicts (absorb review-ui group_verdicts)',
         },
       ]);
     } finally {
@@ -132,12 +143,12 @@ describe('acb domain registration', () => {
   test('migration is idempotent — rerunning does not duplicate log rows', () => {
     // Open with raw store so we can re-run migrations explicitly and
     // observe that the second pass is a no-op (applied is empty, log
-    // has a single acb/v1 row).
+    // has a single row per version).
     const raw = openStore({ path: ':memory:' });
     try {
       const first = runMigrations(raw);
       const firstAcb = first.applied.filter((a) => a.domain === 'acb');
-      expect(firstAcb.map((a) => a.version)).toEqual([1]);
+      expect(firstAcb.map((a) => a.version)).toEqual([1, 2]);
 
       const second = runMigrations(raw);
       expect(second.applied.filter((a) => a.domain === 'acb')).toEqual([]);
@@ -146,10 +157,187 @@ describe('acb domain registration', () => {
         'SELECT version FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['acb'],
       );
-      expect(versions).toEqual([{ version: 1 }]);
+      expect(versions).toEqual([{ version: 1 }, { version: 2 }]);
     } finally {
       raw.close();
     }
+  });
+
+  test('v2 backfills rows from a legacy bare group_verdicts table', () => {
+    // Simulate a .prove/prove.db created by an older review-ui server: v1
+    // migration already applied, then the legacy `ensureVerdictTable`
+    // path created a bare `group_verdicts` table outside the registry.
+    const raw = openStore({ path: ':memory:' });
+    try {
+      raw.exec(`
+        CREATE TABLE _migrations_log (
+          domain TEXT NOT NULL,
+          version INTEGER NOT NULL,
+          description TEXT NOT NULL,
+          applied_at TEXT NOT NULL,
+          PRIMARY KEY (domain, version)
+        );
+        INSERT INTO _migrations_log (domain, version, description, applied_at)
+          VALUES ('acb', 1, 'create acb_manifests + acb_acb_documents + acb_review_state', '2026-01-01T00:00:00Z');
+      `);
+      // Apply v1 table DDL manually so the pre-state is realistic.
+      raw.exec(`
+        CREATE TABLE acb_manifests (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          branch TEXT NOT NULL,
+          commit_sha TEXT NOT NULL,
+          timestamp TEXT NOT NULL,
+          data TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          run_slug TEXT
+        );
+        CREATE TABLE acb_acb_documents (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          branch TEXT NOT NULL UNIQUE,
+          data TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE acb_review_state (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          branch TEXT NOT NULL UNIQUE,
+          acb_hash TEXT NOT NULL,
+          data TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE TABLE group_verdicts (
+          slug TEXT NOT NULL,
+          group_id TEXT NOT NULL,
+          verdict TEXT NOT NULL,
+          note TEXT,
+          fix_prompt TEXT,
+          updated_at TEXT NOT NULL,
+          PRIMARY KEY (slug, group_id)
+        );
+        INSERT INTO group_verdicts (slug, group_id, verdict, note, fix_prompt, updated_at)
+          VALUES ('my-slug', 'g1', 'approved', 'lgtm', NULL, '2026-01-01T00:00:00Z'),
+                 ('my-slug', 'g2', 'rework', 'needs tests', 'Do X', '2026-01-02T00:00:00Z');
+      `);
+
+      // Now run the v2 migration (via the registered schema).
+      const result = runMigrations(raw);
+      expect(result.applied.filter((a) => a.domain === 'acb').map((a) => a.version)).toEqual([2]);
+
+      // Legacy table gone, new table carries the rows verbatim.
+      const legacyExists = raw.all<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'group_verdicts'",
+      );
+      expect(legacyExists).toHaveLength(0);
+
+      const rows = raw.all<{
+        slug: string;
+        group_id: string;
+        verdict: string;
+        note: string | null;
+        fix_prompt: string | null;
+        updated_at: string;
+      }>(
+        'SELECT slug, group_id, verdict, note, fix_prompt, updated_at FROM acb_group_verdicts ORDER BY group_id',
+      );
+      expect(rows).toEqual([
+        {
+          slug: 'my-slug',
+          group_id: 'g1',
+          verdict: 'approved',
+          note: 'lgtm',
+          fix_prompt: null,
+          updated_at: '2026-01-01T00:00:00Z',
+        },
+        {
+          slug: 'my-slug',
+          group_id: 'g2',
+          verdict: 'rework',
+          note: 'needs tests',
+          fix_prompt: 'Do X',
+          updated_at: '2026-01-02T00:00:00Z',
+        },
+      ]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('v2 on a fresh db (no legacy table) succeeds without error', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      const tables = raw
+        .all<{ name: string }>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'acb_group_verdicts'",
+        )
+        .map((r) => r.name);
+      expect(tables).toEqual(['acb_group_verdicts']);
+    } finally {
+      raw.close();
+    }
+  });
+});
+
+describe('AcbStore: group verdicts', () => {
+  let store: AcbStore;
+
+  beforeEach(() => {
+    store = openAcbStore({ path: ':memory:' });
+  });
+  afterEach(() => {
+    store.close();
+  });
+
+  test('listGroupVerdicts on empty slug returns []', () => {
+    expect(store.listGroupVerdicts('my-slug')).toEqual([]);
+  });
+
+  test('upsertGroupVerdict insert round-trips through listGroupVerdicts', () => {
+    const rec = store.upsertGroupVerdict('my-slug', 'g1', 'approved', 'lgtm', null);
+    expect(rec.slug).toBe('my-slug');
+    expect(rec.groupId).toBe('g1');
+    expect(rec.verdict).toBe('approved');
+    expect(rec.note).toBe('lgtm');
+    expect(rec.fixPrompt).toBeNull();
+    expect(typeof rec.updatedAt).toBe('string');
+
+    const rows = store.listGroupVerdicts('my-slug');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toEqual(rec);
+  });
+
+  test('upsertGroupVerdict updates on conflict (slug, groupId)', () => {
+    store.upsertGroupVerdict('my-slug', 'g1', 'approved', 'lgtm', null);
+    const updated = store.upsertGroupVerdict(
+      'my-slug',
+      'g1',
+      'rework',
+      'nit: add tests',
+      'Please add unit tests',
+    );
+    expect(updated.verdict).toBe('rework');
+    expect(updated.fixPrompt).toBe('Please add unit tests');
+
+    const rows = store.listGroupVerdicts('my-slug');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].verdict).toBe('rework');
+  });
+
+  test('clearGroupVerdict deletes the row; no-op when absent', () => {
+    store.upsertGroupVerdict('my-slug', 'g1', 'approved', null, null);
+    store.clearGroupVerdict('my-slug', 'g1');
+    expect(store.listGroupVerdicts('my-slug')).toEqual([]);
+    // Idempotent: second clear throws nothing.
+    store.clearGroupVerdict('my-slug', 'g1');
+  });
+
+  test('listGroupVerdicts is slug-scoped', () => {
+    store.upsertGroupVerdict('slug-a', 'g1', 'approved', null, null);
+    store.upsertGroupVerdict('slug-b', 'g1', 'rejected', null, null);
+    const rowsA = store.listGroupVerdicts('slug-a');
+    expect(rowsA).toHaveLength(1);
+    expect(rowsA[0].verdict).toBe('approved');
   });
 });
 
