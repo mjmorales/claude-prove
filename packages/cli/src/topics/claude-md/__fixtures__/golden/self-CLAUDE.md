@@ -50,6 +50,5 @@ JavaScript/TypeScript (npm)
 - `/prove:plan-task` — Plan implementation for a task
 - `/prove:review-ui` — Docker-based review UI for inspecting prove runs, ACB intent groups, and verdicts
 - `/prove:scrum` — Operate the scrum store backed by `.prove/prove.db` (tasks, milestones, tags, run-links)
-- `/prove:tools` — Manage prove tools — list, install, remove, status
 
 <!-- prove:managed:end -->

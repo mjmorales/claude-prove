@@ -4,7 +4,7 @@ description: Detect project tech stack and generate .claude/.prove.json configur
 
 # Initialize .claude/.prove.json
 
-Delegate stack detection and validator emission to `prove install init-config`, then layer interactive UX for scope, validator review, `.gitignore`, tools, references, and CLAUDE.md.
+Delegate stack detection and validator emission to `prove install init-config`, then layer interactive UX for scope, validator review, `.gitignore`, references, and CLAUDE.md.
 
 `prove install init-config` is the source of truth for validator detection. It writes `<cwd>/.claude/.prove.json`, preserves user-custom validators, and carries every other top-level key (`scopes`, `reporters`, `claude_md`, `tools`, ...) across re-runs.
 
@@ -83,27 +83,7 @@ cd "$TARGET_CWD"
 grep -qxF '.prove/' .gitignore 2>/dev/null || echo '.prove/' >> .gitignore
 ```
 
-## Step 7: Set up plugin tools
-
-```bash
-PYTHONPATH="$PLUGIN_DIR" python3 "$PLUGIN_DIR/tools/registry.py" \
-  --plugin-root "$PLUGIN_DIR" --project-root "$TARGET_CWD" available
-```
-
-If any tools report "available but not installed", `AskUserQuestion` (header: "Tools"):
-- "Setup"
-- "Skip"
-
-On "Setup", direct the user to `/prove:tools install <name>` for each tool they want, or run:
-
-```bash
-PYTHONPATH="$PLUGIN_DIR" python3 "$PLUGIN_DIR/tools/registry.py" \
-  --plugin-root "$PLUGIN_DIR" --project-root "$TARGET_CWD" sync
-```
-
-to reconcile hooks + symlinks for all currently enabled tools.
-
-## Step 8: External references for CLAUDE.md
+## Step 7: External references for CLAUDE.md
 
 Collect candidates from two sources.
 
@@ -149,7 +129,7 @@ Write to `$TARGET_CWD/.claude/.prove.json` under `claude_md.references`. Use `$P
 
 Merge into existing config — preserve all other sections.
 
-## Step 9: Generate CLAUDE.md
+## Step 8: Generate CLAUDE.md
 
 If `$TARGET_CWD/CLAUDE.md` exists, `AskUserQuestion` (header: "CLAUDE.md"):
 - "Regenerate"
@@ -158,12 +138,12 @@ If `$TARGET_CWD/CLAUDE.md` exists, `AskUserQuestion` (header: "CLAUDE.md"):
 Skip generation on "Keep Existing".
 
 ```bash
-python3 "$PLUGIN_DIR/skills/claude-md/__main__.py" generate --project-root "$TARGET_CWD" --plugin-dir "$PLUGIN_DIR"
+bun run "$PLUGIN_DIR/packages/cli/bin/run.ts" claude-md generate --project-root "$TARGET_CWD" --plugin-dir "$PLUGIN_DIR"
 ```
 
 Show summary of generated sections.
 
-## Step 10: Install community skills
+## Step 9: Install community skills
 
 ```bash
 bash "$PLUGIN_DIR/scripts/install-skills.sh" --list
@@ -178,7 +158,7 @@ On "Install":
 bash "$PLUGIN_DIR/scripts/install-skills.sh"
 ```
 
-## Step 11: Summary
+## Step 10: Summary
 
 Report what was created or updated. Suggest next steps:
 - Review and customize validators in `$TARGET_CWD/.claude/.prove.json`
