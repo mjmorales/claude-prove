@@ -9,7 +9,8 @@
     ".": "./src/index.ts",
     "./detect-mode": "./src/detect-mode.ts",
     "./plugin-root": "./src/plugin-root.ts",
-    "./resolve-binary-path": "./src/resolve-binary-path.ts"
+    "./resolve-binary-path": "./src/resolve-binary-path.ts",
+    "./write-settings-hooks": "./src/write-settings-hooks.ts"
   },
   "scripts": {
     "test": "bun test",
