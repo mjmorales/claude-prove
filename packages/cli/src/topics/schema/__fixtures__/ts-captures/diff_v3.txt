@@ -4,10 +4,12 @@ Migration Changes:
   ~ schema_version: "3" -> "4"
   - scopes.tools: tools registry lives under top-level tools.* since v3
   - tools.schema: schema CLI is built-in — no toggleable tool entry
+  ~ schema_version: "4" -> "5"
+  + tools.scrum: added (scrum task management — enabled, scope 'user', empty config)
 
 Target config after migration:
 {
-  "schema_version": "4",
+  "schema_version": "5",
   "validators": [
     {
       "name": "test",
@@ -29,6 +31,11 @@ Target config after migration:
           "*.log"
         ]
       }
+    },
+    "scrum": {
+      "enabled": true,
+      "scope": "user",
+      "config": {}
     }
   }
 }

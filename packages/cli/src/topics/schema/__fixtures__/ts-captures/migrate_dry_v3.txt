@@ -1,4 +1,6 @@
-Migration plan for <FIXTURE_PATH> (v3 -> v4):
+Migration plan for <FIXTURE_PATH> (v3 -> v5):
   ~ schema_version: "3" -> "4"
   - scopes.tools: tools registry lives under top-level tools.* since v3
   - tools.schema: schema CLI is built-in — no toggleable tool entry
+  ~ schema_version: "4" -> "5"
+  + tools.scrum: added (scrum task management — enabled, scope 'user', empty config)
