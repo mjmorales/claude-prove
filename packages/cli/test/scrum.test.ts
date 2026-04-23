@@ -423,6 +423,37 @@ describe('prove scrum hook', () => {
 });
 
 // ---------------------------------------------------------------------------
+// --workspace-root threading — regression for review-round-2 blocking finding
+// ---------------------------------------------------------------------------
+
+describe('prove scrum --workspace-root', () => {
+  test('writes land in --workspace-root repo, not cwd', () => {
+    // repoA is the target workspace; repoB is where we invoke the CLI from.
+    // Before the fix, every handler bare-called openScrumStore() which
+    // resolved via process.cwd() -> repoB, silently ignoring the flag.
+    const repoA = trackRepo('wsroot-target');
+    const repoB = trackRepo('wsroot-cwd');
+
+    const created = runScrum(
+      ['task', 'create', '--title', 'routed task', '--id', 'routed', '--workspace-root', repoA],
+      repoB,
+    );
+    expect(created.exitCode).toBe(0);
+
+    // The DB must be written under repoA, never repoB.
+    expect(existsSync(join(repoA, '.prove', 'prove.db'))).toBe(true);
+    expect(existsSync(join(repoB, '.prove', 'prove.db'))).toBe(false);
+
+    // And a subsequent read from repoB with --workspace-root repoA must
+    // see the row — otherwise the flag isn't threaded on the read path.
+    const shown = runScrum(['task', 'show', 'routed', '--workspace-root', repoA], repoB);
+    expect(shown.exitCode).toBe(0);
+    const payload = JSON.parse(shown.stdout.trim()) as { task: { id: string } };
+    expect(payload.task.id).toBe('routed');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Unknown action
 // ---------------------------------------------------------------------------
 

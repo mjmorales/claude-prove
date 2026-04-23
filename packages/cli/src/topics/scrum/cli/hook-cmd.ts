@@ -19,6 +19,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
 import { type ScrumHookContext, onSessionStart, onStop, onSubagentStop } from '../hook';
 import { openScrumStore } from '../store';
@@ -51,7 +52,7 @@ export function runHookCmd(event: string, flags: HookCmdFlags): number {
     return 0;
   }
 
-  const store = openScrumStore();
+  const store = openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
   try {
     const ctx: ScrumHookContext = { workspaceRoot, store, payload };
     const result = dispatch(event, ctx);

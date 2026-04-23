@@ -11,6 +11,8 @@
  *   1  usage error, unknown action
  */
 
+import { join } from 'node:path';
+import { mainWorktreeRoot } from '@claude-prove/shared';
 import { type ScrumStore, openScrumStore } from '../store';
 
 export interface TagCmdFlags {
@@ -35,7 +37,11 @@ export function runTagCmd(
     return 1;
   }
 
-  const store = openScrumStore();
+  const workspaceRoot =
+    flags.workspaceRoot && flags.workspaceRoot.length > 0
+      ? flags.workspaceRoot
+      : (mainWorktreeRoot() ?? process.cwd());
+  const store = openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
   try {
     switch (action) {
       case 'add':

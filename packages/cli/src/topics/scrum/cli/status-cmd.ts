@@ -16,6 +16,8 @@
  *   1  workspace unresolvable or store open error
  */
 
+import { join } from 'node:path';
+import { mainWorktreeRoot } from '@claude-prove/shared';
 import { type ScrumStore, openScrumStore } from '../store';
 import type { TaskStatus } from '../types';
 
@@ -29,7 +31,11 @@ const RECENT_EVENT_LIMIT = 20;
 const ACTIVE_STATUSES: TaskStatus[] = ['backlog', 'ready', 'in_progress', 'review', 'blocked'];
 
 export function runStatusCmd(flags: StatusCmdFlags): number {
-  const store = openScrumStore();
+  const workspaceRoot =
+    flags.workspaceRoot && flags.workspaceRoot.length > 0
+      ? flags.workspaceRoot
+      : (mainWorktreeRoot() ?? process.cwd());
+  const store = openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
   try {
     const snapshot = buildSnapshot(store);
     if (flags.human === true) {

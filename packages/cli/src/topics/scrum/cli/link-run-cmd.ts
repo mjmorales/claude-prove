@@ -13,6 +13,8 @@
  *   1  missing positional args, unknown task, or invariant violation
  */
 
+import { join } from 'node:path';
+import { mainWorktreeRoot } from '@claude-prove/shared';
 import { openScrumStore } from '../store';
 
 export interface LinkRunCmdFlags {
@@ -35,7 +37,11 @@ export function runLinkRunCmd(
     return 1;
   }
 
-  const store = openScrumStore();
+  const workspaceRoot =
+    flags.workspaceRoot && flags.workspaceRoot.length > 0
+      ? flags.workspaceRoot
+      : (mainWorktreeRoot() ?? process.cwd());
+  const store = openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
   try {
     store.linkRun({
       taskId,

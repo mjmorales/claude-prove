@@ -40,7 +40,7 @@ interface ImportSummary {
 export function runInitCmd(flags: InitCmdFlags): number {
   const workspaceRoot = resolveWorkspaceRoot(flags.workspaceRoot);
 
-  const store = openScrumStore();
+  const store = openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
   try {
     if (hasExistingTasks(store)) {
       process.stdout.write(`${JSON.stringify({ seeded: false, reason: 'already-seeded' })}\n`);
