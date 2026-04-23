@@ -1,24 +1,18 @@
 ---
 name: prompting-token-count
-description: Estimate token counts for prompt files. Wraps the token-count script for measuring agents, skills, commands, references, or any text file. Use when the user wants to check prompt size, compare token budgets, or measure files before/after optimization.
+description: Estimate token counts for prompt files. Wraps the `prove prompting token-count` subcommand for measuring agents, skills, commands, references, or any text file. Use when the user wants to check prompt size, compare token budgets, or measure files before/after optimization.
 ---
 
 # Token Count
 
 Estimate token counts for files using a regex-based heuristic tokenizer. Works on any text file — not limited to prove prompts.
 
-## Script Location
-
-`$PLUGIN_DIR/scripts/token-count.py`
-
-Where `$PLUGIN_DIR` is this plugin's root directory.
-
 ## Usage
 
-Run the script from the user's project root. Pass glob patterns or file paths as positional arguments.
+Run from the user's project root. Pass glob patterns or file paths as positional arguments.
 
 ```bash
-python3 "$PLUGIN_DIR/scripts/token-count.py" <patterns...> [flags]
+prove prompting token-count <patterns...> [flags]
 ```
 
 ## Arguments
@@ -37,16 +31,16 @@ Positional arguments are glob patterns or literal file paths. Multiple patterns 
 
 ```bash
 # All markdown files
-python3 "$PLUGIN_DIR/scripts/token-count.py" "**/*.md"
+prove prompting token-count '**/*.md'
 
 # Single file
-python3 "$PLUGIN_DIR/scripts/token-count.py" agents/llm-prompt-engineer.md
+prove prompting token-count agents/llm-prompt-engineer.md
 
 # Multiple patterns
-python3 "$PLUGIN_DIR/scripts/token-count.py" "agents/**/*.md" "skills/**/SKILL.md"
+prove prompting token-count 'agents/**/*.md' 'skills/**/SKILL.md'
 
 # JSON output for scripting
-python3 "$PLUGIN_DIR/scripts/token-count.py" "**/*.md" --json
+prove prompting token-count '**/*.md' --json
 ```
 
 ## Interpreting Results

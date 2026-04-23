@@ -1,10 +1,8 @@
 /**
  * File index cache I/O — shared by CAFI and PCD.
  *
- * Ported from `tools/_lib/cache.py`. Produces byte-identical JSON output to
- * the Python version so caches remain compatible during the cross-language
- * migration: keys sorted alphabetically (recursively), 2-space indent,
- * trailing newline. Writes are atomic via tempfile + rename.
+ * Canonical JSON output: keys sorted alphabetically (recursively), 2-space
+ * indent, trailing newline. Writes are atomic via tempfile + rename.
  */
 
 import {

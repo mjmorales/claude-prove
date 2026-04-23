@@ -18,7 +18,8 @@ Gather from the user:
 
 ### Phase 2: Code Discovery
 
-Explore the codebase using `scripts/code_explorer.py` (find, imports, usages, structure, tests, history, todos, analyze):
+Delegate to the Explore sub-agent for find, imports, usages, structure, tests, history, todos, and analyze passes — it runs these traversals through its built-in tool surface.
+
 1. Locate relevant files, execution paths, entry points
 2. Map architecture, dependencies, integration points
 3. Trace data flow — ingress, transformations, storage/output
@@ -164,7 +165,6 @@ Check `.claude/.prove.json` for configured validators — use those commands in 
 
 ## Resources
 
-- `scripts/code_explorer.py` — structured code exploration
 - `assets/task-planning-prompts.md` — prompt templates for planning sessions
 - `references/edge-cases-checklist.md` — edge case checklist by domain
 - `references/interaction-patterns.md` — AskUserQuestion vs free-form patterns

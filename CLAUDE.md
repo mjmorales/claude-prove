@@ -1,8 +1,8 @@
 <!-- prove:managed:start -->
 # claude-prove
 
-<!-- prove:plugin-version:1.0.0 -->
-**Prove plugin v1.0.0** — if the installed plugin version (`cat /Users/manuelmorales/dev/claude-prove/.claude-plugin/plugin.json | grep version`) does not match v1.0.0, run `/prove:update` to sync.
+<!-- prove:plugin-version:1.0.1 -->
+**Prove plugin v1.0.1** — if the installed plugin version (`cat /Users/manuelmorales/dev/claude-prove/.claude-plugin/plugin.json | grep version`) does not match v1.0.1, run `/prove:update` to sync.
 
 JavaScript/TypeScript (npm)
 

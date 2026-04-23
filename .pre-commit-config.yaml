@@ -3,7 +3,7 @@ repos:
     hooks:
       - id: conventional-commit-scope
         name: Validate conventional commit with .prove.json scopes
-        entry: python3 scripts/validate_commit_msg.py
+        entry: bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts commit validate-msg
         language: system
         stages: [commit-msg]
         always_run: true

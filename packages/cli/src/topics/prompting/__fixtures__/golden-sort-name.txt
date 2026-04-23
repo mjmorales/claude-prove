@@ -1,0 +1,6 @@
+Path                                                               Tokens   Lines    Chars
+------------------------------------------------------------------------------------------
+packages/cli/src/topics/prompting/__fixtures__/agent-sample.md        830      70    3,862
+packages/cli/src/topics/prompting/__fixtures__/command-sample.md       22       3       87
+------------------------------------------------------------------------------------------
+TOTAL                                                                 852      73    3,949  (2 files)

@@ -18,17 +18,15 @@
       ".claude/settings.json",
       ".claude/settings.local.json",
       ".claude/worktrees",
-      "tools/review-ui",
       "packages/review-ui",
-      "tools/cafi",
-      "tools/_lib",
       "packages/cli/src/topics/pcd/__fixtures__/structural-map/python-captures",
       "packages/cli/src/topics/pcd/__fixtures__/collapse/python-captures",
       "packages/cli/src/topics/pcd/__fixtures__/batch-former/python-captures",
       "packages/cli/src/topics/acb/__fixtures__/hook-prompts",
       "packages/cli/src/topics/acb/__fixtures__/assembler/python-captures",
       "packages/cli/src/topics/acb/__fixtures__/schemas/python-captures",
-      "packages/installer/test/__fixtures__/settings/malformed.json"
+      "packages/installer/test/__fixtures__/settings/malformed.json",
+      "packages/cli/src/topics/claude-md/__fixtures__/golden"
     ]
   },
   "organizeImports": { "enabled": true },

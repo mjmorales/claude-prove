@@ -1,10 +1,9 @@
 /**
  * Per-tool config reader for `.claude/.prove.json`.
  *
- * Replaces `tools/_lib/config.py`, but reads from the post-v4 schema path
- * `tools.<toolName>.config` instead of the retired top-level `index` key.
- * Callers (CAFI, PCD, etc.) pass their own tool name plus the defaults they
- * want merged with user overrides.
+ * Reads from the post-v4 schema path `tools.<toolName>.config`. Callers
+ * (CAFI, PCD, etc.) pass their own tool name plus the defaults they want
+ * merged with user overrides.
  */
 
 import { readFileSync, statSync } from 'node:fs';

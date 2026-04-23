@@ -27,11 +27,199 @@ Returns JSON: `{task, step, task_state, step_state}`. Use it to extract descript
 
 ### 2. Create Planning Workspace
 
-```bash
-python3 scripts/init_planning_workspace.py <step_id> "Task Title Here"
-```
+Substitute the target step id and task title, then run this block from the repo root to scaffold `.prove/plans/plan_<step_id>/` with the 8 template files (overview, requirements, design decisions, open questions, potential issues, implementation plan, test strategy, progress tracker):
 
-Creates `.prove/plans/plan_<step_id>/` with 8 template files (overview, requirements, design decisions, open questions, potential issues, implementation plan, test strategy, progress tracker).
+```bash
+STEP_ID="<step-id>"
+TITLE="<Task Title>"
+TS="$(date +%Y-%m-%d\ %H:%M)"
+WORKSPACE=".prove/plans/plan_${STEP_ID}"
+mkdir -p "${WORKSPACE}"
+
+cat > "${WORKSPACE}/00_task_overview.md" <<EOF
+# Task ${STEP_ID}: ${TITLE}
+
+**Phase**: [Phase name from PLAN.md]
+**Size Estimate**: [XS/S/M/L/XL/XXL]
+**Status**: Planning
+**Dependencies**: [List task dependencies]
+
+## Original Task Description
+[Full description from PLAN.md]
+
+## Verification Criteria
+[From tcg_implementation_plan.md if available]
+
+## Related Tasks
+- [List related/dependent tasks with numbers]
+EOF
+
+cat > "${WORKSPACE}/01_requirements.md" <<EOF
+# Requirements for Task ${STEP_ID}
+
+## Functional Requirements
+- [ ] [Specific, measurable requirement]
+- [ ] [Another requirement]
+
+## Non-Functional Requirements
+- [ ] Performance: [specific expectations]
+- [ ] Error handling: [approach]
+- [ ] Logging: [requirements]
+- [ ] Security: [considerations]
+
+## Acceptance Criteria
+- [ ] [Testable criterion]
+- [ ] [Another criterion]
+
+## Out of Scope
+- [Explicitly excluded items]
+EOF
+
+cat > "${WORKSPACE}/02_design_decisions.md" <<EOF
+# Design Decisions for Task ${STEP_ID}
+
+## Approach Options
+
+### Option 1: [Name]
+**Pros:**
+- [Advantage]
+
+**Cons:**
+- [Disadvantage]
+
+### Option 2: [Name]
+**Pros:**
+- [Advantage]
+
+**Cons:**
+- [Disadvantage]
+
+## Selected Approach
+[Which option and why]
+
+## Technical Choices
+- **Technology/Library**: [Choice] because [reason]
+- **Pattern**: [Choice] because [reason]
+
+## API/Interface Design
+[Define contracts and interfaces]
+EOF
+
+cat > "${WORKSPACE}/03_open_questions.md" <<EOF
+# Open Questions for Task ${STEP_ID}
+
+## Technical Questions
+1. **Q:** [Question about implementation?]
+   **A:** [Answer when resolved]
+
+2. **Q:** [Question about technology choice?]
+   **A:** [Pending]
+
+## Design Questions
+1. **Q:** [Architecture question?]
+   **A:** [Answer]
+
+## Requirements Questions
+1. **Q:** [Unclear requirement?]
+   **A:** [Clarification]
+
+---
+*Mark questions as resolved by adding answers*
+EOF
+
+cat > "${WORKSPACE}/04_potential_issues.md" <<EOF
+# Potential Issues for Task ${STEP_ID}
+
+## Technical Risks
+- **Risk**: [Description]
+  **Mitigation**: [Strategy]
+
+## Edge Cases
+- [Edge case scenario]
+  - How to handle: [approach]
+
+## Performance Concerns
+- [Potential bottleneck]
+  - Solution: [approach]
+
+## Integration Points
+- [System/component to integrate with]
+  - Consideration: [what to watch for]
+EOF
+
+cat > "${WORKSPACE}/05_implementation_plan.md" <<EOF
+# Implementation Plan for Task ${STEP_ID}
+
+## Prerequisites
+- [ ] [What must be in place first]
+- [ ] [Dependencies resolved]
+
+## Implementation Steps
+1. **[Step name]**
+   - Action: [What to do]
+   - Files: [Files to create/modify]
+   - Validation: [How to verify]
+
+2. **[Next step]**
+   - Action: [What to do]
+   - Files: [Files affected]
+   - Validation: [How to verify]
+
+## Code Structure
+\`\`\`
+[Show file/folder structure]
+\`\`\`
+
+## Key Implementation Notes
+- [Important consideration]
+- [Technical detail to remember]
+EOF
+
+cat > "${WORKSPACE}/06_test_strategy.md" <<EOF
+# Test Strategy for Task ${STEP_ID}
+
+## Unit Tests
+- **Test**: [What to test]
+  **Expected**: [Expected behavior]
+
+## Integration Tests
+- **Scenario**: [Description]
+  **Setup**: [Required setup]
+  **Expected**: [Expected outcome]
+
+## Edge Case Tests
+- **Case**: [Edge case]
+  **Expected**: [How it should handle]
+
+## Manual Testing Steps
+1. [Step to verify functionality]
+2. [Another verification step]
+
+## Test Coverage Goals
+- [Coverage target and rationale]
+EOF
+
+cat > "${WORKSPACE}/progress.md" <<EOF
+# Planning Progress for Task ${STEP_ID}
+
+**Started**: ${TS}
+**Current Phase**: Requirements Gathering
+
+## Planning Checklist
+- [ ] Task overview completed
+- [ ] Requirements documented
+- [ ] Design decisions made
+- [ ] Open questions resolved
+- [ ] Potential issues identified
+- [ ] Implementation plan drafted
+- [ ] Test strategy defined
+- [ ] Ready for implementation
+
+## Discussion Log
+### ${TS}
+- Planning workspace initialized
+EOF
+```
 
 Populate `06_test_strategy.md` with validators from `.claude/.prove.json`. See `references/validation-config.md`.
 

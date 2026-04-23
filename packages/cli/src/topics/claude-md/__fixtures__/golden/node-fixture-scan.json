@@ -1,0 +1,73 @@
+{
+  "project": {
+    "name": "my-app"
+  },
+  "tech_stack": {
+    "languages": [
+      "JavaScript/TypeScript"
+    ],
+    "frameworks": [
+      "React",
+      "Next.js"
+    ],
+    "build_systems": [
+      "npm"
+    ]
+  },
+  "key_dirs": {
+    "components": "UI components",
+    "src": "Source code"
+  },
+  "conventions": {
+    "naming": "unknown",
+    "test_patterns": [
+      "*.test.ext (dot)"
+    ],
+    "primary_extensions": [
+      ".tsx"
+    ]
+  },
+  "prove_config": {
+    "exists": false,
+    "validators": [],
+    "has_index": false,
+    "references": [],
+    "tool_directives": []
+  },
+  "cafi": {
+    "available": false,
+    "file_count": 0
+  },
+  "core_commands": [
+    {
+      "name": "autopilot",
+      "summary": "Autonomous execution with validation gates"
+    },
+    {
+      "name": "brainstorm",
+      "summary": "Explore options and record decisions"
+    },
+    {
+      "name": "comprehend",
+      "summary": "Socratic quiz on recent diffs to build code comprehension"
+    },
+    {
+      "name": "index",
+      "summary": "Update the file index (run after significant changes)"
+    },
+    {
+      "name": "plan-task",
+      "summary": "Plan implementation for a task"
+    },
+    {
+      "name": "review-ui",
+      "summary": "Docker-based review UI for inspecting prove runs, ACB intent groups, and verdicts"
+    },
+    {
+      "name": "scrum",
+      "summary": "Operate the scrum store backed by `.prove/prove.db` (tasks, milestones, tags, run-links)"
+    }
+  ],
+  "plugin_version": "1.0.1",
+  "plugin_dir": "__PLUGIN_DIR__"
+}
