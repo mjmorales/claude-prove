@@ -235,6 +235,13 @@ export const PLAN_SCHEMA: Schema = {
       description: 'Orchestrator execution mode: simple (sequential) or full (parallel waves)',
       default: 'simple',
     },
+    task_id: {
+      type: 'str',
+      required: false,
+      minLength: 1,
+      description:
+        'Optional scrum task id linking this run to a scrum backlog entry. Free-form when present; absent on non-scrum runs.',
+    },
     tasks: {
       type: 'list',
       required: true,

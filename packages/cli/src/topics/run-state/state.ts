@@ -126,6 +126,8 @@ export interface PlanData {
   kind: string;
   mode: string;
   tasks: PlanTaskInput[];
+  /** Optional scrum task id linking this run to a scrum backlog entry. */
+  task_id?: string;
   [extra: string]: unknown;
 }
 
