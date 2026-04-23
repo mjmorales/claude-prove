@@ -1,0 +1,16 @@
+{
+  "name": "review_state_verdict_not_object",
+  "validator": "review_state",
+  "input": {
+    "acb_version": "0.2",
+    "acb_hash": "deadbeef",
+    "acb_id": "test-id",
+    "group_verdicts": [
+      "not-an-object"
+    ],
+    "overall_verdict": "pending"
+  },
+  "errors": [
+    "group_verdicts[0]: must be an object"
+  ]
+}

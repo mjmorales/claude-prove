@@ -1,0 +1,8 @@
+{
+  "name": "review_state_not_an_object_list",
+  "validator": "review_state",
+  "input": [],
+  "errors": [
+    "Review state must be a JSON object"
+  ]
+}

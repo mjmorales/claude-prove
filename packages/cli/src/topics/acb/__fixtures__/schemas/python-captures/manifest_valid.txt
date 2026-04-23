@@ -1,0 +1,26 @@
+{
+  "name": "manifest_valid",
+  "validator": "manifest",
+  "input": {
+    "acb_manifest_version": "0.2",
+    "commit_sha": "abc1234",
+    "timestamp": "2026-03-29T12:00:00Z",
+    "intent_groups": [
+      {
+        "id": "feat-auth",
+        "title": "Add authentication",
+        "classification": "explicit",
+        "file_refs": [
+          {
+            "path": "src/auth.py",
+            "ranges": [
+              "1-50"
+            ]
+          }
+        ],
+        "annotations": []
+      }
+    ]
+  },
+  "errors": []
+}

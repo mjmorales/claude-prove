@@ -1,0 +1,19 @@
+{
+  "name": "review_state_invalid_overall_verdict",
+  "validator": "review_state",
+  "input": {
+    "acb_version": "0.2",
+    "acb_hash": "deadbeef",
+    "acb_id": "test-id",
+    "group_verdicts": [
+      {
+        "group_id": "g",
+        "verdict": "pending"
+      }
+    ],
+    "overall_verdict": "dunno"
+  },
+  "errors": [
+    "Invalid overall_verdict: 'dunno'"
+  ]
+}

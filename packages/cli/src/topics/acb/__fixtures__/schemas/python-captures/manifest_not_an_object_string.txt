@@ -1,0 +1,8 @@
+{
+  "name": "manifest_not_an_object_string",
+  "validator": "manifest",
+  "input": "string",
+  "errors": [
+    "Manifest must be a JSON object"
+  ]
+}
