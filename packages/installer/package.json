@@ -10,11 +10,15 @@
     "./detect-mode": "./src/detect-mode.ts",
     "./plugin-root": "./src/plugin-root.ts",
     "./resolve-binary-path": "./src/resolve-binary-path.ts",
-    "./write-settings-hooks": "./src/write-settings-hooks.ts"
+    "./write-settings-hooks": "./src/write-settings-hooks.ts",
+    "./bootstrap-prove-json": "./src/bootstrap-prove-json.ts"
   },
   "scripts": {
     "test": "bun test",
     "build": "tsc --build",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@claude-prove/cli": "workspace:*"
   }
 }

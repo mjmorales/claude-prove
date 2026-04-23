@@ -6,6 +6,10 @@
   "bin": {
     "prove": "./bin/run.ts"
   },
+  "exports": {
+    "./schema/detect": "./src/topics/schema/detect.ts",
+    "./schema/schemas": "./src/topics/schema/schemas.ts"
+  },
   "files": ["bin", "src"],
   "scripts": {
     "test": "bun test",
