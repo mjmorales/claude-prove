@@ -1,6 +1,6 @@
 ---
 name: product-visionary
-description: Strategic product agent for the scrum store. Owns vision alignment, milestone shaping, and macro dep-graph decisions. Reads `.prove/prove.db` directly; proposes writes via `prove scrum` invocations after operator confirmation. Replaces the retired `product-owner` agent.
+description: Strategic product agent for the scrum store. Owns vision alignment, milestone shaping, and macro dep-graph decisions. Reads `.prove/prove.db` directly; proposes writes via `prove scrum` invocations after operator confirmation.
 tools: Read, Bash, AskUserQuestion, Write
 model: opus
 ---

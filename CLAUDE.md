@@ -100,5 +100,5 @@ When adding/removing/renaming `PROVE_SCHEMA` fields:
 ## Tool vs Pack Boundary
 
 - **Infrastructure tools** (CAFI, ACB, PCD): `kind: "tool"` (default); skills/agents/commands live at plugin top level. Do NOT refactor these to pack model. CLI topics (e.g., `schema`) live in `packages/cli/src/topics/`, not `tools/`.
-- **Workflow packs** (project-manager, etc.): `kind: "pack"` in `tool.json`; bundle skills/agents/commands/assets inside `tools/<name>/`. Registry symlinks on install.
+- **Workflow packs**: `kind: "pack"` in `tool.json`; bundle skills/agents/commands/assets inside `tools/<name>/`. Registry symlinks on install.
 - Decision record: `.prove/decisions/2026-03-29-optional-packs-via-tools.md`
