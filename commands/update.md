@@ -80,6 +80,8 @@ Check for plugin capabilities not yet configured in `.claude/.prove.json`:
 
 2. **Core commands**: New `core: true` commands are picked up automatically in Step 8 (CLAUDE.md regeneration). Note "New commands detected, will appear in CLAUDE.md after regeneration."
 
+   **Scrum hooks** (schema v5+): when `tools.scrum.enabled` is true and `.claude/settings.json` is missing scrum-tagged hook entries, add three entries (SessionStart matcher `startup|resume|compact`, SubagentStop no matcher, Stop no matcher — all invoking `bun run <plugin>/packages/cli/bin/run.ts scrum hook <event>` with `_tool: "scrum"`). Idempotent: skip if `_tool: "scrum"` entries already present.
+
 3. **New tools**:
    ```bash
    PYTHONPATH="$PLUGIN_DIR" python3 "$PLUGIN_DIR/tools/registry.py" \
