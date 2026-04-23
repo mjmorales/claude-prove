@@ -3,6 +3,7 @@ import { cac } from 'cac';
 import pjson from '../package.json' with { type: 'json' };
 import { register as registerAcb } from '../src/topics/acb';
 import { register as registerCafi } from '../src/topics/cafi';
+import { register as registerCommit } from '../src/topics/commit';
 import { register as registerHook } from '../src/topics/hook';
 import { register as registerInstall } from '../src/topics/install';
 import { register as registerPcd } from '../src/topics/pcd';
@@ -28,6 +29,7 @@ registerAcb(cli);
 registerInstall(cli);
 registerReviewUi(cli);
 registerScrum(cli);
+registerCommit(cli);
 registerHook(cli);
 
 cli.help();
