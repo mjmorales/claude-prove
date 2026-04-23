@@ -4,6 +4,7 @@
     { "path": "./packages/shared" },
     { "path": "./packages/store" },
     { "path": "./packages/cli" },
-    { "path": "./packages/installer" }
+    { "path": "./packages/installer" },
+    { "path": "./packages/review-ui" }
   ]
 }

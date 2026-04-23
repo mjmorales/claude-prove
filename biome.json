@@ -19,6 +19,7 @@
       ".claude/settings.local.json",
       ".claude/worktrees",
       "tools/review-ui",
+      "packages/review-ui",
       "tools/cafi",
       "tools/project-manager",
       "tools/_lib",
