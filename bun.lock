@@ -16,6 +16,7 @@
         "prove": "./bin/run.ts",
       },
       "dependencies": {
+        "@claude-prove/installer": "workspace:*",
         "@claude-prove/shared": "workspace:*",
         "@claude-prove/store": "workspace:*",
         "cac": "^6.7.14",
