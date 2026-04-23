@@ -10,7 +10,6 @@
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import {
-  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -52,7 +51,7 @@ describe('bootstrapProveJson — stack fixtures', () => {
     process.env.PATH = '/tmp/detect-no-tools';
   });
   afterEach(() => {
-    if (savedPath === undefined) delete process.env.PATH;
+    if (savedPath === undefined) Reflect.deleteProperty(process.env, 'PATH');
     else process.env.PATH = savedPath;
   });
 

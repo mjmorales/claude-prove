@@ -25,7 +25,8 @@
       "packages/cli/src/topics/pcd/__fixtures__/structural-map/python-captures",
       "packages/cli/src/topics/pcd/__fixtures__/collapse/python-captures",
       "packages/cli/src/topics/pcd/__fixtures__/batch-former/python-captures",
-      "packages/cli/src/topics/acb/__fixtures__/hook-prompts"
+      "packages/cli/src/topics/acb/__fixtures__/hook-prompts",
+      "packages/installer/test/__fixtures__/settings/malformed.json"
     ]
   },
   "organizeImports": { "enabled": true },
