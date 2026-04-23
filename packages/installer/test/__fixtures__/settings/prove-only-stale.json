@@ -1,0 +1,92 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git commit*)",
+            "command": "bun run /home/old/path/packages/cli/bin/run.ts acb hook post-commit --workspace-root $CLAUDE_PROJECT_DIR",
+            "timeout": 10000
+          }
+        ],
+        "_tool": "acb"
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run /home/old/path/packages/cli/bin/run.ts run-state hook validate",
+            "timeout": 5000
+          }
+        ],
+        "_tool": "run_state"
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Glob|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run /home/old/path/packages/cli/bin/run.ts cafi gate",
+            "timeout": 10000
+          }
+        ],
+        "_tool": "cafi"
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run /home/old/path/packages/cli/bin/run.ts run-state hook guard",
+            "timeout": 5000
+          }
+        ],
+        "_tool": "run_state"
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "resume|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run /home/old/path/packages/cli/bin/run.ts run-state hook session-start",
+            "timeout": 3000
+          }
+        ],
+        "_tool": "run_state"
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run /home/old/path/packages/cli/bin/run.ts run-state hook stop",
+            "timeout": 5000
+          }
+        ],
+        "_tool": "run_state"
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "general-purpose",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run /home/old/path/packages/cli/bin/run.ts run-state hook subagent-stop",
+            "timeout": 5000
+          }
+        ],
+        "_tool": "run_state"
+      }
+    ]
+  }
+}

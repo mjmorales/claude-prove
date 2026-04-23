@@ -1,0 +1,27 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "my-custom-audit-tool --verbose",
+            "timeout": 2000
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts run-state hook validate",
+            "timeout": 5000
+          }
+        ],
+        "_tool": "run_state"
+      }
+    ]
+  }
+}
