@@ -1,28 +1,21 @@
 /**
- * `prove scrum hook <event> [--workspace-root W]`
+ * `prove scrum hook <event>`
  *
- * Dispatches stdin JSON (Claude Code hook payload) to the respective
- * Task 4 handler in `../hook`:
+ * Dispatches stdin JSON (Claude Code hook payload) to the matching handler
+ * in `../hook`:
  *   session-start  -> onSessionStart
  *   subagent-stop  -> onSubagentStop
  *   stop           -> onStop
  *
  * Malformed or empty stdin silently passes (Claude Code hook convention —
- * matches acb/hook-cmd.ts). Exit is always 0 for `session-start` and
- * `subagent-stop`/`stop` success; hook implementations may throw if not
- * yet available (Task 4 pending), in which case exit is 1.
- *
- * Stdout/stderr contract:
- *   - stdout: handler-provided bytes (usually empty; Claude Code hooks
- *     communicate block decisions via JSON to stdout).
- *   - stderr: human one-liner on error.
+ * matches acb/hook-cmd.ts). The handlers own their own store lifecycle and
+ * return a `HookResult` (`{ exitCode, stdout, stderr }`); we just flush
+ * stdout/stderr and propagate the exit code.
  */
 
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { mainWorktreeRoot } from '@claude-prove/shared';
-import { type ScrumHookContext, onSessionStart, onStop, onSubagentStop } from '../hook';
-import { openScrumStore } from '../store';
+import { type HookResult } from '../../run-state/hooks/types';
+import { onSessionStart, onStop, onSubagentStop } from '../hook';
 
 export interface HookCmdFlags {
   workspaceRoot?: string;
@@ -32,7 +25,7 @@ export type HookEvent = 'session-start' | 'subagent-stop' | 'stop';
 
 const HOOK_EVENTS: readonly HookEvent[] = ['session-start', 'subagent-stop', 'stop'];
 
-export function runHookCmd(event: string, flags: HookCmdFlags): number {
+export function runHookCmd(event: string, _flags: HookCmdFlags): number {
   if (!isHookEvent(event)) {
     process.stderr.write(
       `error: unknown hook event '${event}' (expected: ${HOOK_EVENTS.join(' | ')})\n`,
@@ -40,51 +33,39 @@ export function runHookCmd(event: string, flags: HookCmdFlags): number {
     return 1;
   }
 
-  const workspaceRoot = resolveWorkspaceRoot(flags.workspaceRoot);
   const raw = readStdinSync();
   if (raw.length === 0) return 0;
 
-  let payload: unknown;
+  let payload: Record<string, unknown> | null;
   try {
-    payload = JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    payload = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
   } catch {
     // Silent pass — mirrors acb hook-cmd's JSONDecodeError handling.
     return 0;
   }
 
-  const store = openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
-  try {
-    const ctx: ScrumHookContext = { workspaceRoot, store, payload };
-    const result = dispatch(event, ctx);
-    if (result.stdout.length > 0) process.stdout.write(result.stdout);
-    return result.exit;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    process.stderr.write(`scrum hook ${event}: ${msg}\n`);
-    return 1;
-  } finally {
-    store.close();
-  }
+  const result: HookResult = dispatch(event, payload);
+  if (result.stdout.length > 0) process.stdout.write(result.stdout);
+  if (result.stderr.length > 0) process.stderr.write(result.stderr);
+  return result.exitCode;
 }
 
 function isHookEvent(value: string): value is HookEvent {
   return (HOOK_EVENTS as readonly string[]).includes(value);
 }
 
-function dispatch(event: HookEvent, ctx: ScrumHookContext) {
+function dispatch(event: HookEvent, payload: Record<string, unknown> | null): HookResult {
   switch (event) {
     case 'session-start':
-      return onSessionStart(ctx);
+      return onSessionStart(payload);
     case 'subagent-stop':
-      return onSubagentStop(ctx);
+      return onSubagentStop(payload);
     case 'stop':
-      return onStop(ctx);
+      return onStop(payload);
   }
-}
-
-function resolveWorkspaceRoot(flag: string | undefined): string {
-  if (flag !== undefined && flag.length > 0) return flag;
-  return mainWorktreeRoot() ?? process.cwd();
 }
 
 function readStdinSync(): string {
