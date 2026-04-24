@@ -32,6 +32,7 @@ export type MilestoneStatus = 'planned' | 'active' | 'closed';
 export type EventKind =
   | 'task_created'
   | 'status_changed'
+  | 'milestone_changed'
   | 'run_started'
   | 'run_completed'
   | 'steward_verdict'

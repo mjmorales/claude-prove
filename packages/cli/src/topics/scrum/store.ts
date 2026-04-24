@@ -309,6 +309,59 @@ export class ScrumStore {
     return updated;
   }
 
+  /**
+   * Reassign a task's milestone. Pass `null` to clear. Validates the target
+   * milestone exists when non-null (same pattern as `createTask`). Appends a
+   * `milestone_changed` event with payload `{ from, to }` inside the same
+   * transaction and bumps `last_event_at`.
+   *
+   * Closed-milestone policy is intentionally *not* enforced here — callers
+   * (CLI) are responsible for surfacing a warning so operators can re-open
+   * closed milestones without fighting the store.
+   */
+  updateTaskMilestone(
+    id: string,
+    nextMilestoneId: string | null,
+    agent?: string | null,
+  ): ScrumTask {
+    const task = this.getTask(id);
+    if (!task) throw new Error(`updateTaskMilestone: unknown task '${id}'`);
+
+    if (nextMilestoneId !== null) {
+      const target = this.getMilestone(nextMilestoneId);
+      if (!target) {
+        throw new Error(`updateTaskMilestone: unknown milestone_id '${nextMilestoneId}'`);
+      }
+    }
+
+    if (task.milestone_id === nextMilestoneId) {
+      return task;
+    }
+
+    const ts = isoNow();
+    const tx = this.db.transaction(() => {
+      this.prep('UPDATE scrum_tasks SET milestone_id = ?, last_event_at = ? WHERE id = ?').run(
+        nextMilestoneId,
+        ts,
+        id,
+      );
+      this.prep(
+        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
+      ).run(
+        id,
+        ts,
+        'milestone_changed',
+        agent ?? null,
+        JSON.stringify({ from: task.milestone_id, to: nextMilestoneId }),
+      );
+    });
+    tx();
+
+    const updated = this.getTask(id);
+    if (!updated) throw new Error(`updateTaskMilestone: task '${id}' vanished mid-update`);
+    return updated;
+  }
+
   /** Soft-delete: stamp `deleted_at = now()`. Does not cascade to dependents. */
   softDeleteTask(id: string): void {
     const task = this.getTask(id);

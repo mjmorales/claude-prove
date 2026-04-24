@@ -6,6 +6,7 @@
     "commands": "commands/",
     "packages": "packages/",
     "references": "references/",
+    "scrum": "packages/cli/src/topics/scrum/",
     "skills": "skills/",
     "scripts": "scripts/"
   },

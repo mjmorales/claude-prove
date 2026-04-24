@@ -131,6 +131,109 @@ describe('ScrumStore — tasks', () => {
 });
 
 // ===========================================================================
+// updateTaskMilestone
+// ===========================================================================
+
+describe('ScrumStore — updateTaskMilestone', () => {
+  test('reassigns milestone and appends milestone_changed event with from/to payload', () => {
+    seedMilestone('m1');
+    seedMilestone('m2');
+    seedTask('t1', { milestoneId: 'm1' });
+
+    const before = store.listEventsForTask('t1');
+    const updated = store.updateTaskMilestone('t1', 'm2');
+
+    expect(updated.milestone_id).toBe('m2');
+
+    const events = store.listEventsForTask('t1');
+    expect(events).toHaveLength(before.length + 1);
+    const [latest] = events;
+    if (!latest) throw new Error('expected an event');
+    expect(latest.kind).toBe('milestone_changed');
+    expect(latest.payload).toEqual({ from: 'm1', to: 'm2' });
+  });
+
+  test('clears milestone when passed null and records to: null in payload', () => {
+    seedMilestone('m1');
+    seedTask('t1', { milestoneId: 'm1' });
+
+    const updated = store.updateTaskMilestone('t1', null);
+    expect(updated.milestone_id).toBeNull();
+
+    const [latest] = store.listEventsForTask('t1');
+    if (!latest) throw new Error('expected an event');
+    expect(latest.kind).toBe('milestone_changed');
+    expect(latest.payload).toEqual({ from: 'm1', to: null });
+  });
+
+  test('records from: null when assigning to a previously unassigned task', () => {
+    seedMilestone('m1');
+    seedTask('t1');
+
+    const updated = store.updateTaskMilestone('t1', 'm1');
+    expect(updated.milestone_id).toBe('m1');
+
+    const [latest] = store.listEventsForTask('t1');
+    if (!latest) throw new Error('expected an event');
+    expect(latest.payload).toEqual({ from: null, to: 'm1' });
+  });
+
+  test('rejects unknown target milestone and leaves task + events untouched', () => {
+    seedMilestone('m1');
+    seedTask('t1', { milestoneId: 'm1' });
+    const eventsBefore = store.listEventsForTask('t1').length;
+
+    expect(() => store.updateTaskMilestone('t1', 'missing')).toThrow(/unknown milestone_id/);
+
+    const task = store.getTask('t1');
+    expect(task?.milestone_id).toBe('m1');
+    expect(store.listEventsForTask('t1')).toHaveLength(eventsBefore);
+  });
+
+  test('rejects unknown task id', () => {
+    expect(() => store.updateTaskMilestone('missing', null)).toThrow(/unknown task/);
+  });
+
+  test('allows reassignment to a closed milestone (policy lives at CLI layer)', () => {
+    seedMilestone('m1');
+    seedMilestone('m2');
+    store.closeMilestone('m2');
+    seedTask('t1', { milestoneId: 'm1' });
+
+    const updated = store.updateTaskMilestone('t1', 'm2');
+    expect(updated.milestone_id).toBe('m2');
+  });
+
+  test('bumps last_event_at to the transaction timestamp', () => {
+    seedMilestone('m1');
+    const task = seedTask('t1');
+    const before = task.last_event_at;
+
+    // Sleep just long enough for the ISO timestamp to differ at millisecond resolution.
+    const start = Date.now();
+    while (Date.now() === start) {
+      // spin
+    }
+
+    const updated = store.updateTaskMilestone('t1', 'm1');
+    expect(updated.last_event_at).not.toBe(before);
+    if (before === null) throw new Error('seed task should have last_event_at set');
+    if (updated.last_event_at === null) throw new Error('updated task should have last_event_at');
+    expect(updated.last_event_at > before).toBe(true);
+  });
+
+  test('no-op when target equals current milestone (no duplicate event)', () => {
+    seedMilestone('m1');
+    seedTask('t1', { milestoneId: 'm1' });
+    const eventsBefore = store.listEventsForTask('t1').length;
+
+    const updated = store.updateTaskMilestone('t1', 'm1');
+    expect(updated.milestone_id).toBe('m1');
+    expect(store.listEventsForTask('t1')).toHaveLength(eventsBefore);
+  });
+});
+
+// ===========================================================================
 // Milestones
 // ===========================================================================
 
