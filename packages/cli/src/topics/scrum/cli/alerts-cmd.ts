@@ -149,14 +149,14 @@ function safeIsDir(path: string): boolean {
 
 function renderHumanTable(report: AlertsReport): string {
   const lines: string[] = [];
-  lines.push(`Stalled WIP (${report.stalled_wip.length}, threshold ${report.stalled_after_days}d):`);
+  lines.push(
+    `Stalled WIP (${report.stalled_wip.length}, threshold ${report.stalled_after_days}d):`,
+  );
   if (report.stalled_wip.length === 0) {
     lines.push('  (none)');
   } else {
     for (const entry of report.stalled_wip) {
-      lines.push(
-        `  [${entry.status}] ${entry.id}  ${entry.stalled_days}d  ${entry.title}`,
-      );
+      lines.push(`  [${entry.status}] ${entry.id}  ${entry.stalled_days}d  ${entry.title}`);
     }
   }
   lines.push('');

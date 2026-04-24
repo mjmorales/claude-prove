@@ -7,3 +7,13 @@ repos:
         language: system
         stages: [commit-msg]
         always_run: true
+
+      - id: biome-check
+        name: Biome check (lint + format) on staged files
+        # --staged restricts biome to git-staged files so this stays fast on
+        # large diffs. --no-errors-on-unmatched returns 0 when nothing in the
+        # stage matches biome's file types (docs/config-only commits).
+        entry: bun x biome check --staged --no-errors-on-unmatched
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]

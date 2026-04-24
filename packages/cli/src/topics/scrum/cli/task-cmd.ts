@@ -35,14 +35,7 @@ export interface TaskCmdFlags {
   workspaceRoot?: string;
 }
 
-export type TaskAction =
-  | 'create'
-  | 'show'
-  | 'list'
-  | 'tag'
-  | 'link-decision'
-  | 'status'
-  | 'delete';
+export type TaskAction = 'create' | 'show' | 'list' | 'tag' | 'link-decision' | 'status' | 'delete';
 
 const TASK_ACTIONS: TaskAction[] = [
   'create',
@@ -197,11 +190,7 @@ function doTag(store: ScrumStore, id: string | undefined, tag: string | undefine
   return 0;
 }
 
-function doStatus(
-  store: ScrumStore,
-  id: string | undefined,
-  next: string | undefined,
-): number {
+function doStatus(store: ScrumStore, id: string | undefined, next: string | undefined): number {
   if (id === undefined || id.length === 0 || next === undefined || next.length === 0) {
     process.stderr.write(
       'scrum task status: <id> and <new-status> positional arguments required\n',

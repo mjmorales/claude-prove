@@ -414,7 +414,10 @@ describe('runAlertsCmd', () => {
     s.getDb?.() ?? null;
     // The store doesn't expose a direct last_event_at setter, so edit
     // the underlying sqlite row to simulate the stalled condition.
-    s.store.getDb().prepare('UPDATE scrum_tasks SET last_event_at = ? WHERE id = ?').run(ancient, 'w');
+    s.store
+      .getDb()
+      .prepare('UPDATE scrum_tasks SET last_event_at = ? WHERE id = ?')
+      .run(ancient, 'w');
     s.close();
 
     const res = withCapture(() => runAlertsCmd({ workspaceRoot: workspace, stalledAfterDays: 7 }));
@@ -496,9 +499,12 @@ describe('runInitCmd (importer precision)', () => {
     mkdirSync(join(workspace, 'planning'), { recursive: true });
     writeFileSync(
       join(workspace, 'planning', 'BACKLOG.md'),
-      ['- parser: all depend on AST node type 9', '- see also: other doc', '- real backlog item', ''].join(
-        '\n',
-      ),
+      [
+        '- parser: all depend on AST node type 9',
+        '- see also: other doc',
+        '- real backlog item',
+        '',
+      ].join('\n'),
       'utf8',
     );
 
@@ -563,7 +569,9 @@ describe('runInitCmd (importer precision)', () => {
     mkdirSync(join(workspace, 'planning'), { recursive: true });
     writeFileSync(
       join(workspace, 'planning', 'BACKLOG.md'),
-      ['- M3 something to do later', '- M3 another thing in M3', '- no milestone here', ''].join('\n'),
+      ['- M3 something to do later', '- M3 another thing in M3', '- no milestone here', ''].join(
+        '\n',
+      ),
       'utf8',
     );
 
