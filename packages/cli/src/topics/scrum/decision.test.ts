@@ -316,6 +316,52 @@ describe('ScrumStore — decisions: listDecisions', () => {
     expect(combined.map((d) => d.id)).toEqual(['arch-1']);
   });
 
+  test('listDecisions filters are case-insensitive on topic and status', () => {
+    // ADRs authored with `**Status**: Accepted` (Title-Case) are stored as-is.
+    // Operators filter naturally in lowercase (`--status accepted`); both
+    // sides are lower()-normalized so the filter matches regardless of case.
+    store.recordDecision({
+      id: 'titlecase',
+      title: 'Title case',
+      topic: 'Architecture',
+      status: 'Accepted',
+      content: 'body',
+    });
+    store.recordDecision({
+      id: 'lowercase',
+      title: 'Lower case',
+      topic: 'architecture',
+      status: 'accepted',
+      content: 'body',
+    });
+    store.recordDecision({
+      id: 'uppercase',
+      title: 'Upper case',
+      topic: 'ARCHITECTURE',
+      status: 'ACCEPTED',
+      content: 'body',
+    });
+
+    expect(
+      store
+        .listDecisions({ status: 'accepted' })
+        .map((d) => d.id)
+        .sort(),
+    ).toEqual(['lowercase', 'titlecase', 'uppercase']);
+    expect(
+      store
+        .listDecisions({ topic: 'architecture' })
+        .map((d) => d.id)
+        .sort(),
+    ).toEqual(['lowercase', 'titlecase', 'uppercase']);
+    expect(
+      store
+        .listDecisions({ topic: 'ARCHITECTURE', status: 'Accepted' })
+        .map((d) => d.id)
+        .sort(),
+    ).toEqual(['lowercase', 'titlecase', 'uppercase']);
+  });
+
   test('listDecisions orders results by recorded_at DESC', async () => {
     store.recordDecision({ id: 'first', title: 'First', content: '1' });
     await new Promise((resolve) => setTimeout(resolve, 5));

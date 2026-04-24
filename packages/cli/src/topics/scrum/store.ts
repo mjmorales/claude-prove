@@ -850,11 +850,16 @@ export class ScrumStore {
     const clauses: string[] = [];
     const params: string[] = [];
     if (filter.topic !== undefined) {
-      clauses.push('topic = ?');
+      clauses.push('lower(topic) = lower(?)');
       params.push(filter.topic);
     }
     if (filter.status !== undefined) {
-      clauses.push('status = ?');
+      // Status display casing is authored (e.g., `**Status**: Accepted` from the
+      // ADR body becomes stored as `Accepted`), but operator filters read
+      // naturally in lowercase. Comparison is case-insensitive on both sides
+      // so `--status accepted` matches rows stored as `Accepted`, `ACCEPTED`,
+      // or any other case variant without rewriting existing rows.
+      clauses.push('lower(status) = lower(?)');
       params.push(filter.status);
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
