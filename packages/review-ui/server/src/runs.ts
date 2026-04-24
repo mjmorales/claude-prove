@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { listAllBranches, listWorktrees } from "./git.js";
+import { listAllBranches, listWorktrees, resolveBaselineBranch } from "./git.js";
 import { listManifestsForSlug } from "./acb.js";
 import {
   extractRunProgress,
@@ -97,9 +97,11 @@ export async function readRunSummary(
   const hasState = state !== null;
   const orchestratorBranch = `orchestrator/${slug}`;
 
-  // plan.json does not carry a baseline field today. Default to "main"; UI
-  // diff views use git merge-base against the orch branch when needed.
-  const baseline: string | null = "main";
+  // plan.json does not carry a baseline field today. Resolve the repo's
+  // default branch from `origin/HEAD` so non-`main` repos (e.g. `master`,
+  // `trunk`, `develop`) get correct diff ranges; UI diff views use git
+  // merge-base against the orch branch when needed.
+  const baseline: string | null = await resolveBaselineBranch(repoRoot);
 
   // Worktree path: live git worktree wins over any declared path.
   let worktree: string | null = null;
@@ -169,6 +171,10 @@ async function fileExists(p: string): Promise<boolean> {
 
 async function latestMtime(dir: string): Promise<Date | null> {
   let latest: Date | null = null;
+
+  // Per-directory: stat all entries concurrently, recurse into directories
+  // concurrently. Prior implementation statted sequentially, which scaled as
+  // O(files) wall-clock per run dir.
   async function walk(d: string): Promise<void> {
     let entries: string[] = [];
     try {
@@ -176,17 +182,25 @@ async function latestMtime(dir: string): Promise<Date | null> {
     } catch {
       return;
     }
-    for (const name of entries) {
-      const full = path.join(d, name);
-      const st = await fs.stat(full).catch(() => null);
+    const stats = await Promise.all(
+      entries.map(async (name) => {
+        const full = path.join(d, name);
+        const st = await fs.stat(full).catch(() => null);
+        return { full, st };
+      }),
+    );
+    const subdirs: string[] = [];
+    for (const { full, st } of stats) {
       if (!st) continue;
       if (st.isDirectory()) {
-        await walk(full);
+        subdirs.push(full);
       } else if (!latest || st.mtime > latest) {
         latest = st.mtime;
       }
     }
+    await Promise.all(subdirs.map(walk));
   }
+
   await walk(dir);
   if (!latest) {
     const st = await fs.stat(dir).catch(() => null);

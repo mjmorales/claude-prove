@@ -34,6 +34,31 @@ export function gitAt(cwd: string): SimpleGit {
   return simpleGit({ baseDir: cwd });
 }
 
+/**
+ * Resolve the repo's default/baseline branch (the branch `origin/HEAD` points
+ * at). Falls back to `"main"` when the symbolic ref is missing — which happens
+ * for freshly cloned bare mirrors or when `git remote set-head` has never run.
+ *
+ * Memoized per repoRoot for the server process lifetime: the default branch
+ * doesn't change between orchestrator runs, and the git invocation is cheap
+ * but called on every /api/runs request.
+ */
+const baselineCache = new Map<string, string>();
+export async function resolveBaselineBranch(repoRoot: string): Promise<string> {
+  const cached = baselineCache.get(repoRoot);
+  if (cached) return cached;
+  let baseline = "main";
+  try {
+    const raw = await gitAt(repoRoot).raw(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+    const name = raw.trim().replace(/^origin\//, "");
+    if (name) baseline = name;
+  } catch {
+    /* fall back to "main" */
+  }
+  baselineCache.set(repoRoot, baseline);
+  return baseline;
+}
+
 export async function listAllBranches(repoRoot: string): Promise<BranchRef[]> {
   const git = gitAt(repoRoot);
   const [raw, worktrees, currentRaw] = await Promise.all([
@@ -153,10 +178,11 @@ export async function branchesForRun(repoRoot: string, slug: string): Promise<Br
 
   // Legacy fallback: worktree-agent-* that shares orchestrator-exclusive history.
   const git = gitAt(repoRoot);
+  const baseline = await resolveBaselineBranch(repoRoot);
   for (const b of all) {
     if (attached.has(b.name)) continue;
     if (!b.name.startsWith("worktree-agent-")) continue;
-    if (await sharesOrchestratorHistory(git, b.name, orch.name)) attached.set(b.name, b);
+    if (await sharesOrchestratorHistory(git, b.name, orch.name, baseline)) attached.set(b.name, b);
   }
 
   // Order: task branches sorted by id, then legacy agents.
@@ -170,10 +196,21 @@ export async function branchesForRun(repoRoot: string, slug: string): Promise<Br
   return ordered;
 }
 
+/**
+ * An agent branch "shares orchestrator history" when its merge-base with the
+ * orchestrator is strictly newer than its merge-base with the repo baseline
+ * (typically `main`) — i.e. it diverged from orchestrator-exclusive commits,
+ * not from the shared trunk.
+ *
+ * `baseline` defaults to `resolveBaselineBranch(gitAt-of-cwd)` when omitted so
+ * non-`main`-default repos work correctly. Callers that already know the
+ * baseline should pass it through to avoid the extra lookup.
+ */
 export async function sharesOrchestratorHistory(
   git: SimpleGit,
   agent: string,
-  orch: string
+  orch: string,
+  baseline?: string,
 ): Promise<boolean> {
   const safe = async (args: string[]): Promise<string> => {
     try {
@@ -184,16 +221,25 @@ export async function sharesOrchestratorHistory(
   };
   const mbOrch = await safe(["merge-base", agent, orch]);
   if (!mbOrch) return false;
-  const mbMain = await safe(["merge-base", agent, "main"]);
-  // Agent shares orchestrator-exclusive history iff its merge-base with the
-  // orchestrator is strictly newer than its merge-base with main.
-  if (mbOrch === mbMain) return false;
-  if (!mbMain) return true;
+  const baseRef = baseline ?? (await resolveBaselineBranch(await gitCwd(git)));
+  const mbBase = await safe(["merge-base", agent, baseRef]);
+  if (mbOrch === mbBase) return false;
+  if (!mbBase) return true;
   const ancestor = await git
-    .raw(["merge-base", "--is-ancestor", mbMain, mbOrch])
+    .raw(["merge-base", "--is-ancestor", mbBase, mbOrch])
     .then(() => true)
     .catch(() => false);
   return ancestor;
+}
+
+/** Extract the working directory that a `SimpleGit` instance was opened
+ *  against. `simple-git` exposes this via `revparse --show-toplevel`. */
+async function gitCwd(git: SimpleGit): Promise<string> {
+  try {
+    return (await git.raw(["rev-parse", "--show-toplevel"])).trim();
+  } catch {
+    return "";
+  }
 }
 
 export async function diffFiles(

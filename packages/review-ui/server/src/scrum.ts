@@ -55,16 +55,25 @@ function openStoreIfExists(repoRoot: string): ScrumStore | null {
 }
 
 /**
+ * Missing-db fallback policy:
+ *   - `{ kind: 'default', value }` — return `value` verbatim (read-only empty).
+ *   - `{ kind: 'not-found', message }` — respond 404 with `message` as the body.
+ */
+type StoreOrElse<T> =
+  | { kind: 'default'; value: T }
+  | { kind: 'not-found'; message: string };
+
+/**
  * Run `fn` with a short-lived ScrumStore. Returns:
  *   - `fn(store)` when the db file exists
- *   - `emptyDefault` when the db file is absent (read-only fallback)
+ *   - the `orElse` fallback when the db file is absent
  *   - the Fastify `reply` (already 500'd) when opening throws — the caller
  *     forwards this verbatim so Fastify doesn't double-serialize
  */
 function withStore<T>(
   repoRoot: string,
   reply: FastifyReply,
-  emptyDefault: T,
+  orElse: StoreOrElse<T>,
   fn: (store: ScrumStore) => T | FastifyReply,
 ): T | FastifyReply {
   let store: ScrumStore | null;
@@ -73,32 +82,11 @@ function withStore<T>(
   } catch {
     return reply.code(500).send({ error: 'scrum store unavailable' });
   }
-  if (store === null) return emptyDefault;
-  try {
-    return fn(store);
-  } finally {
-    store.close();
+  if (store === null) {
+    return orElse.kind === 'default'
+      ? orElse.value
+      : reply.code(404).send({ error: orElse.message });
   }
-}
-
-/**
- * Variant for routes whose db-absent fallback is a 404 — the message becomes
- * the body. Saves repeating `reply.code(404).send(...)` at call sites and
- * keeps the eager-evaluation footgun of passing it as an arg out of reach.
- */
-function withStoreOr404<T>(
-  repoRoot: string,
-  reply: FastifyReply,
-  notFoundMessage: string,
-  fn: (store: ScrumStore) => T | FastifyReply,
-): T | FastifyReply {
-  let store: ScrumStore | null;
-  try {
-    store = openStoreIfExists(repoRoot);
-  } catch {
-    return reply.code(500).send({ error: 'scrum store unavailable' });
-  }
-  if (store === null) return reply.code(404).send({ error: notFoundMessage });
   try {
     return fn(store);
   } finally {
@@ -116,26 +104,31 @@ export function registerScrumRoutes(app: FastifyInstance, repoRoot: string) {
     Querystring: { status?: string; milestone?: string; tag?: string };
   }>('/api/scrum/tasks', async (req, reply) => {
     const { status, milestone, tag } = req.query;
-    return withStore<{ tasks: ScrumTask[] }>(repoRoot, reply, { tasks: [] }, (store) => {
-      let tasks: ScrumTask[];
-      if (tag) {
-        tasks = store.listTasksForTag(tag);
-        if (status) tasks = tasks.filter((t) => t.status === (status as TaskStatus));
-        if (milestone) tasks = tasks.filter((t) => t.milestone_id === milestone);
-      } else {
-        tasks = store.listTasks({
-          status: status as TaskStatus | undefined,
-          milestoneId: milestone,
-        });
-      }
-      return { tasks };
-    });
+    return withStore<{ tasks: ScrumTask[] }>(
+      repoRoot,
+      reply,
+      { kind: 'default', value: { tasks: [] } },
+      (store) => {
+        let tasks: ScrumTask[];
+        if (tag) {
+          tasks = store.listTasksForTag(tag);
+          if (status) tasks = tasks.filter((t) => t.status === (status as TaskStatus));
+          if (milestone) tasks = tasks.filter((t) => t.milestone_id === milestone);
+        } else {
+          tasks = store.listTasks({
+            status: status as TaskStatus | undefined,
+            milestoneId: milestone,
+          });
+        }
+        return { tasks };
+      },
+    );
   });
 
   // Task detail + embedded timeline + linked runs + linked decisions.
   app.get<{ Params: { id: string } }>('/api/scrum/tasks/:id', async (req, reply) => {
     const { id } = req.params;
-    return withStoreOr404(repoRoot, reply, 'task not found', (store) =>
+    return withStore(repoRoot, reply, { kind: 'not-found', message: 'task not found' }, (store) =>
       buildTaskDetail(store, id, reply),
     );
   });
@@ -143,7 +136,7 @@ export function registerScrumRoutes(app: FastifyInstance, repoRoot: string) {
   // Event timeline for one task.
   app.get<{ Params: { id: string } }>('/api/scrum/tasks/:id/events', async (req, reply) => {
     const { id } = req.params;
-    return withStoreOr404(repoRoot, reply, 'task not found', (store) =>
+    return withStore(repoRoot, reply, { kind: 'not-found', message: 'task not found' }, (store) =>
       buildTaskEvents(store, id, reply),
     );
   });
@@ -154,7 +147,7 @@ export function registerScrumRoutes(app: FastifyInstance, repoRoot: string) {
     return withStore<{ milestones: ScrumMilestone[] }>(
       repoRoot,
       reply,
-      { milestones: [] },
+      { kind: 'default', value: { milestones: [] } },
       (store) => ({
         milestones: store.listMilestones(status as MilestoneStatus | undefined),
       }),
@@ -164,8 +157,11 @@ export function registerScrumRoutes(app: FastifyInstance, repoRoot: string) {
   // Milestone rollup: tasks belonging to milestone + status counts.
   app.get<{ Params: { id: string } }>('/api/scrum/milestones/:id', async (req, reply) => {
     const { id } = req.params;
-    return withStoreOr404(repoRoot, reply, 'milestone not found', (store) =>
-      buildMilestoneRollup(store, id, reply),
+    return withStore(
+      repoRoot,
+      reply,
+      { kind: 'not-found', message: 'milestone not found' },
+      (store) => buildMilestoneRollup(store, id, reply),
     );
   });
 
@@ -174,7 +170,10 @@ export function registerScrumRoutes(app: FastifyInstance, repoRoot: string) {
     return withStore(
       repoRoot,
       reply,
-      { stalled_wip: [], broken_deps: [], missing_context: [], orphaned_runs: [] },
+      {
+        kind: 'default',
+        value: { stalled_wip: [], broken_deps: [], missing_context: [], orphaned_runs: [] },
+      },
       (store) => buildAlerts(store),
     );
   });
@@ -184,20 +183,28 @@ export function registerScrumRoutes(app: FastifyInstance, repoRoot: string) {
     '/api/scrum/context-bundles/:task_id',
     async (req, reply) => {
       const { task_id: taskId } = req.params;
-      return withStoreOr404(repoRoot, reply, 'context bundle not found', (store) => {
-        const bundle = store.loadContextBundle(taskId);
-        if (!bundle) return reply.code(404).send({ error: 'context bundle not found' });
-        return bundle;
-      });
+      return withStore(
+        repoRoot,
+        reply,
+        { kind: 'not-found', message: 'context bundle not found' },
+        (store) => {
+          const bundle = store.loadContextBundle(taskId);
+          if (!bundle) return reply.code(404).send({ error: 'context bundle not found' });
+          return bundle;
+        },
+      );
     },
   );
 
   // Cross-task recent event feed for the Now-view.
   app.get<{ Querystring: { limit?: string } }>('/api/scrum/events/recent', async (req, reply) => {
     const limit = parseLimit(req.query.limit, RECENT_EVENTS_DEFAULT_LIMIT);
-    return withStore<{ events: ScrumEvent[] }>(repoRoot, reply, { events: [] }, (store) => ({
-      events: store.listRecentEvents(limit),
-    }));
+    return withStore<{ events: ScrumEvent[] }>(
+      repoRoot,
+      reply,
+      { kind: 'default', value: { events: [] } },
+      (store) => ({ events: store.listRecentEvents(limit) }),
+    );
   });
 }
 
@@ -241,11 +248,14 @@ interface AlertsPayload {
 }
 
 function buildAlerts(store: ScrumStore): AlertsPayload {
-  const inProgress = store.listTasks({ status: 'in_progress' });
+  // Fetch the full task set once and derive both views in-memory — avoids a
+  // second round-trip through `listTasks` just to filter by status.
+  const allTasks = store.listTasks({});
+  const inProgress = allTasks.filter((t) => t.status === 'in_progress');
+
   const stalledCutoff = Date.now() - STALL_MS;
   const stalledWip = inProgress.filter((t) => isStalled(t, stalledCutoff));
 
-  const allTasks = store.listTasks({});
   const knownIds = new Set(allTasks.map((t) => t.id));
   const brokenDeps = collectBrokenDeps(store, allTasks, knownIds);
 

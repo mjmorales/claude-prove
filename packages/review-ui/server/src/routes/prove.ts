@@ -20,7 +20,7 @@ import { listCommits, showCommit, type Commit } from "../commits.js";
 import { filterReferenced, listDecisions, readDecision } from "../decisions.js";
 import { listStewardReports } from "../steward.js";
 import { readRunSummary } from "../runs.js";
-import { branchesForRun, gitAt, resolveWorktreePath } from "../git.js";
+import { branchesForRun, diffFiles, gitAt, resolveWorktreePath } from "../git.js";
 
 type FileRef = { path: string; ranges: string[] };
 type Annotation = { id: string; type: string; body: string };
@@ -151,12 +151,13 @@ export function registerProveRoutes(app: FastifyInstance, repoRoot: string) {
     const negativeSpace = new Map<string, NegativeSpaceEntry>();
     const openQuestions = new Map<string, OpenQuestion>();
 
+    const runBranchNames = new Set(runBranches.map((b) => b.name));
     for (const [sha, commit] of commitByHead) {
       const m = manifestByCommit.get(sha);
       const ref = {
         sha,
         shortSha: commit.shortSha,
-        branch: m?.branch ?? commit_branch(runBranches, sha) ?? "",
+        branch: m?.branch ?? (await commitBranch(repoRoot, sha, runBranchNames)) ?? "",
         subject: commit.subject,
         timestamp: commit.timestamp,
       };
@@ -464,7 +465,6 @@ async function listChangedPaths(
   cwd?: string,
 ): Promise<string[]> {
   try {
-    const { diffFiles } = await import("../git.js");
     const files = await diffFiles(repoRoot, base, head, cwd);
     return files.map((f) => f.path);
   } catch {
@@ -472,13 +472,26 @@ async function listChangedPaths(
   }
 }
 
-/** Best-effort branch label when the commit has no manifest: first run branch
- *  whose tip is an ancestor of the commit, else empty string. */
-function commit_branch(
-  runBranches: Array<{ name: string }>,
-  _sha: string,
-): string | undefined {
-  // Cheap stand-in: return the first branch name. Caller only uses this when
-  // no manifest exists, so the display is advisory.
-  return runBranches[0]?.name;
+/**
+ * Best-effort branch label for a commit without an intent manifest: returns
+ * the first run branch whose tip contains `sha` (via `git branch --contains`),
+ * restricted to `runBranchNames` so cross-run branches don't leak in. Falls
+ * back to `undefined` on git errors — caller renders an empty label.
+ */
+async function commitBranch(
+  repoRoot: string,
+  sha: string,
+  runBranchNames: Set<string>,
+): Promise<string | undefined> {
+  if (runBranchNames.size === 0) return undefined;
+  try {
+    const raw = await gitAt(repoRoot).raw(["branch", "--contains", sha, "--format=%(refname:short)"]);
+    for (const line of raw.split("\n")) {
+      const name = line.trim();
+      if (name && runBranchNames.has(name)) return name;
+    }
+  } catch {
+    /* ignore — advisory label only */
+  }
+  return undefined;
 }

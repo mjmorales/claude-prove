@@ -4,6 +4,7 @@ import {
   gitAt,
   listAllBranches,
   listWorktrees,
+  resolveBaselineBranch,
   sharesOrchestratorHistory,
 } from "../git.js";
 import { parseRunKey } from "../parsers.js";
@@ -32,11 +33,12 @@ export function registerBranchRoutes(app: FastifyInstance, repoRoot: string) {
           (b.name.startsWith("task/") && !b.name.startsWith(`task/${key.slug}/`))),
     );
     const git = gitAt(repoRoot);
+    const baseline = await resolveBaselineBranch(repoRoot);
     const orphanAgents = hasOrchestrator
       ? (
           await Promise.all(
             candidates.map(async (b) =>
-              (await sharesOrchestratorHistory(git, b.name, orchestratorName)) ? b : null,
+              (await sharesOrchestratorHistory(git, b.name, orchestratorName, baseline)) ? b : null,
             ),
           )
         ).filter((b): b is (typeof candidates)[number] => b !== null)

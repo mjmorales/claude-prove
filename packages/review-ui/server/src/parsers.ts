@@ -172,8 +172,17 @@ export async function readIfExists(p: string): Promise<string | null> {
   }
 }
 
+// Defense-in-depth: isSafeSegment is the primary guard, but we also resolve
+// the final path and require it to live inside `<repoRoot>/.prove/runs/` so a
+// bypass in segment validation cannot escape the runs directory.
 export function runDir(repoRoot: string, branch: string, slug: string): string {
-  return path.join(repoRoot, ".prove/runs", branch, slug);
+  const runsRoot = path.resolve(repoRoot, ".prove/runs");
+  const resolved = path.resolve(runsRoot, branch, slug);
+  const runsRootPrefix = runsRoot + path.sep;
+  if (!resolved.startsWith(runsRootPrefix)) {
+    throw new Error(`runDir: refusing path outside ${runsRoot} (got ${resolved})`);
+  }
+  return resolved;
 }
 
 /** Merge plan.json + state.json into the view the UI consumes. */
@@ -305,6 +314,11 @@ export function parseRunKey(composite: string): RunKey | null {
   return { branch, slug, composite: `${branch}/${slug}` };
 }
 
+// Rejects path-traversal vectors even though the charset regex would match.
+// `..` and `.` pass `^[\w.\-]+$` but resolve to parent/current-dir references
+// once joined into a filesystem path; `/` would split the segment entirely.
 export function isSafeSegment(s: string): boolean {
+  if (s === ".." || s === ".") return false;
+  if (s.includes("/") || s.includes("\\")) return false;
   return /^[\w.\-]+$/.test(s);
 }

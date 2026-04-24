@@ -43,6 +43,11 @@ function resolveWebRoot(): string | null {
 async function main() {
   const repoRoot = await resolveRepoRoot();
   const webRoot = resolveWebRoot();
+  // Read the SPA shell once at startup so the async SPA-fallback handler
+  // below doesn't block Fastify's event loop with `readFileSync` per 404.
+  const indexHtml = webRoot
+    ? fs.readFileSync(path.join(webRoot, "index.html"))
+    : null;
 
   const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
   await app.register(cors, { origin: true });
@@ -67,13 +72,14 @@ async function main() {
       wildcard: false,
     });
     // SPA fallback: any non-API route falls through to index.html so client-side
-    // routing works on deep links and refreshes.
+    // routing works on deep links and refreshes. Uses the cached buffer read
+    // at startup — no sync FS work per 404.
     app.setNotFoundHandler((req, reply) => {
       if (req.url.startsWith("/api/")) {
         reply.code(404).send({ error: "not_found" });
         return;
       }
-      reply.type("text/html").send(fs.readFileSync(path.join(webRoot, "index.html")));
+      reply.type("text/html").send(indexHtml);
     });
   } else {
     app.log.warn("web bundle not found — running API-only. Set WEB_ROOT or build web/dist.");

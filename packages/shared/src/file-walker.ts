@@ -9,6 +9,7 @@
  * `readdirSync`, skipping dot-dirs and `.prove/`.
  */
 
+import { execFileSync } from 'node:child_process';
 import type { Dirent } from 'node:fs';
 import { closeSync, openSync, readSync, readdirSync, statSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
@@ -18,6 +19,14 @@ export const DEFAULT_MAX_FILE_SIZE = 102400;
 
 /** How long to wait on git subprocess invocations before bailing out. */
 const GIT_TIMEOUT_MS = 30_000;
+
+/**
+ * Runtime detection — this module lives in `packages/shared/` and may be
+ * imported by Node-based consumers (e.g. the review-ui server). The git
+ * helpers below prefer `Bun.spawnSync` under Bun and fall back to
+ * `child_process.execFileSync` under Node so behaviour is identical either way.
+ */
+const isBun = typeof (globalThis as { Bun?: unknown }).Bun !== 'undefined';
 
 /** First-chunk size used to sniff for binary content (null byte presence). */
 const BINARY_SNIFF_BYTES = 8192;
@@ -105,23 +114,65 @@ export function _matchesAny(path: string, patterns: string[]): boolean {
 // Subprocess helpers
 // ---------------------------------------------------------------------------
 
-function gitLsFiles(root: string): string[] | null {
-  let proc: ReturnType<typeof Bun.spawnSync>;
+/** Result shape shared between the Bun and Node subprocess paths. */
+interface GitRunResult {
+  exitCode: number;
+  stdout: string;
+}
+
+/**
+ * Run `git <args>` under `cwd` with optional stdin. Returns a normalized
+ * `{exitCode, stdout}` regardless of runtime, or `null` on spawn failure.
+ *
+ * Prefers `Bun.spawnSync` when available (avoids the extra fork); falls back
+ * to Node's `child_process.execFileSync`, which throws on non-zero exits —
+ * we intercept the thrown error object (`{ status, stdout }`) and normalize.
+ */
+function runGit(args: string[], cwd: string, stdin?: string): GitRunResult | null {
+  if (isBun) {
+    const bunGlobal = (globalThis as { Bun: typeof Bun }).Bun;
+    try {
+      const proc = bunGlobal.spawnSync({
+        cmd: ['git', ...args],
+        cwd,
+        ...(stdin !== undefined ? { stdin: new TextEncoder().encode(stdin) } : {}),
+        stdout: 'pipe',
+        stderr: 'pipe',
+        timeout: GIT_TIMEOUT_MS,
+      });
+      return { exitCode: proc.exitCode, stdout: proc.stdout?.toString() ?? '' };
+    } catch {
+      return null;
+    }
+  }
+
+  // Node path: execFileSync throws on non-zero exit; capture status + stdout
+  // from the thrown error object so callers can treat git's "expected
+  // non-zero" exits (e.g. `check-ignore` returning 1) uniformly.
   try {
-    proc = Bun.spawnSync({
-      cmd: ['git', 'ls-files', '--cached', '--others', '--exclude-standard'],
-      cwd: root,
-      stdout: 'pipe',
-      stderr: 'pipe',
+    const stdout = execFileSync('git', args, {
+      cwd,
+      input: stdin,
+      encoding: 'utf8',
       timeout: GIT_TIMEOUT_MS,
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
-  } catch {
+    return { exitCode: 0, stdout };
+  } catch (err) {
+    const e = err as { status?: number; stdout?: Buffer | string };
+    if (typeof e.status === 'number') {
+      const out = typeof e.stdout === 'string' ? e.stdout : (e.stdout?.toString('utf8') ?? '');
+      return { exitCode: e.status, stdout: out };
+    }
     return null;
   }
-  if (proc.exitCode !== 0) return null;
+}
 
-  const stdout = proc.stdout?.toString() ?? '';
-  const files = stdout
+function gitLsFiles(root: string): string[] | null {
+  const proc = runGit(['ls-files', '--cached', '--others', '--exclude-standard'], root);
+  if (proc === null || proc.exitCode !== 0) return null;
+
+  const files = proc.stdout
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.length > 0);
@@ -131,26 +182,13 @@ function gitLsFiles(root: string): string[] | null {
 function gitCheckIgnore(root: string, paths: string[]): Set<string> {
   if (paths.length === 0) return new Set();
 
-  let proc: ReturnType<typeof Bun.spawnSync>;
-  try {
-    proc = Bun.spawnSync({
-      cmd: ['git', 'check-ignore', '--stdin'],
-      cwd: root,
-      stdin: new TextEncoder().encode(paths.join('\n')),
-      stdout: 'pipe',
-      stderr: 'pipe',
-      timeout: GIT_TIMEOUT_MS,
-    });
-  } catch {
-    return new Set();
-  }
-
+  const proc = runGit(['check-ignore', '--stdin'], root, paths.join('\n'));
+  if (proc === null) return new Set();
   // git check-ignore: exit 0 = some ignored, exit 1 = none, other = error.
   if (proc.exitCode !== 0 && proc.exitCode !== 1) return new Set();
 
-  const stdout = proc.stdout?.toString() ?? '';
   const ignored = new Set<string>();
-  for (const line of stdout.split('\n')) {
+  for (const line of proc.stdout.split('\n')) {
     const trimmed = line.trim();
     if (trimmed.length > 0) ignored.add(trimmed);
   }
@@ -189,8 +227,9 @@ function walkDir(root: string, dir: string, out: string[]): void {
 }
 
 function isProveOrConfig(relPath: string): boolean {
+  // `walkProject` normalizes inputs to paths relative to `absRoot`, so a
+  // leading separator never appears here — only the bare-name checks remain.
   if (relPath.startsWith('.prove')) return true;
-  if (relPath.startsWith(`${sep}.prove`)) return true;
   if (relPath === `.claude${sep}.prove.json`) return true;
   return false;
 }
