@@ -27,6 +27,7 @@ import {
   commitSucceeded,
   generateManifestPrompt,
   parseEffectiveCwd,
+  readDevMode,
   runHookPostCommit,
 } from './hook';
 import { ensureAcbSchemaRegistered, openAcbStore } from './store';
@@ -330,8 +331,12 @@ describe('runHookPostCommit — integration with real repo', () => {
     expect(decision.reason).toContain('feature/auth');
     expect(decision.reason).toContain(sha.slice(0, 12));
     expect(decision.reason).toContain(`--workspace-root ${root}`);
-    expect(decision.reason).toContain('bun run');
-    expect(decision.reason).toContain('acb save-manifest');
+    // No `.claude/.prove.json` in this tmp repo -> readDevMode returns false
+    // -> installed-mode emission. Dev-mode emission is covered by a dedicated
+    // golden-fixture test in the `generateManifestPrompt — golden fixtures`
+    // block above.
+    expect(decision.reason).toContain('claude-prove acb save-manifest');
+    expect(decision.reason).not.toContain('bun run');
     expect(decision.reason).not.toContain('PYTHONPATH=');
     rmSync(root, { recursive: true, force: true });
   });
@@ -531,6 +536,11 @@ describe('generateManifestPrompt — golden fixtures', () => {
     pluginDir: '/plugin/root',
     workspaceRoot: '/workspace',
     nowIso: '2026-04-22T12:00:00+00:00',
+    // Golden fixtures were captured when the only invocation shape was
+    // `bun run <pluginDir>/packages/cli/bin/run.ts`. Dev mode preserves
+    // that byte-for-byte; the installed-mode branch (devMode: false) is
+    // exercised by its own test below.
+    devMode: true,
   };
 
   test('Fixture A: feat/x, slug=None, diff present', () => {
@@ -592,6 +602,24 @@ describe('generateManifestPrompt — golden fixtures', () => {
     const py = rewriteInvocation(readFileSync(join(CAPTURES_DIR, 'D.txt'), 'utf8'));
     expect(ts).toBe(py);
   });
+
+  test('devMode: false emits bare `claude-prove acb save-manifest` invocation', () => {
+    const sha = `${'abc'.repeat(13)}def`;
+    const ts = generateManifestPrompt({
+      ...params,
+      devMode: false,
+      branch: 'feat/x',
+      sha,
+      shortSha: sha.slice(0, 12),
+      diffStat: ' src/auth.py | 10 ++++\n 1 file changed',
+      slugClause: '',
+      slugFlag: '',
+    });
+    expect(ts).toContain(
+      `claude-prove acb save-manifest --workspace-root /workspace --branch feat/x --sha ${sha}`,
+    );
+    expect(ts).not.toContain('bun run /plugin/root/packages/cli/bin/run.ts');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -608,5 +636,85 @@ describe('ClaudeCodeHookPayload shape', () => {
     // No assertion beyond compilation + call not throwing.
     const result = runHookPostCommit({ workspaceRoot: '/tmp/nope', payload });
     expect(typeof result.stdout).toBe('string');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. readDevMode — .claude/.prove.json::dev_mode lookup
+// ---------------------------------------------------------------------------
+
+describe('readDevMode', () => {
+  test('returns false when config file is absent', () => {
+    const root = mkdtempSync(join(tmpdir(), 'acb-devmode-absent-'));
+    try {
+      expect(readDevMode(root)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('returns true when dev_mode is explicitly true', () => {
+    const root = mkdtempSync(join(tmpdir(), 'acb-devmode-true-'));
+    try {
+      mkdirSync(join(root, '.claude'), { recursive: true });
+      writeFileSync(
+        join(root, '.claude', '.prove.json'),
+        JSON.stringify({ schema_version: '6', dev_mode: true }),
+      );
+      expect(readDevMode(root)).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('returns false when dev_mode is explicitly false', () => {
+    const root = mkdtempSync(join(tmpdir(), 'acb-devmode-false-'));
+    try {
+      mkdirSync(join(root, '.claude'), { recursive: true });
+      writeFileSync(
+        join(root, '.claude', '.prove.json'),
+        JSON.stringify({ schema_version: '6', dev_mode: false }),
+      );
+      expect(readDevMode(root)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('returns false when dev_mode key is missing', () => {
+    const root = mkdtempSync(join(tmpdir(), 'acb-devmode-missing-'));
+    try {
+      mkdirSync(join(root, '.claude'), { recursive: true });
+      writeFileSync(join(root, '.claude', '.prove.json'), JSON.stringify({ schema_version: '6' }));
+      expect(readDevMode(root)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('returns false when the file is malformed JSON', () => {
+    const root = mkdtempSync(join(tmpdir(), 'acb-devmode-bad-'));
+    try {
+      mkdirSync(join(root, '.claude'), { recursive: true });
+      writeFileSync(join(root, '.claude', '.prove.json'), '{ not valid json');
+      expect(readDevMode(root)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('returns false when dev_mode is a non-boolean truthy value', () => {
+    const root = mkdtempSync(join(tmpdir(), 'acb-devmode-truthy-'));
+    try {
+      mkdirSync(join(root, '.claude'), { recursive: true });
+      writeFileSync(
+        join(root, '.claude', '.prove.json'),
+        JSON.stringify({ schema_version: '6', dev_mode: 'true' }),
+      );
+      // Strict boolean check — only literal `true` counts.
+      expect(readDevMode(root)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

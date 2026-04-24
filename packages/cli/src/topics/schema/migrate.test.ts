@@ -442,11 +442,12 @@ describe('TestV3ToV4', () => {
       scope: 'user',
       config: {},
     });
-    // v3->v4 emits only the schema_version bump; v4->v5 emits schema_version + tools.scrum.
-    const nonV3V4Changes = changes.filter(
-      (c) => !(c.path === 'schema_version' || c.path === 'tools.scrum'),
-    );
-    expect(nonV3V4Changes).toEqual([]);
+    // v5 -> v6 seeds dev_mode: false at the top level.
+    expect(target.dev_mode).toBe(false);
+    // Only chain-bump + seeded-entry changes should appear — no other v3 mutations.
+    const allowedPaths = new Set(['schema_version', 'tools.scrum', 'dev_mode']);
+    const nonChainChanges = changes.filter((c) => !allowedPaths.has(c.path));
+    expect(nonChainChanges).toEqual([]);
   });
 });
 
@@ -455,7 +456,7 @@ describe('TestV4ToV5', () => {
     const config = { schema_version: '4', tools: {} };
     const [target, changes] = planMigration(config);
 
-    expect(target.schema_version).toBe('5');
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     const tools = target.tools as Record<string, unknown>;
     expect(tools.scrum).toEqual({
       enabled: true,
@@ -473,15 +474,15 @@ describe('TestV4ToV5', () => {
     };
     const [target, changes] = planMigration(config);
 
-    expect(target.schema_version).toBe('5');
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     const tools = target.tools as Record<string, unknown>;
     // Existing scrum block is preserved byte-for-byte.
     expect(tools.scrum).toEqual(existing);
     // No add-change for tools.scrum when it already existed.
     expect(changes.some((c) => c.path === 'tools.scrum')).toBe(false);
-    // Only schema_version bump change is emitted.
+    // The only non-version-bump change from the chain is v5 -> v6's dev_mode add.
     const nonVersionChanges = changes.filter((c) => c.path !== 'schema_version');
-    expect(nonVersionChanges).toEqual([]);
+    expect(nonVersionChanges.map((c) => c.path)).toEqual(['dev_mode']);
   });
 
   test('v4 to v5 preserves acb/pcd/cafi/run_state entries', () => {
@@ -504,7 +505,7 @@ describe('TestV4ToV5', () => {
     };
     const [target] = planMigration(config);
 
-    expect(target.schema_version).toBe('5');
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     const tools = target.tools as Record<string, Record<string, unknown>>;
     expect(tools.pcd).toEqual({ enabled: true });
     expect(tools.acb).toEqual({
@@ -525,20 +526,22 @@ describe('TestV4ToV5', () => {
     });
   });
 
-  test('v4 to v5 bumps version only when no other changes apply', () => {
+  test('v4 to v5 bumps version only when no other v4-hop changes apply', () => {
     const config = {
       schema_version: '4',
       tools: { scrum: { enabled: true, scope: 'user', config: {} } },
     };
     const [target, changes] = planMigration(config);
 
-    expect(target.schema_version).toBe('5');
-    // Only a version-bump change — no tools.scrum add, no other mutations.
-    expect(changes.length).toBe(1);
-    expect(changes[0]?.action).toBe('change');
-    expect(changes[0]?.path).toBe('schema_version');
-    // Keys outside schema_version and tools are untouched.
-    const keys = Object.keys(target).filter((k) => k !== 'schema_version' && k !== 'tools');
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    // Changes reflect both v4->v5 (version bump only, scrum already correct) and
+    // v5->v6 (version bump + dev_mode add). No tools.scrum mutation.
+    const paths = changes.map((c) => c.path);
+    expect(paths).toEqual(['schema_version', 'schema_version', 'dev_mode']);
+    // Keys outside schema_version/tools/dev_mode untouched.
+    const keys = Object.keys(target).filter(
+      (k) => k !== 'schema_version' && k !== 'tools' && k !== 'dev_mode',
+    );
     const origKeys = Object.keys(config).filter((k) => k !== 'schema_version' && k !== 'tools');
     expect(keys).toEqual(origKeys);
   });
@@ -547,15 +550,65 @@ describe('TestV4ToV5', () => {
     const config = { schema_version: '4' };
     const [target] = planMigration(config);
 
-    expect(target.schema_version).toBe('5');
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     expect(target.tools).toEqual({
       scrum: { enabled: true, scope: 'user', config: {} },
     });
   });
 });
 
+describe('TestV5ToV6', () => {
+  test('v5 to v6 adds dev_mode: false when absent', () => {
+    const config = { schema_version: '5' };
+    const [target, changes] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect(target.dev_mode).toBe(false);
+    expect(changes.some((c) => c.path === 'dev_mode' && c.action === 'add')).toBe(true);
+  });
+
+  test('v5 to v6 preserves explicit dev_mode: true (idempotent)', () => {
+    const config = { schema_version: '5', dev_mode: true };
+    const [target, changes] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect(target.dev_mode).toBe(true);
+    // No add-change for dev_mode when it already existed.
+    expect(changes.some((c) => c.path === 'dev_mode')).toBe(false);
+    // Only the schema_version bump change is emitted.
+    const nonVersionChanges = changes.filter((c) => c.path !== 'schema_version');
+    expect(nonVersionChanges).toEqual([]);
+  });
+
+  test('v5 to v6 preserves explicit dev_mode: false (idempotent)', () => {
+    const config = { schema_version: '5', dev_mode: false };
+    const [target, changes] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect(target.dev_mode).toBe(false);
+    expect(changes.some((c) => c.path === 'dev_mode')).toBe(false);
+  });
+
+  test('v5 to v6 preserves all other top-level keys byte-for-byte', () => {
+    const config = {
+      schema_version: '5',
+      scopes: { plugin: '.' },
+      validators: [{ name: 'lint', command: 'go vet ./...', phase: 'lint' }],
+      claude_md: { references: [{ path: 'refs/a.md', label: 'A' }] },
+      tools: { scrum: { enabled: true, scope: 'user', config: {} } },
+    };
+    const [target] = planMigration(config);
+
+    expect(target.scopes).toEqual({ plugin: '.' });
+    expect(target.validators).toEqual([{ name: 'lint', command: 'go vet ./...', phase: 'lint' }]);
+    expect(target.claude_md).toEqual({ references: [{ path: 'refs/a.md', label: 'A' }] });
+    expect(target.tools).toEqual({ scrum: { enabled: true, scope: 'user', config: {} } });
+    expect(target.dev_mode).toBe(false);
+  });
+});
+
 describe('TestFullChain', () => {
-  test('full v0 to v5 chain applies all hops in order', () => {
+  test('full v0 to current chain applies all hops in order', () => {
     const config = {
       validators: [{ name: 'lint', command: 'ruff', stage: 'lint' }],
       scopes: { plugin: '.', tools: 'tools/' },
@@ -565,7 +618,7 @@ describe('TestFullChain', () => {
     const [target, changes] = planMigration(config);
 
     // Final schema_version.
-    expect(target.schema_version).toBe('5');
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
 
     // Ordered hop signatures — each hop emits at least one change whose
     // path or description identifies it.
@@ -575,12 +628,14 @@ describe('TestFullChain', () => {
     const idxIndex = changeText.findIndex((s) => s.includes('moved to tools.cafi.config'));
     const idxScopesTools = changeText.findIndex((s) => s.includes('scopes.tools'));
     const idxScrum = changeText.findIndex((s) => s.includes('tools.scrum'));
+    const idxDevMode = changeText.findIndex((s) => s.includes('dev_mode'));
 
     expect(idxAdd).toBeGreaterThanOrEqual(0);
     expect(idxClaude).toBeGreaterThan(idxAdd);
     expect(idxIndex).toBeGreaterThan(idxClaude);
     expect(idxScopesTools).toBeGreaterThan(idxIndex);
     expect(idxScrum).toBeGreaterThan(idxScopesTools);
+    expect(idxDevMode).toBeGreaterThan(idxScrum);
 
     // v1->v2 renames stage -> phase
     const validators = target.validators as Record<string, unknown>[];
@@ -608,6 +663,9 @@ describe('TestFullChain', () => {
       scope: 'user',
       config: {},
     });
+
+    // v5->v6 seeds dev_mode: false
+    expect(target.dev_mode).toBe(false);
   });
 });
 

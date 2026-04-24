@@ -40,7 +40,7 @@ export interface Schema {
   fields: Record<string, FieldSpec>;
 }
 
-export const CURRENT_SCHEMA_VERSION = '5';
+export const CURRENT_SCHEMA_VERSION = '6';
 
 /**
  * Shape of `tools.scrum` introduced in schema v5. The v4 -> v5 migration
@@ -85,6 +85,18 @@ export const PROVE_SCHEMA: Schema = {
       required: true,
       description: 'Schema version for migration tracking',
       default: CURRENT_SCHEMA_VERSION,
+    },
+    dev_mode: {
+      type: 'bool',
+      required: false,
+      description:
+        'Run prove from the working-tree source instead of the installed ' +
+        '`claude-prove` binary. When true, user-facing codegen (CLAUDE.md, ' +
+        'agent prompts, hook templates) emits `bun run ' +
+        '<pluginDir>/packages/cli/bin/run.ts <topic>`; when false (default), ' +
+        'emits bare `claude-prove <topic>`. Set by plugin developers working ' +
+        'from a git checkout.',
+      default: false,
     },
     scopes: {
       type: 'dict',

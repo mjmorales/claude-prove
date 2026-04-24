@@ -16,10 +16,12 @@ Migration Changes:
   ~ schema_version: "3" -> "4"
   ~ schema_version: "4" -> "5"
   + tools.scrum: added (scrum task management — enabled, scope 'user', empty config)
+  ~ schema_version: "5" -> "6"
+  + dev_mode: added (false — installed-binary mode; flip to true when running from a plugin git checkout)
 
 Target config after migration:
 {
-  "schema_version": "5",
+  "schema_version": "6",
   "validators": [
     {
       "name": "lint",
@@ -47,5 +49,6 @@ Target config after migration:
       "scope": "user",
       "config": {}
     }
-  }
+  },
+  "dev_mode": false
 }

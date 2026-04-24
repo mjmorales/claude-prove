@@ -1,6 +1,8 @@
-Migration plan for <FIXTURE_PATH> (v2 -> v5):
+Migration plan for <FIXTURE_PATH> (v2 -> v6):
   ~ schema_version: "2" -> "3"
   ~ index: moved to tools.cafi.config
   ~ schema_version: "3" -> "4"
   ~ schema_version: "4" -> "5"
   + tools.scrum: added (scrum task management — enabled, scope 'user', empty config)
+  ~ schema_version: "5" -> "6"
+  + dev_mode: added (false — installed-binary mode; flip to true when running from a plugin git checkout)

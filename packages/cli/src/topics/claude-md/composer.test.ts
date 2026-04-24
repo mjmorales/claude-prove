@@ -46,6 +46,7 @@ function fullScan(): ScanResult {
       has_index: true,
       references: [],
       tool_directives: [],
+      dev_mode: false,
     },
     cafi: { available: true, file_count: 50 },
     core_commands: [
@@ -69,6 +70,7 @@ function minimalScan(): ScanResult {
       has_index: false,
       references: [],
       tool_directives: [],
+      dev_mode: false,
     },
     cafi: { available: false, file_count: 0 },
     core_commands: [],
@@ -133,6 +135,23 @@ describe('compose', () => {
     expect(r).toContain('## Discovery Protocol');
     expect(r).toContain('file index');
     expect(r).toContain('lookup');
+  });
+
+  test('installed mode (dev_mode: false) emits bare claude-prove in discovery + version check', () => {
+    const r = compose(fullScan(), '/opt/prove');
+    expect(r).toContain('`claude-prove cafi context`');
+    expect(r).toContain('`claude-prove cafi lookup <keyword>`');
+    expect(r).toContain('`claude-prove --version`');
+    expect(r).not.toContain('bun run /opt/prove');
+  });
+
+  test('dev mode (dev_mode: true) emits bun-run prefix with pluginDir in discovery + version check', () => {
+    const scan = fullScan();
+    scan.prove_config.dev_mode = true;
+    const r = compose(scan, '/opt/prove');
+    expect(r).toContain('`bun run /opt/prove/packages/cli/bin/run.ts cafi context`');
+    expect(r).toContain('`bun run /opt/prove/packages/cli/bin/run.ts cafi lookup <keyword>`');
+    expect(r).toContain('`bun run /opt/prove/packages/cli/bin/run.ts --version`');
   });
 
   test('includes Prove Commands from core_commands', () => {
@@ -323,6 +342,21 @@ describe('composeSubagentContext', () => {
     const r = composeSubagentContext(fullScan());
     expect(r).toContain('**Discovery**');
     expect(r).toContain('context');
+  });
+
+  test('installed mode emits bare claude-prove', () => {
+    const r = composeSubagentContext(fullScan(), '/opt/prove');
+    expect(r).toContain('`claude-prove cafi context`');
+    expect(r).toContain('`claude-prove cafi get <path>`');
+    expect(r).not.toContain('bun run');
+  });
+
+  test('dev mode emits bun-run prefix', () => {
+    const scan = fullScan();
+    scan.prove_config.dev_mode = true;
+    const r = composeSubagentContext(scan, '/opt/prove');
+    expect(r).toContain('`bun run /opt/prove/packages/cli/bin/run.ts cafi context`');
+    expect(r).toContain('`bun run /opt/prove/packages/cli/bin/run.ts cafi get <path>`');
   });
 
   test('includes validation', () => {

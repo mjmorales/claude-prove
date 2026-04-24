@@ -26,7 +26,7 @@
  *     JSON on stdout as the block signal; exit is not the channel.
  */
 
-import { statSync } from 'node:fs';
+import { readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join, normalize } from 'node:path';
 import { resolvePluginRoot } from '@claude-prove/installer';
 import { currentBranch, headSha, resolveRunSlug } from '@claude-prove/shared';
@@ -70,6 +70,15 @@ export interface ManifestPromptParams {
   pluginDir: string;
   workspaceRoot: string;
   nowIso: string;
+  /**
+   * When true, the emitted save-manifest invocation uses
+   * `bun run ${pluginDir}/packages/cli/bin/run.ts` so plugin developers
+   * running from a git checkout execute the working-tree code. When false
+   * (default for installed users), emits bare `claude-prove` and relies on
+   * the CLI being on PATH. Sourced from `<workspaceRoot>/.claude/.prove.json`'s
+   * top-level `dev_mode` field via `readDevMode`.
+   */
+  devMode: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -149,6 +158,7 @@ export function runHookPostCommit(opts: {
   const diffStat = headDiffStat(sha, cwd);
   const pluginDir = resolvePluginRoot();
   const nowIso = isoSeconds();
+  const devMode = readDevMode(workspaceRoot);
 
   const reason = generateManifestPrompt({
     branch,
@@ -160,6 +170,7 @@ export function runHookPostCommit(opts: {
     pluginDir,
     workspaceRoot,
     nowIso,
+    devMode,
   });
 
   return block(reason);
@@ -244,16 +255,26 @@ export function generateManifestPrompt(params: ManifestPromptParams): string {
     pluginDir,
     workspaceRoot,
     nowIso,
+    devMode,
   } = params;
 
-  // Exact template from tools/acb/hook.py lines 167-205. Every
+  // The save-manifest invocation prefix branches on the project's
+  // `.claude/.prove.json::dev_mode`. Installed users (default) get the bare
+  // `claude-prove` on PATH; plugin developers running from a git checkout
+  // get the full `bun run <pluginDir>/...` form so the template resolves
+  // against the working-tree entry point.
+  const invocation = devMode
+    ? `bun run ${pluginDir}/packages/cli/bin/run.ts acb`
+    : 'claude-prove acb';
+
+  // Exact template body from tools/acb/hook.py lines 167-205. Every
   // character outside substitutions — including the em-dashes, the
   // `∈` glyph, and the closing sentence — must stay byte-equal so
   // golden-fixture parity holds.
   return `ACTION REQUIRED — commit ${shortSha} on \`${branch}\`${slugClause} has no intent manifest. Your next tool call MUST be this exact Bash invocation (no variations, no prefix commands):
 
 \`\`\`bash
-bun run ${pluginDir}/packages/cli/bin/run.ts acb save-manifest --workspace-root ${workspaceRoot} --branch ${branch} --sha ${sha}${slugFlag} <<'MANIFEST'
+${invocation} save-manifest --workspace-root ${workspaceRoot} --branch ${branch} --sha ${sha}${slugFlag} <<'MANIFEST'
 {
   "acb_manifest_version": "0.2",
   "commit_sha": "${sha}",
@@ -348,6 +369,26 @@ function orchestratorSlugGuardReason(branch: string): string {
 function isDir(path: string): boolean {
   try {
     return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Read `.claude/.prove.json::dev_mode` under `workspaceRoot`. Returns `false`
+ * when the file is absent, unparseable, or when `dev_mode` is missing/not a
+ * boolean — installed-binary mode is the default.
+ *
+ * The hook reads this at fire time (no scan cache) because the manifest
+ * prompt must reflect the live config — users may flip dev_mode mid-session
+ * when switching between a dev checkout and an installed binary.
+ */
+export function readDevMode(workspaceRoot: string): boolean {
+  const configPath = join(workspaceRoot, '.claude', '.prove.json');
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(configPath, 'utf8'));
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
+    return (parsed as Record<string, unknown>).dev_mode === true;
   } catch {
     return false;
   }

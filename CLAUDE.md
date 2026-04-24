@@ -1,8 +1,8 @@
 <!-- prove:managed:start -->
 # claude-prove
 
-<!-- prove:plugin-version:2.5.0 -->
-**Prove plugin v2.5.0** — if `claude-prove --version` does not match v2.5.0, run `/prove:update` to sync.
+<!-- prove:plugin-version:2.6.0 -->
+**Prove plugin v2.6.0** — if `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts --version` does not match v2.6.0, run `/prove:update` to sync.
 
 JavaScript/TypeScript (npm)
 
@@ -95,6 +95,6 @@ When adding/removing/renaming `PROVE_SCHEMA` fields:
 
 ## CLI Invocation in User-Facing Output
 
-- **Always** invoke the CLI as `claude-prove <topic> <args>` in all user-facing markdown, generated CLAUDE.md content, docs, and codegen output. Assume `claude-prove` is on `PATH`.
-- **Never** emit `bun run` prefixes or absolute paths (e.g., `bun run /path/to/packages/cli/bin/run.ts`) in user-facing output; instead, emit the bare `claude-prove` command.
-- **Never** thread `pluginDir` (or equivalent path args) through codegen functions that render user-facing strings; instead, drop the parameter and render path-free commands.
+- **Hand-written markdown** (agent defs, commands, skills, references, docs): always invoke as bare `claude-prove <topic> <args>`. Assume the CLI is on `PATH`. Never emit `bun run` prefixes or absolute paths; instead, emit the bare command.
+- **Codegen output** (composer.ts renderers, ACB hook template, etc.): route the invocation prefix through `.claude/.prove.json::dev_mode`. Installed-binary mode (`dev_mode: false`, the default) emits bare `claude-prove`; plugin-developer mode (`dev_mode: true`) emits `bun run ${pluginDir}/packages/cli/bin/run.ts`. Use a single `cliPrefix`/`devMode` argument threaded through renderers — not ad-hoc `pluginDir` string concatenation.
+- **Runtime agent prompts** (Claude Code hook `decision: block` payloads): read `dev_mode` at fire time (e.g., `readDevMode(workspaceRoot)` in `acb/hook.ts`) so the emitted command resolves correctly on the user's machine regardless of install shape.

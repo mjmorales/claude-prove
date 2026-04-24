@@ -54,7 +54,8 @@
         "label": "Prompt Engineering Guide"
       }
     ],
-    "tool_directives": []
+    "tool_directives": [],
+    "dev_mode": true
   },
   "cafi": {
     "available": false,

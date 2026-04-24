@@ -186,7 +186,7 @@ describe('claude-md — golden parity (direct API)', () => {
       const root = fixture.buildRoot();
       cleanup(root);
       const scan = scanProject(root, PLUGIN_ROOT);
-      const actual = composeSubagentContext(scan);
+      const actual = composeSubagentContext(scan, PLUGIN_ROOT);
       expectGoldenEqual(actual, `${fixture.name}-subagent-context.md`);
     });
   }

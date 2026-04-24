@@ -29,7 +29,8 @@
     "validators": [],
     "has_index": false,
     "references": [],
-    "tool_directives": []
+    "tool_directives": [],
+    "dev_mode": false
   },
   "cafi": {
     "available": false,

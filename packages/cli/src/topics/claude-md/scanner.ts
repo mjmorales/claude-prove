@@ -52,6 +52,13 @@ export interface ProveConfigSummary {
   has_index: boolean;
   references: ReferenceEntry[];
   tool_directives: ToolDirective[];
+  /**
+   * When true, user-facing codegen emits `bun run
+   * <pluginDir>/packages/cli/bin/run.ts <topic>` instead of bare
+   * `claude-prove <topic>`. Set by plugin developers running from a git
+   * checkout. Defaults to false for installed-binary users.
+   */
+  dev_mode: boolean;
 }
 
 export interface CafiSummary {
@@ -514,6 +521,7 @@ const EMPTY_PROVE_CONFIG: ProveConfigSummary = {
   has_index: false,
   references: [],
   tool_directives: [],
+  dev_mode: false,
 };
 
 export function scanProveConfig(root: string, pluginDir: string | undefined): ProveConfigSummary {
@@ -557,6 +565,7 @@ export function scanProveConfig(root: string, pluginDir: string | undefined): Pr
       })
       .filter((r) => r.path.length > 0),
     tool_directives: toolDirectives,
+    dev_mode: data.dev_mode === true,
   };
 }
 

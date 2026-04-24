@@ -1,5 +1,5 @@
 {
-  "schema_version": "5",
+  "schema_version": "6",
   "scopes": {
     "agents": "agents/",
     "cache": "cache/",
@@ -66,5 +66,6 @@
       "scope": "user",
       "config": {}
     }
-  }
+  },
+  "dev_mode": true
 }

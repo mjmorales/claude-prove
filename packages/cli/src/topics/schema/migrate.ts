@@ -250,12 +250,44 @@ function migrateV4ToV5(config: ProveConfig): [ProveConfig, MigrationChange[]] {
  * Migration registry. Keys are `"<from>_to_<to>"` strings; `planMigration`
  * walks them sequentially from the detected version to CURRENT_SCHEMA_VERSION.
  */
+/**
+ * v5 -> v6: bump schema_version and seed top-level `dev_mode: false` when
+ * absent. Idempotent — if `dev_mode` already exists, it is preserved and
+ * only the version bump change is emitted.
+ *
+ * Hardcodes target version '6'. Do NOT reference CURRENT_SCHEMA_VERSION —
+ * migrations are frozen-in-time; later version bumps must not retroactively
+ * change what this migration does.
+ */
+function migrateV5ToV6(config: ProveConfig): [ProveConfig, MigrationChange[]] {
+  const changes: MigrationChange[] = [];
+  const result: ProveConfig = { ...config };
+
+  result.schema_version = '6';
+  changes.push(new MigrationChange('change', 'schema_version', '"5" -> "6"'));
+
+  if (!('dev_mode' in result)) {
+    result.dev_mode = false;
+    changes.push(
+      new MigrationChange(
+        'add',
+        'dev_mode',
+        'added (false — installed-binary mode; flip to true when running from a plugin git checkout)',
+        false,
+      ),
+    );
+  }
+
+  return [result, changes];
+}
+
 export const MIGRATIONS: Record<string, MigrationFn> = {
   '0_to_1': migrateV0ToV1,
   '1_to_2': migrateV1ToV2,
   '2_to_3': migrateV2ToV3,
   '3_to_4': migrateV3ToV4,
   '4_to_5': migrateV4ToV5,
+  '5_to_6': migrateV5ToV6,
 };
 
 /**

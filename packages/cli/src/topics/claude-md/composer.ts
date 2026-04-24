@@ -44,6 +44,8 @@ export const PLUGIN_DEFAULT_REFERENCES: ReadonlyArray<ReferenceEntry> = [
  */
 export function compose(scan: ScanResult, pluginDir?: string): string {
   const resolvedPluginDir = pluginDir ?? scan.plugin_dir ?? '';
+  const prove = scan.prove_config;
+  const prefix = cliPrefix(prove.dev_mode, resolvedPluginDir);
 
   const parts: string[] = [];
 
@@ -52,9 +54,8 @@ export function compose(scan: ScanResult, pluginDir?: string): string {
 
   // Plugin version check (always, if prove is configured)
   const pluginVersion = scan.plugin_version ?? 'unknown';
-  const prove = scan.prove_config;
   if (prove.exists && pluginVersion !== 'unknown') {
-    parts.push(renderVersionCheck(pluginVersion));
+    parts.push(renderVersionCheck(pluginVersion, prefix));
   }
 
   // Always include: tech-stack identity line
@@ -77,7 +78,7 @@ export function compose(scan: ScanResult, pluginDir?: string): string {
 
   // Discovery (if CAFI is available)
   if (scan.cafi.available || prove.has_index) {
-    parts.push(renderDiscovery());
+    parts.push(renderDiscovery(prefix));
   }
 
   // Tool directives (from enabled tools)
@@ -103,8 +104,16 @@ export function compose(scan: ScanResult, pluginDir?: string): string {
 /**
  * Compose a compact discovery context block for injection into subagent prompts.
  * Subset of the full CLAUDE.md focused on discovery + validation.
+ *
+ * `pluginDir` is only consulted when `scan.prove_config.dev_mode` is true —
+ * plugin developers running from a git checkout need the full
+ * `bun run <pluginDir>/...` invocation prefix. Installed users get bare
+ * `claude-prove`.
  */
-export function composeSubagentContext(scan: ScanResult): string {
+export function composeSubagentContext(scan: ScanResult, pluginDir?: string): string {
+  const resolvedPluginDir = pluginDir ?? scan.plugin_dir ?? '';
+  const prefix = cliPrefix(scan.prove_config.dev_mode, resolvedPluginDir);
+
   const parts: string[] = [];
   parts.push('## Project Context');
   parts.push('');
@@ -115,8 +124,8 @@ export function composeSubagentContext(scan: ScanResult): string {
   if (scan.cafi.available) {
     parts.push('');
     parts.push('**Discovery**: Before broad Glob/Grep searches, check the file index:');
-    parts.push('- `claude-prove cafi context` — full index with routing hints');
-    parts.push('- `claude-prove cafi get <path>` — single file description');
+    parts.push(`- \`${prefix} cafi context\` — full index with routing hints`);
+    parts.push(`- \`${prefix} cafi get <path>\` — single file description`);
   }
 
   const validators = scan.prove_config.validators;
@@ -141,10 +150,10 @@ function renderHeader(scan: ScanResult): string {
   return `# ${name}\n`;
 }
 
-function renderVersionCheck(pluginVersion: string): string {
+function renderVersionCheck(pluginVersion: string, prefix: string): string {
   const lines = [
     `<!-- prove:plugin-version:${pluginVersion} -->`,
-    `**Prove plugin v${pluginVersion}** — if \`claude-prove --version\` does not ` +
+    `**Prove plugin v${pluginVersion}** — if \`${prefix} --version\` does not ` +
       `match v${pluginVersion}, run \`/prove:update\` to sync.`,
     '',
   ];
@@ -201,14 +210,14 @@ function renderValidation(scan: ScanResult): string {
   return lines.join('\n');
 }
 
-function renderDiscovery(): string {
+function renderDiscovery(prefix: string): string {
   const lines = [
     '## Discovery Protocol',
     '',
     'Before broad Glob/Grep searches, check the file index first:',
     '',
-    '- `claude-prove cafi context` — full index with routing hints',
-    '- `claude-prove cafi lookup <keyword>` — search by keyword',
+    `- \`${prefix} cafi context\` — full index with routing hints`,
+    `- \`${prefix} cafi lookup <keyword>\` — search by keyword`,
     '',
     "Only fall back to Glob/Grep when the index doesn't cover what you need.",
   ];
@@ -253,6 +262,22 @@ function mergeReferences(proveExists: boolean, userRefs: ReferenceEntry[]): Refe
   const builtInPaths = new Set(PLUGIN_DEFAULT_REFERENCES.map((r) => r.path));
   const deduped = userRefs.filter((r) => !builtInPaths.has(r.path));
   return [...PLUGIN_DEFAULT_REFERENCES, ...deduped];
+}
+
+/**
+ * Derive the CLI invocation prefix for user-facing codegen.
+ *
+ * `devMode` is sourced from `.claude/.prove.json`'s top-level `dev_mode`
+ * field (scanner lifts it into `scan.prove_config.dev_mode`). Plugin
+ * developers running from a git checkout set `dev_mode: true` so all
+ * generated commands resolve against the working-tree entry point;
+ * installed users get the bare binary on PATH.
+ */
+function cliPrefix(devMode: boolean, pluginDir: string): string {
+  if (devMode && pluginDir.length > 0) {
+    return `bun run ${pluginDir}/packages/cli/bin/run.ts`;
+  }
+  return 'claude-prove';
 }
 
 function renderReferences(references: ReferenceEntry[], pluginDir: string): string {

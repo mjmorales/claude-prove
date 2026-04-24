@@ -6,6 +6,39 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v2.7.0 — Schema v6: `dev_mode` flag routes codegen between installed-binary and working-tree invocation
+
+Adds top-level `dev_mode: boolean` to `.claude/.prove.json` (schema v6). The v2.6.1 CLAUDE.md directive told user-facing markdown to always say `claude-prove`, which breaks plugin developers running from a git checkout (where `claude-prove` isn't on PATH). This release restores the dev-mode path through config: installed users (`dev_mode: false`, default) see bare `claude-prove <topic>`; plugin developers (`dev_mode: true`) see `bun run ${pluginDir}/packages/cli/bin/run.ts <topic>`. Routing applies to composer-generated CLAUDE.md sections, `composeSubagentContext`, and the ACB PostToolUse hook's MANIFEST_PROMPT.
+
+**Schema**:
+
+- New top-level field `dev_mode: bool` in `PROVE_SCHEMA` (optional, default `false`).
+- `CURRENT_SCHEMA_VERSION` bumped to `"6"`; migration `5_to_6` seeds `dev_mode: false` when absent and preserves `dev_mode: true` idempotently.
+
+**Codegen** (`packages/cli/src/topics/claude-md/composer.ts`):
+
+- New `cliPrefix(devMode, pluginDir)` helper: returns `'claude-prove'` for installed mode, `\`bun run ${pluginDir}/packages/cli/bin/run.ts\`` for dev mode.
+- `renderDiscovery(prefix)`, `composeSubagentContext(scan, pluginDir)`, and `renderVersionCheck(pluginVersion, prefix)` all take a prefix string. `composeSubagentContext`'s `pluginDir` arg is back (was dropped in v2.6.1) — callers should thread it again.
+- Scanner lifts `data.dev_mode === true` into `scan.prove_config.dev_mode` (defaults to `false`).
+
+**ACB hook** (`packages/cli/src/topics/acb/hook.ts`):
+
+- New `readDevMode(workspaceRoot)` helper reads `<workspaceRoot>/.claude/.prove.json::dev_mode` at fire time (no scan cache — users may flip mid-session).
+- `ManifestPromptParams` gains a required `devMode: boolean`. Dev-mode emits `bun run ${pluginDir}/packages/cli/bin/run.ts acb save-manifest ...`; installed-mode emits `claude-prove acb save-manifest ...`.
+
+**Migration**:
+
+- Run `/prove:update` (or `claude-prove schema migrate --file .claude/.prove.json`) to bump to schema v6 and seed `dev_mode: false`.
+- **Plugin developers (this repo)**: flip the seeded value to `"dev_mode": true` in `.claude/.prove.json`, then re-run `claude-prove claude-md generate --project-root "$(pwd)" --plugin-dir "$(pwd)"` so the managed block of CLAUDE.md uses the working-tree invocation.
+- **Installed users**: no action beyond `/prove:update`. The default (`dev_mode: false`) preserves the v2.6.1 bare-`claude-prove` emission.
+- **Downstream TS consumers**: `composeSubagentContext(scan)` → `composeSubagentContext(scan, pluginDir)` again. `generateManifestPrompt` callers must pass `devMode: boolean`.
+
+**CLAUDE.md directive update**:
+
+- The **CLI Invocation in User-Facing Output** section now distinguishes three layers: hand-written markdown (always `claude-prove`), codegen (route through `dev_mode`), and runtime agent prompts (read `dev_mode` at fire time). Replaces the v2.6.1 "never thread pluginDir" bullet, which overshot once dev mode became config-routed.
+
+---
+
 ## v2.6.1 — User-facing output drops `bun run` + absolute-path hints; `composeSubagentContext` / `renderDiscovery` lose the `pluginDir` param
 
 New CLAUDE.md directive (**CLI Invocation in User-Facing Output**) codifies: agent-facing markdown, generated CLAUDE.md content, docs, and codegen output must invoke the CLI as bare `claude-prove <topic> <args>` — never `bun run <abs-path>/packages/cli/bin/run.ts ...`, never absolute-path pins. Applied across the plugin so the generated output matches the rule.

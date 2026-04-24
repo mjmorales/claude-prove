@@ -97,7 +97,7 @@ export function runSubagentContext(opts: ClaudeMdOpts): number {
   assertNotPluginInstall(projectRoot);
 
   const scan = scanProject(projectRoot, pluginDir);
-  process.stdout.write(composeSubagentContext(scan));
+  process.stdout.write(composeSubagentContext(scan, pluginDir));
   return 0;
 }
 
