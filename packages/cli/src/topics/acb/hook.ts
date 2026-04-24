@@ -8,10 +8,11 @@
  * with a `decision: "block"` JSON response that prompts it to run
  * `prove acb save-manifest` for the real SHA.
  *
- * Behavior is byte-identical to Python EXCEPT one line inside
- * MANIFEST_PROMPT: the save-manifest invocation swaps from
+ * Behavior mirrors Python's `tools/acb/hook.py` with two MANIFEST_PROMPT
+ * edits: the save-manifest invocation swaps from
  * `PYTHONPATH=... python3 -m tools.acb save-manifest ...` to
- * `bun run <plugin>/packages/cli/bin/run.ts acb save-manifest ...`.
+ * `bun run <plugin>/packages/cli/bin/run.ts acb save-manifest ...`, and
+ * the rules block drops the PYTHONPATH mention that no longer applies.
  *
  * Design notes:
  *
@@ -25,10 +26,10 @@
  *     JSON on stdout as the block signal; exit is not the channel.
  */
 
-import { existsSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, join, normalize } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { statSync } from 'node:fs';
+import { isAbsolute, join, normalize } from 'node:path';
 import { currentBranch, headSha, resolveRunSlug } from '@claude-prove/shared';
+import { resolvePluginRoot } from '@claude-prove/installer';
 import { openAcbStore } from './store';
 
 // ---------------------------------------------------------------------------
@@ -146,7 +147,7 @@ export function runHookPostCommit(opts: {
   if (manifestExists(workspaceRoot, sha, runSlug)) return silent();
 
   const diffStat = headDiffStat(sha, cwd);
-  const pluginDir = resolvePluginDir();
+  const pluginDir = resolvePluginRoot();
   const nowIso = isoSeconds();
 
   const reason = generateManifestPrompt({
@@ -227,8 +228,10 @@ export function commitSucceeded(toolResponse: unknown): boolean {
 }
 
 /**
- * Build the MANIFEST_PROMPT body. Byte-identical to Python's `_MANIFEST_PROMPT`
- * except for the single save-manifest invocation line (bun run vs PYTHONPATH).
+ * Build the MANIFEST_PROMPT body. Derived from Python's `_MANIFEST_PROMPT`;
+ * the save-manifest invocation line swaps from `PYTHONPATH=... python3 -m
+ * tools.acb ...` to `bun run ...`, and the rules block no longer mentions
+ * PYTHONPATH because the bun invocation carries no such flag.
  */
 export function generateManifestPrompt(params: ManifestPromptParams): string {
   const {
@@ -272,7 +275,7 @@ bun run ${pluginDir}/packages/cli/bin/run.ts acb save-manifest --workspace-root 
 MANIFEST
 \`\`\`
 
-Rules for filling in \`intent_groups\` (everything else above is fixed — do NOT edit the flags, PYTHONPATH, or JSON keys):
+Rules for filling in \`intent_groups\` (everything else above is fixed — do NOT edit the flags or JSON keys):
 1. One group per logical unit of change. Group related file edits together.
 2. Every file in the diff below MUST appear in at least one group's \`file_refs\`.
 3. \`classification\` ∈ \`explicit\` (user asked for it), \`inferred\` (logically required), \`speculative\` (beyond asked).
@@ -303,7 +306,9 @@ function block(reason: string): HookOutput {
 /**
  * Check the unified store for a manifest keyed to `commitSha`. Errors
  * (missing db, migration failure) coerce to `false` so a store problem never
- * accidentally unblocks a commit.
+ * accidentally unblocks a commit. The catch is warn-logged so infra issues
+ * surface in hook stderr instead of silently forcing every commit into the
+ * block-and-ask-for-manifest path.
  */
 function manifestExists(workspaceRoot: string, commitSha: string, runSlug: string | null): boolean {
   try {
@@ -314,7 +319,8 @@ function manifestExists(workspaceRoot: string, commitSha: string, runSlug: strin
     } finally {
       store.close();
     }
-  } catch {
+  } catch (err) {
+    console.warn('prove acb hook: manifestExists failed, proceeding without manifest:', err);
     return false;
   }
 }
@@ -332,29 +338,6 @@ function headDiffStat(sha: string, cwd: string): string {
   } catch {
     return '';
   }
-}
-
-/**
- * Walk upward from this module's directory looking for the plugin root
- * (directory containing `.claude-plugin/plugin.json`). Falls back to the
- * `packages/` parent if the walk hits the filesystem root.
- */
-function resolvePluginDir(): string {
-  const modulePath = fileURLToPath(import.meta.url);
-  let cur = dirname(modulePath);
-  while (true) {
-    if (existsSync(join(cur, '.claude-plugin', 'plugin.json'))) return cur;
-    const parent = dirname(cur);
-    if (parent === cur) break;
-    cur = parent;
-  }
-  // Fallback: ../../../.. from .../packages/cli/src/topics/acb = plugin root.
-  // This matches the 2-levels-up heuristic when run from a built dist/.
-  process.stderr.write(
-    'acb hook: could not locate .claude-plugin/plugin.json; using heuristic plugin dir\n',
-  );
-  const heuristic = dirname(dirname(dirname(dirname(dirname(modulePath)))));
-  return heuristic;
 }
 
 function orchestratorSlugGuardReason(branch: string): string {

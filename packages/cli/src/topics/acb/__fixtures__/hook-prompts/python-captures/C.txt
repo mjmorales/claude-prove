@@ -23,7 +23,7 @@ PYTHONPATH=/plugin/root python3 -m tools.acb save-manifest --workspace-root /wor
 MANIFEST
 ```
 
-Rules for filling in `intent_groups` (everything else above is fixed — do NOT edit the flags, PYTHONPATH, or JSON keys):
+Rules for filling in `intent_groups` (everything else above is fixed — do NOT edit the flags or JSON keys):
 1. One group per logical unit of change. Group related file edits together.
 2. Every file in the diff below MUST appear in at least one group's `file_refs`.
 3. `classification` ∈ `explicit` (user asked for it), `inferred` (logically required), `speculative` (beyond asked).

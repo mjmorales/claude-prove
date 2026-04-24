@@ -271,6 +271,7 @@ export function collectOpenQuestions(manifests: Record<string, unknown>[]): Open
  * Python's `try/except CalledProcessError` branch.
  */
 export function getDiffFiles(baseRef: string, cwd?: string): string[] {
+  // Bun runtime required (Bun.spawnSync). CLI-only module — no Node fallback.
   let proc: ReturnType<typeof Bun.spawnSync>;
   try {
     proc = Bun.spawnSync({

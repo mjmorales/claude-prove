@@ -79,6 +79,11 @@ export function importLegacyDb(workspaceRoot: string): ImportResult {
 // Per-process memoization for the auto-invoke wrapper. The CLI subcommand
 // (`prove acb migrate-legacy-db`) bypasses this and calls `importLegacyDb`
 // directly so user-triggered runs always re-check state.
+//
+// Test isolation: `MEMO` is module-level process-scoped state and survives
+// across tests within a `bun test` process. Tests that exercise
+// `ensureLegacyImported` must call `resetLegacyImportMemo()` in
+// `beforeEach`/`afterEach` to prevent cross-test contamination.
 const MEMO = new Map<string, ImportResult>();
 
 /**
