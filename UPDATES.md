@@ -6,6 +6,22 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v2.3.1 — ACB save-manifest auto-injects missing `timestamp`
+
+The PostToolUse hook's manifest prompt template includes a `timestamp` field, but agents occasionally drop it when filling in `intent_groups` — producing a hard schema failure (`Error: invalid manifest: Missing required field: timestamp`) that blocks the commit flow. The fix mirrors the existing `commit_sha` pinning in `save-manifest-cmd.ts`: if the agent omits (or empties) `timestamp`, the CLI injects a UTC ISO-seconds value server-side using the same `isoSeconds()` helper the hook already uses for its prompt.
+
+**Changed**:
+
+- `packages/cli/src/topics/acb/cli/save-manifest-cmd.ts` — auto-inject `timestamp` via `isoSeconds()` when missing/null/empty. `commit_sha` pinning behavior is unchanged; only ops metadata is coerced, so agent-judgment fields (`acb_manifest_version`, `intent_groups`) still fail validation when missing.
+- `packages/cli/src/topics/acb/hook.ts` — exported `isoSeconds` so both the hook prompt template and the save-manifest CLI share the exact UTC-seconds format contract.
+
+**Migration**:
+
+- No schema changes, no config changes. Auto-adopts on upgrade — existing manifests on disk are untouched; only new `save-manifest` invocations benefit.
+- The validator itself (`schemas.ts::validateManifest`) still flags `timestamp` as a required field; only the CLI wrapper injects a default before calling it. Direct `validateManifest` callers (tests, external consumers) see unchanged behavior.
+
+---
+
 ## v2.2.1 — Scrum CLI surface + importer precision + milestone reassignment + binary-rename follow-ups + next-ready scoring (issue #18)
 
 Closes the seven gaps filed in issue #16, adds the milestone-reassignment CLI path filed in issue #17, tightens `scrum next-ready` ranking per issue #18 (closes #18), and finishes the trailing consumers of the v1.2.0 `prove` → `claude-prove` binary rename that were left half-done in the working tree (`install doctor`, `install upgrade`, version bump script, CI release workflow, and runtime PATH checks in `commands/review-ui.md` + `skills/task/scripts/gather-context.sh`).

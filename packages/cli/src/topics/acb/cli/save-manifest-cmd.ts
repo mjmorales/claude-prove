@@ -25,6 +25,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { currentBranch, headSha, mainWorktreeRoot, resolveRunSlug } from '@claude-prove/shared';
+import { isoSeconds } from '../hook';
 import { ensureLegacyImported } from '../importer';
 import { validateManifest } from '../schemas';
 import { openAcbStore } from '../store';
@@ -73,6 +74,12 @@ export function runSaveManifest(opts: SaveManifestOpts): number {
     return 1;
   }
   data.commit_sha = sha;
+  // Agents sometimes drop `timestamp` when filling in the hook's manifest
+  // template. Auto-inject a UTC ISO-seconds value when missing so ops metadata
+  // never blocks a save — only agent-judgment fields should fail validation.
+  if (data.timestamp === undefined || data.timestamp === null || data.timestamp === '') {
+    data.timestamp = isoSeconds();
+  }
 
   const errors = validateManifest(data);
   if (errors.length > 0) {

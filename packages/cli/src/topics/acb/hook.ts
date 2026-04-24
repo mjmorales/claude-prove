@@ -358,7 +358,7 @@ function isDir(path: string): boolean {
  * `datetime.now(timezone.utc).isoformat(timespec="seconds")`, which yields
  * `2026-04-22T12:00:00+00:00` (not a `Z` suffix, not milliseconds).
  */
-function isoSeconds(): string {
+export function isoSeconds(): string {
   const d = new Date();
   const pad = (n: number): string => n.toString().padStart(2, '0');
   return (

@@ -173,6 +173,26 @@ describe('claude-prove acb save-manifest', () => {
     expect(res.exitCode).toBe(1);
     expect(res.stderr.startsWith('Error: invalid manifest:')).toBe(true);
   });
+
+  test('missing timestamp: auto-injected, save succeeds', () => {
+    const repo = trackRepo('sm-missing-ts');
+    const sha = gitStdout(['git', 'rev-parse', 'HEAD'], repo);
+    // Build without `timestamp` so the `in` check in validateManifest sees a
+    // truly absent key — this is the shape agents produce when they strip the
+    // field from the hook's template.
+    const { timestamp: _omit, ...manifestWithoutTs } = validManifest(sha);
+    void _omit;
+
+    const res = runAcb(
+      ['save-manifest', '--workspace-root', repo, '--branch', 'feat/x', '--sha', sha],
+      repo,
+      JSON.stringify(manifestWithoutTs),
+    );
+
+    expect(res.exitCode).toBe(0);
+    const stdout = JSON.parse(res.stdout.trim()) as { saved: boolean };
+    expect(stdout.saved).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
