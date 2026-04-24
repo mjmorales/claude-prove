@@ -23,7 +23,7 @@ You are a technical specification author. You write specs that engineers can imp
 
 ### New Draft
 
-1. Read the user's description, decision records in `.prove/decisions/`, and related specs in `specs/`.
+1. Read the user's description, decisions via `claude-prove scrum decision list --human` (and `claude-prove scrum decision get <id>` to fetch full content), and related specs in `specs/`.
 2. State back what the spec will and will not cover. Get confirmation before writing.
 3. Write following Document Structure below.
 4. Run the Completeness Checklist. Fix issues before presenting.

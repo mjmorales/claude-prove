@@ -40,9 +40,10 @@ Use AskUserQuestion for discrete choices, free-form for nuanced trade-offs. Incl
 
 ### Phase 4: Record the Decision
 
-1. Save to `.prove/decisions/YYYY-MM-DD-<slug>.md` (create directory if needed)
-2. Use the decision record format below
-3. Report the file path to the user
+1. Save to `.prove/decisions/YYYY-MM-DD-<slug>.md` (create directory if needed).
+2. Persist to the scrum store: `claude-prove scrum decision record .prove/decisions/YYYY-MM-DD-<slug>.md`. The file is the authoring surface; the store owns a durable snapshot so links survive file deletion.
+3. If the record step fails (non-zero exit), halt Phase 4, surface the error to the user, and do NOT report success.
+4. Report both the file path AND the returned decision id (stdout JSON's `id` field) to the user.
 
 ## Decision Record Format
 
