@@ -54,6 +54,7 @@ Finishes the trailing consumers of the `prove` → `claude-prove` rename shipped
 - `scripts/install.sh`: fallback git-clone path now `git fetch && reset --hard` refreshes an existing `~/.claude/plugins/prove` checkout instead of trusting it — stale pre-workspace layouts don't have `packages/cli/bin/run.ts` and would silently fail with "Module not found".
 - `commands/review-ui.md` precondition check + `skills/task/scripts/gather-context.sh` fallback now probe `command -v claude-prove` instead of `command -v prove` (the latter now resolves to the Perl TAP runner).
 - `packages/cli/test/install-upgrade.test.ts` + `install-doctor.test.ts`: updated fixtures to expect `claude-prove-<target>` release URLs and destination filenames.
+- Swept every remaining `prove <subcommand>` reference across docs, CLI source (JSDoc + help + error prefixes), test describe labels, agent definitions, skills, and `UPDATES.md` migration snippets. Historical `prove` mentions that describe the rename itself (`bin."prove"`, `~/.local/bin/prove`, `command -v prove`) are preserved intentionally.
 
 **Removed**:
 
