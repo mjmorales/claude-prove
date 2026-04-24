@@ -24,7 +24,8 @@
       "*.test.ext (dot)"
     ],
     "primary_extensions": [
-      ".ts"
+      ".ts",
+      ".js"
     ]
   },
   "prove_config": {

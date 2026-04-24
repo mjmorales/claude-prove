@@ -420,6 +420,11 @@ function walkProject(root: string, visit: (dirpath: string, filename: string) =>
 
     for (const fn of files) {
       if (fn.startsWith('.')) continue;
+      // Skip tsc incremental-build artifacts. They're not source code and
+      // their presence depends on whether the developer has run `tsc --build`
+      // locally — counting them would make `primary_extensions` vary between
+      // fresh-checkout CI and post-build local state.
+      if (fn.endsWith('.tsbuildinfo')) continue;
       visit(dirpath, fn);
     }
 
