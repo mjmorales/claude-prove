@@ -624,6 +624,34 @@ describe('ScrumStore — nextReady', () => {
     expect(byId.get('t2')?.rationale.tag_boost).toBe(0);
   });
 
+  test('tag_boost is +2 for p0 + p1 (priority tags stack)', () => {
+    seedTask('t1', { createdAt: '2026-01-01T00:00:00Z', tags: ['p0', 'p1'] });
+    const rows = store.nextReady();
+    const [row] = rows;
+    expect(row?.rationale.tag_boost).toBe(2);
+  });
+
+  test('tag_boost is -1 for a task tagged only deferred', () => {
+    seedTask('t1', { createdAt: '2026-01-01T00:00:00Z', tags: ['deferred'] });
+    const rows = store.nextReady();
+    const [row] = rows;
+    expect(row?.rationale.tag_boost).toBe(-1);
+  });
+
+  test('tag_boost nets to 0 when p0 cancels deferred', () => {
+    seedTask('t1', { createdAt: '2026-01-01T00:00:00Z', tags: ['p0', 'deferred'] });
+    const rows = store.nextReady();
+    const [row] = rows;
+    expect(row?.rationale.tag_boost).toBe(0);
+  });
+
+  test('tag_boost is 0 for a task with no scored tags', () => {
+    seedTask('t1', { createdAt: '2026-01-01T00:00:00Z', tags: ['docs', 'chore'] });
+    const rows = store.nextReady();
+    const [row] = rows;
+    expect(row?.rationale.tag_boost).toBe(0);
+  });
+
   test('context_hotness decays over time', () => {
     // Task seeded in 2026; ask about a `now` six months later — hotness
     // should be near zero (exp(-4000h/24) ~= 0).
