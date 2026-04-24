@@ -604,7 +604,7 @@ describe('ScrumStore — nextReady', () => {
     expect(first?.rationale.milestone_boost).toBe(1);
   });
 
-  test('milestone_boost fires for active milestones when no filter is set', () => {
+  test('milestone_boost is 1.0 for active, 0.5 for planned when no filter is set', () => {
     seedMilestone('m1', { status: 'active' });
     seedMilestone('m2', { status: 'planned' });
     seedTask('t1', { createdAt: '2026-01-01T00:00:00Z', milestoneId: 'm1' });
@@ -612,7 +612,37 @@ describe('ScrumStore — nextReady', () => {
     const rows = store.nextReady();
     const byId = new Map(rows.map((r) => [r.task.id, r]));
     expect(byId.get('t1')?.rationale.milestone_boost).toBe(1);
-    expect(byId.get('t2')?.rationale.milestone_boost).toBe(0);
+    expect(byId.get('t2')?.rationale.milestone_boost).toBe(0.5);
+  });
+
+  test('milestone_boost is 0.5 for a planned milestone, no filter set', () => {
+    seedMilestone('m1', { status: 'planned' });
+    seedTask('t1', { createdAt: '2026-01-01T00:00:00Z', milestoneId: 'm1' });
+    const rows = store.nextReady();
+    const [first] = rows;
+    expect(first?.rationale.milestone_boost).toBe(0.5);
+  });
+
+  test('milestone_boost is 0 for a closed milestone', () => {
+    seedMilestone('m1', { status: 'planned' });
+    seedTask('t1', { createdAt: '2026-01-01T00:00:00Z', milestoneId: 'm1' });
+    store.closeMilestone('m1');
+    const rows = store.nextReady();
+    const [first] = rows;
+    expect(first?.rationale.milestone_boost).toBe(0);
+  });
+
+  test('activating a planned milestone re-queries to milestone_boost === 1.0', () => {
+    seedMilestone('m1', { status: 'planned' });
+    seedTask('t1', { createdAt: '2026-01-01T00:00:00Z', milestoneId: 'm1' });
+
+    const before = store.nextReady();
+    expect(before[0]?.rationale.milestone_boost).toBe(0.5);
+
+    store.setMilestoneStatus('m1', 'active');
+
+    const after = store.nextReady();
+    expect(after[0]?.rationale.milestone_boost).toBe(1);
   });
 
   test('tag_boost counts priority tags', () => {
