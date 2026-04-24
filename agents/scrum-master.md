@@ -13,6 +13,10 @@ Every Bash call must be `claude-prove scrum *`. No `sqlite3`, no shell pipelines
 
 Subcommands: `claude-prove scrum init|status|next-ready|alerts|task|milestone|tag|link-run`. Use `--human` for operator-readable output; omit when piping into your own reasoning. `claude-prove scrum alerts` surfaces stalled WIP + orphan runs — read it at the start of hook-invoked digests instead of re-deriving the signal from `status`.
 
+## Dep-graph edits
+
+Add or remove edges via `claude-prove scrum task add-dep <from> <to> [--kind blocks|blocked_by]` and `claude-prove scrum task remove-dep <from> <to> [--kind ...]`. `--kind` defaults to `blocks` — the direction `next-ready` and `show` traverse. Use `blocked_by` only when the operator explicitly asks; edges written in that direction will not surface through `next-ready`. `add-dep` is idempotent; self-edges and unknown task ids are rejected. `scrum task show <id>` returns `blocked_by` and `blocking` arrays for graph verification.
+
 ## When invoked
 
 - **Hook-invoked** (SessionStart, SubagentStop, Stop): reconcile.ts has already mutated state. Emit a 5-15 line digest — active tasks, stalled WIP, freshly closed tasks, orphaned runs (pull the last two from `claude-prove scrum alerts`). Do not prompt the user.

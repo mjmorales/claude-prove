@@ -6,6 +6,32 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v2.5.0 — Dep-graph CLI: `scrum task add-dep` / `remove-dep`
+
+The dependency graph in `.prove/prove.db` (`scrum_deps` table) has been readable by `next-ready` since v1, but there was no supported way for operators or agents to *write* edges — `ScrumStore.addDep()` existed only as an internal API. This release exposes it through the `claude-prove scrum task` surface, with idempotent inserts, self-edge rejection, and additive visibility on `scrum task show`.
+
+**New CLI**:
+
+- `claude-prove scrum task add-dep <from> <to> [--kind blocks|blocked_by]` — records an edge in `scrum_deps`. `--kind` defaults to `blocks`, which is the direction `next-ready`/`show` consume. Idempotent on `(from, to, kind)`. Stdout: `{"added":true,"from_task_id","to_task_id","kind"}`.
+- `claude-prove scrum task remove-dep <from> <to> [--kind ...]` — deletes the matching row. No-op if the edge is absent (exit 0).
+
+**Changed**:
+
+- `packages/cli/src/topics/scrum/cli/task-cmd.ts` — adds `add-dep` / `remove-dep` actions, `--kind` handling, and augments `show <id>` to include `blocked_by` / `blocking` arrays (pulled from `scrum_deps` with `kind='blocks'`).
+- `packages/cli/src/topics/scrum.ts` — wires the `--kind` flag into the scrum dispatcher and updates the `task` sub-action usage hint.
+- `agents/scrum-master.md` — documents the dep-graph flow and adds it to the agent's allowed subcommand surface.
+
+**Migration**:
+
+- No schema changes; `scrum_deps` already exists. No `.claude/.prove.json` fields added.
+- Consumers of `scrum task show <id>` JSON: the payload gains `blocked_by` and `blocking` keys (arrays of `{from_task_id, to_task_id, kind: 'blocks'}`). Existing keys (`task`, `tags`, `events`, `runs`) are unchanged — strict JSON parsers that whitelist keys will need an update.
+
+**Auto-adoption**:
+
+- CLI surface is live on next `claude-prove` run — no config migration required.
+
+---
+
 ## v2.4.0 — Decisions persisted in `prove.db`
 
 ADR content now survives file `rm`, `git mv`, archive sweeps, and reclones without `.prove/`. Previously, `scrum_events(kind='decision_linked')` carried only `{ decision_path }` — if the file disappeared the rationale was unrecoverable from the DB alone. This release adds a `scrum_decisions` table (populated on `link-decision` and during brainstorm Phase 4) that owns a durable snapshot of every decision, keyed by filename slug with a sha256 `content_sha` for drift tracking. Event payloads become `{ decision_id, decision_path }`; readers prefer `decision_id` and fall back to `decision_path` for legacy rows. Full rationale: `.prove/decisions/2026-04-24-decision-persistence.md`.

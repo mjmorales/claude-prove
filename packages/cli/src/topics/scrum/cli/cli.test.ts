@@ -394,6 +394,115 @@ describe('runTaskCmd', () => {
     const task = JSON.parse(res.stdout.trim()) as { milestone_id: string | null };
     expect(task.milestone_id).toBeNull();
   });
+
+  // -------------------------------------------------------------------------
+  // add-dep / remove-dep actions
+  // -------------------------------------------------------------------------
+
+  function seedDepPair(): void {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'A', id: 'a' }));
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'B', id: 'b' }));
+  }
+
+  test('add-dep: records a blocks edge (default kind) and shows up in show payload', () => {
+    seedDepPair();
+    const res = withCapture(() => runTaskCmd('add-dep', ['a', 'b'], {}));
+    expect(res.exit).toBe(0);
+    const payload = JSON.parse(res.stdout.trim()) as {
+      added: boolean;
+      from_task_id: string;
+      to_task_id: string;
+      kind: string;
+    };
+    expect(payload).toEqual({ added: true, from_task_id: 'a', to_task_id: 'b', kind: 'blocks' });
+
+    const shown = withCapture(() => runTaskCmd('show', ['b', undefined], {}));
+    const parsed = JSON.parse(shown.stdout.trim()) as {
+      blocked_by: Array<{ from_task_id: string; to_task_id: string; kind: string }>;
+      blocking: Array<{ from_task_id: string; to_task_id: string; kind: string }>;
+    };
+    expect(parsed.blocked_by).toEqual([{ from_task_id: 'a', to_task_id: 'b', kind: 'blocks' }]);
+    expect(parsed.blocking).toEqual([]);
+
+    const shownA = withCapture(() => runTaskCmd('show', ['a', undefined], {}));
+    const parsedA = JSON.parse(shownA.stdout.trim()) as {
+      blocking: Array<{ from_task_id: string; to_task_id: string; kind: string }>;
+    };
+    expect(parsedA.blocking).toEqual([{ from_task_id: 'a', to_task_id: 'b', kind: 'blocks' }]);
+  });
+
+  test('add-dep: idempotent — repeat insert is a no-op at the store layer', () => {
+    seedDepPair();
+    withCapture(() => runTaskCmd('add-dep', ['a', 'b'], {}));
+    const second = withCapture(() => runTaskCmd('add-dep', ['a', 'b'], {}));
+    expect(second.exit).toBe(0);
+    const shown = withCapture(() => runTaskCmd('show', ['b', undefined], {}));
+    const parsed = JSON.parse(shown.stdout.trim()) as { blocked_by: unknown[] };
+    expect(parsed.blocked_by).toHaveLength(1);
+  });
+
+  test('add-dep: self-edge rejected with store error on stderr', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'S', id: 's' }));
+    const res = withCapture(() => runTaskCmd('add-dep', ['s', 's'], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('self-dependency rejected');
+  });
+
+  test('add-dep: unknown task id bubbles up from the store', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'X', id: 'x' }));
+    const res = withCapture(() => runTaskCmd('add-dep', ['x', 'ghost'], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown to_task 'ghost'");
+  });
+
+  test('add-dep: invalid --kind exits 1 with a usage hint', () => {
+    seedDepPair();
+    const res = withCapture(() => runTaskCmd('add-dep', ['a', 'b'], { kind: 'bogus' }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("invalid --kind 'bogus'");
+  });
+
+  test('add-dep: missing <from>/<to> exits 1 with a usage hint', () => {
+    const res = withCapture(() => runTaskCmd('add-dep', [undefined, undefined], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('<from> and <to> positional arguments required');
+  });
+
+  test('add-dep: --kind blocked_by stores the inverse edge', () => {
+    seedDepPair();
+    const res = withCapture(() => runTaskCmd('add-dep', ['a', 'b'], { kind: 'blocked_by' }));
+    expect(res.exit).toBe(0);
+    const payload = JSON.parse(res.stdout.trim()) as { kind: string };
+    expect(payload.kind).toBe('blocked_by');
+    // `blocks`-keyed reads ignore blocked_by rows, so show payload stays empty for both tasks.
+    const shown = withCapture(() => runTaskCmd('show', ['b', undefined], {}));
+    const parsed = JSON.parse(shown.stdout.trim()) as { blocked_by: unknown[] };
+    expect(parsed.blocked_by).toEqual([]);
+  });
+
+  test('remove-dep: deletes the edge and show payload goes back to empty', () => {
+    seedDepPair();
+    withCapture(() => runTaskCmd('add-dep', ['a', 'b'], {}));
+    const rm = withCapture(() => runTaskCmd('remove-dep', ['a', 'b'], {}));
+    expect(rm.exit).toBe(0);
+    const payload = JSON.parse(rm.stdout.trim()) as { removed: boolean; kind: string };
+    expect(payload).toEqual({
+      removed: true,
+      from_task_id: 'a',
+      to_task_id: 'b',
+      kind: 'blocks',
+    } as unknown as typeof payload);
+
+    const shown = withCapture(() => runTaskCmd('show', ['b', undefined], {}));
+    const parsed = JSON.parse(shown.stdout.trim()) as { blocked_by: unknown[] };
+    expect(parsed.blocked_by).toEqual([]);
+  });
+
+  test('remove-dep: missing edge is a no-op (idempotent), exit 0', () => {
+    seedDepPair();
+    const res = withCapture(() => runTaskCmd('remove-dep', ['a', 'b'], {}));
+    expect(res.exit).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------

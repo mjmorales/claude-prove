@@ -13,6 +13,8 @@
  *   claude-prove scrum task link-decision <id> <decision-path>
  *   claude-prove scrum task status <id> <new-status>
  *   claude-prove scrum task delete <id>
+ *   claude-prove scrum task add-dep <from> <to>    [--kind blocks|blocked_by]
+ *   claude-prove scrum task remove-dep <from> <to> [--kind blocks|blocked_by]
  *   claude-prove scrum alerts                    [--human] [--stalled-after-days N]
  *   claude-prove scrum milestone create          --title X [--description Y] [--target-state S] [--id I]
  *   claude-prove scrum milestone list            [--status S]
@@ -94,6 +96,7 @@ interface ScrumFlags {
   branch?: string;
   slug?: string;
   unassign?: boolean;
+  kind?: string;
   stalledAfterDays?: number | string;
   fromGit?: boolean;
   workspaceRoot?: string;
@@ -116,6 +119,10 @@ export function register(cli: CAC): void {
     .option('--branch <b>', 'Branch name for link-run')
     .option('--slug <g>', 'Run slug for link-run')
     .option('--unassign', 'Clear milestone_id (scrum task move)')
+    .option(
+      '--kind <k>',
+      'Dep-edge kind for scrum task add-dep/remove-dep (blocks | blocked_by; default: blocks)',
+    )
     .option('--stalled-after-days <n>', 'Alerts: stalled WIP threshold in days (default: 7)')
     .option('--from-git', 'decision recover: scan git history for .prove/decisions/*.md blobs')
     .option(
@@ -178,7 +185,7 @@ function dispatch(
     case 'task':
       if (arg1 === undefined) {
         console.error(
-          'error: scrum task: sub-action required (one of: create | show | list | tag | link-decision | status | move | delete)',
+          'error: scrum task: sub-action required (one of: create | show | list | tag | link-decision | status | move | delete | add-dep | remove-dep)',
         );
         return 1;
       }
@@ -190,6 +197,7 @@ function dispatch(
         status: flags.status,
         tag: flags.tag,
         unassign: flags.unassign,
+        kind: flags.kind,
         workspaceRoot: flags.workspaceRoot,
       });
 

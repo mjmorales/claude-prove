@@ -10,9 +10,13 @@
  *   status <id> <new-status>
  *   move <id>      (--milestone M | --unassign | --milestone="")
  *   delete <id>
+ *   add-dep <from> <to>     [--kind blocks|blocked_by]   (default: blocks)
+ *   remove-dep <from> <to>  [--kind blocks|blocked_by]   (default: blocks)
  *
  * Stdout contract: JSON result per action on stdout; one-line human
- * summary on stderr. The `list` action returns a JSON array.
+ * summary on stderr. The `list` action returns a JSON array. The `show`
+ * action's JSON additively carries `blocked_by` and `blocking` arrays
+ * (pulled from `scrum_deps` with `kind='blocks'`).
  *
  * Exit codes:
  *   0  success
@@ -24,7 +28,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
 import type { ListTasksOptions, ScrumStore } from '../store';
 import { openScrumStore } from '../store';
-import type { TaskStatus } from '../types';
+import type { DepKind, TaskStatus } from '../types';
 import { parseDecisionFile } from './decision-cmd';
 import { generateId } from './scrum-utils';
 
@@ -36,6 +40,7 @@ export interface TaskCmdFlags {
   status?: string;
   tag?: string;
   unassign?: boolean;
+  kind?: string;
   workspaceRoot?: string;
 }
 
@@ -47,7 +52,9 @@ export type TaskAction =
   | 'link-decision'
   | 'status'
   | 'move'
-  | 'delete';
+  | 'delete'
+  | 'add-dep'
+  | 'remove-dep';
 
 const TASK_ACTIONS: TaskAction[] = [
   'create',
@@ -58,7 +65,11 @@ const TASK_ACTIONS: TaskAction[] = [
   'status',
   'move',
   'delete',
+  'add-dep',
+  'remove-dep',
 ];
+
+const VALID_DEP_KINDS: DepKind[] = ['blocks', 'blocked_by'];
 
 const VALID_STATUSES: TaskStatus[] = [
   'backlog',
@@ -105,6 +116,10 @@ export function runTaskCmd(
         return doMove(store, positional[0], flags);
       case 'delete':
         return doDelete(store, positional[0]);
+      case 'add-dep':
+        return doAddDep(store, positional[0], positional[1], flags);
+      case 'remove-dep':
+        return doRemoveDep(store, positional[0], positional[1], flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -152,7 +167,13 @@ function doShow(store: ScrumStore, id: string | undefined): number {
   const tags = store.listTagsForTask(id);
   const events = store.listEventsForTask(id, 50);
   const runs = store.listRunsForTask(id);
-  process.stdout.write(`${JSON.stringify({ task, tags, events, runs })}\n`);
+  // Dep edges are additive keys on the show payload so operators can
+  // see the graph without a second subcommand. Both arrays use the
+  // 'blocks' kind exclusively — 'blocked_by' edges are inserted but
+  // not read by nextReady/getBlockedBy today (see store.ts:544).
+  const blocked_by = store.getBlockedBy(id);
+  const blocking = store.getBlocking(id);
+  process.stdout.write(`${JSON.stringify({ task, tags, events, runs, blocked_by, blocking })}\n`);
   process.stderr.write(`scrum task show: ${id} (${task.status})\n`);
   return 0;
 }
@@ -343,4 +364,62 @@ function doLinkDecision(
   );
   process.stderr.write(`scrum task link-decision: ${id} -> ${parsed.id} (${decisionPath})\n`);
   return 0;
+}
+
+/**
+ * Record a dependency edge. Thin wrapper over `store.addDep` — domain
+ * checks (self-edge, unknown task) bubble through as exit-1 errors
+ * with stderr carrying the store's message. Idempotent at the store
+ * layer; repeat calls are a no-op (stdout reports `added: true`
+ * regardless, matching the `scrum task tag` convention).
+ */
+function doAddDep(
+  store: ScrumStore,
+  from: string | undefined,
+  to: string | undefined,
+  flags: TaskCmdFlags,
+): number {
+  if (from === undefined || from.length === 0 || to === undefined || to.length === 0) {
+    process.stderr.write('scrum task add-dep: <from> and <to> positional arguments required\n');
+    return 1;
+  }
+  const kind = resolveDepKind(flags.kind, 'add-dep');
+  if (kind === null) return 1;
+  store.addDep(from, to, kind);
+  process.stdout.write(
+    `${JSON.stringify({ added: true, from_task_id: from, to_task_id: to, kind })}\n`,
+  );
+  process.stderr.write(`scrum task add-dep: ${from} -${kind}-> ${to}\n`);
+  return 0;
+}
+
+function doRemoveDep(
+  store: ScrumStore,
+  from: string | undefined,
+  to: string | undefined,
+  flags: TaskCmdFlags,
+): number {
+  if (from === undefined || from.length === 0 || to === undefined || to.length === 0) {
+    process.stderr.write('scrum task remove-dep: <from> and <to> positional arguments required\n');
+    return 1;
+  }
+  const kind = resolveDepKind(flags.kind, 'remove-dep');
+  if (kind === null) return 1;
+  store.removeDep(from, to, kind);
+  process.stdout.write(
+    `${JSON.stringify({ removed: true, from_task_id: from, to_task_id: to, kind })}\n`,
+  );
+  process.stderr.write(`scrum task remove-dep: ${from} -${kind}-> ${to}\n`);
+  return 0;
+}
+
+function resolveDepKind(raw: string | undefined, action: 'add-dep' | 'remove-dep'): DepKind | null {
+  if (raw === undefined || raw.length === 0) return 'blocks';
+  if (!(VALID_DEP_KINDS as string[]).includes(raw)) {
+    process.stderr.write(
+      `scrum task ${action}: invalid --kind '${raw}'. expected one of: ${VALID_DEP_KINDS.join(', ')}\n`,
+    );
+    return null;
+  }
+  return raw as DepKind;
 }
