@@ -117,7 +117,7 @@ Remaining `$ARGUMENTS` tokens after `test`:
 Delegate to the CLI which handles script resolution, env var injection, and exit-code capture:
 
 ```bash
-bun run "$PLUGIN_DIR/packages/cli/bin/run.ts" notify test $ARGUMENTS
+claude-prove notify test $ARGUMENTS
 ```
 
 Reporter scripts live in `./.prove/` (project scope) or `~/.claude/scripts/` (global scope).

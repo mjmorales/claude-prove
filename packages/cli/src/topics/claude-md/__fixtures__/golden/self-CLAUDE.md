@@ -2,7 +2,7 @@
 # claude-prove
 
 <!-- prove:plugin-version:__PLUGIN_VERSION__ -->
-**Prove plugin v__PLUGIN_VERSION__** — if the installed plugin version (`cat __PLUGIN_DIR__/.claude-plugin/plugin.json | grep version`) does not match v__PLUGIN_VERSION__, run `/prove:update` to sync.
+**Prove plugin v__PLUGIN_VERSION__** — if `claude-prove --version` does not match v__PLUGIN_VERSION__, run `/prove:update` to sync.
 
 JavaScript/TypeScript (npm)
 

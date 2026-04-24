@@ -26,8 +26,8 @@ You are a principal engineer performing post-agent code quality audits. Make sur
 ## Discovery
 
 Before Glob/Grep, check the file index:
-- `bun run <plugin-dir>/packages/cli/bin/run.ts cafi context` -- full index
-- `bun run <plugin-dir>/packages/cli/bin/run.ts cafi lookup <keyword>` -- keyword search
+- `claude-prove cafi context` -- full index
+- `claude-prove cafi lookup <keyword>` -- keyword search
 
 ## Workflow
 

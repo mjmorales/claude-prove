@@ -17,8 +17,8 @@ CAFI uses subcommands, not flags. Default (no argument): `index` (incremental).
 
 | Subcommand | Purpose | Example |
 |---|---|---|
-| `index [--force]` | Build/update index. `--force` re-describes all files | `bun run $PLUGIN/packages/cli/bin/run.ts cafi index` |
-| `status` | Show new/stale/deleted/unchanged counts (no indexing) | `bun run $PLUGIN/packages/cli/bin/run.ts cafi status` |
-| `clear` | Remove the cache file | `bun run $PLUGIN/packages/cli/bin/run.ts cafi clear` |
-| `lookup <keyword>` | Search by keyword (case-insensitive, paths + descriptions) | `bun run $PLUGIN/packages/cli/bin/run.ts cafi lookup orchestrator` |
-| `context` | Output formatted file index | `bun run $PLUGIN/packages/cli/bin/run.ts cafi context` |
+| `index [--force]` | Build/update index. `--force` re-describes all files | `claude-prove cafi index` |
+| `status` | Show new/stale/deleted/unchanged counts (no indexing) | `claude-prove cafi status` |
+| `clear` | Remove the cache file | `claude-prove cafi clear` |
+| `lookup <keyword>` | Search by keyword (case-insensitive, paths + descriptions) | `claude-prove cafi lookup orchestrator` |
+| `context` | Output formatted file index | `claude-prove cafi context` |

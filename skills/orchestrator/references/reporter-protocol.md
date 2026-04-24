@@ -48,7 +48,7 @@ Hook Event -> claude-prove run-state hook <event> -> .claude/.prove.json reporte
 
 ### Hook Configuration (`.claude/settings.json`)
 
-Prove-owned blocks are tagged with `_tool` and scaffolded by `claude-prove install init-hooks` (or `claude-prove install init`). They resolve the runtime prefix from the active plugin root (dev: `bun run <pluginRoot>/packages/cli/bin/run.ts`; compiled: `prove`) and emit canonical blocks:
+Prove-owned blocks are tagged with `_tool` and scaffolded by `claude-prove install init-hooks` (or `claude-prove install init`). Runtime prefix is resolved via `resolveBinaryPath` — compiled installs emit the bare `claude-prove` binary path; dev-mode installs substitute the working-tree entry point. Canonical blocks:
 
 ```json
 {

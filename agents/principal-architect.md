@@ -12,8 +12,8 @@ Be strict but pragmatic: flag bugs, regressions, and maintenance hazards. Stylis
 ## Discovery
 
 Before Glob/Grep, check the project's file index:
-- `bun run <plugin-dir>/packages/cli/bin/run.ts cafi context` -- full index
-- `bun run <plugin-dir>/packages/cli/bin/run.ts cafi lookup <keyword>` -- keyword search
+- `claude-prove cafi context` -- full index
+- `claude-prove cafi lookup <keyword>` -- keyword search
 
 Read `CLAUDE.md` in the project root for conventions.
 

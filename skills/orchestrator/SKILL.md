@@ -143,7 +143,7 @@ For each task in the wave:
 2. Generate the agent prompt from JSON:
    ```bash
    RUN_DIR=".prove/runs/<branch>/<slug>"
-   PROMPT=$(bun run "$PLUGIN_DIR/packages/cli/bin/run.ts" orchestrator task-prompt \
+   PROMPT=$(claude-prove orchestrator task-prompt \
      --run-dir "$RUN_DIR" --task-id <task-id> --project-root <project-root> --worktree "$WT_PATH")
    ```
 3. Launch agent (worktree already exists — do NOT pass `isolation: "worktree"`):
@@ -190,7 +190,7 @@ REVIEW LOOP (max 3 iterations per task):
 1. Build review prompt:
    WT_PATH=$(bash skills/orchestrator/scripts/manage-worktree.sh path <slug> <task-id>)
    RUN_DIR=".prove/runs/<branch>/<slug>"
-   REVIEW_PROMPT=$(bun run "$PLUGIN_DIR/packages/cli/bin/run.ts" orchestrator review-prompt \
+   REVIEW_PROMPT=$(claude-prove orchestrator review-prompt \
      --worktree "$WT_PATH" --task-id <task-id> --run-dir "$RUN_DIR" --base-branch <base-branch>)
 
 2. Launch review:

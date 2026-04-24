@@ -25,14 +25,10 @@ Bind the chosen directory to `$TARGET_CWD`. Default: `$(pwd)`.
 
 ## Step 2: Resolve CLI invocation
 
-Dev mode ships CLI sources; compiled mode ships a `prove` binary.
+Use `claude-prove` directly (assumed on `PATH`). Dev-mode users alias or symlink `claude-prove` to their working-tree entry point.
 
 ```bash
-if [ -d "$PLUGIN_DIR/packages/cli/src" ]; then
-  PROVE_CLI=(bun run "$PLUGIN_DIR/packages/cli/bin/run.ts")
-else
-  PROVE_CLI=(prove)
-fi
+PROVE_CLI=(claude-prove)
 ```
 
 Use `"${PROVE_CLI[@]}"` for every downstream call.
@@ -140,7 +136,7 @@ If `$TARGET_CWD/CLAUDE.md` exists, `AskUserQuestion` (header: "CLAUDE.md"):
 Skip generation on "Keep Existing".
 
 ```bash
-bun run "$PLUGIN_DIR/packages/cli/bin/run.ts" claude-md generate --project-root "$TARGET_CWD" --plugin-dir "$PLUGIN_DIR"
+claude-prove claude-md generate --project-root "$TARGET_CWD" --plugin-dir "$PLUGIN_DIR"
 ```
 
 Show summary of generated sections.

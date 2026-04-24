@@ -1,8 +1,8 @@
 <!-- prove:managed:start -->
 # claude-prove
 
-<!-- prove:plugin-version:1.1.0 -->
-**Prove plugin v1.1.0** — if the installed plugin version (`cat /Users/manuelmorales/dev/claude-prove/.claude-plugin/plugin.json | grep version`) does not match v1.1.0, run `/prove:update` to sync.
+<!-- prove:plugin-version:2.5.0 -->
+**Prove plugin v2.5.0** — if `claude-prove --version` does not match v2.5.0, run `/prove:update` to sync.
 
 JavaScript/TypeScript (npm)
 
@@ -13,34 +13,17 @@ JavaScript/TypeScript (npm)
 - `docs/` — Documentation
 - `scripts/` — Build/utility scripts
 - `skills/` — Plugin skills
-- `tools/` — Development tools
 
 ## Conventions
 
-- File naming: snake_case
-- Test files: test_*.ext (prefix)
-
-## Discovery Protocol
-
-Before broad Glob/Grep searches, check the file index first:
-
-- `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts cafi context` — full index with routing hints
-- `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts cafi lookup <keyword>` — search by keyword
-
-Only fall back to Glob/Grep when the index doesn't cover what you need.
-## Tool Directives
-
-### acb
-
-Feature-branch commits must carry an ACB v0.2 intent manifest; the PostToolUse hook on `git commit` supplies the exact save command. Review via `/prove:review-ui` (Docker-based UI; image at `ghcr.io/mjmorales/claude-prove/review-ui`).
-
-### scrum
-
-Agentic task management on `.prove/prove.db` (schema v5+). Hook-driven: SessionStart, SubagentStop, and Stop hooks invoke `claude-prove scrum hook <event>`, which reconciles task state at task boundaries — not per commit. Orchestrator runs couple to scrum tasks via the optional `task_id` field in `plan.json`; unlinked runs surface as alerts in `/scrum alerts`.
-
-`/scrum` is the operator entry point: `init|status|next` are direct CLI passthroughs; `task|milestone|tag|link|alerts` delegate to the `scrum-master` agent (operational — hook + interactive flows). `product-visionary` is user-invoked only for strategic milestone shaping and VISION.md alignment; never hook-driven. Architecture: `.prove/decisions/2026-04-21-scrum-architecture.md`.
+- File naming: kebab-case
+- Test files: *.test.ext (dot)
 
 ## References
+
+### claude-prove CLI Reference
+
+@/Users/manuelmorales/dev/claude-prove/references/claude-prove-reference.md
 
 ### LLM-Optimized Coding Standards
 
@@ -64,12 +47,13 @@ Agentic task management on `.prove/prove.db` (schema v5+). Hook-driven: SessionS
 
 ## Prove Commands
 
-- `/prove:orchestrator` — Autonomous execution with mode dispatch (`--autopilot`, `--full`, auto-detect)
 - `/prove:brainstorm` — Explore options and record decisions
 - `/prove:comprehend` — Socratic quiz on recent diffs to build code comprehension
 - `/prove:index` — Update the file index (run after significant changes)
-- `/prove:plan` — Plan implementation (`--task <desc>` or `--step <id>`)
-- `/prove:task` — Task lifecycle (`handoff|pickup|progress|complete|cleanup`)
+- `/prove:orchestrator` — Unified entry point for orchestrator, autopilot, and full-auto execution
+- `/prove:plan` — Plan a task or a specific step from the active plan.json
+- `/prove:review-ui` — Docker-based review UI for inspecting prove runs, ACB intent groups, and verdicts
+- `/prove:scrum` — Operate the scrum store backed by `.prove/prove.db` (tasks, milestones, tags, run-links)
 
 <!-- prove:managed:end -->
 
@@ -108,3 +92,9 @@ When adding/removing/renaming `PROVE_SCHEMA` fields:
 - **Infrastructure tools** (CAFI, ACB, PCD): `kind: "tool"` (default); skills/agents/commands live at plugin top level. Do NOT refactor these to pack model. CLI topics (e.g., `schema`) live in `packages/cli/src/topics/`, not `tools/`.
 - **Workflow packs**: `kind: "pack"` in `tool.json`; bundle skills/agents/commands/assets inside `tools/<name>/`. Registry symlinks on install.
 - Decision record: `.prove/decisions/2026-03-29-optional-packs-via-tools.md`
+
+## CLI Invocation in User-Facing Output
+
+- **Always** invoke the CLI as `claude-prove <topic> <args>` in all user-facing markdown, generated CLAUDE.md content, docs, and codegen output. Assume `claude-prove` is on `PATH`.
+- **Never** emit `bun run` prefixes or absolute paths (e.g., `bun run /path/to/packages/cli/bin/run.ts`) in user-facing output; instead, emit the bare `claude-prove` command.
+- **Never** thread `pluginDir` (or equivalent path args) through codegen functions that render user-facing strings; instead, drop the parameter and render path-free commands.

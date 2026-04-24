@@ -38,7 +38,7 @@ claude-prove schema validate --file "$(pwd)/.claude/.prove.json" 2>&1
 
 #### 1.2: CLAUDE.md exists
 
-- Fail fix: `bun run "$PLUGIN_DIR/packages/cli/bin/run.ts" claude-md generate --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"`
+- Fail fix: `claude-prove claude-md generate --project-root "$(pwd)"`
 
 #### 1.3: .prove/ directory exists
 
@@ -75,11 +75,11 @@ Alternative fix (when `claude-prove` is already on PATH but stale): `claude-prov
 Skip unless `tools.cafi.enabled` is true.
 
 ```bash
-bun run $PLUGIN_DIR/packages/cli/bin/run.ts cafi status 2>&1
+claude-prove cafi status 2>&1
 ```
 
 - Pass: reports indexed files
-- Fail: errors or index missing — fix: `bun run $PLUGIN_DIR/packages/cli/bin/run.ts cafi index`
+- Fail: errors or index missing — fix: `claude-prove cafi index`
 
 #### 2.2: Docker
 
@@ -116,11 +116,11 @@ Skip unless `.claude/.prove.json` has a `reporters` section. Check each reporter
 Skip unless CAFI configured and index exists.
 
 ```bash
-bun run $PLUGIN_DIR/packages/cli/bin/run.ts cafi status 2>&1
+claude-prove cafi status 2>&1
 ```
 
 - Pass: up to date
-- Warn: N files changed — fix: `bun run $PLUGIN_DIR/packages/cli/bin/run.ts cafi index`
+- Warn: N files changed — fix: `claude-prove cafi index`
 
 #### 3.2: Orphaned Worktrees
 
@@ -134,7 +134,7 @@ Check `.claude/worktrees/` entries against `git worktree list 2>&1`.
 Compare `.claude/.prove.json` mtime vs `CLAUDE.md` mtime.
 
 - Pass: CLAUDE.md newer
-- Warn: .prove.json modified after CLAUDE.md — fix: `bun run "$PLUGIN_DIR/packages/cli/bin/run.ts" claude-md generate --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"`
+- Warn: .prove.json modified after CLAUDE.md — fix: `claude-prove claude-md generate --project-root "$(pwd)"`
 
 #### 3.4: Schema Version
 

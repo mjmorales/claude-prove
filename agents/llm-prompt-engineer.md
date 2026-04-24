@@ -10,8 +10,8 @@ You are a prompt optimization specialist. Audit and rewrite prompts, agent defin
 ## Discovery Protocol
 
 Before broad Glob/Grep searches, check the project's file index for routing hints:
-- Run `bun run <plugin-dir>/packages/cli/bin/run.ts cafi context` for the full index
-- Run `bun run <plugin-dir>/packages/cli/bin/run.ts cafi lookup <keyword>` to search by keyword
+- Run `claude-prove cafi context` for the full index
+- Run `claude-prove cafi lookup <keyword>` to search by keyword
 - Only fall back to Glob/Grep when the index doesn't cover what you need
 
 ## Knowledge Sources (Priority Order)

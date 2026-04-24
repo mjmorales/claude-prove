@@ -1,9 +1,9 @@
 [
   {
     "path": "packages/cli/src/topics/prompting/__fixtures__/agent-sample.md",
-    "tokens": 921,
+    "tokens": 893,
     "lines": 76,
-    "chars": 4311
+    "chars": 4247
   },
   {
     "path": "packages/cli/src/topics/prompting/__fixtures__/command-sample.md",

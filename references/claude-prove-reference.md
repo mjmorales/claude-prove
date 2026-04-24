@@ -4,9 +4,7 @@
 
 **Shape**: `claude-prove <topic> <action> [args] [flags]`
 
-**Invocation:**
-- In this repo (prefer): `bun run claude-prove/packages/cli/bin/run.ts <topic> <action>` — uses working-tree source, not the stale installed binary.
-- Installed: `claude-prove <topic> <action>`.
+**Invocation:** `claude-prove <topic> <action>` — the CLI is assumed on `PATH`. Dev-mode users alias or symlink `claude-prove` to their working-tree entry point so the bare command always resolves correctly.
 
 Examples below omit the prefix.
 

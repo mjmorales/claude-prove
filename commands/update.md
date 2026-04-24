@@ -96,7 +96,7 @@ Check for plugin capabilities not yet configured in `.claude/.prove.json`:
 
 2. **Core commands**: New `core: true` commands are picked up automatically in Step 8 (CLAUDE.md regeneration). Note "New commands detected, will appear in CLAUDE.md after regeneration."
 
-   **Scrum hooks** (schema v5+): when `tools.scrum.enabled` is true and `.claude/settings.json` is missing scrum-tagged hook entries, add three entries (SessionStart matcher `startup|resume|compact`, SubagentStop no matcher, Stop no matcher — all invoking `bun run <plugin>/packages/cli/bin/run.ts scrum hook <event>` with `_tool: "scrum"`). Idempotent: skip if `_tool: "scrum"` entries already present.
+   **Scrum hooks** (schema v5+): when `tools.scrum.enabled` is true and `.claude/settings.json` is missing scrum-tagged hook entries, add three entries (SessionStart matcher `startup|resume|compact`, SubagentStop no matcher, Stop no matcher — all invoking `claude-prove scrum hook <event>` with `_tool: "scrum"`). Dev-mode installs substitute the resolved `bun run <plugin>/packages/cli/bin/run.ts` prefix via `resolveBinaryPath`. Idempotent: skip if `_tool: "scrum"` entries already present.
 
 Skip this step entirely if all features are already configured.
 
@@ -118,18 +118,10 @@ Report: PASS/FAIL per config file, schema version, backup location (if applicabl
 
 ## Step 8: Update CLAUDE.md
 
-Substitute `$PLUGIN_DIR` with the path resolved in Step 0a. Pick one branch:
-
-**Compiled mode** — if `$PLUGIN_DIR/packages/cli/` does NOT exist (standard install under `~/.claude/plugins/cache/`):
+Substitute `$PLUGIN_DIR` with the path resolved in Step 0a.
 
 ```bash
 claude-prove claude-md generate --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"
-```
-
-**Dogfooding mode** — if `$PLUGIN_DIR/packages/cli/bin/run.ts` exists (running from the plugin checkout):
-
-```bash
-bun run "$PLUGIN_DIR/packages/cli/bin/run.ts" claude-md generate --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"
 ```
 
 Only the `<!-- prove:managed:start -->` / `<!-- prove:managed:end -->` block is replaced. Content outside the markers is preserved.

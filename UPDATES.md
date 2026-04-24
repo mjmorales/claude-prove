@@ -6,6 +6,36 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v2.6.1 — User-facing output drops `bun run` + absolute-path hints; `composeSubagentContext` / `renderDiscovery` lose the `pluginDir` param
+
+New CLAUDE.md directive (**CLI Invocation in User-Facing Output**) codifies: agent-facing markdown, generated CLAUDE.md content, docs, and codegen output must invoke the CLI as bare `claude-prove <topic> <args>` — never `bun run <abs-path>/packages/cli/bin/run.ts ...`, never absolute-path pins. Applied across the plugin so the generated output matches the rule.
+
+**Changed — codegen** (`packages/cli/src/topics/claude-md/composer.ts`):
+
+- `renderDiscovery()` no longer takes `pluginDir` — emits `claude-prove cafi context` / `claude-prove cafi lookup <keyword>`.
+- `composeSubagentContext(scan)` no longer takes an optional `pluginDir` — emits `claude-prove cafi context` / `claude-prove cafi get <path>`. **Public API change**: drop the second positional arg at call sites (`composeSubagentContext(scan, pluginDir)` → `composeSubagentContext(scan)`). TS consumers outside this repo should update their imports.
+- `renderVersionCheck(pluginVersion)` no longer takes `pluginDir` — generated CLAUDE.md now says `if \`claude-prove --version\` does not match vX.Y.Z, run /prove:update` instead of `cat <abs-path>/.claude-plugin/plugin.json | grep version`.
+
+**Changed — user-facing markdown** (bare `claude-prove` everywhere):
+
+- `agents/{code_steward,llm-prompt-engineer,principal-architect}.md` — CAFI discovery hints.
+- `commands/{doctor,init,review-ui,update}.md` — CLI invocations in fix-hints and orchestration scripts. `commands/update.md` drops the separate "Dogfooding mode" branch (Step 8); dev-mode users alias `claude-prove` to their working-tree entry point.
+- `skills/{docs,index,notify,orchestrator}/SKILL.md` + `skills/orchestrator/references/reporter-protocol.md`.
+- `references/claude-prove-reference.md` — invocation section collapses to a single form.
+
+**Migration**:
+
+- **Consumers of `composeSubagentContext(scan, pluginDir)`**: drop the second arg. No behavior change beyond the emitted command shape.
+- **CLAUDE.md owners**: re-run `/prove:update` (or `claude-prove claude-md generate --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"`) to regenerate the managed block in the new format. User-owned content outside `<!-- prove:managed:start/end -->` is preserved byte-for-byte.
+- **Dev-mode users (running the plugin from source)**: `claude-prove` must resolve to your working-tree entry point. Add an alias (`alias claude-prove="bun run /path/to/claude-prove/packages/cli/bin/run.ts"`) or symlink `~/.local/bin/claude-prove` to `packages/cli/bin/run.ts` (with a bun shebang).
+
+**Explicitly out of scope** (left unchanged):
+
+- `packages/installer/src/resolve-binary-path.ts` + the `acb` PostToolUse hook template (`packages/cli/src/topics/acb/hook.ts`) still emit the dev-mode `bun run <plugin>/packages/cli/bin/run.ts ...` form — these are machine-executable commands written into `settings.json` hooks and hook-blocked agent prompts, not user-facing markdown. Dev-mode agents would loop on hook failure if the bare `claude-prove` form were used without a PATH alias.
+- `UPDATES.md` historical entries unchanged — they document past behavior.
+
+---
+
 ## v2.5.0 — Dep-graph CLI: `scrum task add-dep` / `remove-dep`
 
 The dependency graph in `.prove/prove.db` (`scrum_deps` table) has been readable by `next-ready` since v1, but there was no supported way for operators or agents to *write* edges — `ScrumStore.addDep()` existed only as an internal API. This release exposes it through the `claude-prove scrum task` surface, with idempotent inserts, self-edge rejection, and additive visibility on `scrum task show`.

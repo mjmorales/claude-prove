@@ -195,7 +195,7 @@ Full CLAUDE.md regeneration. Scans codebase (tech stack, conventions, structure)
 
 1. `$PLUGIN` = absolute path to this plugin's root (parent of `skills/`)
 2. `$CWD` = user's cwd (target project, not plugin dir)
-3. Run: `bun run $PLUGIN/packages/cli/bin/run.ts claude-md generate --project-root $CWD --plugin-dir $PLUGIN`
+3. Run: `claude-prove claude-md generate --project-root $CWD --plugin-dir $PLUGIN`
 4. Display CLI output
 
 ### Related CLI Subcommands

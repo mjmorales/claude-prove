@@ -54,7 +54,7 @@ export function compose(scan: ScanResult, pluginDir?: string): string {
   const pluginVersion = scan.plugin_version ?? 'unknown';
   const prove = scan.prove_config;
   if (prove.exists && pluginVersion !== 'unknown') {
-    parts.push(renderVersionCheck(pluginVersion, resolvedPluginDir));
+    parts.push(renderVersionCheck(pluginVersion));
   }
 
   // Always include: tech-stack identity line
@@ -77,7 +77,7 @@ export function compose(scan: ScanResult, pluginDir?: string): string {
 
   // Discovery (if CAFI is available)
   if (scan.cafi.available || prove.has_index) {
-    parts.push(renderDiscovery(resolvedPluginDir));
+    parts.push(renderDiscovery());
   }
 
   // Tool directives (from enabled tools)
@@ -104,9 +104,7 @@ export function compose(scan: ScanResult, pluginDir?: string): string {
  * Compose a compact discovery context block for injection into subagent prompts.
  * Subset of the full CLAUDE.md focused on discovery + validation.
  */
-export function composeSubagentContext(scan: ScanResult, pluginDir?: string): string {
-  const resolvedPluginDir = pluginDir ?? scan.plugin_dir ?? '';
-
+export function composeSubagentContext(scan: ScanResult): string {
   const parts: string[] = [];
   parts.push('## Project Context');
   parts.push('');
@@ -117,12 +115,8 @@ export function composeSubagentContext(scan: ScanResult, pluginDir?: string): st
   if (scan.cafi.available) {
     parts.push('');
     parts.push('**Discovery**: Before broad Glob/Grep searches, check the file index:');
-    parts.push(
-      `- \`bun run ${resolvedPluginDir}/packages/cli/bin/run.ts cafi context\` — full index with routing hints`,
-    );
-    parts.push(
-      `- \`bun run ${resolvedPluginDir}/packages/cli/bin/run.ts cafi get <path>\` — single file description`,
-    );
+    parts.push('- `claude-prove cafi context` — full index with routing hints');
+    parts.push('- `claude-prove cafi get <path>` — single file description');
   }
 
   const validators = scan.prove_config.validators;
@@ -147,11 +141,10 @@ function renderHeader(scan: ScanResult): string {
   return `# ${name}\n`;
 }
 
-function renderVersionCheck(pluginVersion: string, pluginDir: string): string {
+function renderVersionCheck(pluginVersion: string): string {
   const lines = [
     `<!-- prove:plugin-version:${pluginVersion} -->`,
-    `**Prove plugin v${pluginVersion}** — if the installed plugin version ` +
-      `(\`cat ${pluginDir}/.claude-plugin/plugin.json | grep version\`) does not ` +
+    `**Prove plugin v${pluginVersion}** — if \`claude-prove --version\` does not ` +
       `match v${pluginVersion}, run \`/prove:update\` to sync.`,
     '',
   ];
@@ -208,14 +201,14 @@ function renderValidation(scan: ScanResult): string {
   return lines.join('\n');
 }
 
-function renderDiscovery(pluginDir: string): string {
+function renderDiscovery(): string {
   const lines = [
     '## Discovery Protocol',
     '',
     'Before broad Glob/Grep searches, check the file index first:',
     '',
-    `- \`bun run ${pluginDir}/packages/cli/bin/run.ts cafi context\` — full index with routing hints`,
-    `- \`bun run ${pluginDir}/packages/cli/bin/run.ts cafi lookup <keyword>\` — search by keyword`,
+    '- `claude-prove cafi context` — full index with routing hints',
+    '- `claude-prove cafi lookup <keyword>` — search by keyword',
     '',
     "Only fall back to Glob/Grep when the index doesn't cover what you need.",
   ];
