@@ -259,7 +259,7 @@ jobs:
             target: bun-linux-arm64
             artifact: claude-prove-linux-arm64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: v${{ needs.release.outputs.new_version }}
 
