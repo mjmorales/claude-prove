@@ -285,6 +285,48 @@ describe('ScrumStore — milestones', () => {
 });
 
 // ===========================================================================
+// setMilestoneStatus
+// ===========================================================================
+
+describe('ScrumStore — setMilestoneStatus', () => {
+  test('planned -> active transitions and returns the updated row', () => {
+    seedMilestone('m1');
+    const updated = store.setMilestoneStatus('m1', 'active');
+    expect(updated.status).toBe('active');
+    expect(store.getMilestone('m1')?.status).toBe('active');
+  });
+
+  test('active -> planned transitions back', () => {
+    seedMilestone('m1', { status: 'active' });
+    const updated = store.setMilestoneStatus('m1', 'planned');
+    expect(updated.status).toBe('planned');
+    expect(store.getMilestone('m1')?.status).toBe('planned');
+  });
+
+  test('planned -> planned is idempotent', () => {
+    seedMilestone('m1');
+    const updated = store.setMilestoneStatus('m1', 'planned');
+    expect(updated.status).toBe('planned');
+  });
+
+  test('active -> active is idempotent', () => {
+    seedMilestone('m1', { status: 'active' });
+    const updated = store.setMilestoneStatus('m1', 'active');
+    expect(updated.status).toBe('active');
+  });
+
+  test('throws on unknown id', () => {
+    expect(() => store.setMilestoneStatus('missing', 'active')).toThrow(/unknown milestone/);
+  });
+
+  test('throws when milestone is closed', () => {
+    seedMilestone('m1', { status: 'active' });
+    store.closeMilestone('m1');
+    expect(() => store.setMilestoneStatus('m1', 'active')).toThrow(/closed milestone/);
+  });
+});
+
+// ===========================================================================
 // Tags
 // ===========================================================================
 
@@ -562,7 +604,7 @@ describe('ScrumStore — nextReady', () => {
     expect(first?.rationale.milestone_boost).toBe(1);
   });
 
-  test('milestone_boost fires for active milestones when no filter is set', () => {
+  test('milestone_boost is 1.0 for active, 0.5 for planned when no filter is set', () => {
     seedMilestone('m1', { status: 'active' });
     seedMilestone('m2', { status: 'planned' });
     seedTask('t1', { createdAt: '2026-01-01T00:00:00Z', milestoneId: 'm1' });
@@ -570,7 +612,37 @@ describe('ScrumStore — nextReady', () => {
     const rows = store.nextReady();
     const byId = new Map(rows.map((r) => [r.task.id, r]));
     expect(byId.get('t1')?.rationale.milestone_boost).toBe(1);
-    expect(byId.get('t2')?.rationale.milestone_boost).toBe(0);
+    expect(byId.get('t2')?.rationale.milestone_boost).toBe(0.5);
+  });
+
+  test('milestone_boost is 0.5 for a planned milestone, no filter set', () => {
+    seedMilestone('m1', { status: 'planned' });
+    seedTask('t1', { createdAt: '2026-01-01T00:00:00Z', milestoneId: 'm1' });
+    const rows = store.nextReady();
+    const [first] = rows;
+    expect(first?.rationale.milestone_boost).toBe(0.5);
+  });
+
+  test('milestone_boost is 0 for a closed milestone', () => {
+    seedMilestone('m1', { status: 'planned' });
+    seedTask('t1', { createdAt: '2026-01-01T00:00:00Z', milestoneId: 'm1' });
+    store.closeMilestone('m1');
+    const rows = store.nextReady();
+    const [first] = rows;
+    expect(first?.rationale.milestone_boost).toBe(0);
+  });
+
+  test('activating a planned milestone re-queries to milestone_boost === 1.0', () => {
+    seedMilestone('m1', { status: 'planned' });
+    seedTask('t1', { createdAt: '2026-01-01T00:00:00Z', milestoneId: 'm1' });
+
+    const before = store.nextReady();
+    expect(before[0]?.rationale.milestone_boost).toBe(0.5);
+
+    store.setMilestoneStatus('m1', 'active');
+
+    const after = store.nextReady();
+    expect(after[0]?.rationale.milestone_boost).toBe(1);
   });
 
   test('tag_boost counts priority tags', () => {
@@ -580,6 +652,34 @@ describe('ScrumStore — nextReady', () => {
     const byId = new Map(rows.map((r) => [r.task.id, r]));
     expect(byId.get('t1')?.rationale.tag_boost).toBe(2);
     expect(byId.get('t2')?.rationale.tag_boost).toBe(0);
+  });
+
+  test('tag_boost is +2 for p0 + p1 (priority tags stack)', () => {
+    seedTask('t1', { createdAt: '2026-01-01T00:00:00Z', tags: ['p0', 'p1'] });
+    const rows = store.nextReady();
+    const [row] = rows;
+    expect(row?.rationale.tag_boost).toBe(2);
+  });
+
+  test('tag_boost is -1 for a task tagged only deferred', () => {
+    seedTask('t1', { createdAt: '2026-01-01T00:00:00Z', tags: ['deferred'] });
+    const rows = store.nextReady();
+    const [row] = rows;
+    expect(row?.rationale.tag_boost).toBe(-1);
+  });
+
+  test('tag_boost nets to 0 when p0 cancels deferred', () => {
+    seedTask('t1', { createdAt: '2026-01-01T00:00:00Z', tags: ['p0', 'deferred'] });
+    const rows = store.nextReady();
+    const [row] = rows;
+    expect(row?.rationale.tag_boost).toBe(0);
+  });
+
+  test('tag_boost is 0 for a task with no scored tags', () => {
+    seedTask('t1', { createdAt: '2026-01-01T00:00:00Z', tags: ['docs', 'chore'] });
+    const rows = store.nextReady();
+    const [row] = rows;
+    expect(row?.rationale.tag_boost).toBe(0);
   });
 
   test('context_hotness decays over time', () => {

@@ -128,6 +128,11 @@ const ALLOWED_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
 // Tags that boost priority in nextReady ranking.
 const PRIORITY_TAGS = new Set(['p0', 'p1', 'urgent', 'blocker']);
 
+// Tags that suppress a task in nextReady ranking. Each contributes -1 to
+// `tag_boost`, allowing deferred/blocked/wontfix work to net negative even
+// when the task also carries a priority tag.
+const DEFER_TAGS = new Set(['deferred', 'blocked', 'wontfix']);
+
 // ---------------------------------------------------------------------------
 // ScrumStore class
 // ---------------------------------------------------------------------------
@@ -411,6 +416,28 @@ export class ScrumStore {
     return row ?? null;
   }
 
+  /**
+   * Transition a milestone between `planned` and `active`. Closed is terminal —
+   * use `closeMilestone` to close and never re-open (schema invariant).
+   * Idempotent: setting status to the current value writes the same row.
+   *
+   * Does NOT emit a `scrum_events` row — the events table is task-scoped
+   * (`task_id NOT NULL`). Milestone-level events are out of scope for this
+   * change; operators can follow the transition via the milestone row's
+   * `status` column.
+   */
+  setMilestoneStatus(id: string, status: 'planned' | 'active'): ScrumMilestone {
+    const existing = this.getMilestone(id);
+    if (!existing) throw new Error(`setMilestoneStatus: unknown milestone '${id}'`);
+    if (existing.status === 'closed') {
+      throw new Error(`setMilestoneStatus: cannot re-open closed milestone '${id}'`);
+    }
+    this.prep('UPDATE scrum_milestones SET status = ? WHERE id = ?').run(status, id);
+    const updated = this.getMilestone(id);
+    if (!updated) throw new Error(`setMilestoneStatus: milestone '${id}' vanished mid-update`);
+    return updated;
+  }
+
   /** Set status = 'closed' and stamp `closed_at = now()`. Throws on unknown id. */
   closeMilestone(id: string): ScrumMilestone {
     const existing = this.getMilestone(id);
@@ -637,11 +664,18 @@ export class ScrumStore {
    * Where:
    *   unblock_depth    = count of descendant tasks this one unblocks
    *                      (transitive closure over `blocks` edges)
-   *   milestone_boost  = 1 if assigned to the filter milestone OR any
-   *                      active milestone, else 0
+   *   milestone_boost  = 1.0 if assigned to the filter milestone OR any
+   *                      active milestone (strongest boost);
+   *                      0.5 if assigned to a non-closed milestone
+   *                      (planned — partial credit so milestone-bound
+   *                      work outranks unlinked work);
+   *                      0   if unlinked or assigned to a closed milestone.
+   *                      `scrum milestone <id> activate` promotes a
+   *                      planned milestone to the strongest boost.
    *   context_hotness  = sigmoid of hours-since-last-event; fresher tasks
    *                      rank higher. Value in [0, 1].
-   *   tag_boost        = sum of +1 per priority tag attached to the task
+   *   tag_boost        = sum of +1 per priority tag and -1 per defer tag
+   *                      ({deferred, blocked, wontfix}) attached to the task
    *
    * Returns up to `limit` rows sorted by score DESC, then `created_at` ASC
    * for deterministic ordering on ties.
@@ -668,7 +702,11 @@ export class ScrumStore {
           ).all()
     ) as ScrumTask[];
 
+    // Snapshot active and closed milestone ids in one pass each — both
+    // sets feed `computeMilestoneBoost`. Per-invocation lookup keeps the
+    // boost calculation O(1) per task without a per-task DB round trip.
     const activeMilestones = new Set(this.listMilestones('active').map((m) => m.id));
+    const closedMilestones = new Set(this.listMilestones('closed').map((m) => m.id));
 
     // Batch the per-candidate tag lookup into a single IN-query. Bun's sqlite
     // binds parameters positionally, so we expand placeholders to match the
@@ -684,7 +722,12 @@ export class ScrumStore {
 
     const scored: NextReadyRow[] = candidates.map((task) => {
       const unblockDepth = this.computeUnblockDepth(task.id, unblockDepthCache);
-      const milestoneBoost = computeMilestoneBoost(task, options.milestoneId, activeMilestones);
+      const milestoneBoost = computeMilestoneBoost(
+        task,
+        options.milestoneId,
+        activeMilestones,
+        closedMilestones,
+      );
       const contextHotness = computeContextHotness(task.last_event_at, nowMs);
       const tagBoost = tagBoostByTask.get(task.id) ?? 0;
       const score = unblockDepth * 10 + milestoneBoost * 5 + contextHotness * 3 + tagBoost;
@@ -749,26 +792,40 @@ export class ScrumStore {
   }
 
   /**
-   * Batch-load priority-tag counts for a set of task ids in a single
-   * `WHERE task_id IN (...)` query. Replaces N individual tag lookups
-   * on the `nextReady` hot path. Tasks with no priority tags are
-   * absent from the returned map (callers should treat missing as 0).
+   * Batch-load net tag scores for a set of task ids in a single grouped
+   * query. Each priority tag contributes +1, each defer tag contributes -1;
+   * neutral tags contribute 0. Net scores can be negative — tasks with only
+   * defer tags must still appear in the returned map so callers see the
+   * suppression instead of treating them as neutral. Tasks with no scored
+   * tags at all are absent (callers treat missing as 0).
    */
   private fetchTagBoosts(taskIds: string[]): Map<string, number> {
     const boosts = new Map<string, number>();
     if (taskIds.length === 0) return boosts;
 
-    // One prepared statement per distinct candidate-count — Bun's sqlite
-    // requires a fixed placeholder count per statement. In practice
+    // SQL-side scoring keeps the boost calculation in one round-trip per
+    // candidate set instead of streaming every (task_id, tag) row back to
+    // JS. One prepared statement per distinct candidate-count — Bun's
+    // sqlite requires a fixed placeholder count per statement. In practice
     // `nextReady` caps the candidate set at the `ready`/`backlog` row
     // count, so the number of cached shapes stays bounded.
     const placeholders = taskIds.map(() => '?').join(', ');
-    const sql = `SELECT task_id, tag FROM scrum_tags WHERE task_id IN (${placeholders})`;
-    const rows = this.prep(sql).all(...taskIds) as Array<{ task_id: string; tag: string }>;
+    const priorityList = [...PRIORITY_TAGS].map((t) => `'${t}'`).join(', ');
+    const deferList = [...DEFER_TAGS].map((t) => `'${t}'`).join(', ');
+    const sql = `
+      SELECT task_id,
+             SUM(CASE WHEN tag IN (${priorityList}) THEN 1
+                      WHEN tag IN (${deferList}) THEN -1
+                      ELSE 0 END) AS boost
+      FROM scrum_tags
+      WHERE task_id IN (${placeholders})
+      GROUP BY task_id
+      HAVING boost <> 0
+    `;
+    const rows = this.prep(sql).all(...taskIds) as Array<{ task_id: string; boost: number }>;
 
-    for (const { task_id, tag } of rows) {
-      if (!PRIORITY_TAGS.has(tag)) continue;
-      boosts.set(task_id, (boosts.get(task_id) ?? 0) + 1);
+    for (const { task_id, boost } of rows) {
+      boosts.set(task_id, boost);
     }
     return boosts;
   }
@@ -813,16 +870,33 @@ function decodeEvent(row: {
   };
 }
 
+/**
+ * Weighted milestone boost for `nextReady`. Three tiers:
+ *   1.0 — task matches the explicit filter milestone, OR the task's
+ *         milestone is in the active set (operator has promoted it).
+ *   0.5 — task is bound to a non-closed milestone (planned). Partial
+ *         credit so milestone-bound work outranks fully unlinked work
+ *         even before activation.
+ *   0   — task is unlinked, OR its milestone is closed (terminal).
+ *
+ * `closedMilestones` is required so we can score "closed" without a
+ * per-task DB lookup; callers (see `nextReady`) snapshot both sets once
+ * per invocation. A milestone id present in neither set is treated as
+ * planned — matches `MilestoneStatus = 'planned' | 'active' | 'closed'`.
+ */
 function computeMilestoneBoost(
   task: ScrumTask,
   filterMilestoneId: string | undefined,
   activeMilestones: Set<string>,
+  closedMilestones: Set<string>,
 ): number {
   if (task.milestone_id === null) return 0;
   if (filterMilestoneId !== undefined) {
     return task.milestone_id === filterMilestoneId ? 1 : 0;
   }
-  return activeMilestones.has(task.milestone_id) ? 1 : 0;
+  if (activeMilestones.has(task.milestone_id)) return 1;
+  if (closedMilestones.has(task.milestone_id)) return 0;
+  return 0.5;
 }
 
 /**

@@ -6,9 +6,9 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## unreleased — Scrum CLI surface + importer precision (issue #16) + milestone reassignment (issue #17) + binary-rename follow-ups
+## v2.2.1 — Scrum CLI surface + importer precision + milestone reassignment + binary-rename follow-ups + next-ready scoring (issue #18)
 
-Closes the seven gaps filed in issue #16, adds the milestone-reassignment CLI path filed in issue #17, and finishes the trailing consumers of the v1.2.0 `prove` → `claude-prove` binary rename that were left half-done in the working tree (`install doctor`, `install upgrade`, version bump script, CI release workflow, and runtime PATH checks in `commands/review-ui.md` + `skills/task/scripts/gather-context.sh`).
+Closes the seven gaps filed in issue #16, adds the milestone-reassignment CLI path filed in issue #17, tightens `scrum next-ready` ranking per issue #18 (closes #18), and finishes the trailing consumers of the v1.2.0 `prove` → `claude-prove` binary rename that were left half-done in the working tree (`install doctor`, `install upgrade`, version bump script, CI release workflow, and runtime PATH checks in `commands/review-ui.md` + `skills/task/scripts/gather-context.sh`).
 
 ### Scrum task milestone reassignment — issue #17
 
@@ -102,6 +102,44 @@ The composer now injects `@$PLUGIN_DIR/references/claude-prove-reference.md` as 
 
 - Auto-adopted on next `/prove:update` (Step 8 regenerates CLAUDE.md). Manual: `claude-prove claude-md generate --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"`.
 - If you previously added `claude-prove-reference.md` to your `.claude/.prove.json` by hand, the composer silently dedupes it — safe to leave or remove.
+
+### Milestone lifecycle transitions — issue #18
+
+Planned milestones now have an explicit `active` state with CLI transitions, so operators can promote scope into focus without hand-editing the DB. `closed` remains terminal (reopen reverts to `planned`, not `active`).
+
+**Added**:
+
+- `claude-prove scrum milestone <id> activate` — transitions `planned` → `active`. Idempotent on already-active rows; rejects activation from `closed` (reopen first).
+- `claude-prove scrum milestone <id> reopen` — transitions `closed` → `planned`. Operators re-enter the lifecycle from `planned` and re-activate explicitly, preserving the audit trail.
+- `ScrumStore.updateMilestoneStatus(id, nextStatus)` — transaction-wrapped transitions with explicit allow-list: `planned↔active`, `planned→closed`, `active→closed`, `closed→planned`. Rejects other transitions with a descriptive error.
+
+**Migration**:
+
+- No schema changes. Existing `scrum_milestones` rows with `status = 'planned'` stay planned until activated; rows with `status = 'active'` are unaffected.
+
+### Weighted milestone boost in `next-ready` — issue #18
+
+`scrum next-ready` now weights milestone contribution by lifecycle status instead of treating all milestone-linked tasks equally. Active milestones (or an explicit `--milestone` filter) get full credit, planned milestones get half credit so they rank below in-focus work but above unlinked tasks, and closed/unlinked tasks contribute zero.
+
+**Changed**:
+
+- `milestone_boost` in the `next-ready` score is now `1.0` for active/filter-matched milestones, `0.5` for planned milestones, and `0` for closed or unlinked tasks. Activating a planned milestone automatically promotes its tasks from `0.5` → `1.0` on the next ranking — no manual re-ranking required.
+
+**Migration**:
+
+- Auto-adopted. Ranking shifts on the next `claude-prove scrum next-ready` invocation; operators who relied on planned milestones outranking active ones (unusual) should run `milestone activate` on the intended focus scope.
+
+### Negative tag scoring in `next-ready` — issue #18
+
+`next-ready` now demotes explicitly-suppressed tasks instead of only boosting positive signals. Tasks tagged `deferred`, `blocked`, or `wontfix` contribute `-1` per tag to `tag_boost`, ranking them below neutral peers so the top of the queue stays free of known-suppressed work.
+
+**Added**:
+
+- `DEFER_TAGS = { deferred, blocked, wontfix }` constant in the `next-ready` scorer. Each defer tag subtracts `1` from `tag_boost`; positive-signal tags continue to contribute their existing boost.
+
+**Migration**:
+
+- Auto-adopted. Operators using non-standard suppression vocabulary (e.g. `on-hold`, `paused`) should re-tag affected tasks with one of the canonical defer tags, or continue to rely on status transitions (`in_review`, `blocked`) for suppression.
 
 ---
 
