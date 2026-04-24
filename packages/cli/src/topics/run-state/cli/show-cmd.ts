@@ -9,11 +9,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { RunPaths } from '../paths';
-import { loadState } from '../state';
 import { renderPlan, renderPrd, renderReport, renderState, renderSummary } from '../render';
+import { loadState } from '../state';
 import type { PlanData, PrdData, ReportData, StateData } from '../state';
 import { sortedChildren } from './fs-helpers';
-import { type RunSelection, ResolveError, resolvePaths, defaultRunsRoot } from './resolve';
+import { ResolveError, type RunSelection, defaultRunsRoot, resolvePaths } from './resolve';
 
 export interface ShowFlags extends RunSelection {
   kind?: 'state' | 'plan' | 'prd' | 'report';

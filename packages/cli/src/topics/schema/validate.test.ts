@@ -41,9 +41,7 @@ describe('TestProveSchema', () => {
       schema_version: '1',
       scopes: { plugin: '.' },
       validators: [{ name: 'build', command: 'go build ./...', phase: 'build' }],
-      reporters: [
-        { name: 'slack', command: './notify.sh', events: ['step-complete'] },
-      ],
+      reporters: [{ name: 'slack', command: './notify.sh', events: ['step-complete'] }],
       index: { excludes: [], max_file_size: 102400, concurrency: 3 },
     };
     const errors = validateConfig(config, PROVE_SCHEMA);

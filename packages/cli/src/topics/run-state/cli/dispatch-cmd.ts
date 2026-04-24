@@ -9,7 +9,7 @@
  */
 
 import { dispatchHas, dispatchRecord } from '../state';
-import { type RunSelection, ResolveError, resolvePaths } from './resolve';
+import { ResolveError, type RunSelection, resolvePaths } from './resolve';
 
 export type DispatchAction = 'record' | 'has';
 

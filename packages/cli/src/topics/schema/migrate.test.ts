@@ -101,9 +101,7 @@ describe('TestPlanMigration', () => {
     const config = {
       scopes: { skills: 'skills/' },
       validators: [{ name: 'test', command: 'pytest', phase: 'test' }],
-      reporters: [
-        { name: 'slack', command: './notify.sh', events: ['step-complete'] },
-      ],
+      reporters: [{ name: 'slack', command: './notify.sh', events: ['step-complete'] }],
       index: { excludes: [], max_file_size: 102400, concurrency: 3 },
     };
     const [target] = planMigration(config);
@@ -223,7 +221,7 @@ describe('TestPlanMigration', () => {
     // move. The current Python test asserts "3" — the TS hop sequence
     // continues past v3, so assert the final target state is >= "3" AND
     // the v2->v3 move happened.
-    expect(parseInt(target['schema_version'] as string, 10)).toBeGreaterThanOrEqual(3);
+    expect(Number.parseInt(target['schema_version'] as string, 10)).toBeGreaterThanOrEqual(3);
     expect('index' in target).toBe(false);
     const tools = target['tools'] as Record<string, Record<string, unknown>>;
     expect(tools['cafi']!['enabled']).toBe(true);
@@ -235,7 +233,7 @@ describe('TestPlanMigration', () => {
     const config = { schema_version: '2', validators: [] };
     const [target] = planMigration(config);
 
-    expect(parseInt(target['schema_version'] as string, 10)).toBeGreaterThanOrEqual(3);
+    expect(Number.parseInt(target['schema_version'] as string, 10)).toBeGreaterThanOrEqual(3);
     const tools = target['tools'] as Record<string, Record<string, unknown>>;
     expect(tools['cafi']!['enabled']).toBe(false);
   });
@@ -463,9 +461,7 @@ describe('TestV4ToV5', () => {
       scope: 'user',
       config: {},
     });
-    expect(
-      changes.some((c) => c.path === 'tools.scrum' && c.action === 'add'),
-    ).toBe(true);
+    expect(changes.some((c) => c.path === 'tools.scrum' && c.action === 'add')).toBe(true);
   });
 
   test('v4 to v5 preserves existing tools.scrum (idempotent)', () => {
@@ -542,9 +538,7 @@ describe('TestV4ToV5', () => {
     expect(changes[0]!.path).toBe('schema_version');
     // Keys outside schema_version and tools are untouched.
     const keys = Object.keys(target).filter((k) => k !== 'schema_version' && k !== 'tools');
-    const origKeys = Object.keys(config).filter(
-      (k) => k !== 'schema_version' && k !== 'tools',
-    );
+    const origKeys = Object.keys(config).filter((k) => k !== 'schema_version' && k !== 'tools');
     expect(keys).toEqual(origKeys);
   });
 

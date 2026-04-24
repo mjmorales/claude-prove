@@ -289,7 +289,10 @@ function dispatchCurrent(flags: RunStateFlags): number {
 }
 
 // run-state step <start|complete|fail|halt> <step_id>
-function dispatchStep({ arg1: stepAction, arg2: stepId }: Positionals, flags: RunStateFlags): number {
+function dispatchStep(
+  { arg1: stepAction, arg2: stepId }: Positionals,
+  flags: RunStateFlags,
+): number {
   if (!stepAction) return usage('the following arguments are required: action');
   if (!STEP_ACTIONS.has(stepAction as StepAction)) {
     console.error(
@@ -365,9 +368,7 @@ function dispatchDispatch(
   flags: RunStateFlags,
 ): number {
   if (subAction !== 'record' && subAction !== 'has') {
-    console.error(
-      `error: unknown dispatch action '${subAction ?? ''}' (expected: record | has)`,
-    );
+    console.error(`error: unknown dispatch action '${subAction ?? ''}' (expected: record | has)`);
     return 1;
   }
   if (!key) return usage('the following arguments are required: key');
@@ -410,9 +411,7 @@ function dispatchHook({ arg1: event }: Positionals): number {
     );
   }
   if (!isHookEvent(event)) {
-    console.error(
-      `error: unknown hook event '${event}' (expected: ${HOOK_EVENTS.join(' | ')})`,
-    );
+    console.error(`error: unknown hook event '${event}' (expected: ${HOOK_EVENTS.join(' | ')})`);
     return 1;
   }
   return runHookFromStdin(event);
@@ -435,7 +434,9 @@ function narrowMdJson(value: string): 'md' | 'json' {
 
 function narrowJsonText(value: string): 'json' | 'text' {
   if (value === 'json' || value === 'text') return value;
-  console.warn(`warning: unknown --format '${value}' (expected: json | text); defaulting to 'text'`);
+  console.warn(
+    `warning: unknown --format '${value}' (expected: json | text); defaulting to 'text'`,
+  );
   return 'text';
 }
 

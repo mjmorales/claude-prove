@@ -258,7 +258,17 @@ describe('run-state CLI integration', () => {
         root,
       );
       const show = runCli(
-        ['show', '--branch', 'feature', '--slug', 'demo', '--runs-root', runsRoot, '--format', 'json'],
+        [
+          'show',
+          '--branch',
+          'feature',
+          '--slug',
+          'demo',
+          '--runs-root',
+          runsRoot,
+          '--format',
+          'json',
+        ],
         root,
       );
       expect(show.exitCode).toBe(0);
@@ -383,16 +393,46 @@ describe('run-state CLI integration', () => {
       );
       // start + complete
       runCli(
-        ['step', 'start', '1.1.1', '--branch', 'feature', '--slug', 'demo', '--runs-root', runsRoot],
+        [
+          'step',
+          'start',
+          '1.1.1',
+          '--branch',
+          'feature',
+          '--slug',
+          'demo',
+          '--runs-root',
+          runsRoot,
+        ],
         root,
       );
       runCli(
-        ['step', 'complete', '1.1.1', '--branch', 'feature', '--slug', 'demo', '--runs-root', runsRoot],
+        [
+          'step',
+          'complete',
+          '1.1.1',
+          '--branch',
+          'feature',
+          '--slug',
+          'demo',
+          '--runs-root',
+          runsRoot,
+        ],
         root,
       );
       // start again on already-completed step — invalid
       const again = runCli(
-        ['step', 'start', '1.1.1', '--branch', 'feature', '--slug', 'demo', '--runs-root', runsRoot],
+        [
+          'step',
+          'start',
+          '1.1.1',
+          '--branch',
+          'feature',
+          '--slug',
+          'demo',
+          '--runs-root',
+          runsRoot,
+        ],
         root,
       );
       expect(again.exitCode).toBe(2);

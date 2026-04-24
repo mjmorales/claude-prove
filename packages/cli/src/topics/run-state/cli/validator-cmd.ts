@@ -7,7 +7,7 @@
 
 import { StateError, validatorSet } from '../state';
 import { printMutationResult } from './print-result';
-import { type RunSelection, ResolveError, resolvePaths } from './resolve';
+import { ResolveError, type RunSelection, resolvePaths } from './resolve';
 
 export interface ValidatorFlags extends RunSelection {
   format?: 'md' | 'json';

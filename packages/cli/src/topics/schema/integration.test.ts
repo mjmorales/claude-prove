@@ -20,12 +20,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import {
-  copyFileSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-} from 'node:fs';
+import { copyFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
@@ -88,13 +83,7 @@ describe.each(VERSIONS)('schema CLI parity against %s fixture', (version) => {
 
   test('migrate --dry-run output matches ts-capture', () => {
     const actual = withFixture(version, (provePath) => {
-      const { stdout } = runCli([
-        'schema',
-        'migrate',
-        '--file',
-        provePath,
-        '--dry-run',
-      ]);
+      const { stdout } = runCli(['schema', 'migrate', '--file', provePath, '--dry-run']);
       return normalise(stdout, provePath);
     });
     expect(actual).toBe(readCapture(`migrate_dry_${version}.txt`));

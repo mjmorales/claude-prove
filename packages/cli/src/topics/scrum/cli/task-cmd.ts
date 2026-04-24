@@ -207,4 +207,3 @@ function doLinkDecision(
   process.stderr.write(`scrum task link-decision: ${id} -> ${decisionPath}\n`);
   return 0;
 }
-

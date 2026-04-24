@@ -5,16 +5,9 @@
  * on stderr (matches Python hook-blocking semantics).
  */
 
-import {
-  type StateData,
-  StateError,
-  stepComplete,
-  stepFail,
-  stepHalt,
-  stepStart,
-} from '../state';
+import { type StateData, StateError, stepComplete, stepFail, stepHalt, stepStart } from '../state';
 import { printMutationResult } from './print-result';
-import { type RunSelection, ResolveError, resolvePaths } from './resolve';
+import { ResolveError, type RunSelection, resolvePaths } from './resolve';
 
 export type StepAction = 'start' | 'complete' | 'fail' | 'halt';
 

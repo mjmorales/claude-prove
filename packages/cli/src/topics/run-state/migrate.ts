@@ -36,23 +36,18 @@
  * and `.prove/decisions/2026-04-17-prove-runs-json-first.md` for intent.
  */
 
-import {
-  existsSync,
-  readFileSync,
-  readdirSync,
-  statSync,
-} from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
-import { type RunPathsData } from './paths';
+import type { RunPathsData } from './paths';
 import {
-  _clock,
-  deepCloneJson,
-  defaultsFromSchema,
   type DispatchLedger,
   type PlanData,
   type PrdData,
   type StateData,
   type TaskData,
+  _clock,
+  deepCloneJson,
+  defaultsFromSchema,
   newPlan as stateNewPlan,
   newPrd as stateNewPrd,
   newState as stateNewState,
@@ -101,11 +96,7 @@ export function newPlan(tasks: PlanData['tasks'], mode = 'simple'): PlanData {
  * delegates to the canonical builder in `state.ts` so key order / on-disk
  * bytes stay identical.
  */
-export function newState(
-  slug: string,
-  branch: string,
-  plan: Record<string, unknown>,
-): StateData {
+export function newState(slug: string, branch: string, plan: Record<string, unknown>): StateData {
   return stateNewState(slug, branch, coercePlan(plan));
 }
 
@@ -326,10 +317,7 @@ export function deriveStateFromProgress(
 
   if (anyInProgress) {
     state.run_status = 'running';
-  } else if (
-    state.tasks.length > 0 &&
-    state.tasks.every((t) => t.status === 'completed')
-  ) {
+  } else if (state.tasks.length > 0 && state.tasks.every((t) => t.status === 'completed')) {
     state.run_status = 'completed';
     state.ended_at = utcnowIso();
   }
@@ -521,8 +509,7 @@ function walk(dir: string, acc: string[]): void {
   } catch {
     return;
   }
-  const hasLegacy =
-    existsSync(join(dir, 'TASK_PLAN.md')) || existsSync(join(dir, 'PRD.md'));
+  const hasLegacy = existsSync(join(dir, 'TASK_PLAN.md')) || existsSync(join(dir, 'PRD.md'));
   if (hasLegacy) acc.push(dir);
   for (const name of entries) {
     const child = join(dir, name);

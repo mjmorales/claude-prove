@@ -6,9 +6,9 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { initRun, type PlanData, type PrdData, StateError } from '../state';
+import { type PlanData, type PrdData, StateError, initRun } from '../state';
 import { validateData } from '../validate';
-import { defaultRunsRoot, ResolveError } from './resolve';
+import { ResolveError, defaultRunsRoot } from './resolve';
 
 export interface InitFlags {
   branch?: string;

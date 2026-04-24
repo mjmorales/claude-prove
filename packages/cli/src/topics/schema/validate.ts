@@ -74,11 +74,7 @@ export interface ValidateFileResult {
  * Emits an error (with `config: null`) for missing file, invalid JSON, or a
  * non-object top-level value.
  */
-export function validateFile(
-  path: string,
-  schema?: Schema,
-  strict = false,
-): ValidateFileResult {
+export function validateFile(path: string, schema?: Schema, strict = false): ValidateFileResult {
   let raw: string;
   try {
     raw = readFileSync(path, 'utf8');
@@ -110,11 +106,7 @@ export function validateFile(
     return {
       config,
       errors: [
-        new ValidationError(
-          path,
-          'cannot auto-detect schema — pass schema explicitly',
-          'warning',
-        ),
+        new ValidationError(path, 'cannot auto-detect schema — pass schema explicitly', 'warning'),
       ],
     };
   }
@@ -178,15 +170,16 @@ function validateValue(value: unknown, spec: FieldSpec, path: string): Validatio
   if (expected === 'any') return errors;
 
   if (!matchesType(value, expected)) {
-    errors.push(
-      new ValidationError(path, `expected ${expected}, got ${typeName(value)}`),
-    );
+    errors.push(new ValidationError(path, `expected ${expected}, got ${typeName(value)}`));
     return errors; // Skip further checks if type is wrong.
   }
 
   if (spec.enum && !spec.enum.includes(value as string | number | boolean)) {
     errors.push(
-      new ValidationError(path, `must be one of ${formatEnum(spec.enum)}, got ${formatValue(value)}`),
+      new ValidationError(
+        path,
+        `must be one of ${formatEnum(spec.enum)}, got ${formatValue(value)}`,
+      ),
     );
   }
 

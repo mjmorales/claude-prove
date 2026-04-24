@@ -1,11 +1,6 @@
 {
-  "init_only": [
-    { "op": "init" }
-  ],
-  "step_start": [
-    { "op": "init" },
-    { "op": "step", "action": "start", "step_id": "1.1.1" }
-  ],
+  "init_only": [{ "op": "init" }],
+  "step_start": [{ "op": "init" }, { "op": "step", "action": "start", "step_id": "1.1.1" }],
   "validator_set": [
     { "op": "init" },
     { "op": "step", "action": "start", "step_id": "1.1.1" },

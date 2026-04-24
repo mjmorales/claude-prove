@@ -28,8 +28,8 @@
 
 import { statSync } from 'node:fs';
 import { isAbsolute, join, normalize } from 'node:path';
-import { currentBranch, headSha, resolveRunSlug } from '@claude-prove/shared';
 import { resolvePluginRoot } from '@claude-prove/installer';
+import { currentBranch, headSha, resolveRunSlug } from '@claude-prove/shared';
 import { openAcbStore } from './store';
 
 // ---------------------------------------------------------------------------

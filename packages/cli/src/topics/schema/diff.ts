@@ -18,7 +18,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { basename } from 'node:path';
 import { planMigration } from './migrate';
-import { PROVE_SCHEMA, type Schema, SETTINGS_SCHEMA } from './schemas';
+import { PROVE_SCHEMA, SETTINGS_SCHEMA, type Schema } from './schemas';
 import { validateConfig } from './validate';
 
 /**

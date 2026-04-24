@@ -257,8 +257,7 @@ const HOOK_MATCHER_SCHEMA: FieldSpec = {
     _tool: {
       type: 'str',
       required: false,
-      description:
-        'Tool registry tag — identifies which prove tool owns this hook entry',
+      description: 'Tool registry tag — identifies which prove tool owns this hook entry',
     },
   },
 };

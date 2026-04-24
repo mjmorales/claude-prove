@@ -11,14 +11,9 @@
 
 import { readFileSync } from 'node:fs';
 import { CURRENT_SCHEMA_VERSION, STEP_STATUSES } from '../schemas';
-import {
-  type PlanData,
-  type ReportData,
-  reportWrite,
-  utcnowIso,
-} from '../state';
+import { type PlanData, type ReportData, reportWrite, utcnowIso } from '../state';
 import { validateData } from '../validate';
-import { type RunSelection, ResolveError, resolvePaths } from './resolve';
+import { ResolveError, type RunSelection, resolvePaths } from './resolve';
 
 export interface ReportWriteFlags extends RunSelection {
   status?: string;

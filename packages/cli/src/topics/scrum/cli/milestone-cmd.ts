@@ -79,9 +79,7 @@ function doCreate(store: ScrumStore, flags: MilestoneCmdFlags): number {
     return 1;
   }
   const id =
-    flags.id !== undefined && flags.id.length > 0
-      ? flags.id
-      : generateId(flags.title, 'milestone');
+    flags.id !== undefined && flags.id.length > 0 ? flags.id : generateId(flags.title, 'milestone');
   const milestone = store.createMilestone({
     id,
     title: flags.title,
@@ -138,4 +136,3 @@ function doClose(store: ScrumStore, id: string | undefined): number {
   process.stderr.write(`scrum milestone close: ${id}\n`);
   return 0;
 }
-

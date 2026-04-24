@@ -19,15 +19,10 @@
  *   - summary: prints `summary()` for the two canonical config paths.
  */
 
-import type { CAC } from 'cac';
 import { readFileSync } from 'node:fs';
+import type { CAC } from 'cac';
 import { configDiff, summary } from './schema/diff';
-import {
-  applyMigration,
-  detectVersion,
-  planMigration,
-  type ProveConfig,
-} from './schema/migrate';
+import { type ProveConfig, applyMigration, detectVersion, planMigration } from './schema/migrate';
 import { CURRENT_SCHEMA_VERSION } from './schema/schemas';
 import { validateFile } from './schema/validate';
 

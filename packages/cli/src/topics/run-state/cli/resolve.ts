@@ -58,7 +58,8 @@ export function resolvePaths(selection: RunSelection): ResolvedRun {
     );
   }
 
-  const branch = selection.branch ?? process.env.PROVE_RUN_BRANCH ?? autodetectBranch(runsRoot, slug);
+  const branch =
+    selection.branch ?? process.env.PROVE_RUN_BRANCH ?? autodetectBranch(runsRoot, slug);
   if (!branch) {
     throw new ResolveError(
       `slug '${slug}' is not registered under ${runsRoot}. ` +

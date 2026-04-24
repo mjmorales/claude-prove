@@ -23,7 +23,12 @@
  */
 
 import type { CAC } from 'cac';
-import { runGenerate, runScan, runSubagentContext, runValidators } from './claude-md/cli/generate-cmd';
+import {
+  runGenerate,
+  runScan,
+  runSubagentContext,
+  runValidators,
+} from './claude-md/cli/generate-cmd';
 
 type ClaudeMdAction = 'generate' | 'scan' | 'subagent-context' | 'validators';
 

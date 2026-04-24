@@ -97,11 +97,7 @@ function migrateV1ToV2(config: ProveConfig): [ProveConfig, MigrationChange[]] {
         delete v['stage'];
         const name = typeof v['name'] === 'string' ? v['name'] : '?';
         changes.push(
-          new MigrationChange(
-            'rename',
-            `validators[${name}].stage`,
-            'renamed "stage" -> "phase"',
-          ),
+          new MigrationChange('rename', `validators[${name}].stage`, 'renamed "stage" -> "phase"'),
         );
       }
       return v;
@@ -138,9 +134,7 @@ function migrateV2ToV3(config: ProveConfig): [ProveConfig, MigrationChange[]] {
   changes.push(new MigrationChange('change', 'schema_version', '"2" -> "3"'));
 
   const existingTools = result['tools'];
-  const tools: Record<string, unknown> = isPlainObject(existingTools)
-    ? { ...existingTools }
-    : {};
+  const tools: Record<string, unknown> = isPlainObject(existingTools) ? { ...existingTools } : {};
 
   const indexConfig = result['index'];
   const hadIndex = 'index' in result;
@@ -148,9 +142,7 @@ function migrateV2ToV3(config: ProveConfig): [ProveConfig, MigrationChange[]] {
 
   if (hadIndex) {
     const cafiExisting = tools['cafi'];
-    const cafi: Record<string, unknown> = isPlainObject(cafiExisting)
-      ? { ...cafiExisting }
-      : {};
+    const cafi: Record<string, unknown> = isPlainObject(cafiExisting) ? { ...cafiExisting } : {};
     cafi['enabled'] = true;
     cafi['config'] = indexConfig;
     tools['cafi'] = cafi;
@@ -158,12 +150,9 @@ function migrateV2ToV3(config: ProveConfig): [ProveConfig, MigrationChange[]] {
   } else if (!('cafi' in tools)) {
     tools['cafi'] = { enabled: false };
     changes.push(
-      new MigrationChange(
-        'add',
-        'tools.cafi',
-        'added (disabled — no prior index config)',
-        { enabled: false },
-      ),
+      new MigrationChange('add', 'tools.cafi', 'added (disabled — no prior index config)', {
+        enabled: false,
+      }),
     );
   }
 
@@ -237,9 +226,7 @@ function migrateV4ToV5(config: ProveConfig): [ProveConfig, MigrationChange[]] {
   changes.push(new MigrationChange('change', 'schema_version', '"4" -> "5"'));
 
   const existingTools = result['tools'];
-  const tools: Record<string, unknown> = isPlainObject(existingTools)
-    ? { ...existingTools }
-    : {};
+  const tools: Record<string, unknown> = isPlainObject(existingTools) ? { ...existingTools } : {};
 
   if (!('scrum' in tools)) {
     const scrumDefaults = { enabled: true, scope: 'user', config: {} };
@@ -287,7 +274,7 @@ export function planMigration(config: ProveConfig): [ProveConfig, MigrationChang
 
   let version = currentVersion;
   while (version !== CURRENT_SCHEMA_VERSION) {
-    const nextVersion = String(parseInt(version, 10) + 1);
+    const nextVersion = String(Number.parseInt(version, 10) + 1);
     const key = `${version}_to_${nextVersion}`;
     const fn = MIGRATIONS[key];
     if (!fn) {

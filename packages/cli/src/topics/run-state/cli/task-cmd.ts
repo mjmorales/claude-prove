@@ -7,7 +7,7 @@
 
 import { StateError, taskReview } from '../state';
 import { printMutationResult } from './print-result';
-import { type RunSelection, ResolveError, resolvePaths } from './resolve';
+import { ResolveError, type RunSelection, resolvePaths } from './resolve';
 
 export interface TaskReviewFlags extends RunSelection {
   verdict?: string;

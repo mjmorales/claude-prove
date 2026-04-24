@@ -14,7 +14,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { type HookResult } from '../../run-state/hooks/types';
+import type { HookResult } from '../../run-state/hooks/types';
 import { onSessionStart, onStop, onSubagentStop } from '../hook';
 
 export interface HookCmdFlags {
@@ -39,9 +39,10 @@ export function runHookCmd(event: string, _flags: HookCmdFlags): number {
   let payload: Record<string, unknown> | null;
   try {
     const parsed = JSON.parse(raw);
-    payload = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
+    payload =
+      parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
   } catch {
     // Silent pass — mirrors acb hook-cmd's JSONDecodeError handling.
     return 0;

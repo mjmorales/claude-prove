@@ -13,7 +13,7 @@
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { loadState } from '../state';
-import type { PlanData, StateData, TaskData, StepData } from '../state';
+import type { PlanData, StateData, StepData, TaskData } from '../state';
 import { ResolveError, type RunSelection, resolvePaths } from './resolve';
 
 export interface StepInfoFlags extends RunSelection {}

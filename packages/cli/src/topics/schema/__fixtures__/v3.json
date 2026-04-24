@@ -1,8 +1,6 @@
 {
   "schema_version": "3",
-  "validators": [
-    { "name": "test", "command": "pytest", "phase": "test" }
-  ],
+  "validators": [{ "name": "test", "command": "pytest", "phase": "test" }],
   "scopes": {
     "plugin": ".",
     "tools": "tools/"
