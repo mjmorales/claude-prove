@@ -1,10 +1,16 @@
 import { useState } from "react";
+import { NavLink } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api, type GroupVerdict } from "../lib/api";
 import { useSelection } from "../lib/store";
 import { useConnection } from "../hooks/useConnection";
 import { cn } from "../lib/cn";
 import { PALETTE } from "./review/verdictTokens";
+
+const SURFACES: Array<{ to: string; label: string }> = [
+  { to: "/acb", label: "ACB" },
+  { to: "/scrum", label: "Scrum" },
+];
 
 type VerdictKey = Exclude<GroupVerdict, "pending">;
 
@@ -72,6 +78,25 @@ export function StatusHeader({
           <span className="mono text-[13px] text-fg-faint">/</span>
           <span className="mono text-[13px] text-fg-dim">review</span>
         </div>
+
+        <nav aria-label="Surface" className="flex items-center gap-1 pr-3 border-r border-bg-line h-6">
+          {SURFACES.map((s) => (
+            <NavLink
+              key={s.to}
+              to={s.to}
+              className={({ isActive }) =>
+                cn(
+                  "px-2.5 h-6 flex items-center rounded-md text-[12px] mono transition-colors",
+                  isActive
+                    ? "bg-phos/15 text-phos border border-phos/40"
+                    : "text-fg-dim hover:text-fg-bright hover:bg-bg-raised border border-transparent",
+                )
+              }
+            >
+              {s.label}
+            </NavLink>
+          ))}
+        </nav>
 
         {slug ? (
           <div className="flex items-center gap-4 min-w-0">
