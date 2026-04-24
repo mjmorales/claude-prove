@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { FileChange } from "../lib/api";
 import { cn } from "../lib/cn";
+import { PALETTE } from "./review/verdictTokens";
 
 type TreeNode = {
   name: string;
@@ -208,12 +209,12 @@ function TreeItem({
 function StatusGlyph({ status }: { status: string }) {
   const key = status[0] ?? "M";
   const map: Record<string, { glyph: string; color: string }> = {
-    A: { glyph: "+", color: "#50fa7b" },
-    M: { glyph: "M", color: "#8be9fd" },
-    D: { glyph: "−", color: "#ff5555" },
-    R: { glyph: "R", color: "#ffb86c" },
+    A: { glyph: "+", color: PALETTE.status.added },
+    M: { glyph: "M", color: PALETTE.status.modified },
+    D: { glyph: "−", color: PALETTE.status.deleted },
+    R: { glyph: "R", color: PALETTE.status.renamed },
   };
-  const m = map[key] ?? { glyph: key, color: "#a9b0c4" };
+  const m = map[key] ?? { glyph: key, color: PALETTE.accent.neutral };
   return (
     <span
       className="w-4 h-4 text-[11px] font-bold font-mono shrink-0 flex items-center justify-center rounded-sm"

@@ -5,6 +5,7 @@ import { useSelection } from "../lib/store";
 import { cn } from "../lib/cn";
 import { Markdown } from "./Markdown";
 import { PanelLoading } from "./PanelLoading";
+import { Empty } from "./Empty";
 
 export function DecisionsPanel() {
   const slug = useSelection((s) => s.slug);
@@ -115,6 +116,3 @@ function GroupLabel({ text, tone }: { text: string; tone?: "amber" }) {
   );
 }
 
-function Empty({ text }: { text: string }) {
-  return <div className="flex h-full items-center justify-center text-fg-dim text-[13px]">{text}</div>;
-}

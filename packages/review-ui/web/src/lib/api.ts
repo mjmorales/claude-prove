@@ -1,6 +1,8 @@
 // Client shapes mirror the server JSON-backed types. Run-scoped routes use a
 // composite `<branch>/<slug>` slug — the client URL-encodes it.
 
+import { getJSON } from "./fetch-utils";
+
 export type ValidatorStatus = "pending" | "pass" | "fail" | "skipped";
 export type ValidatorPhase = "build" | "lint" | "test" | "custom" | "llm";
 export type ValidatorSummary = Record<ValidatorPhase, ValidatorStatus>;
@@ -189,12 +191,6 @@ export type StatusSummary = {
   modified: string[];
   untracked: string[];
 };
-
-async function getJSON<T>(url: string): Promise<T> {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${url}`);
-  return r.json() as Promise<T>;
-}
 
 function enc(compositeSlug: string): string {
   return encodeURIComponent(compositeSlug);

@@ -3,6 +3,7 @@ import { api, type BranchRef } from "../lib/api";
 import { useSelection } from "../lib/store";
 import { cn } from "../lib/cn";
 import { PanelLoading } from "./PanelLoading";
+import { Empty } from "./Empty";
 
 export function BranchTree() {
   const slug = useSelection((s) => s.slug);
@@ -194,8 +195,3 @@ function SectionLabel({
   );
 }
 
-function Empty({ text }: { text: string }) {
-  return (
-    <div className="flex h-full items-center justify-center text-fg-dim text-[13px]">{text}</div>
-  );
-}

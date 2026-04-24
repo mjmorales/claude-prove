@@ -1,5 +1,5 @@
-import { useEffect } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo } from "react";
+import { useQueries } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useSelection, type DocView } from "../lib/store";
 import { cn } from "../lib/cn";
@@ -28,11 +28,21 @@ export function DocsPanel() {
       staleTime: 10_000,
     })),
   });
-  const availability = DOCS.map((d, i) => ({
-    id: d.id,
-    available: probes[i].status === "success",
-    pending: probes[i].status === "pending",
-  }));
+  // Stable projection of probe statuses so downstream memoization / effects
+  // depend on a single primitive that only flips when an actual status
+  // transition happens — avoids re-running the auto-switch effect on every
+  // render caused by fresh array identity out of `useQueries`.
+  const probeStatusKey = probes.map((p) => p.status).join(",");
+  const availability = useMemo(
+    () =>
+      DOCS.map((d, i) => ({
+        id: d.id,
+        available: probes[i].status === "success",
+        pending: probes[i].status === "pending",
+      })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [probeStatusKey],
+  );
 
   useEffect(() => {
     if (!slug) return;
@@ -41,20 +51,12 @@ export function DocsPanel() {
     if (availability.some((a) => a.pending)) return;
     const firstAvail = availability.find((a) => a.available);
     if (firstAvail) setView(firstAvail.id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [slug, view, availability.map((a) => a.available + "|" + a.pending).join(",")]);
+  }, [slug, view, availability, setView]);
 
   const doc = DOCS.find((d) => d.id === view)!;
   const currentProbe = probes[DOCS.findIndex((d) => d.id === view)];
   const raw = (currentProbe?.data as { content?: string } | undefined)?.content ?? "";
   const rendered = raw ? renderJson(raw, doc.id) : "";
-
-  useQuery({
-    queryKey: ["doc", slug, doc.file],
-    queryFn: () => api.doc(slug!, doc.file),
-    enabled: !!slug,
-    retry: false,
-  });
 
   if (!slug) return <Empty text="Select a run" />;
 

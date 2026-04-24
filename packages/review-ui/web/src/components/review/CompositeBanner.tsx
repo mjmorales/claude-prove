@@ -17,7 +17,6 @@ export function CompositeBanner({
   working: boolean;
 }) {
   const t = tokenOf(item.verdict);
-  const since = item.staleCommits[0]?.timestamp ?? "";
   return (
     <section
       className="rounded-md border px-4 py-3"
@@ -41,7 +40,7 @@ export function CompositeBanner({
             prior {t.label.toLowerCase()}
           </span>
         )}
-        {since && (
+        {item.staleCommits.length > 0 && (
           <span className="text-[11.5px] text-fg-faint ml-auto">
             {item.staleCommits.length} new commit
             {item.staleCommits.length === 1 ? "" : "s"} since your verdict

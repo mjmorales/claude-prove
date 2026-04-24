@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import { useSelection } from "../lib/store";
 import { cn } from "../lib/cn";
 import { PanelLoading } from "./PanelLoading";
+import { Empty } from "./Empty";
 
 export function IntentsPanel() {
   const slug = useSelection((s) => s.slug);
@@ -18,8 +19,7 @@ export function IntentsPanel() {
     retry: false,
   });
 
-  if (!slug)
-    return <div className="h-full flex items-center justify-center text-fg-dim text-[13px]">Select a run</div>;
+  if (!slug) return <Empty text="Select a run" />;
   if (isPending || (isFetching && !data)) return <PanelLoading label="ASSEMBLING INTENTS" />;
   if (isError) return <Hollow text="INTENT STORE UNREACHABLE" />;
 

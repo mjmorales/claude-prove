@@ -7,12 +7,35 @@ export type PanelSizes = {
   collapsed: boolean[];
 };
 
+/**
+ * Per-column-count defaults. Widths are the non-final columns (the last column
+ * always flexes to fill remaining space, matching `ResizableColumns`'s layout
+ * contract), so a layout of N columns carries N-1 widths and N collapsed flags.
+ *
+ * The 4-column preset carries hand-tuned widths from the canonical review-UI
+ * layout (runs list | docs | context | review). Other counts default to an
+ * equal 280 px / column so the first render never shows zero-width panels.
+ */
+const EQUAL_WIDTH_PX = 280;
+
+function equalWidthDefaults(n: number): PanelSizes {
+  return {
+    widths: new Array(Math.max(0, n - 1)).fill(EQUAL_WIDTH_PX),
+    collapsed: new Array(n).fill(false),
+  };
+}
+
 const DEFAULTS: Record<number, PanelSizes> = {
+  1: equalWidthDefaults(1),
+  2: equalWidthDefaults(2),
+  3: equalWidthDefaults(3),
   4: { widths: [220, 320, 340], collapsed: [false, false, false, false] },
+  5: equalWidthDefaults(5),
+  6: equalWidthDefaults(6),
 };
 
 function load(n: number): PanelSizes {
-  const def = DEFAULTS[n] ?? { widths: [], collapsed: new Array(n).fill(false) };
+  const def = DEFAULTS[n] ?? equalWidthDefaults(n);
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return def;
@@ -90,7 +113,7 @@ export function usePanelSizes(numColumns: number, min = 160, max = 900) {
   );
 
   const reset = useCallback(() => {
-    commit(DEFAULTS[numColumns] ?? { widths: [], collapsed: new Array(numColumns).fill(false) });
+    commit(DEFAULTS[numColumns] ?? equalWidthDefaults(numColumns));
   }, [numColumns, commit]);
 
   useEffect(() => {

@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import { useSelection } from "../lib/store";
 import { cn } from "../lib/cn";
 import { PanelLoading } from "./PanelLoading";
+import { Empty } from "./Empty";
 
 export function CommitsPanel() {
   const slug = useSelection((s) => s.slug);
@@ -126,6 +127,3 @@ function relTime(iso: string): string {
   return `T-${Math.round(s / 86400)}d`;
 }
 
-function Empty({ text }: { text: string }) {
-  return <div className="flex h-full items-center justify-center text-fg-dim text-[13px]">{text}</div>;
-}

@@ -16,6 +16,7 @@ import type {
   ScrumTask,
   TaskStatus,
 } from "@claude-prove/cli/scrum/types";
+import { getJSON } from "./fetch-utils";
 
 // ---------------------------------------------------------------------------
 // Response envelope types — one per server route.
@@ -58,14 +59,8 @@ export type AlertsResponse = {
 export type RecentEventsResponse = { events: ScrumEvent[] };
 
 // ---------------------------------------------------------------------------
-// Fetch helper
+// URL helper
 // ---------------------------------------------------------------------------
-
-async function getJSON<T>(url: string): Promise<T> {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${url}`);
-  return r.json() as Promise<T>;
-}
 
 function enc(v: string): string {
   return encodeURIComponent(v);

@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import { useSelection } from "../lib/store";
 import { cn } from "../lib/cn";
 import { PanelLoading } from "./PanelLoading";
+import { Empty } from "./Empty";
 
 export function ContextPanel() {
   const slug = useSelection((s) => s.slug);
@@ -18,14 +19,15 @@ export function ContextPanel() {
     enabled: !!slug,
     retry: false,
   });
-  const stewardQ = useQuery({ queryKey: ["steward-reports"], queryFn: () => api.stewardReports() });
+  // Include the run slug in the cache key — steward reports are global, but
+  // keying by slug keeps the cache partitioned per run and avoids stale
+  // cross-run data when the user navigates between runs.
+  const stewardQ = useQuery({
+    queryKey: ["steward-reports", slug],
+    queryFn: () => api.stewardReports(),
+  });
 
-  if (!slug)
-    return (
-      <div className="h-full flex items-center justify-center text-fg-dim text-[13px]">
-        Select a run
-      </div>
-    );
+  if (!slug) return <Empty text="Select a run" />;
 
   if (runQ.isPending || tasksQ.isPending || stewardQ.isPending)
     return <PanelLoading label="LOADING CONTEXT" />;
