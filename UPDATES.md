@@ -6,9 +6,28 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## unreleased — Scrum CLI surface + importer precision (issue #16) + binary-rename follow-ups
+## unreleased — Scrum CLI surface + importer precision (issue #16) + milestone reassignment (issue #17) + binary-rename follow-ups
 
-Closes the seven gaps filed in issue #16, and finishes the trailing consumers of the v1.2.0 `prove` → `claude-prove` binary rename that were left half-done in the working tree (`install doctor`, `install upgrade`, version bump script, CI release workflow, and runtime PATH checks in `commands/review-ui.md` + `skills/task/scripts/gather-context.sh`).
+Closes the seven gaps filed in issue #16, adds the milestone-reassignment CLI path filed in issue #17, and finishes the trailing consumers of the v1.2.0 `prove` → `claude-prove` binary rename that were left half-done in the working tree (`install doctor`, `install upgrade`, version bump script, CI release workflow, and runtime PATH checks in `commands/review-ui.md` + `skills/task/scripts/gather-context.sh`).
+
+### Scrum task milestone reassignment — issue #17
+
+Backlog grooming needed a CLI path for moving tasks between milestones without dropping to raw SQL. Added `ScrumStore.updateTaskMilestone` + a `scrum task move` action that emits a `milestone_changed` event for every reassignment.
+
+**Added**:
+
+- `claude-prove scrum task move <task-id> --milestone <milestone-id>` — reassigns a task's milestone and emits a `milestone_changed` event with `{from, to}` payload. Rejects unknown milestone/task ids with exit 1.
+- `--unassign` flag (and `--milestone=""`) — clears `milestone_id` to `NULL` on the task row. Both forms emit the same `milestone_changed` event with `to: null`. When both `--milestone` and `--unassign` are supplied, `--unassign` wins (explicit clear beats implicit target).
+- `ScrumStore.updateTaskMilestone(id, nextMilestoneId, agent?)` — transaction-wrapped mirror of `updateTaskStatus`. Validates task existence, validates target milestone when non-null, updates row + inserts `scrum_events` row + bumps `last_event_at` in one transaction. No-ops silently when target equals current.
+- `EventKind` union extended with `'milestone_changed'` in `packages/cli/src/topics/scrum/types.ts`.
+- Closed-milestone safety: moving a task into a milestone whose status is `closed` succeeds but writes a one-line warning to stderr (exit 0 preserved) — operators re-opening scope should not be blocked.
+- `scrum` registered as a commit scope in `.claude/.prove.json` alongside the existing `packages` / `agents` / etc. scopes — matches scrum's first-class domain status (dedicated CLI topic, hook integration, `/scrum` slash command).
+
+**Migration**:
+
+- No schema changes. The `scrum_events.kind` column has no CHECK constraint, so older databases stay forward-compatible; rolling back the binary leaves existing `milestone_changed` rows untouched (readers ignore unknown kinds).
+- Operators patching around the missing path with `sqlite3 UPDATE scrum_tasks SET milestone_id = ? WHERE id = ?` can now switch to `claude-prove scrum task move <id> --milestone <mid>` (or `--unassign`) — the CLI emits the event row the raw `UPDATE` was bypassing.
+- `scrum-master` agent can drive bulk grooming (close M4 → reassign 46 tasks into M5/M6/M7) by looping single `move` invocations.
 
 ### Scrum CLI — issue #16
 

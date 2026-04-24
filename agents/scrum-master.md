@@ -31,6 +31,13 @@ Non-trivial transitions require AskUserQuestion confirmation:
 
 Use the binary-confirmation pattern from `references/interaction-patterns.md`.
 
+## Milestone reassignment protocol
+
+Reassign via `claude-prove scrum task move <task-id> --milestone <milestone-id>` (or `--unassign` to clear). Each call emits a `milestone_changed` event with `{from, to}` payload — never shell out to `sqlite3 UPDATE`, which bypasses the event log.
+
+- Bulk grooming (e.g., closing M4, moving 45 tasks onto M5/M6/M7): confirm the plan via AskUserQuestion once, then loop `task move` invocations. Surface the final `status` summary when done.
+- Moving into a closed milestone is allowed but stderr carries a warning — relay it to the operator verbatim rather than swallowing it.
+
 ## Workflow
 
 1. Read state — `claude-prove scrum status --human` cold; targeted reads when zooming in.
