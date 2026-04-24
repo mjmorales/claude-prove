@@ -100,13 +100,51 @@ CREATE INDEX idx_scrum_deps_to_task ON scrum_deps(to_task_id);
 CREATE INDEX idx_scrum_tags_tag ON scrum_tags(tag);
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v2 — scrum_decisions (ADR-style decision persistence)
+// ---------------------------------------------------------------------------
+
+/**
+ * v2: persist decision records as first-class rows in the scrum domain.
+ *
+ *   scrum_decisions — one row per decision (id = filename slug, e.g.
+ *                     `2026-04-24-decision-persistence`); `content_sha`
+ *                     is `sha256(content)` hex-encoded so downstream
+ *                     drift-detection can compare against the working-tree
+ *                     file without re-reading it. `source_path` is
+ *                     nullable because git-recovered rows may lack a
+ *                     working-tree file.
+ *
+ * `status` defaults to `'accepted'` per ADR convention. Indexes cover the
+ * two filter dimensions used by `listDecisions` — topic and status.
+ *
+ * Table and index names carry the `scrum_` / `idx_scrum_` prefix per the
+ * domain-namespacing contract established in v1.
+ */
+export const SCRUM_MIGRATION_V2_SQL = `
+CREATE TABLE scrum_decisions (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    topic TEXT,
+    status TEXT NOT NULL DEFAULT 'accepted',
+    content TEXT NOT NULL,
+    source_path TEXT,
+    content_sha TEXT NOT NULL,
+    recorded_at TEXT NOT NULL,
+    recorded_by_agent TEXT
+);
+
+CREATE INDEX idx_scrum_decisions_topic ON scrum_decisions(topic);
+CREATE INDEX idx_scrum_decisions_status ON scrum_decisions(status);
+`;
+
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that previously hit `clearRegistry()` — both
- * paths land a single scrum/v1 entry. Matches `ensureAcbSchemaRegistered`
- * exactly; the guard exists because bun shares module cache across test
- * files, so a module-scoped `registerSchema` runs only once per process
- * and cannot recover after a registry wipe.
+ * paths land a single scrum/{v1,v2} entry set. Matches
+ * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
+ * module cache across test files, so a module-scoped `registerSchema` runs
+ * only once per process and cannot recover after a registry wipe.
  */
 export function ensureScrumSchemaRegistered(): void {
   if (listDomains().includes('scrum')) return;
@@ -119,6 +157,14 @@ export function ensureScrumSchemaRegistered(): void {
           'create scrum_tasks + scrum_milestones + scrum_tags + scrum_deps + scrum_events + scrum_run_links + scrum_context_bundles',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V1_SQL);
+        },
+      },
+      {
+        version: 2,
+        description:
+          'create scrum_decisions + idx_scrum_decisions_topic + idx_scrum_decisions_status',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V2_SQL);
         },
       },
     ],
