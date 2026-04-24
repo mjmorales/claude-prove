@@ -17,7 +17,7 @@ import {
   type IntentManifest,
 } from "../acb.js";
 import { listCommits, showCommit, type Commit } from "../commits.js";
-import { filterReferenced, listDecisions, readDecision } from "../decisions.js";
+import { filterReferenced, listDecisions, resolveDecisionById } from "../decisions.js";
 import { listStewardReports } from "../steward.js";
 import { readRunSummary } from "../runs.js";
 import { branchesForRun, diffFiles, gitAt, resolveWorktreePath } from "../git.js";
@@ -296,10 +296,11 @@ export function registerProveRoutes(app: FastifyInstance, repoRoot: string) {
   app.get<{ Params: { id: string } }>("/api/decisions/:id", async (req, reply) => {
     const { id } = req.params;
     if (!/^[\w.\-]+$/.test(id)) return reply.code(400).send({ error: "bad id" });
-    const p = path.join(repoRoot, ".prove/decisions", `${id}.md`);
-    const content = await readDecision(p);
-    if (!content) return reply.code(404).send({ error: "not found" });
-    return { id, path: p, content };
+    const resolved = await resolveDecisionById(repoRoot, id);
+    if (!resolved) return reply.code(404).send({ error: "not found" });
+    // Existing clients expect { id, path, content }; `source` is an
+    // additive field they can safely ignore.
+    return { id: resolved.id, path: resolved.path, content: resolved.content, source: resolved.source };
   });
 
   // Steward audit reports.
