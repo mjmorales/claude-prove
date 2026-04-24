@@ -9,6 +9,7 @@
  *   claude-prove install init-config  [--cwd <path>] [--force]
  *   claude-prove install doctor
  *   claude-prove install upgrade      [--prefix <dir>]
+ *   claude-prove install latest       [--offline]
  *
  * Semantics:
  *   - init        : bootstrap both `.claude/settings.json` and `.claude/.prove.json`.
@@ -16,6 +17,9 @@
  *   - init-config : write `.claude/.prove.json` with auto-detected validators.
  *   - doctor      : report health of the claude-prove installation (exit 1 on any failure).
  *   - upgrade     : fetch latest binary from GH Releases for the host target (compiled mode only).
+ *   - latest      : emit JSON { local, remote, upToDate } locating the newest installed
+ *                   plugin cache and the latest GH release — definitive source for
+ *                   `/prove:update` when picking which plugin dir to operate on.
  *
  * init* resolve the plugin root (env -> walk-up -> fallback), classify the
  * install as dev vs compiled, and build the runtime command prefix
@@ -28,18 +32,27 @@ import { handleDoctorAction } from './doctor';
 import { runInit } from './init';
 import { runInitConfig } from './init-config';
 import { runInitHooks } from './init-hooks';
+import { type LatestFlags, runLatest } from './latest';
 import { type UpgradeFlags, runUpgrade } from './upgrade';
 
-type InstallAction = 'init' | 'init-hooks' | 'init-config' | 'doctor' | 'upgrade';
+type InstallAction = 'init' | 'init-hooks' | 'init-config' | 'doctor' | 'upgrade' | 'latest';
 
-const INSTALL_ACTIONS: InstallAction[] = ['init', 'init-hooks', 'init-config', 'doctor', 'upgrade'];
+const INSTALL_ACTIONS: InstallAction[] = [
+  'init',
+  'init-hooks',
+  'init-config',
+  'doctor',
+  'upgrade',
+  'latest',
+];
 
-type InstallFlags = UpgradeFlags & {
-  project?: string;
-  cwd?: string;
-  settings?: string;
-  force?: boolean;
-};
+type InstallFlags = UpgradeFlags &
+  LatestFlags & {
+    project?: string;
+    cwd?: string;
+    settings?: string;
+    force?: boolean;
+  };
 
 export function register(cli: CAC): void {
   cli
@@ -55,6 +68,7 @@ export function register(cli: CAC): void {
     )
     .option('--force', 'Rewrite existing files even when already in sync')
     .option('--prefix <dir>', 'Target directory for upgrade (default: ~/.local/bin)')
+    .option('--offline', 'Skip network calls (latest: omit remote release lookup)')
     .action(async (action: string, flags: InstallFlags) => {
       if (!isInstallAction(action)) {
         console.error(
@@ -94,6 +108,8 @@ async function dispatch(action: InstallAction, flags: InstallFlags): Promise<num
         return handleDoctorAction();
       case 'upgrade':
         return await runUpgrade({ prefix: flags.prefix });
+      case 'latest':
+        return await runLatest({ offline: flags.offline ?? false });
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

@@ -8,15 +8,31 @@ Validate `.claude/.prove.json` and `.claude/settings.json` against current schem
 
 All schema tool calls use `--file` with an absolute path to the project's config. Run against the user's current working directory, not the plugin directory.
 
-## Step 0: Guard
+## Step 0: Pre-flight
 
-1. Verify `$PLUGIN_DIR` is set. If not, error: "Cannot resolve plugin directory."
-2. Verify `$(pwd)` is NOT inside `~/.claude/`. **Exception:** if `$(pwd)` equals `$PLUGIN_DIR` and `$(pwd)/.claude/.prove.json` exists, this is dogfooding mode — allow it and set both `$PLUGIN_DIR` and project root to `$(pwd)`.
-3. If `$(pwd)/.claude/.prove.json` does not exist, go to Step 0b instead of failing.
+### 0a: Resolve plugin location
 
-### Step 0b: Bootstrap (if .prove.json missing)
+**Dogfooding shortcut:** if `$(pwd)/.claude-plugin/plugin.json` exists, set `PLUGIN_DIR = $(pwd)` and skip the CLI call below. Otherwise:
 
-`AskUserQuestion` (header: "Bootstrap"):
+```bash
+claude-prove install latest
+```
+
+Apply these rules to the JSON output, in order:
+
+1. **Halt if `local` is null.** Message: "Plugin not installed — run `claude plugin install prove@prove`." Do not proceed.
+2. **Set `PLUGIN_DIR = local.installPath`.** This path is referenced as `$PLUGIN_DIR` in later steps; substitute the literal value when issuing commands.
+3. **Record `local.version`** for the pinned reference in CLAUDE.md.
+4. **Warn on remote mismatch, then continue.** If `remote.version` differs from `local.version`, surface: "Newer release available: `local.version` → `remote.version`. Run `claude plugin update prove@prove` to upgrade, then re-run `/prove:update`." Continue the rest of the skill against the locally installed version — this skill syncs configs against what is on disk, never against an unreleased remote.
+5. **Surface `errors.local` / `errors.remote` if present,** but do not abort unless rule 1 triggered.
+
+### 0b: Guard working directory
+
+Verify `$(pwd)` is NOT inside `~/.claude/` — prevents accidentally mutating the plugin cache. If it is (and the dogfooding shortcut above did not fire), halt: "Run `/prove:update` from your project root, not inside the plugin cache."
+
+### 0c: Bootstrap if `.prove.json` is missing
+
+If `$(pwd)/.claude/.prove.json` does not exist, `AskUserQuestion` (header: "Bootstrap"):
 - "Create minimal config" — write `{"schema_version": "0"}` to `.claude/.prove.json` and continue to Step 1
 - "Run /prove:init instead" — suggest the full init flow and stop
 - "Cancel" — stop
@@ -102,13 +118,23 @@ Report: PASS/FAIL per config file, schema version, backup location (if applicabl
 
 ## Step 8: Update CLAUDE.md
 
+Substitute `$PLUGIN_DIR` with the path resolved in Step 0a. Pick one branch:
+
+**Compiled mode** — if `$PLUGIN_DIR/packages/cli/` does NOT exist (standard install under `~/.claude/plugins/cache/`):
+
+```bash
+claude-prove claude-md generate --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"
+```
+
+**Dogfooding mode** — if `$PLUGIN_DIR/packages/cli/bin/run.ts` exists (running from the plugin checkout):
+
 ```bash
 bun run "$PLUGIN_DIR/packages/cli/bin/run.ts" claude-md generate --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"
 ```
 
-Replaces only the `<!-- prove:managed:start -->` / `<!-- prove:managed:end -->` block. Content outside markers is preserved.
+Only the `<!-- prove:managed:start -->` / `<!-- prove:managed:end -->` block is replaced. Content outside the markers is preserved.
 
-Show generated sections summary.
+Show the generated sections summary.
 
 ## Step 9: Next steps
 
