@@ -249,9 +249,6 @@ export function deepCloneJson<T>(value: T): T {
   return out as unknown as T;
 }
 
-/** Back-compat alias for call sites that used the shorter name. */
-const deepCopy = deepCloneJson;
-
 /**
  * Render a minimal object populated with defaults for every field that has
  * one. Exported so `migrate.ts` shares the exact same routine.
@@ -510,7 +507,7 @@ export function stepStart(paths: RunPaths, stepId: string): StateData {
 
     state.current_task = task.id;
     state.current_step = step.id;
-    return deepCopy(state);
+    return deepCloneJson(state);
   });
 }
 
@@ -535,7 +532,7 @@ export function stepComplete(
     maybeFinalizeTask(task);
     maybeAdvanceCurrent(state, task, step);
     maybeFinalizeRun(state);
-    return deepCopy(state);
+    return deepCloneJson(state);
   });
 }
 
@@ -591,7 +588,7 @@ function terminateStep(
     state.run_status = target === 'halted' ? 'halted' : 'failed';
     if (!state.ended_at) state.ended_at = now;
     state.current_step = '';
-    return deepCopy(state);
+    return deepCloneJson(state);
   });
 }
 
@@ -625,7 +622,7 @@ export function validatorSet(
       };
     }
     (step.validator_summary as unknown as Record<string, string>)[phase] = status;
-    return deepCopy(state);
+    return deepCloneJson(state);
   });
 }
 
@@ -656,7 +653,7 @@ export function taskReview(paths: RunPaths, taskId: string, options: TaskReviewO
     task.review.notes = notes;
     task.review.reviewer = reviewer;
     task.review.reviewed_at = utcnowIso();
-    return deepCopy(state);
+    return deepCloneJson(state);
   });
 }
 
@@ -814,7 +811,11 @@ export function reconcile(paths: RunPaths, options: ReconcileOptions = {}): Reco
     : null;
 
   const changes: ReconcileChange[] = [];
-  mutateState(paths, (state) => {
+  // Explicit <void> type argument: the mutator accumulates into the outer
+  // `changes` array via side-effect and has no meaningful return. Without
+  // the annotation, `mutateState<T>` would infer `T = undefined` and the
+  // typed return channel would be silently defeated.
+  mutateState<void>(paths, (state) => {
     const targets = findInprogressSteps(state);
     for (const [taskId, stepId] of targets) {
       if (scope !== null && !scope.has(stepId)) continue;

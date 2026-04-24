@@ -175,6 +175,24 @@ function isRunStateAction(value: string): value is RunStateAction {
   return (ACTIONS as string[]).includes(value);
 }
 
+/**
+ * Positional-arg bundle for one invocation. cac hands us up to four
+ * positionals; each sub-dispatcher destructures only what it needs by
+ * name, so handler bodies never reason about `arg1..arg4` slot meanings.
+ */
+interface Positionals {
+  arg1: string | undefined;
+  arg2: string | undefined;
+  arg3: string | undefined;
+  arg4: string | undefined;
+}
+
+/**
+ * Adapter at dispatch entry: validates the top-level action, then routes
+ * to a per-action sub-dispatcher. Each sub-dispatcher owns its own
+ * positional destructuring and flag narrowing, mirroring the Facade
+ * pattern — one switch, many typed entry points.
+ */
 function dispatch(
   action: RunStateAction,
   arg1: string | undefined,
@@ -183,187 +201,221 @@ function dispatch(
   arg4: string | undefined,
   flags: RunStateFlags,
 ): number {
+  const pos: Positionals = { arg1, arg2, arg3, arg4 };
   switch (action) {
     case 'validate':
-      // run-state validate <file>
-      if (!arg1) return usage('the following arguments are required: file');
-      return runValidate(arg1, { kind: flags.kind, strict: flags.strict });
-
+      return dispatchValidate(pos, flags);
     case 'init':
-      // run-state init  (all inputs via flags)
-      return runInit({
-        branch: flags.branch,
-        slug: flags.slug,
-        runsRoot: flags.runsRoot,
-        plan: flags.plan,
-        prd: flags.prd,
-        overwrite: flags.overwrite,
-      });
-
+      return dispatchInit(flags);
     case 'show':
-      return runShow({
-        runsRoot: flags.runsRoot,
-        branch: flags.branch,
-        slug: flags.slug,
-        kind: narrowShowKind(flags.kind),
-        format: narrowMdJson(flags.format ?? 'md'),
-      });
-
+      return dispatchShow(flags);
     case 'show-report':
-      if (!arg1) return usage('the following arguments are required: step_id');
-      return runShowReport(arg1, {
-        runsRoot: flags.runsRoot,
-        branch: flags.branch,
-        slug: flags.slug,
-        format: narrowMdJson(flags.format ?? 'md'),
-      });
-
+      return dispatchShowReport(pos, flags);
     case 'ls':
       return runLs({ runsRoot: flags.runsRoot });
-
     case 'summary':
       return runSummary({ runsRoot: flags.runsRoot });
-
     case 'current':
-      return runCurrent({
-        runsRoot: flags.runsRoot,
-        branch: flags.branch,
-        slug: flags.slug,
-        format: narrowJsonText(flags.format ?? 'text'),
-      });
-
-    case 'step': {
-      // run-state step <start|complete|fail|halt> <step_id>
-      const stepAction = arg1;
-      const stepId = arg2;
-      if (!stepAction) return usage('the following arguments are required: action');
-      if (!STEP_ACTIONS.has(stepAction as StepAction)) {
-        console.error(
-          `error: unknown step action '${stepAction}' (expected: start | complete | fail | halt)`,
-        );
-        return 1;
-      }
-      if (!stepId) return usage('the following arguments are required: step_id');
-      return runStep(stepAction as StepAction, stepId, {
-        runsRoot: flags.runsRoot,
-        branch: flags.branch,
-        slug: flags.slug,
-        commit: flags.commit,
-        reason: flags.reason,
-        format: narrowMdJson(flags.format ?? 'md'),
-      });
-    }
-
-    case 'step-info': {
-      // run-state step-info <step_id>
-      if (!arg1) return usage('the following arguments are required: step_id');
-      return runStepInfo(arg1, {
-        runsRoot: flags.runsRoot,
-        branch: flags.branch,
-        slug: flags.slug,
-      });
-    }
-
-    case 'validator': {
-      // run-state validator set <step_id> <phase> <status>
-      const subAction = arg1;
-      if (subAction !== 'set') {
-        console.error(`error: unknown validator action '${subAction ?? ''}' (expected: set)`);
-        return 1;
-      }
-      if (!arg2 || !arg3 || !arg4) {
-        return usage('the following arguments are required: step_id, phase, status');
-      }
-      return runValidatorSet(arg2, arg3, arg4, {
-        runsRoot: flags.runsRoot,
-        branch: flags.branch,
-        slug: flags.slug,
-        format: narrowMdJson(flags.format ?? 'md'),
-      });
-    }
-
-    case 'task': {
-      // run-state task review <task_id>
-      const subAction = arg1;
-      if (subAction !== 'review') {
-        console.error(`error: unknown task action '${subAction ?? ''}' (expected: review)`);
-        return 1;
-      }
-      if (!arg2) return usage('the following arguments are required: task_id');
-      return runTaskReview(arg2, {
-        runsRoot: flags.runsRoot,
-        branch: flags.branch,
-        slug: flags.slug,
-        verdict: flags.verdict,
-        notes: flags.notes,
-        reviewer: flags.reviewer,
-        format: narrowMdJson(flags.format ?? 'md'),
-      });
-    }
-
-    case 'dispatch': {
-      // run-state dispatch <record|has> <key> [<event>]
-      const subAction = arg1;
-      if (subAction !== 'record' && subAction !== 'has') {
-        console.error(
-          `error: unknown dispatch action '${subAction ?? ''}' (expected: record | has)`,
-        );
-        return 1;
-      }
-      if (!arg2) return usage('the following arguments are required: key');
-      return runDispatch(subAction, arg2, arg3, {
-        runsRoot: flags.runsRoot,
-        branch: flags.branch,
-        slug: flags.slug,
-      });
-    }
-
-    case 'report': {
-      // run-state report write <step_id>
-      const subAction = arg1;
-      if (subAction !== 'write') {
-        console.error(
-          `error: unknown report action '${subAction ?? ''}' (expected: write; show wiring lands with Task 4 render port)`,
-        );
-        return 1;
-      }
-      if (!arg2) return usage('the following arguments are required: step_id');
-      return runReportWrite(arg2, {
-        runsRoot: flags.runsRoot,
-        branch: flags.branch,
-        slug: flags.slug,
-        status: flags.status,
-        commit: flags.commit,
-        json: flags.json,
-        notes: flags.notes,
-      });
-    }
-
+      return dispatchCurrent(flags);
+    case 'step':
+      return dispatchStep(pos, flags);
+    case 'step-info':
+      return dispatchStepInfo(pos, flags);
+    case 'validator':
+      return dispatchValidator(pos, flags);
+    case 'task':
+      return dispatchTask(pos, flags);
+    case 'dispatch':
+      return dispatchDispatch(pos, flags);
+    case 'report':
+      return dispatchReport(pos, flags);
     case 'migrate':
       return runMigrate({
         runsRoot: flags.runsRoot,
         dryRun: flags.dryRun,
         overwrite: flags.overwrite,
       });
-
-    case 'hook': {
-      // run-state hook <event>  — reads Claude Code hook payload from stdin,
-      // dispatches to the TS hook module, writes stdout/stderr, returns exit.
-      const event = arg1;
-      if (!event) {
-        return usage(
-          `the following arguments are required: hook event (one of: ${HOOK_EVENTS.join(', ')})`,
-        );
-      }
-      if (!isHookEvent(event)) {
-        console.error(
-          `error: unknown hook event '${event}' (expected: ${HOOK_EVENTS.join(' | ')})`,
-        );
-        return 1;
-      }
-      return runHookFromStdin(event);
-    }
+    case 'hook':
+      return dispatchHook(pos);
   }
+}
+
+// run-state validate <file>
+function dispatchValidate({ arg1: file }: Positionals, flags: RunStateFlags): number {
+  if (!file) return usage('the following arguments are required: file');
+  return runValidate(file, { kind: flags.kind, strict: flags.strict });
+}
+
+// run-state init  (all inputs via flags)
+function dispatchInit(flags: RunStateFlags): number {
+  return runInit({
+    branch: flags.branch,
+    slug: flags.slug,
+    runsRoot: flags.runsRoot,
+    plan: flags.plan,
+    prd: flags.prd,
+    overwrite: flags.overwrite,
+  });
+}
+
+function dispatchShow(flags: RunStateFlags): number {
+  return runShow({
+    runsRoot: flags.runsRoot,
+    branch: flags.branch,
+    slug: flags.slug,
+    kind: narrowShowKind(flags.kind),
+    format: narrowMdJson(flags.format ?? 'md'),
+  });
+}
+
+// run-state show-report <step_id>
+function dispatchShowReport({ arg1: stepId }: Positionals, flags: RunStateFlags): number {
+  if (!stepId) return usage('the following arguments are required: step_id');
+  return runShowReport(stepId, {
+    runsRoot: flags.runsRoot,
+    branch: flags.branch,
+    slug: flags.slug,
+    format: narrowMdJson(flags.format ?? 'md'),
+  });
+}
+
+function dispatchCurrent(flags: RunStateFlags): number {
+  return runCurrent({
+    runsRoot: flags.runsRoot,
+    branch: flags.branch,
+    slug: flags.slug,
+    format: narrowJsonText(flags.format ?? 'text'),
+  });
+}
+
+// run-state step <start|complete|fail|halt> <step_id>
+function dispatchStep({ arg1: stepAction, arg2: stepId }: Positionals, flags: RunStateFlags): number {
+  if (!stepAction) return usage('the following arguments are required: action');
+  if (!STEP_ACTIONS.has(stepAction as StepAction)) {
+    console.error(
+      `error: unknown step action '${stepAction}' (expected: start | complete | fail | halt)`,
+    );
+    return 1;
+  }
+  if (!stepId) return usage('the following arguments are required: step_id');
+  return runStep(stepAction as StepAction, stepId, {
+    runsRoot: flags.runsRoot,
+    branch: flags.branch,
+    slug: flags.slug,
+    commit: flags.commit,
+    reason: flags.reason,
+    format: narrowMdJson(flags.format ?? 'md'),
+  });
+}
+
+// run-state step-info <step_id>
+function dispatchStepInfo({ arg1: stepId }: Positionals, flags: RunStateFlags): number {
+  if (!stepId) return usage('the following arguments are required: step_id');
+  return runStepInfo(stepId, {
+    runsRoot: flags.runsRoot,
+    branch: flags.branch,
+    slug: flags.slug,
+  });
+}
+
+// run-state validator set <step_id> <phase> <status>
+function dispatchValidator(
+  { arg1: subAction, arg2: stepId, arg3: phase, arg4: status }: Positionals,
+  flags: RunStateFlags,
+): number {
+  if (subAction !== 'set') {
+    console.error(`error: unknown validator action '${subAction ?? ''}' (expected: set)`);
+    return 1;
+  }
+  if (!stepId || !phase || !status) {
+    return usage('the following arguments are required: step_id, phase, status');
+  }
+  return runValidatorSet(stepId, phase, status, {
+    runsRoot: flags.runsRoot,
+    branch: flags.branch,
+    slug: flags.slug,
+    format: narrowMdJson(flags.format ?? 'md'),
+  });
+}
+
+// run-state task review <task_id>
+function dispatchTask(
+  { arg1: subAction, arg2: taskId }: Positionals,
+  flags: RunStateFlags,
+): number {
+  if (subAction !== 'review') {
+    console.error(`error: unknown task action '${subAction ?? ''}' (expected: review)`);
+    return 1;
+  }
+  if (!taskId) return usage('the following arguments are required: task_id');
+  return runTaskReview(taskId, {
+    runsRoot: flags.runsRoot,
+    branch: flags.branch,
+    slug: flags.slug,
+    verdict: flags.verdict,
+    notes: flags.notes,
+    reviewer: flags.reviewer,
+    format: narrowMdJson(flags.format ?? 'md'),
+  });
+}
+
+// run-state dispatch <record|has> <key> [<event>]
+function dispatchDispatch(
+  { arg1: subAction, arg2: key, arg3: event }: Positionals,
+  flags: RunStateFlags,
+): number {
+  if (subAction !== 'record' && subAction !== 'has') {
+    console.error(
+      `error: unknown dispatch action '${subAction ?? ''}' (expected: record | has)`,
+    );
+    return 1;
+  }
+  if (!key) return usage('the following arguments are required: key');
+  return runDispatch(subAction, key, event, {
+    runsRoot: flags.runsRoot,
+    branch: flags.branch,
+    slug: flags.slug,
+  });
+}
+
+// run-state report write <step_id>
+function dispatchReport(
+  { arg1: subAction, arg2: stepId }: Positionals,
+  flags: RunStateFlags,
+): number {
+  if (subAction !== 'write') {
+    console.error(
+      `error: unknown report action '${subAction ?? ''}' (expected: write). report action not implemented for this format`,
+    );
+    return 1;
+  }
+  if (!stepId) return usage('the following arguments are required: step_id');
+  return runReportWrite(stepId, {
+    runsRoot: flags.runsRoot,
+    branch: flags.branch,
+    slug: flags.slug,
+    status: flags.status,
+    commit: flags.commit,
+    json: flags.json,
+    notes: flags.notes,
+  });
+}
+
+// run-state hook <event>  — reads Claude Code hook payload from stdin,
+// dispatches to the TS hook module, writes stdout/stderr, returns exit.
+function dispatchHook({ arg1: event }: Positionals): number {
+  if (!event) {
+    return usage(
+      `the following arguments are required: hook event (one of: ${HOOK_EVENTS.join(', ')})`,
+    );
+  }
+  if (!isHookEvent(event)) {
+    console.error(
+      `error: unknown hook event '${event}' (expected: ${HOOK_EVENTS.join(' | ')})`,
+    );
+    return 1;
+  }
+  return runHookFromStdin(event);
 }
 
 function usage(msg: string): number {
@@ -371,12 +423,20 @@ function usage(msg: string): number {
   return 1;
 }
 
+// Format narrowers keep the existing default-on-miss return shape so the
+// caller always gets a usable format, but now warn on unrecognized input
+// instead of coercing silently. Unknown values usually mean a typo
+// (`yml`, `yaml`, `markdown`) the user should correct.
 function narrowMdJson(value: string): 'md' | 'json' {
-  return value === 'json' ? 'json' : 'md';
+  if (value === 'md' || value === 'json') return value;
+  console.warn(`warning: unknown --format '${value}' (expected: md | json); defaulting to 'md'`);
+  return 'md';
 }
 
 function narrowJsonText(value: string): 'json' | 'text' {
-  return value === 'json' ? 'json' : 'text';
+  if (value === 'json' || value === 'text') return value;
+  console.warn(`warning: unknown --format '${value}' (expected: json | text); defaulting to 'text'`);
+  return 'text';
 }
 
 function narrowShowKind(value: string | undefined): 'state' | 'plan' | 'prd' | 'report' {

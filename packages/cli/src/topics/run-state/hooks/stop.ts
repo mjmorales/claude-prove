@@ -12,10 +12,11 @@
  * Port of `tools/run_state/hook_stop.py`.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { RunPaths } from '../paths';
 import { type ReconcileChange, reconcile } from '../state';
+import { isDir, readStateJson } from './fs-utils';
 import { pyJsonDump } from './json-compat';
 import { EMPTY_HOOK_RESULT, type HookResult, readCwd } from './types';
 
@@ -27,25 +28,11 @@ interface RunLocator {
   paths: RunPaths;
 }
 
-function isDir(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-function readStateJson(path: string): Record<string, unknown> | null {
-  try {
-    const raw = readFileSync(path, 'utf8');
-    const parsed = JSON.parse(raw) as unknown;
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-    return null;
-  } catch {
-    return null;
-  }
+/** `ReconcileChange` annotated with run identity so Stop can render a single
+ *  multi-run summary line across every reconciled step. */
+interface TaggedChange extends ReconcileChange {
+  branch: string;
+  slug: string;
 }
 
 /** Enumerate `<runs_root>/<branch>/<slug>/state.json` and yield each run
@@ -104,10 +91,6 @@ export function runStop(payload: Record<string, unknown> | null): HookResult {
   const runsRoot = join(project, '.prove', 'runs');
   if (!isDir(runsRoot)) return EMPTY_HOOK_RESULT;
 
-  interface TaggedChange extends ReconcileChange {
-    branch: string;
-    slug: string;
-  }
   const allChanges: TaggedChange[] = [];
 
   for (const run of iterActiveRuns(runsRoot)) {

@@ -10,7 +10,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { CURRENT_SCHEMA_VERSION } from '../schemas';
+import { CURRENT_SCHEMA_VERSION, STEP_STATUSES } from '../schemas';
 import {
   type PlanData,
   type ReportData,
@@ -36,6 +36,12 @@ export function runReportWrite(stepId: string, flags: ReportWriteFlags): number 
     console.error('error: the following arguments are required: --status');
     return 1;
   }
+  if (!(STEP_STATUSES as readonly string[]).includes(flags.status)) {
+    const allowed = STEP_STATUSES.map((s) => `'${s}'`).join(', ');
+    console.error(`error: invalid --status '${flags.status}' (expected one of: ${allowed})`);
+    return 1;
+  }
+  const status = flags.status as ReportData['status'];
   let resolved;
   try {
     resolved = resolvePaths(flags);
@@ -75,8 +81,12 @@ export function runReportWrite(stepId: string, flags: ReportWriteFlags): number 
       kind: 'report',
       step_id: stepId,
       task_id: taskId,
-      status: flags.status as ReportData['status'],
+      status,
       commit_sha: flags.commit ?? '',
+      // `started_at` is intentionally empty for synthetic reports: the CLI
+      // only learns of the step at completion time, so there is no authoritative
+      // start timestamp. Callers needing a start time must supply a full
+      // payload via --json.
       started_at: '',
       ended_at: utcnowIso(),
       diff_stats: { files_changed: 0, insertions: 0, deletions: 0 },

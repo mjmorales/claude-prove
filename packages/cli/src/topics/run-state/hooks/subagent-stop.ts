@@ -79,13 +79,25 @@ function mainWorktree(cwd: string): string {
     stdout: 'pipe',
     stderr: 'ignore',
   });
-  if (proc.exitCode !== 0) return cwd;
+  if (proc.exitCode !== 0) {
+    // Fallback: `git worktree list` failed (non-repo cwd, missing git, permissions).
+    // Treat `cwd` as the main worktree so reconciliation still has a root to scan.
+    console.warn(
+      `run_state: mainWorktree() falling back to cwd=${cwd} (git worktree list exited ${proc.exitCode})`,
+    );
+    return cwd;
+  }
   const out = proc.stdout.toString();
   for (const line of out.split('\n')) {
     if (line.startsWith('worktree ')) {
       return line.slice('worktree '.length).trim();
     }
   }
+  // Fallback: git succeeded but emitted no `worktree <path>` line — unexpected
+  // on any working repo. Log so the oddity is visible rather than silent.
+  console.warn(
+    `run_state: mainWorktree() falling back to cwd=${cwd} (no 'worktree' line in porcelain output)`,
+  );
   return cwd;
 }
 
@@ -109,6 +121,11 @@ function newCommitsSince(cwd: string, isoTs: string): boolean {
   const parsed = Date.parse(normalized);
   if (Number.isNaN(parsed)) return false;
   const startedUnix = Math.floor(parsed / 1000);
+  // Same-second edge case: if a step's `started_at` and HEAD's commit timestamp
+  // fall in the same unix second, `>=` treats them as "commit happened after
+  // step start" and the step auto-completes. Acceptable because step start
+  // always precedes the subagent's commit chronologically; only the
+  // second-level granularity of `git log %ct` blurs the ordering.
   return headUnix >= startedUnix;
 }
 

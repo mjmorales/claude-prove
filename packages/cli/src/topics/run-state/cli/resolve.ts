@@ -111,33 +111,40 @@ function isFile(path: string): boolean {
   }
 }
 
+/**
+ * Scan `<runsRoot>/*\/<slug>/` once and pick the first branch whose run
+ * directory contains any of the marker files, in priority order. Mirrors
+ * Python's `glob(f"*\/{slug}/{marker}")` loop but avoids three sequential
+ * readdir passes for the same directory.
+ */
 function autodetectBranch(runsRoot: string, slug: string): string | undefined {
   if (!existsSync(runsRoot)) return undefined;
 
-  // Prefer directories with state.json; fall back to plan.json/prd.json.
-  const primary = findSlugBranch(runsRoot, slug, 'state.json');
-  if (primary) return primary;
-  const planFallback = findSlugBranch(runsRoot, slug, 'plan.json');
-  if (planFallback) return planFallback;
-  return findSlugBranch(runsRoot, slug, 'prd.json');
-}
-
-function findSlugBranch(runsRoot: string, slug: string, marker: string): string | undefined {
-  // Enumerate immediate children of runsRoot — Python uses glob(f"*/{slug}/{marker}");
-  // mirror that with readdir + existsSync.
   let children: string[];
   try {
-    children = readdirSyncSafe(runsRoot);
+    children = readdirSync(runsRoot);
   } catch {
     return undefined;
   }
-  for (const name of children) {
-    const candidate = join(runsRoot, name, slug, marker);
-    if (existsSync(candidate)) return name;
-  }
-  return undefined;
-}
 
-function readdirSyncSafe(path: string): string[] {
-  return readdirSync(path);
+  // Priority order: state.json (active run), plan.json / prd.json (pre-init).
+  // Tracked separately so a branch with only plan.json doesn't shadow a later
+  // branch that actually has state.json.
+  const MARKERS = ['state.json', 'plan.json', 'prd.json'] as const;
+  const firstHit: Record<(typeof MARKERS)[number], string | undefined> = {
+    'state.json': undefined,
+    'plan.json': undefined,
+    'prd.json': undefined,
+  };
+
+  for (const name of children) {
+    const runDir = join(runsRoot, name, slug);
+    for (const marker of MARKERS) {
+      if (firstHit[marker] !== undefined) continue;
+      if (existsSync(join(runDir, marker))) firstHit[marker] = name;
+    }
+    if (firstHit['state.json'] !== undefined) break; // highest-priority hit; done.
+  }
+
+  return firstHit['state.json'] ?? firstHit['plan.json'] ?? firstHit['prd.json'];
 }

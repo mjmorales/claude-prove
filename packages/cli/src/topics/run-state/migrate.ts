@@ -43,12 +43,16 @@ import {
   statSync,
 } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
-import { RunPaths as StateRunPaths } from './paths';
+import { type RunPathsData } from './paths';
 import {
   _clock,
   deepCloneJson,
   defaultsFromSchema,
+  type DispatchLedger,
   type PlanData,
+  type PrdData,
+  type StateData,
+  type TaskData,
   newPlan as stateNewPlan,
   newPrd as stateNewPrd,
   newState as stateNewState,
@@ -66,58 +70,58 @@ import {
 export { _clock, deepCloneJson, defaultsFromSchema, utcnowIso, writeJsonAtomic };
 
 /**
- * Legacy path shape used by this module's `migrateRun` output for
- * backwards-compat with the prior drop. New call sites should use
- * `RunPaths` from `./paths` directly.
+ * Raised when the legacy markdown input cannot be translated into a valid
+ * JSON artifact — typically because the parsed plan is missing required
+ * fields (`tasks` array, task `id`, step `id`). Surfaces the offending
+ * field so callers can point at the bad source file.
  */
-export interface RunPaths {
-  root: string;
-  prd: string;
-  plan: string;
-  state: string;
-  stateLock: string;
-  reportsDir: string;
-}
-
-export function runPathsFor(runsRoot: string, branch: string, slug: string): RunPaths {
-  const p = StateRunPaths.forRun(runsRoot, branch, slug);
-  return {
-    root: p.root,
-    prd: p.prd,
-    plan: p.plan,
-    state: p.state,
-    stateLock: p.state_lock,
-    reportsDir: p.reports_dir,
-  };
+export class MigrationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MigrationError';
+  }
 }
 
 /**
- * Build a fresh prd.json payload. Wraps the canonical factory in `state.ts`
- * and widens the return type to the loose `Record<string, unknown>` the
- * markdown-migration call sites were written against.
+ * Build a fresh prd.json payload. Thin passthrough to the canonical factory
+ * in `state.ts`; exported from this module so tests and migrate call sites
+ * share one construction path (and thus one key order).
  */
-export function newPrd(
-  title: string,
-  overrides: Record<string, unknown> = {},
-): Record<string, unknown> {
-  return stateNewPrd(title, overrides) as unknown as Record<string, unknown>;
+export function newPrd(title: string, overrides: Record<string, unknown> = {}): PrdData {
+  return stateNewPrd(title, overrides);
 }
 
-export function newPlan(tasks: unknown[], mode = 'simple'): Record<string, unknown> {
-  return stateNewPlan(tasks as PlanData['tasks'], mode) as unknown as Record<string, unknown>;
+export function newPlan(tasks: PlanData['tasks'], mode = 'simple'): PlanData {
+  return stateNewPlan(tasks, mode);
 }
 
 /**
  * Markdown-tolerant `newState` wrapper. Accepts the untyped dict shape
- * the markdown parsers produce; delegates to the canonical builder in
- * `state.ts` so key order / on-disk bytes stay identical.
+ * the markdown parsers produce; validates the minimal plan shape then
+ * delegates to the canonical builder in `state.ts` so key order / on-disk
+ * bytes stay identical.
  */
 export function newState(
   slug: string,
   branch: string,
   plan: Record<string, unknown>,
-): Record<string, unknown> {
-  return stateNewState(slug, branch, plan as unknown as PlanData) as unknown as Record<string, unknown>;
+): StateData {
+  return stateNewState(slug, branch, coercePlan(plan));
+}
+
+/**
+ * Narrow a markdown-parsed dict into a `PlanData` shape. The parsers in
+ * this file build plans field-by-field, so `tasks` is always present when
+ * the markdown is well-formed; this guard raises `MigrationError` rather
+ * than allowing a silently-malformed plan to flow into `state.json`.
+ */
+function coercePlan(plan: Record<string, unknown>): PlanData {
+  if (!Array.isArray(plan['tasks'])) {
+    throw new MigrationError(
+      "plan is missing 'tasks' array (expected PlanData shape from parsePlanMd)",
+    );
+  }
+  return plan as unknown as PlanData;
 }
 
 // --------------------------------------------------------------------------
@@ -259,7 +263,9 @@ export function parsePlanMd(text: string): Record<string, unknown> {
   }
 
   const mode = tasks.some((t) => Number(t['wave']) > 1) ? 'full' : 'simple';
-  return newPlan(tasks, mode);
+  // Markdown parsing built each task field-by-field against PlanTaskInput;
+  // structural match is verified by the parity fixtures.
+  return newPlan(tasks as unknown as PlanData['tasks'], mode);
 }
 
 // --------------------------------------------------------------------------
@@ -269,17 +275,22 @@ export function parsePlanMd(text: string): Record<string, unknown> {
 /**
  * Best-effort translation of a PROGRESS.md checklist into state.json.
  * Unmatched tasks keep their default `pending` status.
+ *
+ * Input-shape discipline: `newState` guarantees a well-formed `StateData`
+ * output so bracket-notation writes are replaced by typed field access —
+ * the compiler now rejects value drift. Callers passing a malformed plan
+ * surface as `MigrationError` from `newState`, never silent corruption.
  */
 export function deriveStateFromProgress(
   progressText: string,
   plan: Record<string, unknown>,
   slug: string,
   branch: string,
-): Record<string, unknown> {
+): StateData {
   const state = newState(slug, branch, plan);
 
   // Parse checkmarks into a {taskId: status} map.
-  const statuses: Record<string, string> = {};
+  const statuses: Record<string, ProgressMark> = {};
   for (const m of progressText.matchAll(CHECK_TASK_RE)) {
     const mark = m[1] ?? ' ';
     const tid = m[2];
@@ -288,42 +299,55 @@ export function deriveStateFromProgress(
   }
 
   let anyInProgress = false;
-  const stateTasks = state['tasks'] as Record<string, unknown>[];
 
-  for (const task of stateTasks) {
-    const s = statuses[task['id'] as string];
+  for (const task of state.tasks) {
+    const s = statuses[task.id];
     if (!s) continue;
-    task['status'] = s;
+    // 'skipped' is a step-only status and 'pending' is a no-op default —
+    // filter to the four marks that legally transition a task.
+    if (!TASK_MARKS.has(s)) continue;
+    task.status = s as TaskData['status'];
+
     // Propagate a sensible default to steps: completed tasks mark steps
     // completed, in_progress leaves steps pending, failed/halted mark
     // the task end-time but leave steps for the caller.
     if (s === 'completed') {
-      for (const step of task['steps'] as Record<string, unknown>[]) {
-        step['status'] = 'completed';
-        step['ended_at'] = utcnowIso();
+      for (const step of task.steps) {
+        step.status = 'completed';
+        step.ended_at = utcnowIso();
       }
-      task['ended_at'] = utcnowIso();
+      task.ended_at = utcnowIso();
     } else if (s === 'in_progress') {
       anyInProgress = true;
     } else if (s === 'failed' || s === 'halted') {
-      task['ended_at'] = utcnowIso();
+      task.ended_at = utcnowIso();
     }
   }
 
   if (anyInProgress) {
-    state['run_status'] = 'running';
+    state.run_status = 'running';
   } else if (
-    stateTasks.length > 0 &&
-    stateTasks.every((t) => t['status'] === 'completed')
+    state.tasks.length > 0 &&
+    state.tasks.every((t) => t.status === 'completed')
   ) {
-    state['run_status'] = 'completed';
-    state['ended_at'] = utcnowIso();
+    state.run_status = 'completed';
+    state.ended_at = utcnowIso();
   }
 
   return state;
 }
 
-function markToStatus(mark: string): string {
+type ProgressMark = 'pending' | 'completed' | 'failed' | 'halted' | 'in_progress' | 'skipped';
+
+/** Marks that legally land on `TaskData.status`. Other marks are ignored. */
+const TASK_MARKS: ReadonlySet<ProgressMark> = new Set([
+  'completed',
+  'failed',
+  'halted',
+  'in_progress',
+]);
+
+function markToStatus(mark: string): ProgressMark {
   switch (mark) {
     case ' ':
       return 'pending';
@@ -371,13 +395,16 @@ export function migrateRun(runDir: string, opts: MigrateRunOptions): MigrationRe
   const progressMd = join(runDir, 'PROGRESS.md');
   const dispatchLegacy = join(runDir, 'dispatch-state.json');
 
-  const paths: RunPaths = {
+  // `migrateRun` takes a pre-resolved run dir rather than `(runsRoot,
+  // branch, slug)`, so we compute paths inline against the canonical
+  // `RunPathsData` shape from `./paths` instead of calling `forRun`.
+  const paths: RunPathsData = {
     root: runDir,
     prd: join(runDir, 'prd.json'),
     plan: join(runDir, 'plan.json'),
     state: join(runDir, 'state.json'),
-    stateLock: join(runDir, 'state.json.lock'),
-    reportsDir: join(runDir, 'reports'),
+    state_lock: join(runDir, 'state.json.lock'),
+    reports_dir: join(runDir, 'reports'),
   };
 
   // PRD
@@ -411,9 +438,12 @@ export function migrateRun(runDir: string, opts: MigrateRunOptions): MigrationRe
       try {
         const legacy = JSON.parse(readFileSync(dispatchLegacy, 'utf8')) as Record<string, unknown>;
         if (Array.isArray(legacy['dispatched'])) {
-          const dispatch = (state['dispatch'] ??= { dispatched: [] }) as Record<string, unknown>;
-          const dispatched = (dispatch['dispatched'] as unknown[]) ?? [];
-          dispatch['dispatched'] = [...dispatched, ...(legacy['dispatched'] as unknown[])];
+          // `newState` always seeds `state.dispatch = { dispatched: [] }`,
+          // so no re-initialization guard is needed here.
+          state.dispatch.dispatched = [
+            ...state.dispatch.dispatched,
+            ...(legacy['dispatched'] as DispatchLedger['dispatched']),
+          ];
         }
       } catch {
         // Malformed legacy file — skip silently, mirrors Python's except JSONDecodeError.

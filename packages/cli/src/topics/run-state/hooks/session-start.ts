@@ -10,8 +10,9 @@
  * Port of `tools/run_state/hook_session_start.py`.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { isDir, readStateJson } from './fs-utils';
 import { pyJsonDump } from './json-compat';
 import { EMPTY_HOOK_RESULT, type HookResult, readCwd } from './types';
 
@@ -62,27 +63,6 @@ function collectActiveRuns(runsRoot: string): ActiveRunSummary[] {
     }
   }
   return out;
-}
-
-function readStateJson(path: string): Record<string, unknown> | null {
-  try {
-    const raw = readFileSync(path, 'utf8');
-    const parsed = JSON.parse(raw) as unknown;
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function isDir(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
 }
 
 /** Python:

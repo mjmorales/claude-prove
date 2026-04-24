@@ -6,7 +6,6 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { RunPaths } from '../paths';
 import { initRun, type PlanData, type PrdData, StateError } from '../state';
 import { validateData } from '../validate';
 import { defaultRunsRoot, ResolveError } from './resolve';
@@ -34,41 +33,49 @@ export function runInit(flags: InitFlags): number {
     return 1;
   }
 
-  let plan: PlanData;
+  let planRaw: unknown;
   try {
-    plan = JSON.parse(readFileSync(flags.plan, 'utf8')) as PlanData;
+    planRaw = JSON.parse(readFileSync(flags.plan, 'utf8'));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`error: ${msg}`);
     return 1;
   }
 
-  const planFindings = validateData(plan, 'plan');
+  // validateData is the runtime type guard — it checks shape against PLAN_SCHEMA
+  // before we cast to PlanData. Without this the JSON.parse result (unknown)
+  // would reach initRun unchecked and surface as cryptic mid-write errors.
+  const planFindings = validateData(planRaw, 'plan');
   if (!planFindings.ok) {
     for (const e of planFindings.errors) console.error(e);
     return 2;
   }
+  const plan = planRaw as PlanData;
 
   let prd: PrdData | undefined;
   if (flags.prd) {
+    let prdRaw: unknown;
     try {
-      prd = JSON.parse(readFileSync(flags.prd, 'utf8')) as PrdData;
+      prdRaw = JSON.parse(readFileSync(flags.prd, 'utf8'));
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`error: ${msg}`);
       return 1;
     }
-    const prdFindings = validateData(prd, 'prd');
+    const prdFindings = validateData(prdRaw, 'prd');
     if (!prdFindings.ok) {
       for (const e of prdFindings.errors) console.error(e);
       return 2;
     }
+    prd = prdRaw as PrdData;
   }
 
   const runsRoot = flags.runsRoot ?? defaultRunsRoot();
   try {
-    const paths = RunPaths.forRun(runsRoot, flags.branch, flags.slug);
-    initRun(runsRoot, flags.branch, flags.slug, plan, { prd, overwrite: flags.overwrite });
+    const paths = initRun(runsRoot, flags.branch, flags.slug, plan, {
+      prd,
+      overwrite: flags.overwrite,
+    });
     console.log(`initialized: ${paths.root}`);
     return 0;
   } catch (err) {

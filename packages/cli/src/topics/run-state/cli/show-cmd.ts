@@ -6,11 +6,13 @@
  * (byte-equal to Python for every view).
  */
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { RunPaths } from '../paths';
 import { loadState } from '../state';
 import { renderPlan, renderPrd, renderReport, renderState, renderSummary } from '../render';
 import type { PlanData, PrdData, ReportData, StateData } from '../state';
+import { sortedChildren } from './fs-helpers';
 import { type RunSelection, ResolveError, resolvePaths, defaultRunsRoot } from './resolve';
 
 export interface ShowFlags extends RunSelection {
@@ -146,18 +148,17 @@ export function runSummary(flags: SummaryFlags): number {
     console.error(`error: no runs root at ${runsRoot}`);
     return 1;
   }
-  const branches = safeReaddir(runsRoot);
   let emitted = 0;
-  for (const branch of branches) {
+  for (const branch of sortedChildren(runsRoot)) {
     const branchDir = join(runsRoot, branch);
-    const slugs = safeReaddir(branchDir);
-    for (const slug of slugs) {
-      const statePath = join(branchDir, slug, 'state.json');
-      if (!existsSync(statePath)) continue;
-      const state = JSON.parse(readFileSync(statePath, 'utf8')) as StateData;
-      const planPath = join(branchDir, slug, 'plan.json');
-      const plan = existsSync(planPath)
-        ? (JSON.parse(readFileSync(planPath, 'utf8')) as PlanData)
+    for (const slug of sortedChildren(branchDir)) {
+      // Route reads through RunPaths + loadState so the lock-file sidecar is
+      // touched consistently with every other state.json reader in this module.
+      const paths = RunPaths.forRun(runsRoot, branch, slug);
+      if (!existsSync(paths.state)) continue;
+      const state = loadState(paths);
+      const plan = existsSync(paths.plan)
+        ? (JSON.parse(readFileSync(paths.plan, 'utf8')) as PlanData)
         : null;
       process.stdout.write(renderSummary(state, { plan }));
       emitted += 1;
@@ -168,12 +169,4 @@ export function runSummary(flags: SummaryFlags): number {
     return 1;
   }
   return 0;
-}
-
-function safeReaddir(dir: string): string[] {
-  try {
-    return readdirSync(dir).sort();
-  } catch {
-    return [];
-  }
 }

@@ -7,8 +7,9 @@
  * Missing state.json is flagged as `(no state)`.
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { sortedChildren, statSafe } from './fs-helpers';
 import { defaultRunsRoot } from './resolve';
 
 export interface LsFlags {
@@ -56,20 +57,4 @@ export function runLs(flags: LsFlags): number {
     console.log(`${r.key}\t${r.status}\t${r.current}`);
   }
   return 0;
-}
-
-function sortedChildren(dir: string): string[] {
-  try {
-    return readdirSync(dir).sort();
-  } catch {
-    return [];
-  }
-}
-
-function statSafe(path: string): ReturnType<typeof statSync> | null {
-  try {
-    return statSync(path);
-  } catch {
-    return null;
-  }
 }
