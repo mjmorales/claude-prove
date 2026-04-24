@@ -56,21 +56,29 @@ function isPromptingAction(value: string): value is PromptingAction {
 
 function dispatch(action: PromptingAction, patterns: string[], flags: PromptingFlags): number {
   switch (action) {
-    case 'token-count':
+    case 'token-count': {
+      const sort = resolveSortKey(flags.sort);
+      if (typeof sort === 'number') return sort;
       return runTokenCountCmd({
         patterns: patterns ?? [],
-        sort: resolveSortKey(flags.sort),
+        sort,
         json: flags.json === true,
         // cac: flags.strip defaults to true; --no-strip sets it to false.
         // Python default strips frontmatter; --no-strip disables stripping.
         noStrip: flags.strip === false,
       });
+    }
   }
 }
 
-function resolveSortKey(value: string | undefined): SortKey {
+/**
+ * Returns a valid {@link SortKey} or a numeric exit code (1) on invalid
+ * input. The callback at registration time is the only place that calls
+ * process.exit for this topic — sub-handlers propagate codes upward.
+ */
+function resolveSortKey(value: string | undefined): SortKey | number {
   if (value === undefined) return 'tokens';
   if ((SORT_KEYS as readonly string[]).includes(value)) return value as SortKey;
   console.error(`error: --sort expected one of: ${SORT_KEYS.join(', ')} (got: ${value})`);
-  process.exit(1);
+  return 1;
 }

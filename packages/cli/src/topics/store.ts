@@ -41,7 +41,11 @@ export function register(cli: CAC): void {
         );
         process.exit(1);
       }
-      runStoreCommand((store) => dispatch(store, action, flags));
+      // Single exit point — sub-handlers return exit codes; lifecycle
+      // wrapper maps unexpected errors to 1; the action callback is the
+      // only thing that calls process.exit for this topic.
+      const code = runStoreCommand((store) => dispatch(store, action, flags));
+      process.exit(code);
     });
 }
 
@@ -49,51 +53,49 @@ function isStoreAction(value: string): value is StoreAction {
   return (STORE_ACTIONS as string[]).includes(value);
 }
 
-function dispatch(store: Store, action: StoreAction, flags: StoreFlags): void {
+function dispatch(store: Store, action: StoreAction, flags: StoreFlags): number {
   switch (action) {
     case 'migrate':
-      handleMigrate(store);
-      break;
+      return handleMigrate(store);
     case 'info':
-      handleInfo(store);
-      break;
+      return handleInfo(store);
     case 'reset':
-      handleReset(store, flags);
-      break;
+      return handleReset(store, flags);
   }
 }
 
-function runStoreCommand(fn: (store: Store) => void): void {
+function runStoreCommand(fn: (store: Store) => number): number {
   let store: Store | undefined;
   try {
     store = openStore();
-    fn(store);
+    return fn(store);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`prove store: ${msg}`);
-    process.exit(1);
+    return 1;
   } finally {
     store?.close();
   }
 }
 
-function handleMigrate(store: Store): void {
+function handleMigrate(store: Store): number {
   const result = runMigrations(store);
   if (result.applied.length === 0) {
     console.log('no pending migrations');
-    return;
+    return 0;
   }
   for (const m of result.applied) {
     console.log(`applied ${m.domain} v${m.version}: ${m.description}`);
   }
+  return 0;
 }
 
-function handleInfo(store: Store): void {
+function handleInfo(store: Store): number {
   console.log(`db path: ${store.path}`);
   const domains = listDomains();
   if (domains.length === 0) {
     console.log('no domains registered');
-    return;
+    return 0;
   }
   console.log('domains:');
   for (const domain of domains) {
@@ -104,13 +106,15 @@ function handleInfo(store: Store): void {
     const version = rows[0]?.version ?? 0;
     console.log(`  ${domain}: v${version}`);
   }
+  return 0;
 }
 
-function handleReset(store: Store, flags: StoreFlags): void {
+function handleReset(store: Store, flags: StoreFlags): number {
   if (!flags.confirm) {
     console.error('refusing to reset without --confirm. this will drop every domain table.');
-    process.exit(1);
+    return 1;
   }
   dropAllDomainTables(store);
   console.log(`reset: dropped all domain tables at ${store.path}`);
+  return 0;
 }
