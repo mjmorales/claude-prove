@@ -110,6 +110,30 @@ export interface ScrumContextBundle {
   bundle: unknown;
 }
 
+/**
+ * One row of the `scrum_decisions` table. `id` is the filename slug
+ * (e.g., `2026-04-24-decision-persistence`). `content_sha` is the
+ * hex-encoded sha256 of `content`, computed at write time so drift
+ * detection never needs to re-read the working-tree file. `source_path`
+ * is nullable because git-recovered rows may lack a working-tree file.
+ *
+ * `status` defaults to `'accepted'` per ADR convention; the column is
+ * `TEXT` (not a typed enum) so downstream domains can extend the
+ * vocabulary without a schema migration.
+ */
+export interface DecisionRow {
+  id: string;
+  title: string;
+  topic: string | null;
+  status: string;
+  content: string;
+  source_path: string | null;
+  content_sha: string;
+  /** ISO-8601 timestamp. */
+  recorded_at: string;
+  recorded_by_agent: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Derived views
 // ---------------------------------------------------------------------------
