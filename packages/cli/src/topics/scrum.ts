@@ -17,6 +17,8 @@
  *   claude-prove scrum milestone create          --title X [--description Y] [--target-state S] [--id I]
  *   claude-prove scrum milestone list            [--status S]
  *   claude-prove scrum milestone show <id>
+ *   claude-prove scrum milestone activate <id>
+ *   claude-prove scrum milestone reopen <id>
  *   claude-prove scrum milestone close <id>
  *   claude-prove scrum tag add <task-id> <tag>
  *   claude-prove scrum tag remove <task-id> <tag>

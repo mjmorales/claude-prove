@@ -309,6 +309,12 @@ describe('ScrumStore — setMilestoneStatus', () => {
     expect(updated.status).toBe('planned');
   });
 
+  test('active -> active is idempotent', () => {
+    seedMilestone('m1', { status: 'active' });
+    const updated = store.setMilestoneStatus('m1', 'active');
+    expect(updated.status).toBe('active');
+  });
+
   test('throws on unknown id', () => {
     expect(() => store.setMilestoneStatus('missing', 'active')).toThrow(/unknown milestone/);
   });
