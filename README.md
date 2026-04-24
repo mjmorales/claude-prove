@@ -1,34 +1,6 @@
 # prove
 
-**P**lan, **R**esearch, **O**rchestrate, **V**alidate, **E**xecute — a Claude Code plugin that provides a complete plan-to-implementation lifecycle for any tech stack.
-
-## What It Does
-
-Takes you from idea to merged code through a structured pipeline:
-
-```
-/prove:brainstorm  →  /prove:task-planner  →  /prove:plan-step  →  /prove:orchestrator  →  /prove:review-ui  →  /prove:comprehend  →  /prove:cleanup
-      │                        │                         │                        │                        │                        │                        │
-.prove/decisions/       .prove/runs/<b>/<s>/    .prove/plans/plan_X/    .prove/runs/.../state.json   .prove/reviews/         .prove/learning/         .prove/archive/
-```
-
-1. **Brainstorm** — Explore options, weigh trade-offs, record decisions
-2. **Task Planner** — Discover requirements via questionnaires, create incremental plans
-3. **Plan Step** — Deep-dive into individual steps: requirements, design decisions, test strategy
-4. **Orchestrator** — Autonomous execution with validation gates and git snapshots
-5. **Review** — Inspect intent-grouped diffs and record verdicts via the Docker-based review UI
-6. **Comprehend** — Socratic quiz on agent-generated diffs to build code comprehension
-7. **Cleanup** — Archive artifacts, remove working files, delete branches
-
-## Key Features
-
-- **Auto-scaling orchestrator**: Small tasks (≤3 steps) run sequentially. Larger tasks use parallel git worktrees with mandatory architect review. Three execution modes: `/prove:orchestrator`, `/prove:autopilot`, and `/prove:full-auto`.
-- **Structured code review**: Intent-manifest-driven code review. Agents declare *why* they made each change via Claude Code hooks. Changes are grouped by intent for structured review in a Dracula-themed browser UI. Run `/prove:review-ui` to launch the Docker image (pulled from `ghcr.io/mjmorales/claude-prove/review-ui`).
-- **Code quality steward**: Deep line-by-line audits (`/prove:steward`), iterative audit-fix loops (`/prove:steward:auto-steward`), and lightweight session-scoped reviews (`/prove:steward:steward-review`). See [docs/code-quality.md](docs/code-quality.md).
-- **Stack-agnostic validation**: Auto-detects your project type (Go, Rust, Python, Node, Godot, Makefile) and runs appropriate build/lint/test checks. Supports LLM-based prompt validators for higher-level checks. Configure with `.claude/.prove.json` or let auto-detection handle it.
-- **Session management**: Create handoff prompts (`/prove:handoff`) to preserve context across Claude Code sessions. Resume with `/prove:pickup` in a fresh session.
-- **Documentation generation**: Human-readable docs (`/prove:docs`), LLM-optimized agent docs (`/prove:docs:agentic-docs`), or both at once (`/prove:docs:auto-docs`).
-- **Git-based rollback**: Every step is committed individually. Revert any step, reset to any point.
+A Claude Code plugin that adds a complete plan-to-implementation lifecycle: autonomous task execution with validation gates, structured code review, and agentic task management. Designed for engineering teams that want Claude to do real work — not just answer questions.
 
 ## Installation
 
@@ -37,307 +9,120 @@ claude plugin marketplace add mjmorales/claude-prove
 claude plugin install prove@prove
 ```
 
-If Claude Code is already running, restart it for the plugin to take effect.
+Restart Claude Code after installation for the plugin to take effect.
 
 ## Quick Start
 
 ```bash
-# Initialize validation config for your project
+# Detect tech stack and generate .claude/.prove.json
 /prove:init
 
-# Start brainstorming a feature
+# Explore approaches and record the decision
 /prove:brainstorm
 
-# Plan the implementation
-/prove:task-planner
+# Create a PRD + task plan
+/prove:plan --task "add rate limiting to the API gateway"
 
-# Deep-dive into a specific step
-/prove:plan-step 1.2.3
-
-# Execute autonomously
+# Execute the plan autonomously with validation gates
 /prove:orchestrator
 
-# Review agent-generated code (launches Docker UI)
+# Inspect agent-generated diffs and record verdicts
 /prove:review-ui
-
-# Quiz yourself on what the agent wrote
-/prove:comprehend
-
-# Clean up when done
-/prove:cleanup my-feature
 ```
 
-## Commands Reference
+## Core Subsystems
 
-### Planning & Discovery
+| Subsystem | Entry Point | What It Does |
+|-----------|-------------|--------------|
+| **Orchestrator** | `/prove:orchestrator` | Executes a task plan step-by-step. Runs build/lint/test validators after each step. Auto-scales: 1-3 steps run sequentially; 4+ steps use parallel git worktrees with mandatory principal-architect review before merge. |
+| **Scrum** | `/prove:scrum` | Agentic task management backed by `.prove/prove.db`. Tasks, milestones, tags, and dependency graph. SessionStart/SubagentStop/Stop hooks reconcile state at task boundaries. Orchestrator runs link to tasks via `task_id` in `plan.json`. |
+| **ACB** (Agent Change Brief) | `/prove:review-ui` | Every feature-branch commit carries an ACB v0.2 intent manifest written by a PostToolUse hook at commit time. The review UI (React + Fastify, Docker) surfaces intent-grouped diffs for structured review with verdicts: accepted / rejected / needs_discussion / rework. |
 
-| Command | Description |
-|---------|-------------|
-| `/prove:brainstorm` | Interactive brainstorming — explore options, record decisions to `.prove/decisions/` |
-| `/prove:task-planner` | Guided requirements gathering and incremental plan creation |
-| `/prove:plan-step [step]` | Deep-dive into a specific plan step: requirements, design, test strategy |
-| `/prove:spec [topic]` | Author formal specifications following RFC/IETF conventions |
+## Command Reference
 
-### Execution
-
-| Command | Description |
-|---------|-------------|
-| `/prove:orchestrator` | Execute a task plan with validation gates. Auto-scales between simple and full mode |
-| `/prove:autopilot [plan]` | Run the orchestrator hands-off on a specific plan |
-| `/prove:full-auto` | End-to-end: requirements → plan → parallel execution → merge |
-| `/prove:prep-permissions` | Pre-configure Claude Code permissions for smooth orchestrator runs |
-
-### Code Review
+### Planning & Execution
 
 | Command | Description |
 |---------|-------------|
-| `/prove:review-ui` | Launch the Docker-based review UI (`ghcr.io/mjmorales/claude-prove/review-ui`). Inspect runs, intent groups, diffs, and record verdicts (approve / reject / discuss / rework) |
+| `/prove:orchestrator [--autopilot \| --full]` | Unified orchestrator entry point. `--autopilot` runs an existing plan hands-off; `--full` starts from a description (PRD-first); no flag auto-detects. |
+| `/prove:plan [--task <desc> \| --step <id>]` | Plan a task (produces `prd.json` + `plan.json`) or drill into a numbered step from the active plan. No args prompts interactively. |
+| `/prove:task <handoff\|pickup\|progress\|complete\|cleanup> [slug]` | Task lifecycle dispatcher. `handoff` captures context before ending a session; `pickup` resumes in a fresh session. |
+| `/prove:brainstorm` | Explore options, weigh trade-offs, record decisions to `.prove/decisions/`. |
 
-### Code Quality
-
-| Command | Description |
-|---------|-------------|
-| `/prove:steward` | Deep line-by-line codebase audit with automated fixes |
-| `/prove:steward:auto-steward` | Iterative audit-fix loop — runs until clean or cap is hit |
-| `/prove:steward:steward-review` | Lightweight review of current branch changes only |
-
-### Documentation
+### Review & Quality
 
 | Command | Description |
 |---------|-------------|
-| `/prove:docs` | Generate human-readable documentation |
-| `/prove:docs:agentic-docs` | Generate LLM-optimized documentation for agents |
-| `/prove:docs:auto-docs` | Analyze scope and generate both doc types in one pass |
-| `/prove:docs:claude-md` | Generate or update the project's CLAUDE.md |
+| `/prove:review-ui [--port N] [--stop] [--restart] [--pull]` | Launch the Docker-based review UI (`ghcr.io/mjmorales/claude-prove/review-ui`). Pulls the image if absent, bind-mounts the repo, opens `http://localhost:5174`. |
+| `/prove:steward [--review \| --full \| --auto]` | Code quality audit. `--review` (default) scans current branch changes; `--full` runs a deep line-by-line audit; `--auto` iterates until clean or the pass cap is hit. |
+| `/prove:comprehend [commit SHA or range]` | Socratic quiz on recent diffs to build comprehension of agent-generated code. Defaults to the most recent diff. |
+| `/prove:bug-fix [symptom]` | Structured debugging protocol — sequential hypothesis testing with backtracking. |
 
-### Session & Lifecycle
+### Scrum
 
 | Command | Description |
 |---------|-------------|
-| `/prove:handoff` | Create a handoff prompt for clean context transfer between sessions |
-| `/prove:pickup` | Resume work from a handoff prompt in a fresh session |
-| `/prove:comprehend` | Socratic quiz on agent-generated diffs to build code comprehension |
-| `/prove:commit` | Semantic commit assistant — reads `.claude/.prove.json` scopes for valid scopes |
-| `/prove:cleanup [task]` | Archive artifacts, remove working files, delete branches |
-| `/prove:complete-task` | Merge a task branch to main and run cleanup |
+| `/prove:scrum init` | One-shot importer to seed scrum tables from legacy planning artifacts. |
+| `/prove:scrum status` | Compact text overview of current task state. |
+| `/prove:scrum next` | Ranked list of next-ready tasks. |
+| `/prove:scrum task` | Interactive task lifecycle via `scrum-master` agent (create, update, transition). |
+| `/prove:scrum milestone` | Milestone lifecycle via `scrum-master` agent. |
+| `/prove:scrum tag` | Tag taxonomy edits via `scrum-master` agent. |
+| `/prove:scrum link` | Link orchestrator runs to scrum tasks. |
+| `/prove:scrum alerts` | Review stalled WIP and orphaned tasks. |
 
 ### Utilities
 
 | Command | Description |
 |---------|-------------|
-| `/prove:init` | Detect tech stack and generate `.claude/.prove.json` |
-| `/prove:doctor` | Diagnose installation health — configs, tooling, drift |
-| `/prove:update` | Validate configs, detect schema drift, apply migrations |
-| `/prove:tools` | List, install, or remove prove tools |
-| `/prove:index` | Build or update the content-addressable file index |
-| `/prove:progress` | Show orchestrator execution status and blockers |
-| `/prove:notify:notify-setup` | Configure notification integrations (Slack, Discord, custom) |
-| `/prove:notify:notify-test` | Send a test notification through configured reporters |
+| `/prove:docs <human\|agent\|both\|claude-md>` | Generate documentation. `human` for READMEs and guides; `agent` for LLM-optimized docs; `both` for both audiences; `claude-md` to generate or update `CLAUDE.md`. |
+| `/prove:create <skill\|command\|agent\|spec>` | Scaffold a new Claude Code skill, slash command, subagent, or technical spec. |
+| `/prove:prompting <craft\|cache\|token-count>` | Prompt engineering toolkit. Optimize prompts, manage the research cache, or count tokens. |
+| `/prove:notify <setup\|test>` | Configure notification reporters (Slack, Discord, MCP, custom) and send test events. |
+| `/prove:index [--force]` | Build or update the content-addressable file index. Run after significant structural changes. |
+| `/prove:init` | Detect tech stack and generate `.claude/.prove.json`. |
+| `/prove:doctor` | Diagnose installation health: config validity, tooling, schema drift, stale worktrees. |
+| `/prove:update` | Validate configs, detect schema drift, and apply migrations with approval. |
+| `/prove:install-skills` | Install recommended community skills from external repos into `~/.claude/skills/`. |
+| `/prove:report-issue [description]` | File a bug report or feature request against the prove plugin via `gh` CLI. |
 
-## Deep Dives
+## Configuration
 
-Detailed documentation for major feature areas:
-
-- **[Code Review](docs/code-review.md)** — Intent-manifest-driven code review with browser-based UI
-- **[Orchestrator](docs/orchestrator.md)** — Execution modes, validation gates, worktrees, and reporting
-- **[Code Quality](docs/code-quality.md)** — Steward, auto-steward, and steward-review audit system
-- **[Session Management](docs/session-management.md)** — Handoff/pickup workflow for context preservation
-
-## Monorepo Layout
-
-Prove is mid-migration from a collection of Python tools under `tools/` to a unified TypeScript CLI
-(see `.prove/decisions/2026-04-21-typescript-cli-unification.md` for the full decision record).
-The new TS workspace sits alongside the legacy Python tools:
-
-```
-packages/
-├── cli/           # cac CLI — bin/run.ts, src/topics/<topic>.ts registrations
-├── shared/        # @claude-prove/shared — types, logger, cross-package utilities
-└── store/         # @claude-prove/store — unified bun:sqlite connection, schema registry, migrations
-```
-
-Each port phase replaces one `tools/<name>/` Python module with a `packages/<name>/` TypeScript
-implementation (or folds it into `packages/cli/src/topics/<topic>/`). Until the final phase lands,
-both toolchains coexist; hooks and slash commands migrate incrementally.
-
-### Topic registration pattern
-
-Every CLI topic file (`packages/cli/src/topics/<topic>.ts`) exports a single `register(cli: CAC)`
-function. Stub topics wrap `registerStubTopic` inside `register()`; real topics (starting with
-`store` in phase 2) call `cli.command(...)` directly. `bin/run.ts` imports each topic's `register`
-and calls them in canonical port order. A port phase replaces only the body of one topic's
-`register()` — no other file changes.
-
-### Running the CLI locally
-
-```bash
-bun install
-bun run packages/cli/bin/run.ts --help              # topic tree
-bun run packages/cli/bin/run.ts store migrate       # apply pending migrations
-bun run packages/cli/bin/run.ts store info          # db path + registered domains
-bun run packages/cli/bin/run.ts store reset --confirm   # drop all domain tables
-```
-
-Example `prove store info` output in a fresh git repo:
-
-```
-db path: /Users/<you>/src/<repo>/.prove/prove.db
-no domains registered
-```
-
-Domains register themselves via side-effect imports once their phase ports (scrum, acb, pcd,
-decisions, handoff); until then, `store migrate` is a well-defined no-op.
-
-### Compiling a standalone binary
-
-```bash
-bun build --compile \
-  --target=bun-darwin-arm64 \
-  --outfile dist-bin/prove \
-  packages/cli/bin/run.ts
-```
-
-The compiled binary runs identically to the dev-mode invocation — `--help` lists all topics,
-every stub command dispatches correctly, and the `store` topic reads/writes `<git-root>/.prove/prove.db`.
-cac registers commands statically at startup, so there is no filesystem discovery or dynamic
-`import(path)` for `bun build --compile` to break.
-
-### Workspace scripts
-
-```bash
-bun test          # all packages
-bun run lint      # biome check
-bun run format    # biome format --write
-bun run typecheck # tsc --build
-bun run build     # tsc --build (emits packages/*/dist)
-bun run clean     # tsc --build --clean
-```
-
-## Project Structure
-
-```
-.claude-plugin/
-└── plugin.json                 # Plugin metadata (v0.14.1)
-specs/
-└── ...                         # Protocol specifications
-references/
-├── validation-config.md        # Canonical validation spec (.claude/.prove.json schema)
-└── interaction-patterns.md     # UX interaction patterns
-skills/
-├── brainstorm/                 # Interactive brainstorming → .prove/decisions/
-├── task-planner/               # Discovery & planning → .prove/runs/<branch>/<slug>/{prd,plan}.json
-├── plan-step/                  # Step-level requirements → .prove/plans/
-├── orchestrator/               # Autonomous execution with validation gates
-├── review/                     # Intent-based code review
-├── steward/                    # Deep codebase quality audit
-├── auto-steward/               # Iterative audit-fix loop
-├── steward-review/             # Session-scoped quality review
-├── comprehend/                 # Socratic quiz for code comprehension
-├── handoff/                    # Session handoff prompt generation
-├── commit/                     # Semantic commit assistant
-├── cleanup/                    # Archive & remove artifacts
-├── docs-writer/                # Human-readable documentation
-├── agentic-doc-writer/         # LLM-optimized documentation
-├── auto-docs/                  # Orchestrates both doc types
-├── claude-md/                  # CLAUDE.md generation
-├── spec-writer/                # RFC/IETF-style spec authoring
-├── notify-setup/               # Notification integrations
-├── prep-permissions/           # Permission pre-configuration
-├── slash-command-creator/      # Slash command scaffolding
-└── subagent-creator/           # Subagent scaffolding
-scripts/
-├── init-config.sh              # Tech stack detection → .claude/.prove.json
-├── setup-tools.sh              # Auto-configure tools
-├── cleanup.sh                  # Task artifact cleanup
-├── cleanup-worktrees.sh        # Stale worktree removal
-└── hooks/                      # Git hook templates
-tools/
-├── acb/                        # Intent-based code review (assembler, server, hook)
-└── cafi/                       # Content-addressable file index
-agents/
-├── principal-architect.md      # Architect review for orchestrator full mode
-├── code_steward.md             # Deep code quality auditor
-├── validation-agent.md         # LLM-based validation (haiku)
-├── spec-writer.md              # Specification author
-└── technical-writer.md         # Documentation writer
-```
-
-## Working Directory
-
-All prove artifacts are stored under `.prove/` in your project:
-
-```
-.prove/
-├── decisions/                    # Brainstorm decision records
-├── plans/                        # Step-level planning docs (plan-step workspace)
-│   └── plan_X.Y.Z/
-├── runs/                         # Orchestrator runs (JSON-first)
-│   └── <branch>/<slug>/
-│       ├── prd.json              # Write-once requirements
-│       ├── plan.json             # Write-once task graph (tasks, waves, steps)
-│       ├── state.json            # Live run state (mutated only via scripts/prove-run)
-│       ├── state.json.lock
-│       └── reports/
-│           └── <step_id>.json    # Per-step write-once report
-├── context/                      # Inter-agent handoff context
-├── learning/                     # Comprehension session logs
-├── archive/                      # Archived completed tasks
-└── handoff.md                    # Ephemeral session-to-session handoff prompt
-```
-
-Human views (progress, PRD, plan) render JIT from the JSON via `scripts/prove-run show ...`. No markdown status files are persisted.
-
-Add `.prove/` to your `.gitignore` to keep artifacts out of version control:
-
-```bash
-echo '.prove/' >> .gitignore
-```
-
-The `.claude/.prove.json` config file lives under `.claude/` alongside other Claude Code configuration.
-
-## LLM Validators
-
-In addition to shell-command validators (build, lint, test), prove supports **prompt-based LLM validators** for higher-level checks that can't be captured in a script — such as documentation quality, naming conventions, or domain-specific patterns.
-
-Configure them in `.claude/.prove.json`:
+Run `/prove:init` to auto-detect your tech stack and generate `.claude/.prove.json`. The file controls which validators run after each orchestrator step and which reporters fire on lifecycle events.
 
 ```json
 {
+  "schema_version": "1",
   "validators": [
     { "name": "build", "command": "go build ./...", "phase": "build" },
+    { "name": "lint",  "command": "go vet ./...",   "phase": "lint" },
+    { "name": "tests", "command": "go test ./...",  "phase": "test" },
     { "name": "doc-quality", "prompt": ".prove/prompts/doc-quality.md", "phase": "llm" }
+  ],
+  "reporters": [
+    { "name": "slack", "command": "./.prove/notify-slack.sh", "events": ["step-complete", "step-halted"] }
   ]
 }
 ```
 
-- **Prompt file**: A standard markdown file describing what to check. No special DSL — just write what you'd tell a reviewer.
-- **Phase**: LLM validators run in the `llm` phase, after all command-based validators (build → lint → test → custom → llm).
-- **Agent**: Uses the `validation-agent` (haiku model) for fast, cost-efficient evaluation. Read-only — it can inspect code but never modifies it.
-- **Verdict**: Returns PASS or FAIL with specific findings referencing files and lines.
-- **Retry**: Same semantics as command validators — one auto-fix attempt on failure, then halt.
+Auto-detection covers Go, Rust, Python, Node/TypeScript, Godot, and Makefile projects. LLM validators (`phase: "llm"`) are never auto-detected — configure them explicitly. Full schema reference: [`references/validation-config.md`](references/validation-config.md).
 
-## Tools
+## Monorepo Layout
 
-Tools are standalone utilities that live in `tools/` and are auto-configured by `/prove:init`. Each tool has a `tool.json` manifest declaring its hooks, config, and requirements.
-
-### CAFI — Content-Addressable File Index
-
-Hashes all project files, generates routing-hint descriptions via Claude CLI ("Read this file when doing X"). Run `/prove:index` to build or update the index.
-
-```bash
-# Manual usage
-/prove:index              # Build/update index (incremental)
-/prove:index --force      # Re-describe all files
-/prove:index status       # Check what's changed
+```
+packages/
+├── cli/        # Bun-native TypeScript CLI — ships as prebuilt binaries for darwin-arm64/x64 and linux-arm64/x64
+├── shared/     # Cross-package types, logger, and utilities
+├── store/      # Unified SQLite connection via bun:sqlite — schema registry and domain migrations for .prove/prove.db
+├── installer/  # Binary distribution helpers and Claude-side wiring (hooks + settings)
+└── review-ui/  # React + Fastify + Tailwind — published as ghcr.io/mjmorales/claude-prove/review-ui
 ```
 
-## Protocols
+## Deep Dives
 
-The system is built on extensible protocols:
-
-- **Handoff Protocol** — How agents pass context between steps. See `skills/orchestrator/references/handoff-protocol.md`
-- **Validation Config** — How project-specific checks are configured and run. See `references/validation-config.md`
-- **Reporter Protocol** — How progress is tracked and reported. See `skills/orchestrator/references/reporter-protocol.md`
+- [Orchestrator](docs/orchestrator.md) — execution modes, validation gates, worktrees, and reporting
+- [Code Quality](docs/code-quality.md) — steward, auto-steward, and session-scoped review
+- [Session Management](docs/session-management.md) — handoff/pickup workflow for context preservation
 
 ## License
 
