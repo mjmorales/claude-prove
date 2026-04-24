@@ -240,8 +240,11 @@ jobs:
             arch: arm64
             target: bun-darwin-arm64
             artifact: claude-prove-darwin-arm64
-          # macos-13 is the last Intel x64 macOS runner image.
-          - os: macos-13
+          # Build the Intel mac target on Apple Silicon — bun's
+          # `--target=bun-darwin-x64` cross-compiles cleanly from any host,
+          # so there is no reason to depend on GH's constrained macos-13
+          # Intel runner pool (queues there regularly exceed 20 minutes).
+          - os: macos-latest
             arch: x64
             target: bun-darwin-x64
             artifact: claude-prove-darwin-x64
