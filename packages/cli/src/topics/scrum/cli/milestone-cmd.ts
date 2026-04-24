@@ -6,6 +6,8 @@
  *   list   [--status planned|active|closed]
  *   show <id>
  *   close <id>
+ *   activate <id>
+ *   reopen <id>
  *
  * Exit codes:
  *   0  success
@@ -27,9 +29,16 @@ export interface MilestoneCmdFlags {
   workspaceRoot?: string;
 }
 
-export type MilestoneAction = 'create' | 'list' | 'show' | 'close';
+export type MilestoneAction = 'create' | 'list' | 'show' | 'close' | 'activate' | 'reopen';
 
-const MILESTONE_ACTIONS: MilestoneAction[] = ['create', 'list', 'show', 'close'];
+const MILESTONE_ACTIONS: MilestoneAction[] = [
+  'create',
+  'list',
+  'show',
+  'close',
+  'activate',
+  'reopen',
+];
 const VALID_STATUSES: MilestoneStatus[] = ['planned', 'active', 'closed'];
 
 export function runMilestoneCmd(
@@ -59,6 +68,10 @@ export function runMilestoneCmd(
         return doShow(store, positional[0]);
       case 'close':
         return doClose(store, positional[0]);
+      case 'activate':
+        return doActivate(store, positional[0]);
+      case 'reopen':
+        return doReopen(store, positional[0]);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -134,5 +147,27 @@ function doClose(store: ScrumStore, id: string | undefined): number {
   const milestone = store.closeMilestone(id);
   process.stdout.write(`${JSON.stringify(milestone)}\n`);
   process.stderr.write(`scrum milestone close: ${id}\n`);
+  return 0;
+}
+
+function doActivate(store: ScrumStore, id: string | undefined): number {
+  if (id === undefined || id.length === 0) {
+    process.stderr.write('scrum milestone activate: <id> positional argument required\n');
+    return 1;
+  }
+  const milestone = store.setMilestoneStatus(id, 'active');
+  process.stdout.write(`${JSON.stringify(milestone)}\n`);
+  process.stderr.write(`scrum milestone activate: ${id}\n`);
+  return 0;
+}
+
+function doReopen(store: ScrumStore, id: string | undefined): number {
+  if (id === undefined || id.length === 0) {
+    process.stderr.write('scrum milestone reopen: <id> positional argument required\n');
+    return 1;
+  }
+  const milestone = store.setMilestoneStatus(id, 'planned');
+  process.stdout.write(`${JSON.stringify(milestone)}\n`);
+  process.stderr.write(`scrum milestone reopen: ${id}\n`);
   return 0;
 }

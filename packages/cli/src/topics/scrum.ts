@@ -17,6 +17,8 @@
  *   claude-prove scrum milestone create          --title X [--description Y] [--target-state S] [--id I]
  *   claude-prove scrum milestone list            [--status S]
  *   claude-prove scrum milestone show <id>
+ *   claude-prove scrum milestone activate <id>
+ *   claude-prove scrum milestone reopen <id>
  *   claude-prove scrum milestone close <id>
  *   claude-prove scrum tag add <task-id> <tag>
  *   claude-prove scrum tag remove <task-id> <tag>
@@ -183,7 +185,7 @@ function dispatch(
     case 'milestone':
       if (arg1 === undefined) {
         console.error(
-          'error: scrum milestone: sub-action required (one of: create | list | show | close)',
+          'error: scrum milestone: sub-action required (one of: create | list | show | close | activate | reopen)',
         );
         return 1;
       }

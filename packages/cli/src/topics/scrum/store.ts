@@ -411,6 +411,28 @@ export class ScrumStore {
     return row ?? null;
   }
 
+  /**
+   * Transition a milestone between `planned` and `active`. Closed is terminal —
+   * use `closeMilestone` to close and never re-open (schema invariant).
+   * Idempotent: setting status to the current value writes the same row.
+   *
+   * Does NOT emit a `scrum_events` row — the events table is task-scoped
+   * (`task_id NOT NULL`). Milestone-level events are out of scope for this
+   * change; operators can follow the transition via the milestone row's
+   * `status` column.
+   */
+  setMilestoneStatus(id: string, status: 'planned' | 'active'): ScrumMilestone {
+    const existing = this.getMilestone(id);
+    if (!existing) throw new Error(`setMilestoneStatus: unknown milestone '${id}'`);
+    if (existing.status === 'closed') {
+      throw new Error(`setMilestoneStatus: cannot re-open closed milestone '${id}'`);
+    }
+    this.prep('UPDATE scrum_milestones SET status = ? WHERE id = ?').run(status, id);
+    const updated = this.getMilestone(id);
+    if (!updated) throw new Error(`setMilestoneStatus: milestone '${id}' vanished mid-update`);
+    return updated;
+  }
+
   /** Set status = 'closed' and stamp `closed_at = now()`. Throws on unknown id. */
   closeMilestone(id: string): ScrumMilestone {
     const existing = this.getMilestone(id);
