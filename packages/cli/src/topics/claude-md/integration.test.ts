@@ -113,8 +113,17 @@ function buildPythonFixture(): string {
 // Golden helpers
 // ---------------------------------------------------------------------------
 
+// Live plugin version read from the real plugin.json so the test tolerates
+// auto-bumped patch releases. Goldens pin the placeholder `__PLUGIN_VERSION__`
+// (not a literal version) so they don't need to be refreshed per release.
+const PLUGIN_VERSION = JSON.parse(
+  readFileSync(join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json'), 'utf8'),
+).version as string;
+
 function readGolden(name: string): string {
-  return readFileSync(join(GOLDEN_DIR, name), 'utf8').replaceAll('__PLUGIN_DIR__', PLUGIN_ROOT);
+  return readFileSync(join(GOLDEN_DIR, name), 'utf8')
+    .replaceAll('__PLUGIN_DIR__', PLUGIN_ROOT)
+    .replaceAll('__PLUGIN_VERSION__', PLUGIN_VERSION);
 }
 
 function expectGoldenEqual(actual: string, goldenName: string): void {
