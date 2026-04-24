@@ -200,6 +200,14 @@ describe('claude-prove scrum task lifecycle', () => {
     const listed = JSON.parse(tList.stdout.trim()) as Array<{ id: string }>;
     expect(listed.some((t) => t.id === 'ship-it')).toBe(true);
 
+    // Seed a decision file on disk so link-decision can read + auto-record it.
+    mkdirSync(join(repo, '.prove', 'decisions'), { recursive: true });
+    writeFileSync(
+      join(repo, '.prove', 'decisions', '2026-04-23-scrum.md'),
+      '# Scrum architecture\n\n**Topic**: scrum\n',
+      'utf8',
+    );
+
     // Link a decision.
     const tLinkDec = runScrum(
       ['task', 'link-decision', 'ship-it', '.prove/decisions/2026-04-23-scrum.md'],
@@ -209,9 +217,11 @@ describe('claude-prove scrum task lifecycle', () => {
     const linked = JSON.parse(tLinkDec.stdout.trim()) as {
       linked: boolean;
       event_id: number;
+      decision_id: string;
     };
     expect(linked.linked).toBe(true);
     expect(typeof linked.event_id).toBe('number');
+    expect(linked.decision_id).toBe('2026-04-23-scrum');
 
     // Link a run retroactively.
     const lRun = runScrum(

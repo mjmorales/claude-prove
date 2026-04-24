@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { runAlertsCmd } from './alerts-cmd';
+import { parseDecisionFile, runDecisionCmd } from './decision-cmd';
 import { runHookCmd } from './hook-cmd';
 import { runInitCmd } from './init-cmd';
 import { runLinkRunCmd } from './link-run-cmd';
@@ -224,11 +225,15 @@ describe('runTaskCmd', () => {
 
   test('link-decision: appends event', () => {
     withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'Z', id: 'z' }));
+    // link-decision now reads the file — seed one so the handler succeeds.
+    mkdirSync(join(workspace, '.prove', 'decisions'), { recursive: true });
+    writeFileSync(join(workspace, '.prove', 'decisions', 'x.md'), '# X decision\n', 'utf8');
     const res = withCapture(() => runTaskCmd('link-decision', ['z', '.prove/decisions/x.md'], {}));
     expect(res.exit).toBe(0);
     const payload = JSON.parse(res.stdout.trim());
     expect(payload.linked).toBe(true);
     expect(payload.decision_path).toBe('.prove/decisions/x.md');
+    expect(payload.decision_id).toBe('x');
   });
 
   test('status: drives a valid transition and returns the updated task', () => {
@@ -698,5 +703,228 @@ describe('runInitCmd (importer precision)', () => {
     const ml = withCapture(() => runMilestoneCmd('list', [undefined, undefined], {}));
     const milestones = JSON.parse(ml.stdout.trim()) as Array<{ id: string }>;
     expect(milestones.map((m) => m.id)).toContain('m3');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseDecisionFile — pure extractor (no store, no I/O)
+// ---------------------------------------------------------------------------
+
+describe('parseDecisionFile', () => {
+  test('extracts id from filename basename without .md', () => {
+    const input = parseDecisionFile(
+      '# Title\n',
+      '.prove/decisions/2026-04-24-decision-persistence.md',
+    );
+    expect(input.id).toBe('2026-04-24-decision-persistence');
+  });
+
+  test('extracts title from the first H1', () => {
+    const input = parseDecisionFile('# Use SQLite for persistence\n\n**Topic**: storage\n', 'x.md');
+    expect(input.title).toBe('Use SQLite for persistence');
+  });
+
+  test('extracts **Topic** field', () => {
+    const input = parseDecisionFile('# Foo\n\n**Topic**: architecture\n\nBody...', 'x.md');
+    expect(input.topic).toBe('architecture');
+  });
+
+  test('extracts plain Topic: field when bold markers absent', () => {
+    const input = parseDecisionFile('# Foo\n\nTopic: storage\n\nBody', 'x.md');
+    expect(input.topic).toBe('storage');
+  });
+
+  test('extracts **Status** field', () => {
+    const input = parseDecisionFile('# Foo\n\n**Status**: proposed\n', 'x.md');
+    expect(input.status).toBe('proposed');
+  });
+
+  test('defaults status to accepted when absent', () => {
+    const input = parseDecisionFile('# Foo\n', 'x.md');
+    expect(input.status).toBe('accepted');
+  });
+
+  test('topic defaults to null when absent', () => {
+    const input = parseDecisionFile('# Foo\n', 'x.md');
+    expect(input.topic).toBeNull();
+  });
+
+  test('preserves full content byte-for-byte', () => {
+    const content = '# Foo\n\nLine 1\nLine 2\n\n**Topic**: x\n';
+    const input = parseDecisionFile(content, 'x.md');
+    expect(input.content).toBe(content);
+  });
+
+  test('sourcePath is the input path, not resolved', () => {
+    const input = parseDecisionFile('# Foo\n', '.prove/decisions/rel.md');
+    expect(input.sourcePath).toBe('.prove/decisions/rel.md');
+  });
+
+  test('title falls back to id when no H1 is present', () => {
+    const input = parseDecisionFile('No heading here\n', 'abc.md');
+    expect(input.title).toBe('abc');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// decision-cmd
+// ---------------------------------------------------------------------------
+
+describe('runDecisionCmd', () => {
+  function writeDecision(relPath: string, body: string): string {
+    const abs = join(workspace, relPath);
+    mkdirSync(join(abs, '..'), { recursive: true });
+    writeFileSync(abs, body, 'utf8');
+    return relPath;
+  }
+
+  test('record: happy path upserts row and prints JSON', () => {
+    const rel = writeDecision(
+      '.prove/decisions/2026-04-24-alpha.md',
+      '# Alpha decision\n\n**Topic**: storage\n\nBody\n',
+    );
+    const res = withCapture(() => runDecisionCmd('record', [rel, undefined], {}));
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as {
+      id: string;
+      title: string;
+      topic: string | null;
+      status: string;
+      content: string;
+    };
+    expect(row.id).toBe('2026-04-24-alpha');
+    expect(row.title).toBe('Alpha decision');
+    expect(row.topic).toBe('storage');
+    expect(row.status).toBe('accepted');
+    expect(res.stderr).toContain('scrum decision record: 2026-04-24-alpha');
+    expect(res.stderr).toMatch(/\(\d+ bytes\)/);
+  });
+
+  test('record: nonexistent file → exit 1, no row', () => {
+    const res = withCapture(() =>
+      runDecisionCmd('record', ['.prove/decisions/ghost.md', undefined], {}),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("file not found '.prove/decisions/ghost.md'");
+    const list = withCapture(() => runDecisionCmd('list', [undefined, undefined], {}));
+    const rows = JSON.parse(list.stdout.trim()) as unknown[];
+    expect(rows).toHaveLength(0);
+  });
+
+  test('get: unknown id → exit 1', () => {
+    const res = withCapture(() => runDecisionCmd('get', ['nope', undefined], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown decision 'nope'");
+  });
+
+  test('get: known id → stdout equals content byte-for-byte', () => {
+    const content = '# Beta decision\n\n**Topic**: ui\n\nWhatever body text.\n';
+    const rel = writeDecision('.prove/decisions/2026-04-24-beta.md', content);
+    withCapture(() => runDecisionCmd('record', [rel, undefined], {}));
+
+    const res = withCapture(() => runDecisionCmd('get', ['2026-04-24-beta', undefined], {}));
+    expect(res.exit).toBe(0);
+    expect(res.stdout).toBe(content);
+  });
+
+  test('list: empty workspace → empty JSON array', () => {
+    const res = withCapture(() => runDecisionCmd('list', [undefined, undefined], {}));
+    expect(res.exit).toBe(0);
+    const rows = JSON.parse(res.stdout.trim()) as unknown[];
+    expect(rows).toHaveLength(0);
+    expect(res.stderr).toContain('0 decisions');
+  });
+
+  test('list: two seeded rows → JSON array of length 2', () => {
+    const a = writeDecision('.prove/decisions/2026-04-24-a.md', '# A\n\n**Topic**: architecture\n');
+    const b = writeDecision('.prove/decisions/2026-04-24-b.md', '# B\n\n**Topic**: ui\n');
+    withCapture(() => runDecisionCmd('record', [a, undefined], {}));
+    withCapture(() => runDecisionCmd('record', [b, undefined], {}));
+
+    const res = withCapture(() => runDecisionCmd('list', [undefined, undefined], {}));
+    expect(res.exit).toBe(0);
+    const rows = JSON.parse(res.stdout.trim()) as Array<{ id: string }>;
+    expect(rows).toHaveLength(2);
+  });
+
+  test('list --topic architecture: filters correctly', () => {
+    const a = writeDecision(
+      '.prove/decisions/2026-04-24-arch.md',
+      '# Arch\n\n**Topic**: architecture\n',
+    );
+    const b = writeDecision('.prove/decisions/2026-04-24-ui.md', '# UI\n\n**Topic**: ui\n');
+    withCapture(() => runDecisionCmd('record', [a, undefined], {}));
+    withCapture(() => runDecisionCmd('record', [b, undefined], {}));
+
+    const res = withCapture(() =>
+      runDecisionCmd('list', [undefined, undefined], { topic: 'architecture' }),
+    );
+    expect(res.exit).toBe(0);
+    const rows = JSON.parse(res.stdout.trim()) as Array<{ id: string; topic: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.topic).toBe('architecture');
+  });
+
+  test('list --human: emits a table header on stdout', () => {
+    const rel = writeDecision('.prove/decisions/2026-04-24-h.md', '# H\n\n**Topic**: t\n');
+    withCapture(() => runDecisionCmd('record', [rel, undefined], {}));
+
+    const res = withCapture(() => runDecisionCmd('list', [undefined, undefined], { human: true }));
+    expect(res.exit).toBe(0);
+    expect(res.stdout).toContain('ID');
+    expect(res.stdout).toContain('TITLE');
+    expect(res.stdout).toContain('RECORDED_AT');
+  });
+
+  test('unknown action → exit 1', () => {
+    const res = withCapture(() => runDecisionCmd('bogus', [undefined, undefined], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown decision action 'bogus'");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// task link-decision — auto-record + new-shape payload
+// ---------------------------------------------------------------------------
+
+describe('runTaskCmd link-decision (auto-record)', () => {
+  test('auto-records decision when absent, payload carries decision_id + decision_path', () => {
+    // Seed a task and an on-disk decision file.
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'T', id: 't' }));
+    const rel = '.prove/decisions/2026-04-24-auto.md';
+    mkdirSync(join(workspace, '.prove', 'decisions'), { recursive: true });
+    writeFileSync(join(workspace, rel), '# Auto-recorded decision\n\n**Topic**: storage\n', 'utf8');
+
+    const res = withCapture(() => runTaskCmd('link-decision', ['t', rel], {}));
+    expect(res.exit).toBe(0);
+    const payload = JSON.parse(res.stdout.trim()) as {
+      linked: boolean;
+      task_id: string;
+      decision_id: string;
+      decision_path: string;
+    };
+    expect(payload.linked).toBe(true);
+    expect(payload.decision_id).toBe('2026-04-24-auto');
+    expect(payload.decision_path).toBe(rel);
+
+    // Decision row was upserted by the link step.
+    const get = withCapture(() => runDecisionCmd('get', ['2026-04-24-auto', undefined], {}));
+    expect(get.exit).toBe(0);
+    expect(get.stdout).toContain('Auto-recorded decision');
+  });
+
+  test('nonexistent file → exit 1, no event appended', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'Z', id: 'z2' }));
+
+    const res = withCapture(() =>
+      runTaskCmd('link-decision', ['z2', '.prove/decisions/ghost.md'], {}),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("file not found '.prove/decisions/ghost.md'");
+
+    // No decision_linked event was appended.
+    const show = withCapture(() => runTaskCmd('show', ['z2', undefined], {}));
+    const payload = JSON.parse(show.stdout.trim()) as { events: Array<{ kind: string }> };
+    expect(payload.events.some((e) => e.kind === 'decision_linked')).toBe(false);
   });
 });
