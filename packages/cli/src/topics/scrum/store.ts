@@ -659,8 +659,14 @@ export class ScrumStore {
    * Where:
    *   unblock_depth    = count of descendant tasks this one unblocks
    *                      (transitive closure over `blocks` edges)
-   *   milestone_boost  = 1 if assigned to the filter milestone OR any
-   *                      active milestone, else 0
+   *   milestone_boost  = 1.0 if assigned to the filter milestone OR any
+   *                      active milestone (strongest boost);
+   *                      0.5 if assigned to a non-closed milestone
+   *                      (planned — partial credit so milestone-bound
+   *                      work outranks unlinked work);
+   *                      0   if unlinked or assigned to a closed milestone.
+   *                      `scrum milestone <id> activate` promotes a
+   *                      planned milestone to the strongest boost.
    *   context_hotness  = sigmoid of hours-since-last-event; fresher tasks
    *                      rank higher. Value in [0, 1].
    *   tag_boost        = sum of +1 per priority tag attached to the task
@@ -690,7 +696,11 @@ export class ScrumStore {
           ).all()
     ) as ScrumTask[];
 
+    // Snapshot active and closed milestone ids in one pass each — both
+    // sets feed `computeMilestoneBoost`. Per-invocation lookup keeps the
+    // boost calculation O(1) per task without a per-task DB round trip.
     const activeMilestones = new Set(this.listMilestones('active').map((m) => m.id));
+    const closedMilestones = new Set(this.listMilestones('closed').map((m) => m.id));
 
     // Batch the per-candidate tag lookup into a single IN-query. Bun's sqlite
     // binds parameters positionally, so we expand placeholders to match the
@@ -706,7 +716,12 @@ export class ScrumStore {
 
     const scored: NextReadyRow[] = candidates.map((task) => {
       const unblockDepth = this.computeUnblockDepth(task.id, unblockDepthCache);
-      const milestoneBoost = computeMilestoneBoost(task, options.milestoneId, activeMilestones);
+      const milestoneBoost = computeMilestoneBoost(
+        task,
+        options.milestoneId,
+        activeMilestones,
+        closedMilestones,
+      );
       const contextHotness = computeContextHotness(task.last_event_at, nowMs);
       const tagBoost = tagBoostByTask.get(task.id) ?? 0;
       const score = unblockDepth * 10 + milestoneBoost * 5 + contextHotness * 3 + tagBoost;
@@ -835,16 +850,33 @@ function decodeEvent(row: {
   };
 }
 
+/**
+ * Weighted milestone boost for `nextReady`. Three tiers:
+ *   1.0 — task matches the explicit filter milestone, OR the task's
+ *         milestone is in the active set (operator has promoted it).
+ *   0.5 — task is bound to a non-closed milestone (planned). Partial
+ *         credit so milestone-bound work outranks fully unlinked work
+ *         even before activation.
+ *   0   — task is unlinked, OR its milestone is closed (terminal).
+ *
+ * `closedMilestones` is required so we can score "closed" without a
+ * per-task DB lookup; callers (see `nextReady`) snapshot both sets once
+ * per invocation. A milestone id present in neither set is treated as
+ * planned — matches `MilestoneStatus = 'planned' | 'active' | 'closed'`.
+ */
 function computeMilestoneBoost(
   task: ScrumTask,
   filterMilestoneId: string | undefined,
   activeMilestones: Set<string>,
+  closedMilestones: Set<string>,
 ): number {
   if (task.milestone_id === null) return 0;
   if (filterMilestoneId !== undefined) {
     return task.milestone_id === filterMilestoneId ? 1 : 0;
   }
-  return activeMilestones.has(task.milestone_id) ? 1 : 0;
+  if (activeMilestones.has(task.milestone_id)) return 1;
+  if (closedMilestones.has(task.milestone_id)) return 0;
+  return 0.5;
 }
 
 /**
