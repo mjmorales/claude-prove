@@ -1,7 +1,7 @@
 {
   "name": "prove",
   "description": "Plan, Research, Orchestrate, Validate, Execute — a complete lifecycle plugin for Claude Code, for any tech stack.",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "author": {
     "name": "Manuel Morales"
   },
