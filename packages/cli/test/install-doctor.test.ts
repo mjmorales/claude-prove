@@ -154,9 +154,9 @@ describe('prove install doctor', () => {
   test('missing binary on PATH (compiled mode) — binary-on-path check FAILs', () => {
     // Force compiled mode by pinning CLAUDE_PLUGIN_ROOT at a dir that has
     // `.claude-plugin/plugin.json` but NO `packages/cli/src/`. Scrub PATH
-    // so `which prove` misses. Other checks will also fail (hook-paths,
-    // prove-json) but this test asserts binary-on-path is individually
-    // exercised and reports its actionable fix.
+    // so `which claude-prove` misses. Other checks will also fail
+    // (hook-paths, prove-json) but this test asserts binary-on-path is
+    // individually exercised and reports its actionable fix.
     const root = mkdtempSync(join(tmpdir(), 'prove-doctor-nobinary-'));
     try {
       // Compiled-mode plugin root: plugin.json present, packages/cli/src absent.
@@ -186,7 +186,7 @@ describe('prove install doctor', () => {
         env: {
           CLAUDE_PLUGIN_ROOT: pluginRoot,
           NODE_ENV: 'test',
-          // PATH contains only a directory we just created — definitely no `prove`.
+          // PATH contains only a directory we just created — definitely no `claude-prove`.
           PATH: emptyDir,
           HOME: process.env.HOME ?? '',
         },

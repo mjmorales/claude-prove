@@ -9,21 +9,17 @@ on:
     paths-ignore:
       - 'packages/review-ui/**'
       - '.github/workflows/review-ui-image.yml'
-    # Tag pushes trigger the binary build + GH Release asset upload matrix
-    # below. The `release` job (version bump + tag cut) gates itself on
-    # branch pushes via `if:`; the `build-release-binary` matrix gates on
-    # tag pushes via `if:`.
-    tags: ['v*']
 
 permissions:
   contents: write
 
 jobs:
   release:
-    # Cut a new version + tag on pushes to main. Skipped on tag pushes so
-    # we don't recursively try to re-release.
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/')
+    # Cut a new version + tag on pushes to main.
     runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.bump.outputs.skip }}
+      new_version: ${{ steps.bump.outputs.new_version }}
     steps:
       - name: Generate App token
         id: app-token
@@ -201,7 +197,7 @@ jobs:
           NEW_VERSION="${{ steps.bump.outputs.new_version }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .claude-plugin/plugin.json .claude-plugin/marketplace.json CHANGELOG.md
+          git add .claude-plugin/plugin.json .claude-plugin/marketplace.json packages/cli/package.json CHANGELOG.md
           # Commit only if files actually changed (version may already match)
           if git diff --cached --quiet; then
             echo "Version files already at $NEW_VERSION, skipping commit."
@@ -223,12 +219,15 @@ jobs:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
   build-release-binary:
-    # Triggered only by tag pushes matching v*. The `release` job above
-    # pushes the tag, which fires this workflow a second time via the
-    # `tags: ['v*']` trigger. Matrix builds a compiled Bun binary for each
-    # of the 4 supported targets and uploads each as a named GH Release
-    # asset.
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    # Runs immediately after the `release` job in the same workflow. We
+    # don't rely on the tag-push event to re-trigger this workflow: the
+    # release commit message contains `[skip ci]`, which GitHub honors for
+    # both the branch push AND the tag push that points at the same commit,
+    # so a tag-trigger approach silently no-ops. Matrix builds a compiled
+    # Bun binary for each of the 4 supported targets and uploads each as a
+    # named GH Release asset against the tag the release job just cut.
+    needs: release
+    if: needs.release.outputs.skip != 'true'
     name: Build ${{ matrix.artifact }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -261,6 +260,8 @@ jobs:
             artifact: claude-prove-linux-arm64
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.release.outputs.new_version }}
 
       - uses: oven-sh/setup-bun@v2
         with:

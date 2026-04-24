@@ -144,7 +144,7 @@ echo ""
 
 # --- Discovery Block ---
 # Primary: full compose_subagent_context via the TS port.
-# Fallback: `prove claude-md validators` (plugin-dir-less, reads .claude/.prove.json only).
+# Fallback: `claude-prove claude-md validators` (plugin-dir-less, reads .claude/.prove.json only).
 if [[ -n "$PLUGIN_DIR" && -f "$PLUGIN_DIR/packages/cli/bin/run.ts" ]]; then
   DISCOVERY=$(bun run "$PLUGIN_DIR/packages/cli/bin/run.ts" claude-md subagent-context \
     --project-root "$PROJECT_ROOT" --plugin-dir "$PLUGIN_DIR" 2>/dev/null || true)
@@ -154,10 +154,10 @@ if [[ -n "$PLUGIN_DIR" && -f "$PLUGIN_DIR/packages/cli/bin/run.ts" ]]; then
     echo ""
     echo "$DISCOVERY"
   fi
-elif [[ -f .claude/.prove.json ]] && command -v prove >/dev/null 2>&1; then
+elif [[ -f .claude/.prove.json ]] && command -v claude-prove >/dev/null 2>&1; then
   echo "## Discovery"
   echo ""
-  VALIDATORS=$(prove claude-md validators --project-root "$PROJECT_ROOT" 2>/dev/null || true)
+  VALIDATORS=$(claude-prove claude-md validators --project-root "$PROJECT_ROOT" 2>/dev/null || true)
   if [[ -n "$VALIDATORS" ]]; then
     echo "**Validation**: Run before committing:"
     echo "$VALIDATORS"

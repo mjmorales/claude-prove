@@ -6,9 +6,13 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## unreleased — Scrum CLI surface + importer precision (issue #16)
+## unreleased — Scrum CLI surface + importer precision (issue #16) + binary-rename follow-ups
 
-Closes the seven gaps filed in issue #16. The scrum CLI gains the status-transition and soft-delete actions the operator-facing surface was missing, a dedicated `alerts` subcommand matches the `/prove:scrum` routing table, the status summary stops undercounting closed milestones, and the importer rejects prose/dep-notes, dedupes ROADMAP↔BACKLOG ICE entries, and lifts referenced milestones into first-class rows.
+Closes the seven gaps filed in issue #16, and finishes the trailing consumers of the v1.2.0 `prove` → `claude-prove` binary rename that were left half-done in the working tree (`install doctor`, `install upgrade`, version bump script, CI release workflow, and runtime PATH checks in `commands/review-ui.md` + `skills/task/scripts/gather-context.sh`).
+
+### Scrum CLI — issue #16
+
+The scrum CLI gains the status-transition and soft-delete actions the operator-facing surface was missing, a dedicated `alerts` subcommand matches the `/prove:scrum` routing table, the status summary stops undercounting closed milestones, and the importer rejects prose/dep-notes, dedupes ROADMAP↔BACKLOG ICE entries, and lifts referenced milestones into first-class rows.
 
 **Added**:
 
@@ -34,6 +38,30 @@ Closes the seven gaps filed in issue #16. The scrum CLI gains the status-transit
   - `softDeleteTask(id)` → `prove scrum task delete <id>`
   - `createMilestone(...)` for inferred placeholders happens automatically during `prove scrum init`.
 - Projects that previously ran `prove scrum init` against a planning tree with prose-as-task noise, ICE duplicates, or unreferenced milestones should re-run the importer against a fresh `.prove/prove.db` (or use `prove scrum task delete` to trim the existing seed). The importer itself is still idempotent and short-circuits when any tasks exist.
+
+### Binary-rename follow-ups
+
+Finishes the trailing consumers of the `prove` → `claude-prove` rename shipped in v1.2.0.
+
+**Changed**:
+
+- `packages/cli/src/topics/install/upgrade.ts`: `BINARY_NAME` = `claude-prove`; release asset URL is now `${PROVE_RELEASE_URL_BASE}/claude-prove-<target>` (default: GitHub Releases). Docstrings and the concurrency-safety comment updated accordingly.
+- `packages/cli/src/topics/install/doctor.ts`: `binary-on-path` check now looks for `claude-prove` on `$PATH`; fix hints reference `claude-prove install upgrade` (and the install-from-source fallback).
+- `commands/doctor.md`: new §2.0 documenting the `claude-prove binary on PATH` check with pass/warn/fail states and fix hints for both stock installs and dev checkouts.
+- `packages/cli/bin/run.ts`: `cac('prove')` → `cac('claude-prove')` so `claude-prove --help` prints the correct program name.
+- `scripts/bump-version.sh`: also rewrites `packages/cli/package.json` → `version` on each bump. Without this, `claude-prove --version` reported whatever was last committed (historically `0.0.0`) because cac reads `pjson.version` at bundle time.
+- `.github/workflows/release.yml`: `build-release-binary` now runs in-workflow via `needs: release` instead of relying on the `tags: ['v*']` trigger. The tag-trigger approach silently no-op'd because the release commit carries `[skip ci]`, which GitHub honors for the tag push pointing at that commit too. Binaries again upload against the tag the release job just cut.
+- `scripts/install.sh`: fallback git-clone path now `git fetch && reset --hard` refreshes an existing `~/.claude/plugins/prove` checkout instead of trusting it — stale pre-workspace layouts don't have `packages/cli/bin/run.ts` and would silently fail with "Module not found".
+- `commands/review-ui.md` precondition check + `skills/task/scripts/gather-context.sh` fallback now probe `command -v claude-prove` instead of `command -v prove` (the latter now resolves to the Perl TAP runner).
+- `packages/cli/test/install-upgrade.test.ts` + `install-doctor.test.ts`: updated fixtures to expect `claude-prove-<target>` release URLs and destination filenames.
+
+**Removed**:
+
+- `packages/cli/src/topics/install/doctor.ts.bak` — stray backup from the rename iteration.
+
+**Migration**:
+
+- No end-user migration beyond re-running `scripts/install.sh` (or `claude-prove install upgrade` once the new binary is on PATH). The CI release-binary pipeline will self-heal on the next tag cut now that `build-release-binary` runs in-workflow.
 
 ---
 

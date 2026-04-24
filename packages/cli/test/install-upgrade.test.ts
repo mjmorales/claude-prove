@@ -106,7 +106,7 @@ describe('prove install upgrade — compiled mode with stubbed CDN', () => {
       hostname: '127.0.0.1',
       fetch(req) {
         const url = new URL(req.url);
-        if (url.pathname === `/prove-${target}`) {
+        if (url.pathname === `/claude-prove-${target}`) {
           return new Response(payload, { status: 200 });
         }
         return new Response('not found', { status: 404 });
@@ -130,7 +130,7 @@ describe('prove install upgrade — compiled mode with stubbed CDN', () => {
       expect(stderr).toBe('');
       expect(status).toBe(0);
 
-      const destPath = join(prefix, 'prove');
+      const destPath = join(prefix, 'claude-prove');
       expect(stdout).toContain(`upgraded to ${destPath}`);
       expect(stdout).toContain(`(${payload.byteLength} bytes)`);
 

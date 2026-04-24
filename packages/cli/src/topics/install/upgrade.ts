@@ -1,15 +1,16 @@
 /**
- * `prove install upgrade` — download the latest prove binary from GitHub
- * Releases for the current platform and atomically swap it in place.
+ * `claude-prove install upgrade` — download the latest claude-prove binary
+ * from GitHub Releases for the current platform and atomically swap it in
+ * place.
  *
- *   prove install upgrade [--prefix <dir>]
+ *   claude-prove install upgrade [--prefix <dir>]
  *
  * Dev mode (checkout with `packages/cli/src/`) exits 1 with a pointer to
  * `git pull`; compiled installs fetch
- * `${PROVE_RELEASE_URL_BASE}/prove-<target>` (env override; default is the
- * canonical GitHub Releases CDN URL), write to a sibling tmp file, chmod
- * +x, and `rename(2)` onto the destination so a concurrent `prove` caller
- * never observes a partial file.
+ * `${PROVE_RELEASE_URL_BASE}/claude-prove-<target>` (env override; default
+ * is the canonical GitHub Releases CDN URL), write to a sibling tmp file,
+ * chmod +x, and `rename(2)` onto the destination so a concurrent
+ * `claude-prove` caller never observes a partial file.
  *
  * Platform targets (`<platform>-<arch>`) mirror the eventual bash
  * bootstrap (phase 10 task 8): darwin-arm64, darwin-x64, linux-arm64,
@@ -30,7 +31,10 @@ import { detectMode, resolvePluginRoot } from '@claude-prove/installer';
 const DEFAULT_RELEASE_URL_BASE =
   'https://github.com/mjmorales/claude-prove/releases/latest/download';
 const DEFAULT_PREFIX_REL = join('.local', 'bin');
-const BINARY_NAME = 'prove';
+// Binary was renamed from `prove` → `claude-prove` in v2.0.0 (commit ace69a6)
+// to avoid collision with /usr/bin/prove (Perl TAP test runner). Release
+// assets, install.sh, and the CI matrix all emit `claude-prove-<target>`.
+const BINARY_NAME = 'claude-prove';
 
 const DEV_MODE_MESSAGE = 'upgrade is a compiled-mode command; use git pull in dev checkouts';
 
@@ -84,8 +88,8 @@ export async function runUpgrade(flags: UpgradeFlags): Promise<number> {
 
 /**
  * Map (platform, arch) to the release asset suffix. Must stay in lockstep
- * with the bash bootstrap in phase 10 task 8 — both consumers pull the
- * same `prove-<target>` assets.
+ * with `scripts/install.sh` — both consumers pull the same
+ * `claude-prove-<target>` assets from GitHub Releases.
  */
 export function resolveTarget(): string {
   const platform = process.platform;
@@ -126,7 +130,7 @@ function tryUnlink(path: string): void {
   } catch (err) {
     // Best-effort cleanup — the partial tmp file may not exist.
     // Log at warn level so failures are visible without changing control flow.
-    console.warn('prove upgrade: failed to unlink tmp binary:', err);
+    console.warn('claude-prove upgrade: failed to unlink tmp binary:', err);
   }
 }
 

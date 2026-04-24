@@ -1,5 +1,5 @@
 /**
- * `prove install doctor` — report health of the prove installation.
+ * `claude-prove install doctor` — report health of the prove installation.
  *
  * Runs a fixed sequence of non-invasive checks. Each check returns a
  * `CheckResult` with pass/fail/warn status and an actionable `fix` hint.
@@ -13,7 +13,7 @@
  *   1. plugin-root        — resolvePluginRoot() points at a dir with
  *                           `.claude-plugin/plugin.json`
  *   2. mode               — detectMode() returns 'dev' or 'compiled'
- *   3. binary-on-path     — (compiled mode only) `which prove` hits
+ *   3. binary-on-path     — (compiled mode only) `which claude-prove` hits
  *   4. hook-paths         — each prove-owned hook block in
  *                           `.claude/settings.json` points at an
  *                           executable command
@@ -118,17 +118,17 @@ function checkMode(root: string | undefined): CheckResult {
   }
 }
 
-/** Verify `prove` resolves on $PATH. Compiled installs only. */
+/** Verify `claude-prove` resolves on $PATH. Compiled installs only. */
 function checkBinaryOnPath(): CheckResult {
-  const found = which('prove');
+  const found = which('claude-prove');
   if (found) {
     return { name: 'binary-on-path', status: 'pass', message: found };
   }
   return {
     name: 'binary-on-path',
     status: 'fail',
-    message: '`prove` not found on $PATH',
-    fix: 'add ~/.local/bin to PATH or run `prove install upgrade`',
+    message: '`claude-prove` not found on $PATH',
+    fix: 'add ~/.local/bin to PATH or run `claude-prove install upgrade` (or re-run `bash <plugin>/scripts/install.sh`)',
   };
 }
 
@@ -145,7 +145,7 @@ function checkSettingsHookPaths(cwd: string): CheckResult[] {
         name: 'hook-paths',
         status: 'warn',
         message: `no ${DEFAULT_SETTINGS_REL} at ${cwd}`,
-        fix: 'run `prove install init` to scaffold hook blocks',
+        fix: 'run `claude-prove install init` to scaffold hook blocks',
       },
     ];
   }
@@ -160,7 +160,7 @@ function checkSettingsHookPaths(cwd: string): CheckResult[] {
         name: 'hook-paths',
         status: 'fail',
         message: `failed to parse ${path}: ${msg}`,
-        fix: 'fix the JSON syntax or run `prove install init --force`',
+        fix: 'fix the JSON syntax or run `claude-prove install init --force`',
       },
     ];
   }
@@ -172,7 +172,7 @@ function checkSettingsHookPaths(cwd: string): CheckResult[] {
         name: 'hook-paths',
         status: 'warn',
         message: `no prove-owned hook blocks in ${DEFAULT_SETTINGS_REL}`,
-        fix: 'run `prove install init` to scaffold hook blocks',
+        fix: 'run `claude-prove install init` to scaffold hook blocks',
       },
     ];
   }
@@ -205,7 +205,7 @@ function collectProveBlocks(settings: SettingsFile): HookBlock[] {
  *
  * For shape 1 we stat the script file. For shape 2 we require the binary
  * to be executable (X_OK). Either kind failing yields a `fail` with the
- * `--force` fix hint so `prove install init --force` rewrites the block.
+ * `--force` fix hint so `claude-prove install init --force` rewrites the block.
  *
  * Iterates every entry in `block.hooks` — multi-entry blocks must not be
  * silently passed based solely on entry[0]. First failure wins; a block
@@ -220,7 +220,7 @@ function checkHookBlock(block: HookBlock): CheckResult {
       name,
       status: 'fail',
       message: 'hook block has no entries',
-      fix: 'run `prove install init --force`',
+      fix: 'run `claude-prove install init --force`',
     };
   }
 
@@ -231,7 +231,7 @@ function checkHookBlock(block: HookBlock): CheckResult {
         name,
         status: 'fail',
         message: 'hook block has no command',
-        fix: 'run `prove install init --force`',
+        fix: 'run `claude-prove install init --force`',
       };
     }
 
@@ -242,7 +242,7 @@ function checkHookBlock(block: HookBlock): CheckResult {
         name,
         status: 'fail',
         message: `could not parse hook command: ${entry.command}`,
-        fix: 'run `prove install init --force`',
+        fix: 'run `claude-prove install init --force`',
       };
     }
 
@@ -252,7 +252,7 @@ function checkHookBlock(block: HookBlock): CheckResult {
         name,
         status: 'fail',
         message: verdict.message,
-        fix: 'run `prove install init --force`',
+        fix: 'run `claude-prove install init --force`',
       };
     }
     verifiedPaths.push(target.path);
@@ -311,7 +311,7 @@ function checkProveJsonSchemaVersion(cwd: string): CheckResult {
       name: 'prove-json-version',
       status: 'warn',
       message: `no ${DEFAULT_PROVE_JSON_REL} at ${cwd}`,
-      fix: 'run `prove install init-config` to bootstrap it',
+      fix: 'run `claude-prove install init-config` to bootstrap it',
     };
   }
 
@@ -324,7 +324,7 @@ function checkProveJsonSchemaVersion(cwd: string): CheckResult {
       name: 'prove-json-version',
       status: 'fail',
       message: `failed to parse ${path}: ${msg}`,
-      fix: 'fix the JSON syntax or run `prove install init-config --force`',
+      fix: 'fix the JSON syntax or run `claude-prove install init-config --force`',
     };
   }
 
@@ -337,7 +337,7 @@ function checkProveJsonSchemaVersion(cwd: string): CheckResult {
       name: 'prove-json-version',
       status: 'fail',
       message: `${DEFAULT_PROVE_JSON_REL} is missing schema_version`,
-      fix: 'run `prove schema migrate`',
+      fix: 'run `claude-prove schema migrate`',
     };
   }
   if (version !== CURRENT_SCHEMA_VERSION) {
@@ -345,7 +345,7 @@ function checkProveJsonSchemaVersion(cwd: string): CheckResult {
       name: 'prove-json-version',
       status: 'fail',
       message: `schema_version ${version} != current ${CURRENT_SCHEMA_VERSION}`,
-      fix: 'run `prove schema migrate`',
+      fix: 'run `claude-prove schema migrate`',
     };
   }
   return { name: 'prove-json-version', status: 'pass', message: `v${version}` };

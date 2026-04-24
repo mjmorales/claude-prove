@@ -58,6 +58,18 @@ Core checks failed. Fix these before other checks can run.
 
 Only check tools relevant to this project's `.claude/.prove.json`.
 
+#### 2.0: claude-prove binary on PATH
+
+```bash
+command -v claude-prove >/dev/null 2>&1
+```
+
+- Pass: `claude-prove` is on `$PATH` (compiled install)
+- Warn: not on PATH but `$PLUGIN_DIR/packages/cli/bin/run.ts` exists — bun-run fallback works, but downstream checks that shell out to bare `claude-prove` will miss. Fix: `bash "$PLUGIN_DIR/scripts/install.sh"` (fetches the latest release binary, or refreshes the plugin clone if the binary 404s and falls back to `bun run`)
+- Fail: neither available — fix: `bash "$PLUGIN_DIR/scripts/install.sh"`
+
+Alternative fix (when `claude-prove` is already on PATH but stale): `claude-prove install upgrade` atomically swaps in the latest release binary.
+
 #### 2.1: CAFI
 
 Skip unless `tools.cafi.enabled` is true.
@@ -144,6 +156,7 @@ Group by tier:
 [✓] .prove/ directory exists
 
 ── Tooling ──
+[✓] claude-prove binary on PATH
 [✓] CAFI configured and accessible
 [✓] Docker available
 [✓] Schema validator working

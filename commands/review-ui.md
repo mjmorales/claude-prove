@@ -29,7 +29,7 @@ If `$ARGUMENTS` is empty, use defaults resolved from config.
 
 Run these checks first. Bail with a clear error on failure.
 
-1. **`prove` installed**: `command -v prove >/dev/null` — if missing, print: "`prove` CLI not found on PATH. Install via \`curl -fsSL https://raw.githubusercontent.com/mjmorales/claude-prove/main/scripts/install.sh | bash\`, or run from a dev checkout with \`bun run packages/cli/bin/run.ts\` on PATH." Stop.
+1. **`claude-prove` installed**: `command -v claude-prove >/dev/null` — if missing, print: "`claude-prove` CLI not found on PATH. Install via \`curl -fsSL https://raw.githubusercontent.com/mjmorales/claude-prove/main/scripts/install.sh | bash\`, or run from a dev checkout with \`bun run packages/cli/bin/run.ts\` on PATH." Stop.
 2. **`jq` installed**: `command -v jq >/dev/null` — if missing, say "`jq` not found on PATH. Install via your package manager (`brew install jq`, `apt install jq`, etc.)." Stop.
 3. **Docker installed**: `command -v docker >/dev/null` — if missing, tell the user to install Docker Desktop / colima / podman-compat and stop.
 4. **Docker daemon running**: `docker info >/dev/null 2>&1` — if it fails, say "Docker daemon isn't running. Start Docker Desktop (or `colima start`) and retry." Stop.

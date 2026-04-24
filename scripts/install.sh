@@ -32,7 +32,15 @@ if curl -fsSL "$URL" -o "$TMP" && [[ -s "$TMP" ]]; then
   chmod +x "$TMP"; mv "$TMP" "$DEST"; CMD=("$DEST"); echo ":: wrote $DEST ($TARGET)"
 else
   echo ":: fetch failed — falling back to git clone" >&2
-  [[ -d "$CLONE/.git" ]] || git clone --depth 1 https://github.com/mjmorales/claude-prove.git "$CLONE"
+  # Refresh a stale clone rather than trusting an existing checkout — prior
+  # layouts (pre-workspace) don't have packages/cli/bin/run.ts, so running
+  # bun on a stale checkout silently fails with "Module not found".
+  if [[ -d "$CLONE/.git" ]]; then
+    git -C "$CLONE" fetch --depth 1 origin main
+    git -C "$CLONE" reset --hard FETCH_HEAD
+  else
+    git clone --depth 1 https://github.com/mjmorales/claude-prove.git "$CLONE"
+  fi
   CMD=(bun run "${CLONE}/packages/cli/bin/run.ts")
 fi
 if ! [[ ":$PATH:" == *":${PREFIX}:"* ]]; then

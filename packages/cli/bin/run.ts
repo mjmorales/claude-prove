@@ -17,10 +17,10 @@ import { register as registerSchema } from '../src/topics/schema';
 import { register as registerScrum } from '../src/topics/scrum';
 import { register as registerStore } from '../src/topics/store';
 
-const cli = cac('prove');
+const cli = cac('claude-prove');
 
-// Register topics in the canonical port order so `prove --help` lists them
-// in a stable sequence that mirrors the phase plan in
+// Register topics in the canonical port order so `claude-prove --help` lists
+// them in a stable sequence that mirrors the phase plan in
 // .prove/decisions/2026-04-21-typescript-cli-unification.md. Every topic
 // exports register(cli); stubs wrap registerStubTopic, real topics
 // (starting with store in phase 2) register their own subcommand tree.
