@@ -21,7 +21,7 @@ export interface ShowFlags extends RunSelection {
 }
 
 export function runShow(flags: ShowFlags): number {
-  let resolved;
+  let resolved: ReturnType<typeof resolvePaths>;
   try {
     resolved = resolvePaths(flags);
   } catch (err) {
@@ -78,7 +78,7 @@ export function runShowReport(stepId: string, flags: ShowReportFlags): number {
     console.error('error: the following arguments are required: step_id');
     return 1;
   }
-  let resolved;
+  let resolved: ReturnType<typeof resolvePaths>;
   try {
     resolved = resolvePaths(flags);
   } catch (err) {
@@ -108,7 +108,7 @@ export interface CurrentFlags extends RunSelection {
 }
 
 export function runCurrent(flags: CurrentFlags): number {
-  let resolved;
+  let resolved: ReturnType<typeof resolvePaths>;
   try {
     resolved = resolvePaths(flags);
   } catch (err) {

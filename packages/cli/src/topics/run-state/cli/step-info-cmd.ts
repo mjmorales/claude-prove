@@ -23,7 +23,7 @@ export function runStepInfo(stepId: string, flags: StepInfoFlags): number {
     console.error('error: the following arguments are required: step_id');
     return 1;
   }
-  let resolved;
+  let resolved: ReturnType<typeof resolvePaths>;
   try {
     resolved = resolvePaths(flags);
   } catch (err) {

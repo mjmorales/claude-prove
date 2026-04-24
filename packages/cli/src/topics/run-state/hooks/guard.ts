@@ -36,10 +36,7 @@ export function runGuard(payload: Record<string, unknown> | null): HookResult {
 
   if (process.env.RUN_STATE_ALLOW_DIRECT === '1') return EMPTY_HOOK_RESULT;
 
-  const message =
-    `Direct edits to ${filePath} are blocked. ` +
-    'Use `prove run-state step|validator|task|dispatch ...` to mutate state.json. ' +
-    'Set RUN_STATE_ALLOW_DIRECT=1 only for emergency manual recovery.';
+  const message = `Direct edits to ${filePath} are blocked. Use \`prove run-state step|validator|task|dispatch ...\` to mutate state.json. Set RUN_STATE_ALLOW_DIRECT=1 only for emergency manual recovery.`;
 
   const body = pyJsonDump({
     hookSpecificOutput: {

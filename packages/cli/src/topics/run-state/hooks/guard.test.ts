@@ -13,10 +13,10 @@ import { runGuard } from './guard';
 describe('runGuard', () => {
   const savedEnv = process.env.RUN_STATE_ALLOW_DIRECT;
   beforeEach(() => {
-    delete process.env.RUN_STATE_ALLOW_DIRECT;
+    Reflect.deleteProperty(process.env, 'RUN_STATE_ALLOW_DIRECT');
   });
   afterEach(() => {
-    if (savedEnv === undefined) delete process.env.RUN_STATE_ALLOW_DIRECT;
+    if (savedEnv === undefined) Reflect.deleteProperty(process.env, 'RUN_STATE_ALLOW_DIRECT');
     else process.env.RUN_STATE_ALLOW_DIRECT = savedEnv;
   });
 

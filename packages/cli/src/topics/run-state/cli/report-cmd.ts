@@ -37,7 +37,7 @@ export function runReportWrite(stepId: string, flags: ReportWriteFlags): number 
     return 1;
   }
   const status = flags.status as ReportData['status'];
-  let resolved;
+  let resolved: ReturnType<typeof resolvePaths>;
   try {
     resolved = resolvePaths(flags);
   } catch (err) {

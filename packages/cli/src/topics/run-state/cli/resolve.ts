@@ -62,9 +62,7 @@ export function resolvePaths(selection: RunSelection): ResolvedRun {
     selection.branch ?? process.env.PROVE_RUN_BRANCH ?? autodetectBranch(runsRoot, slug);
   if (!branch) {
     throw new ResolveError(
-      `slug '${slug}' is not registered under ${runsRoot}. ` +
-        'Expected .prove/runs/<branch>/<slug>/ to exist. ' +
-        'Run `prove run-state init --branch <b> --slug <s> --plan ...` first.',
+      `slug '${slug}' is not registered under ${runsRoot}. Expected .prove/runs/<branch>/<slug>/ to exist. Run \`prove run-state init --branch <b> --slug <s> --plan ...\` first.`,
     );
   }
 
@@ -83,9 +81,9 @@ export function resolvePaths(selection: RunSelection): ResolvedRun {
  */
 function autodetectSlug(): string | undefined {
   let cur = resolve(process.cwd());
-  // Iterate until dirname is a no-op (cur is root)
-  // biome-ignore lint/suspicious/noConstantCondition: exit when parent === cur
-  while (true) {
+  // Iterate until dirname is a no-op (cur is root) — the loop body
+  // breaks when `parent === cur` or a `.git` directory is found.
+  for (;;) {
     const wtMarker = join(cur, '.prove-wt-slug.txt');
     if (isFile(wtMarker)) {
       const text = readFileSync(wtMarker, 'utf8').trim();

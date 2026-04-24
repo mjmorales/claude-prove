@@ -25,7 +25,7 @@ export function runTaskReview(taskId: string, flags: TaskReviewFlags): number {
     console.error('error: the following arguments are required: --verdict');
     return 1;
   }
-  let resolved;
+  let resolved: ReturnType<typeof resolvePaths>;
   try {
     resolved = resolvePaths(flags);
   } catch (err) {

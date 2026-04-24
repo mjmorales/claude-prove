@@ -68,7 +68,7 @@ describe('detectValidators', () => {
       savedPath = process.env.PATH;
     });
     afterEach(() => {
-      if (savedPath === undefined) delete process.env.PATH;
+      if (savedPath === undefined) process.env.PATH = undefined;
       else process.env.PATH = savedPath;
     });
 
@@ -227,7 +227,7 @@ describe('DETECTED_VALIDATOR_NAMES', () => {
         expect(DETECTED_VALIDATOR_NAMES).toContain(name);
       }
     } finally {
-      if (savedPath === undefined) delete process.env.PATH;
+      if (savedPath === undefined) process.env.PATH = undefined;
       else process.env.PATH = savedPath;
       rmSync(dir, { recursive: true, force: true });
       rmSync(pathDir, { recursive: true, force: true });

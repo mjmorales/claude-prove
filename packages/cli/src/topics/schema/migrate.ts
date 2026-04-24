@@ -55,7 +55,7 @@ export type MigrationFn = (config: ProveConfig) => [ProveConfig, MigrationChange
  * configs (no `schema_version` field).
  */
 export function detectVersion(config: ProveConfig): string {
-  const v = config['schema_version'];
+  const v = config.schema_version;
   return typeof v === 'string' ? v : '0';
 }
 
@@ -84,29 +84,29 @@ function migrateV1ToV2(config: ProveConfig): [ProveConfig, MigrationChange[]] {
   const changes: MigrationChange[] = [];
   const result: ProveConfig = { ...config };
 
-  result['schema_version'] = '2';
+  result.schema_version = '2';
   changes.push(new MigrationChange('change', 'schema_version', '"1" -> "2"'));
 
-  const validators = result['validators'];
+  const validators = result.validators;
   if (Array.isArray(validators)) {
     const next = validators.map((raw) => {
       if (!isPlainObject(raw)) return raw;
       const v: Record<string, unknown> = { ...raw };
       if ('stage' in v && !('phase' in v)) {
-        v['phase'] = v['stage'];
-        delete v['stage'];
-        const name = typeof v['name'] === 'string' ? v['name'] : '?';
+        v.phase = v.stage;
+        Reflect.deleteProperty(v, 'stage');
+        const name = typeof v.name === 'string' ? v.name : '?';
         changes.push(
           new MigrationChange('rename', `validators[${name}].stage`, 'renamed "stage" -> "phase"'),
         );
       }
       return v;
     });
-    result['validators'] = next;
+    result.validators = next;
   }
 
   if (!('claude_md' in result)) {
-    result['claude_md'] = { references: [] };
+    result.claude_md = { references: [] };
     changes.push(
       new MigrationChange(
         'add',
@@ -130,25 +130,25 @@ function migrateV2ToV3(config: ProveConfig): [ProveConfig, MigrationChange[]] {
   const changes: MigrationChange[] = [];
   const result: ProveConfig = { ...config };
 
-  result['schema_version'] = '3';
+  result.schema_version = '3';
   changes.push(new MigrationChange('change', 'schema_version', '"2" -> "3"'));
 
-  const existingTools = result['tools'];
+  const existingTools = result.tools;
   const tools: Record<string, unknown> = isPlainObject(existingTools) ? { ...existingTools } : {};
 
-  const indexConfig = result['index'];
+  const indexConfig = result.index;
   const hadIndex = 'index' in result;
-  delete result['index'];
+  Reflect.deleteProperty(result, 'index');
 
   if (hadIndex) {
-    const cafiExisting = tools['cafi'];
+    const cafiExisting = tools.cafi;
     const cafi: Record<string, unknown> = isPlainObject(cafiExisting) ? { ...cafiExisting } : {};
-    cafi['enabled'] = true;
-    cafi['config'] = indexConfig;
-    tools['cafi'] = cafi;
+    cafi.enabled = true;
+    cafi.config = indexConfig;
+    tools.cafi = cafi;
     changes.push(new MigrationChange('rename', 'index', 'moved to tools.cafi.config'));
   } else if (!('cafi' in tools)) {
-    tools['cafi'] = { enabled: false };
+    tools.cafi = { enabled: false };
     changes.push(
       new MigrationChange('add', 'tools.cafi', 'added (disabled — no prior index config)', {
         enabled: false,
@@ -156,7 +156,7 @@ function migrateV2ToV3(config: ProveConfig): [ProveConfig, MigrationChange[]] {
     );
   }
 
-  result['tools'] = tools;
+  result.tools = tools;
 
   return [result, changes];
 }
@@ -174,14 +174,14 @@ function migrateV3ToV4(config: ProveConfig): [ProveConfig, MigrationChange[]] {
   const changes: MigrationChange[] = [];
   const result: ProveConfig = { ...config };
 
-  result['schema_version'] = '4';
+  result.schema_version = '4';
   changes.push(new MigrationChange('change', 'schema_version', '"3" -> "4"'));
 
-  const scopes = result['scopes'];
+  const scopes = result.scopes;
   if (isPlainObject(scopes) && 'tools' in scopes) {
     const nextScopes: Record<string, unknown> = { ...scopes };
-    delete nextScopes['tools'];
-    result['scopes'] = nextScopes;
+    Reflect.deleteProperty(nextScopes, 'tools');
+    result.scopes = nextScopes;
     changes.push(
       new MigrationChange(
         'remove',
@@ -191,11 +191,11 @@ function migrateV3ToV4(config: ProveConfig): [ProveConfig, MigrationChange[]] {
     );
   }
 
-  const tools = result['tools'];
+  const tools = result.tools;
   if (isPlainObject(tools) && 'schema' in tools) {
     const nextTools: Record<string, unknown> = { ...tools };
-    delete nextTools['schema'];
-    result['tools'] = nextTools;
+    Reflect.deleteProperty(nextTools, 'schema');
+    result.tools = nextTools;
     changes.push(
       new MigrationChange(
         'remove',
@@ -222,15 +222,15 @@ function migrateV4ToV5(config: ProveConfig): [ProveConfig, MigrationChange[]] {
   const changes: MigrationChange[] = [];
   const result: ProveConfig = { ...config };
 
-  result['schema_version'] = '5';
+  result.schema_version = '5';
   changes.push(new MigrationChange('change', 'schema_version', '"4" -> "5"'));
 
-  const existingTools = result['tools'];
+  const existingTools = result.tools;
   const tools: Record<string, unknown> = isPlainObject(existingTools) ? { ...existingTools } : {};
 
   if (!('scrum' in tools)) {
     const scrumDefaults = { enabled: true, scope: 'user', config: {} };
-    tools['scrum'] = scrumDefaults;
+    tools.scrum = scrumDefaults;
     changes.push(
       new MigrationChange(
         'add',
@@ -241,7 +241,7 @@ function migrateV4ToV5(config: ProveConfig): [ProveConfig, MigrationChange[]] {
     );
   }
 
-  result['tools'] = tools;
+  result.tools = tools;
 
   return [result, changes];
 }

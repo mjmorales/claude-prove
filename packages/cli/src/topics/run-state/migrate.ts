@@ -107,7 +107,7 @@ export function newState(slug: string, branch: string, plan: Record<string, unkn
  * than allowing a silently-malformed plan to flow into `state.json`.
  */
 function coercePlan(plan: Record<string, unknown>): PlanData {
-  if (!Array.isArray(plan['tasks'])) {
+  if (!Array.isArray(plan.tasks)) {
     throw new MigrationError(
       "plan is missing 'tasks' array (expected PlanData shape from parsePlanMd)",
     );
@@ -253,7 +253,7 @@ export function parsePlanMd(text: string): Record<string, unknown> {
     });
   }
 
-  const mode = tasks.some((t) => Number(t['wave']) > 1) ? 'full' : 'simple';
+  const mode = tasks.some((t) => Number(t.wave) > 1) ? 'full' : 'simple';
   // Markdown parsing built each task field-by-field against PlanTaskInput;
   // structural match is verified by the parity fixtures.
   return newPlan(tasks as unknown as PlanData['tasks'], mode);
@@ -425,12 +425,12 @@ export function migrateRun(runDir: string, opts: MigrateRunOptions): MigrationRe
     if (existsSync(dispatchLegacy)) {
       try {
         const legacy = JSON.parse(readFileSync(dispatchLegacy, 'utf8')) as Record<string, unknown>;
-        if (Array.isArray(legacy['dispatched'])) {
+        if (Array.isArray(legacy.dispatched)) {
           // `newState` always seeds `state.dispatch = { dispatched: [] }`,
           // so no re-initialization guard is needed here.
           state.dispatch.dispatched = [
             ...state.dispatch.dispatched,
-            ...(legacy['dispatched'] as DispatchLedger['dispatched']),
+            ...(legacy.dispatched as DispatchLedger['dispatched']),
           ];
         }
       } catch {
@@ -442,11 +442,11 @@ export function migrateRun(runDir: string, opts: MigrateRunOptions): MigrationRe
     stateWritten = true;
   }
 
-  const planTasks = plan ? ((plan['tasks'] as unknown[]) ?? []) : [];
+  const planTasks = plan ? ((plan.tasks as unknown[]) ?? []) : [];
   const tasksFound = planTasks.length;
   let stepsFound = 0;
   for (const t of planTasks) {
-    const steps = (t as Record<string, unknown>)['steps'];
+    const steps = (t as Record<string, unknown>).steps;
     if (Array.isArray(steps)) stepsFound += steps.length;
   }
 
@@ -513,7 +513,7 @@ function walk(dir: string, acc: string[]): void {
   if (hasLegacy) acc.push(dir);
   for (const name of entries) {
     const child = join(dir, name);
-    let st;
+    let st: ReturnType<typeof statSync>;
     try {
       st = statSync(child);
     } catch {

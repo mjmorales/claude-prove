@@ -28,8 +28,8 @@ interface CliResult {
 function runCli(args: string[], cwd: string, envExtras: Record<string, string> = {}): CliResult {
   const env = { ...process.env, PROVE_STATE_FROZEN_NOW: FROZEN, ...envExtras };
   // Strip inherited slug env so tests are deterministic unless explicit.
-  delete env.PROVE_RUN_SLUG;
-  delete env.PROVE_RUN_BRANCH;
+  Reflect.deleteProperty(env, 'PROVE_RUN_SLUG');
+  Reflect.deleteProperty(env, 'PROVE_RUN_BRANCH');
   const proc = Bun.spawnSync({
     cmd: ['bun', 'run', CLI_PATH, 'run-state', ...args],
     cwd,

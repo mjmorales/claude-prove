@@ -184,9 +184,8 @@ describe('deriveStateFromProgress', () => {
   test('applies statuses', () => {
     const plan = parsePlanMd(PLAN_MD);
     const state = deriveStateFromProgress(PROGRESS_MD, plan, 'demo', 'feature');
-    const tasks = state.tasks as Record<string, unknown>[];
-    expect(tasks[0].status).toBe('completed');
-    expect(tasks[1].status).toBe('in_progress');
+    expect(state.tasks[0].status).toBe('completed');
+    expect(state.tasks[1].status).toBe('in_progress');
     expect(state.run_status).toBe('running');
   });
 
@@ -199,7 +198,7 @@ describe('deriveStateFromProgress', () => {
 
   test('all completed flips run_status to completed', () => {
     const plan = parsePlanMd(PLAN_MD);
-    const progress = `# Progress\n- [x] Task 1.1\n- [x] Task 2.1\n`;
+    const progress = '# Progress\n- [x] Task 1.1\n- [x] Task 2.1\n';
     const state = deriveStateFromProgress(progress, plan, 'demo', 'feature');
     expect(state.run_status).toBe('completed');
     expect(state.ended_at).toBe(FROZEN_TS);
@@ -433,7 +432,7 @@ function runCase(name: string): Envelope {
   }
   if (name === 'state_all_completed') {
     const plan = parsePlanMd(PLAN_MD);
-    const progress = `# Progress\n- [x] Task 1.1\n- [x] Task 2.1\n`;
+    const progress = '# Progress\n- [x] Task 1.1\n- [x] Task 2.1\n';
     return {
       name,
       artifact: 'state',

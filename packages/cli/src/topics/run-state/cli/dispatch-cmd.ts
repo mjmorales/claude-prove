@@ -25,7 +25,7 @@ export function runDispatch(
     console.error('error: the following arguments are required: key');
     return 1;
   }
-  let resolved;
+  let resolved: ReturnType<typeof resolvePaths>;
   try {
     resolved = resolvePaths(flags);
   } catch (err) {

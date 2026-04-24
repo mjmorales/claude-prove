@@ -23,7 +23,7 @@ function runHookCli(
   envExtras: Record<string, string> = {},
 ): CliResult {
   const env = { ...process.env, ...envExtras };
-  delete env.RUN_STATE_ALLOW_DIRECT;
+  Reflect.deleteProperty(env, 'RUN_STATE_ALLOW_DIRECT');
   const proc = Bun.spawnSync({
     cmd: ['bun', 'run', CLI_PATH, 'run-state', 'hook', event],
     stdin: new Blob([stdin]),

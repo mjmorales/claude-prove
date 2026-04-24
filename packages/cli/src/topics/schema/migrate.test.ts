@@ -93,7 +93,7 @@ describe('TestPlanMigration', () => {
     const config = { validators: [], scopes: { plugin: '.' } };
     const [target, changes] = planMigration(config);
 
-    expect(target['schema_version']).toBe(CURRENT_SCHEMA_VERSION);
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     expect(changes.some((c) => c.path === 'schema_version')).toBe(true);
   });
 
@@ -106,14 +106,14 @@ describe('TestPlanMigration', () => {
     };
     const [target] = planMigration(config);
 
-    expect(target['scopes']).toEqual(config.scopes);
-    expect(target['validators']).toEqual(config.validators);
-    expect(target['reporters']).toEqual(config.reporters);
+    expect(target.scopes).toEqual(config.scopes);
+    expect(target.validators).toEqual(config.validators);
+    expect(target.reporters).toEqual(config.reporters);
     // v3 migration moves index -> tools.cafi.config
     expect('index' in target).toBe(false);
-    const tools = target['tools'] as Record<string, Record<string, unknown>>;
-    expect(tools['cafi']!['config']).toEqual(config.index);
-    expect(target['schema_version']).toBe(CURRENT_SCHEMA_VERSION);
+    const tools = target.tools as Record<string, Record<string, unknown>>;
+    expect(tools.cafi?.config).toEqual(config.index);
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
   });
 
   test('already current no changes', () => {
@@ -136,8 +136,8 @@ describe('TestPlanMigration', () => {
     const config = { schema_version: '1', validators: [] };
     const [target, changes] = planMigration(config);
 
-    expect(target['schema_version']).toBe(CURRENT_SCHEMA_VERSION);
-    expect(target['claude_md']).toEqual({ references: [] });
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect(target.claude_md).toEqual({ references: [] });
     expect(changes.some((c) => c.path === 'claude_md')).toBe(true);
   });
 
@@ -150,9 +150,9 @@ describe('TestPlanMigration', () => {
     };
     const [target, changes] = planMigration(config);
 
-    expect(target['schema_version']).toBe(CURRENT_SCHEMA_VERSION);
-    const cm = target['claude_md'] as { references: { path: string }[] };
-    expect(cm.references[0]!.path).toBe('~/.claude/standards.md');
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    const cm = target.claude_md as { references: { path: string }[] };
+    expect(cm.references[0]?.path).toBe('~/.claude/standards.md');
     expect(changes.some((c) => c.path === 'claude_md')).toBe(false);
   });
 
@@ -166,14 +166,14 @@ describe('TestPlanMigration', () => {
     };
     const [target, changes] = planMigration(config);
 
-    expect(target['schema_version']).toBe(CURRENT_SCHEMA_VERSION);
-    const validators = target['validators'] as Record<string, unknown>[];
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    const validators = target.validators as Record<string, unknown>[];
     for (const v of validators) {
       expect('phase' in v).toBe(true);
       expect('stage' in v).toBe(false);
     }
-    expect(validators[0]!['phase']).toBe('lint');
-    expect(validators[1]!['phase']).toBe('test');
+    expect(validators[0]?.phase).toBe('lint');
+    expect(validators[1]?.phase).toBe('test');
     expect(changes.some((c) => c.path.includes('stage'))).toBe(true);
   });
 
@@ -184,8 +184,8 @@ describe('TestPlanMigration', () => {
     };
     const [target, changes] = planMigration(config);
 
-    const validators = target['validators'] as Record<string, unknown>[];
-    expect(validators[0]!['phase']).toBe('test');
+    const validators = target.validators as Record<string, unknown>[];
+    expect(validators[0]?.phase).toBe('test');
     expect(changes.some((c) => c.path.includes('stage'))).toBe(false);
   });
 
@@ -195,17 +195,17 @@ describe('TestPlanMigration', () => {
     };
     const [target] = planMigration(config);
 
-    expect(target['schema_version']).toBe(CURRENT_SCHEMA_VERSION);
-    const validators = target['validators'] as Record<string, unknown>[];
-    expect(validators[0]!['phase']).toBe('lint');
-    expect('stage' in validators[0]!).toBe(false);
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    const validators = target.validators as Record<string, unknown>[];
+    expect(validators[0]?.phase).toBe('lint');
+    expect('stage' in (validators[0] as object)).toBe(false);
   });
 
   test('v0 migrates through v1 to v2', () => {
     const config = { validators: [], scopes: { plugin: '.' } };
     const [target] = planMigration(config);
 
-    expect(target['schema_version']).toBe(CURRENT_SCHEMA_VERSION);
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     expect('claude_md' in target).toBe(true);
   });
 
@@ -221,11 +221,11 @@ describe('TestPlanMigration', () => {
     // move. The current Python test asserts "3" — the TS hop sequence
     // continues past v3, so assert the final target state is >= "3" AND
     // the v2->v3 move happened.
-    expect(Number.parseInt(target['schema_version'] as string, 10)).toBeGreaterThanOrEqual(3);
+    expect(Number.parseInt(target.schema_version as string, 10)).toBeGreaterThanOrEqual(3);
     expect('index' in target).toBe(false);
-    const tools = target['tools'] as Record<string, Record<string, unknown>>;
-    expect(tools['cafi']!['enabled']).toBe(true);
-    expect((tools['cafi']!['config'] as { max_file_size: number }).max_file_size).toBe(102400);
+    const tools = target.tools as Record<string, Record<string, unknown>>;
+    expect(tools.cafi?.enabled).toBe(true);
+    expect((tools.cafi?.config as { max_file_size: number }).max_file_size).toBe(102400);
     expect(changes.some((c) => c.path.includes('index'))).toBe(true);
   });
 
@@ -233,9 +233,9 @@ describe('TestPlanMigration', () => {
     const config = { schema_version: '2', validators: [] };
     const [target] = planMigration(config);
 
-    expect(Number.parseInt(target['schema_version'] as string, 10)).toBeGreaterThanOrEqual(3);
-    const tools = target['tools'] as Record<string, Record<string, unknown>>;
-    expect(tools['cafi']!['enabled']).toBe(false);
+    expect(Number.parseInt(target.schema_version as string, 10)).toBeGreaterThanOrEqual(3);
+    const tools = target.tools as Record<string, Record<string, unknown>>;
+    expect(tools.cafi?.enabled).toBe(false);
   });
 
   test('v2 to v3 preserves existing tools', () => {
@@ -246,9 +246,9 @@ describe('TestPlanMigration', () => {
     };
     const [target] = planMigration(config);
 
-    const tools = target['tools'] as Record<string, Record<string, unknown>>;
-    expect(tools['acb']!['enabled']).toBe(true);
-    expect((tools['cafi']!['config'] as { excludes: string[] }).excludes).toEqual(['*.log']);
+    const tools = target.tools as Record<string, Record<string, unknown>>;
+    expect(tools.acb?.enabled).toBe(true);
+    expect((tools.cafi?.config as { excludes: string[] }).excludes).toEqual(['*.log']);
   });
 
   test('v0 migrates through to v3', () => {
@@ -259,11 +259,11 @@ describe('TestPlanMigration', () => {
     };
     const [target] = planMigration(config);
 
-    expect(target['schema_version']).toBe(CURRENT_SCHEMA_VERSION);
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     expect('claude_md' in target).toBe(true);
     expect('tools' in target).toBe(true);
-    const tools = target['tools'] as Record<string, Record<string, unknown>>;
-    expect((tools['cafi']!['config'] as { max_file_size: number }).max_file_size).toBe(50000);
+    const tools = target.tools as Record<string, Record<string, unknown>>;
+    expect((tools.cafi?.config as { max_file_size: number }).max_file_size).toBe(50000);
     expect('index' in target).toBe(false);
   });
 });
@@ -297,9 +297,10 @@ describe('TestApplyMigration', () => {
       const { backupPath } = applyMigration(configPath);
 
       expect(backupPath).not.toBeNull();
-      expect(readFileSync(backupPath!, 'utf8')).toBeTruthy();
+      const backupBytes = readFileSync(backupPath as string, 'utf8');
+      expect(backupBytes).toBeTruthy();
       // Backup should contain original config.
-      expect(JSON.parse(readFileSync(backupPath!, 'utf8'))).toEqual(config);
+      expect(JSON.parse(backupBytes)).toEqual(config);
     } finally {
       cleanup(tmp);
     }
@@ -315,9 +316,9 @@ describe('TestApplyMigration', () => {
       applyMigration(configPath);
 
       const result = JSON.parse(readFileSync(configPath, 'utf8'));
-      expect(result['schema_version']).toBe(CURRENT_SCHEMA_VERSION);
-      expect(result['scopes']).toEqual({ plugin: '.' });
-      expect(result['validators']).toEqual([]);
+      expect(result.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+      expect(result.scopes).toEqual({ plugin: '.' });
+      expect(result.validators).toEqual([]);
     } finally {
       cleanup(tmp);
     }
@@ -375,10 +376,10 @@ describe('TestV3ToV4', () => {
 
     // planMigration chains to CURRENT_SCHEMA_VERSION ('5' after Phase 12
     // Task 2) — assert the final version AND that the v3->v4 hop fired.
-    expect(target['schema_version']).toBe(CURRENT_SCHEMA_VERSION);
-    const scopes = target['scopes'] as Record<string, unknown>;
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    const scopes = target.scopes as Record<string, unknown>;
     expect('tools' in scopes).toBe(false);
-    expect(scopes['plugin']).toBe('.');
+    expect(scopes.plugin).toBe('.');
     expect(changes.some((c) => c.path === 'scopes.tools' && c.action === 'remove')).toBe(true);
   });
 
@@ -392,11 +393,11 @@ describe('TestV3ToV4', () => {
     };
     const [target, changes] = planMigration(config);
 
-    expect(target['schema_version']).toBe(CURRENT_SCHEMA_VERSION);
-    const tools = target['tools'] as Record<string, Record<string, unknown>>;
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    const tools = target.tools as Record<string, Record<string, unknown>>;
     expect('schema' in tools).toBe(false);
-    expect(tools['cafi']!['enabled']).toBe(true);
-    expect((tools['cafi']!['config'] as { excludes: string[] }).excludes).toEqual(['*.log']);
+    expect(tools.cafi?.enabled).toBe(true);
+    expect((tools.cafi?.config as { excludes: string[] }).excludes).toEqual(['*.log']);
     expect(changes.some((c) => c.path === 'tools.schema' && c.action === 'remove')).toBe(true);
   });
 
@@ -412,15 +413,15 @@ describe('TestV3ToV4', () => {
     };
     const [target] = planMigration(config);
 
-    const scopes = target['scopes'] as Record<string, unknown>;
+    const scopes = target.scopes as Record<string, unknown>;
     expect(scopes).toEqual({
       plugin: '.',
       commands: 'commands/',
       agents: 'agents/',
     });
-    const tools = target['tools'] as Record<string, Record<string, unknown>>;
-    expect(tools['cafi']).toEqual({ enabled: true, config: { concurrency: 4 } });
-    expect(tools['acb']).toEqual({ enabled: true });
+    const tools = target.tools as Record<string, Record<string, unknown>>;
+    expect(tools.cafi).toEqual({ enabled: true, config: { concurrency: 4 } });
+    expect(tools.acb).toEqual({ enabled: true });
     expect('schema' in tools).toBe(false);
   });
 
@@ -432,11 +433,11 @@ describe('TestV3ToV4', () => {
     };
     const [target, changes] = planMigration(config);
 
-    expect(target['schema_version']).toBe(CURRENT_SCHEMA_VERSION);
-    expect(target['scopes']).toEqual({ plugin: '.' });
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect(target.scopes).toEqual({ plugin: '.' });
     // v4 -> v5 seeds tools.scrum, so cafi is preserved alongside scrum.
-    expect((target['tools'] as Record<string, unknown>)['cafi']).toEqual({ enabled: false });
-    expect((target['tools'] as Record<string, unknown>)['scrum']).toEqual({
+    expect((target.tools as Record<string, unknown>).cafi).toEqual({ enabled: false });
+    expect((target.tools as Record<string, unknown>).scrum).toEqual({
       enabled: true,
       scope: 'user',
       config: {},
@@ -454,9 +455,9 @@ describe('TestV4ToV5', () => {
     const config = { schema_version: '4', tools: {} };
     const [target, changes] = planMigration(config);
 
-    expect(target['schema_version']).toBe('5');
-    const tools = target['tools'] as Record<string, unknown>;
-    expect(tools['scrum']).toEqual({
+    expect(target.schema_version).toBe('5');
+    const tools = target.tools as Record<string, unknown>;
+    expect(tools.scrum).toEqual({
       enabled: true,
       scope: 'user',
       config: {},
@@ -472,10 +473,10 @@ describe('TestV4ToV5', () => {
     };
     const [target, changes] = planMigration(config);
 
-    expect(target['schema_version']).toBe('5');
-    const tools = target['tools'] as Record<string, unknown>;
+    expect(target.schema_version).toBe('5');
+    const tools = target.tools as Record<string, unknown>;
     // Existing scrum block is preserved byte-for-byte.
-    expect(tools['scrum']).toEqual(existing);
+    expect(tools.scrum).toEqual(existing);
     // No add-change for tools.scrum when it already existed.
     expect(changes.some((c) => c.path === 'tools.scrum')).toBe(false);
     // Only schema_version bump change is emitted.
@@ -503,21 +504,21 @@ describe('TestV4ToV5', () => {
     };
     const [target] = planMigration(config);
 
-    expect(target['schema_version']).toBe('5');
-    const tools = target['tools'] as Record<string, Record<string, unknown>>;
-    expect(tools['pcd']).toEqual({ enabled: true });
-    expect(tools['acb']).toEqual({
+    expect(target.schema_version).toBe('5');
+    const tools = target.tools as Record<string, Record<string, unknown>>;
+    expect(tools.pcd).toEqual({ enabled: true });
+    expect(tools.acb).toEqual({
       enabled: true,
       scope: 'user',
       config: { base_branch: 'main', review_ui_port: 5174 },
     });
-    expect(tools['cafi']).toEqual({
+    expect(tools.cafi).toEqual({
       enabled: true,
       scope: 'user',
       config: { excludes: [], max_file_size: 102400, concurrency: 3 },
     });
-    expect(tools['run_state']).toEqual({ enabled: true, scope: 'user' });
-    expect(tools['scrum']).toEqual({
+    expect(tools.run_state).toEqual({ enabled: true, scope: 'user' });
+    expect(tools.scrum).toEqual({
       enabled: true,
       scope: 'user',
       config: {},
@@ -531,11 +532,11 @@ describe('TestV4ToV5', () => {
     };
     const [target, changes] = planMigration(config);
 
-    expect(target['schema_version']).toBe('5');
+    expect(target.schema_version).toBe('5');
     // Only a version-bump change — no tools.scrum add, no other mutations.
     expect(changes.length).toBe(1);
-    expect(changes[0]!.action).toBe('change');
-    expect(changes[0]!.path).toBe('schema_version');
+    expect(changes[0]?.action).toBe('change');
+    expect(changes[0]?.path).toBe('schema_version');
     // Keys outside schema_version and tools are untouched.
     const keys = Object.keys(target).filter((k) => k !== 'schema_version' && k !== 'tools');
     const origKeys = Object.keys(config).filter((k) => k !== 'schema_version' && k !== 'tools');
@@ -546,8 +547,8 @@ describe('TestV4ToV5', () => {
     const config = { schema_version: '4' };
     const [target] = planMigration(config);
 
-    expect(target['schema_version']).toBe('5');
-    expect(target['tools']).toEqual({
+    expect(target.schema_version).toBe('5');
+    expect(target.tools).toEqual({
       scrum: { enabled: true, scope: 'user', config: {} },
     });
   });
@@ -564,7 +565,7 @@ describe('TestFullChain', () => {
     const [target, changes] = planMigration(config);
 
     // Final schema_version.
-    expect(target['schema_version']).toBe('5');
+    expect(target.schema_version).toBe('5');
 
     // Ordered hop signatures — each hop emits at least one change whose
     // path or description identifies it.
@@ -582,27 +583,27 @@ describe('TestFullChain', () => {
     expect(idxScrum).toBeGreaterThan(idxScopesTools);
 
     // v1->v2 renames stage -> phase
-    const validators = target['validators'] as Record<string, unknown>[];
-    expect(validators[0]!['phase']).toBe('lint');
-    expect('stage' in validators[0]!).toBe(false);
+    const validators = target.validators as Record<string, unknown>[];
+    expect(validators[0]?.phase).toBe('lint');
+    expect('stage' in (validators[0] as object)).toBe(false);
 
     // v1->v2 adds claude_md with empty references
-    expect(target['claude_md']).toEqual({ references: [] });
+    expect(target.claude_md).toEqual({ references: [] });
 
     // v2->v3 moves index under tools.cafi
     expect('index' in target).toBe(false);
-    const tools = target['tools'] as Record<string, Record<string, unknown>>;
-    expect(tools['cafi']!['enabled']).toBe(true);
-    expect((tools['cafi']!['config'] as { max_file_size: number }).max_file_size).toBe(4096);
+    const tools = target.tools as Record<string, Record<string, unknown>>;
+    expect(tools.cafi?.enabled).toBe(true);
+    expect((tools.cafi?.config as { max_file_size: number }).max_file_size).toBe(4096);
 
     // v3->v4 drops scopes.tools + tools.schema
-    const scopes = target['scopes'] as Record<string, unknown>;
+    const scopes = target.scopes as Record<string, unknown>;
     expect('tools' in scopes).toBe(false);
-    expect(scopes['plugin']).toBe('.');
+    expect(scopes.plugin).toBe('.');
     expect('schema' in tools).toBe(false);
 
     // v4->v5 seeds tools.scrum with defaults
-    expect(tools['scrum']).toEqual({
+    expect(tools.scrum).toEqual({
       enabled: true,
       scope: 'user',
       config: {},

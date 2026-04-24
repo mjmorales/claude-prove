@@ -125,7 +125,7 @@ describe('runSubagentStop', () => {
     process.env.PROVE_STATE_FROZEN_NOW = '2026-04-22T12:00:00Z';
   });
   afterEach(() => {
-    if (savedFrozen === undefined) delete process.env.PROVE_STATE_FROZEN_NOW;
+    if (savedFrozen === undefined) Reflect.deleteProperty(process.env, 'PROVE_STATE_FROZEN_NOW');
     else process.env.PROVE_STATE_FROZEN_NOW = savedFrozen;
   });
 
