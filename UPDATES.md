@@ -6,6 +6,37 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## unreleased — Scrum CLI surface + importer precision (issue #16)
+
+Closes the seven gaps filed in issue #16. The scrum CLI gains the status-transition and soft-delete actions the operator-facing surface was missing, a dedicated `alerts` subcommand matches the `/prove:scrum` routing table, the status summary stops undercounting closed milestones, and the importer rejects prose/dep-notes, dedupes ROADMAP↔BACKLOG ICE entries, and lifts referenced milestones into first-class rows.
+
+**Added**:
+
+- `prove scrum task status <id> <new-status>` — drive a task through the lifecycle from the CLI; rejects invalid transitions and unknown statuses.
+- `prove scrum task delete <id>` — soft-delete via `softDeleteTask`; removed tasks stop showing up in `task list`.
+- `prove scrum alerts [--human] [--stalled-after-days N]` — aggregates `stalled_wip` (in_progress/review tasks whose `last_event_at` exceeds the threshold, default 7d) and `orphan_runs` (directories under `.prove/runs/<branch>/<slug>/` with no matching `scrum_run_links` row). Stdout JSON for agents, `--human` table for operators. Exit 0 whether or not alerts are present — this is a report, not a gate.
+- `status` snapshot now carries `total_milestones` alongside the existing `milestones` array; the `--human` table renders `Active milestones (N of M total)` and the stderr summary reads `N/M active milestones`. Resolves the undercount surprise filed in #16.4.
+- Importer noise filter: bullets ending in `:`, bare `**Header**` rows, and dependency prose (`/\b(all\s+)?depend(s|ed)?\s+on\b/i`, `see also:`, `note:`) are dropped from both ROADMAP and BACKLOG. Fixes the "M1 capstone" and "parser items all depend on AST node type 9" false positives.
+- Importer ICE dedup: ROADMAP tasks with an `ICE <n>` token register the number; matching BACKLOG entries are skipped as duplicates rather than creating parallel records.
+- Importer milestone inference: `## M<n>` anchors are recognized alongside the canonical `## Milestone:` form, and any task title containing a `M<n>` token creates a planned milestone placeholder when none was declared. All imported tasks now carry a `milestone_id` whenever one is inferable, which restores the milestone component of `next-ready` scoring.
+
+**Changed**:
+
+- `commands/scrum.md` routing table: `alerts` is a direct CLI passthrough (`prove scrum alerts --human`) rather than an agent delegation. Matches `init|status|next`.
+- `agents/scrum-master.md`: hook-invoked digests pull stalled-WIP + orphan-run signal from `prove scrum alerts` instead of re-deriving it. Frontmatter description + interactive routing no longer advertise `alerts` — the agent reaches for it when useful but is no longer the only entry point.
+- `prove scrum task` error message now lists the full action set (`create | show | list | tag | link-decision | status | delete`).
+
+**Migration**:
+
+- No schema changes. All state lives in the existing `scrum_tasks`, `scrum_milestones`, and `scrum_run_links` tables.
+- Operators who patched around the missing CLI by importing `openScrumStore` directly can now switch to the CLI surface:
+  - `updateTaskStatus(id, s)` → `prove scrum task status <id> <s>`
+  - `softDeleteTask(id)` → `prove scrum task delete <id>`
+  - `createMilestone(...)` for inferred placeholders happens automatically during `prove scrum init`.
+- Projects that previously ran `prove scrum init` against a planning tree with prose-as-task noise, ICE duplicates, or unreferenced milestones should re-run the importer against a fresh `.prove/prove.db` (or use `prove scrum task delete` to trim the existing seed). The importer itself is still idempotent and short-circuits when any tasks exist.
+
+---
+
 ## v1.2.0 — CLI binary renamed to `claude-prove`
 
 The compiled CLI binary is renamed from `prove` to `claude-prove` to end the naming collision with `/usr/bin/prove` (the Perl TAP test runner shipped with macOS and most Linux distros). Slash commands (`/prove:*`), plugin name, marketplace ID, and source paths are unchanged. Only the binary on `$PATH` and the release asset filenames move.

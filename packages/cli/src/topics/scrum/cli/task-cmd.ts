@@ -7,6 +7,8 @@
  *   list           [--status S] [--milestone M] [--tag T]
  *   tag <id> <tag>
  *   link-decision <id> <decision-path>
+ *   status <id> <new-status>
+ *   delete <id>
  *
  * Stdout contract: JSON result per action on stdout; one-line human
  * summary on stderr. The `list` action returns a JSON array.
@@ -33,9 +35,24 @@ export interface TaskCmdFlags {
   workspaceRoot?: string;
 }
 
-export type TaskAction = 'create' | 'show' | 'list' | 'tag' | 'link-decision';
+export type TaskAction =
+  | 'create'
+  | 'show'
+  | 'list'
+  | 'tag'
+  | 'link-decision'
+  | 'status'
+  | 'delete';
 
-const TASK_ACTIONS: TaskAction[] = ['create', 'show', 'list', 'tag', 'link-decision'];
+const TASK_ACTIONS: TaskAction[] = [
+  'create',
+  'show',
+  'list',
+  'tag',
+  'link-decision',
+  'status',
+  'delete',
+];
 
 const VALID_STATUSES: TaskStatus[] = [
   'backlog',
@@ -76,6 +93,10 @@ export function runTaskCmd(
         return doTag(store, positional[0], positional[1]);
       case 'link-decision':
         return doLinkDecision(store, positional[0], positional[1]);
+      case 'status':
+        return doStatus(store, positional[0], positional[1]);
+      case 'delete':
+        return doDelete(store, positional[0]);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -173,6 +194,40 @@ function doTag(store: ScrumStore, id: string | undefined, tag: string | undefine
   // so downstream consumers can parse either entry point identically.
   process.stdout.write(`${JSON.stringify({ added: true, task_id: id, tag })}\n`);
   process.stderr.write(`scrum task tag: ${id} += ${tag}\n`);
+  return 0;
+}
+
+function doStatus(
+  store: ScrumStore,
+  id: string | undefined,
+  next: string | undefined,
+): number {
+  if (id === undefined || id.length === 0 || next === undefined || next.length === 0) {
+    process.stderr.write(
+      'scrum task status: <id> and <new-status> positional arguments required\n',
+    );
+    return 1;
+  }
+  if (!VALID_STATUSES.includes(next as TaskStatus)) {
+    process.stderr.write(
+      `scrum task status: invalid status '${next}'. expected one of: ${VALID_STATUSES.join(', ')}\n`,
+    );
+    return 1;
+  }
+  const task = store.updateTaskStatus(id, next as TaskStatus);
+  process.stdout.write(`${JSON.stringify(task)}\n`);
+  process.stderr.write(`scrum task status: ${id} -> ${next}\n`);
+  return 0;
+}
+
+function doDelete(store: ScrumStore, id: string | undefined): number {
+  if (id === undefined || id.length === 0) {
+    process.stderr.write('scrum task delete: <id> positional argument required\n');
+    return 1;
+  }
+  store.softDeleteTask(id);
+  process.stdout.write(`${JSON.stringify({ deleted: true, task_id: id })}\n`);
+  process.stderr.write(`scrum task delete: ${id}\n`);
   return 0;
 }
 

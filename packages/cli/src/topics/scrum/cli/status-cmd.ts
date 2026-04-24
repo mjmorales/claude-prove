@@ -2,9 +2,10 @@
  * `prove scrum status [--human] [--workspace-root W]`
  *
  * Snapshot of active scrum state:
- *   - active_tasks  — every non-terminal, non-deleted task
- *   - milestones    — planned + active milestones (excludes closed)
- *   - recent_events — last 20 cross-task events
+ *   - active_tasks      — every non-terminal, non-deleted task
+ *   - milestones        — planned + active milestones (excludes closed)
+ *   - total_milestones  — count of every milestone row including closed
+ *   - recent_events     — last 20 cross-task events
  *
  * Default emits a single-line JSON document on stdout for agents and
  * pipelines; `--human` prints a compact text table on stdout instead.
@@ -44,7 +45,7 @@ export function runStatusCmd(flags: StatusCmdFlags): number {
       process.stdout.write(`${JSON.stringify(snapshot)}\n`);
     }
     process.stderr.write(
-      `scrum status: ${snapshot.active_tasks.length} active tasks, ${snapshot.milestones.length} milestones, ${snapshot.recent_events.length} recent events\n`,
+      `scrum status: ${snapshot.active_tasks.length} active tasks, ${snapshot.milestones.length}/${snapshot.total_milestones} active milestones, ${snapshot.recent_events.length} recent events\n`,
     );
     return 0;
   } finally {
@@ -55,15 +56,22 @@ export function runStatusCmd(flags: StatusCmdFlags): number {
 interface Snapshot {
   active_tasks: ReturnType<ScrumStore['listTasks']>;
   milestones: ReturnType<ScrumStore['listMilestones']>;
+  total_milestones: number;
   recent_events: ReturnType<ScrumStore['listRecentEvents']>;
 }
 
 function buildSnapshot(store: ScrumStore): Snapshot {
   const allTasks = store.listTasks();
   const active = allTasks.filter((t) => ACTIVE_STATUSES.includes(t.status));
-  const milestones = store.listMilestones().filter((m) => m.status !== 'closed');
+  const allMilestones = store.listMilestones();
+  const milestones = allMilestones.filter((m) => m.status !== 'closed');
   const recent = store.listRecentEvents(RECENT_EVENT_LIMIT);
-  return { active_tasks: active, milestones, recent_events: recent };
+  return {
+    active_tasks: active,
+    milestones,
+    total_milestones: allMilestones.length,
+    recent_events: recent,
+  };
 }
 
 function renderHumanTable(snapshot: Snapshot): string {
@@ -73,7 +81,9 @@ function renderHumanTable(snapshot: Snapshot): string {
     lines.push(`  [${task.status}] ${task.id}  ${task.title}`);
   }
   lines.push('');
-  lines.push(`Milestones (${snapshot.milestones.length}):`);
+  lines.push(
+    `Active milestones (${snapshot.milestones.length} of ${snapshot.total_milestones} total):`,
+  );
   for (const m of snapshot.milestones) {
     lines.push(`  [${m.status}] ${m.id}  ${m.title}`);
   }

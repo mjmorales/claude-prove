@@ -272,7 +272,7 @@ describe('prove scrum status', () => {
     const res = runScrum(['status', '--human'], repo);
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toContain('Active tasks');
-    expect(res.stdout).toContain('Milestones');
+    expect(res.stdout).toContain('Active milestones');
     expect(res.stdout).toContain('Recent events');
   });
 });

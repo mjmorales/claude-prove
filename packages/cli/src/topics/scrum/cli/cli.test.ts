@@ -18,6 +18,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { runAlertsCmd } from './alerts-cmd';
 import { runHookCmd } from './hook-cmd';
 import { runInitCmd } from './init-cmd';
 import { runLinkRunCmd } from './link-run-cmd';
@@ -129,7 +130,27 @@ describe('runStatusCmd', () => {
     const res = withCapture(() => runStatusCmd({ human: true }));
     expect(res.exit).toBe(0);
     expect(res.stdout).toContain('Active tasks');
-    expect(res.stdout).toContain('Milestones');
+    expect(res.stdout).toContain('Active milestones');
+  });
+
+  test('JSON payload carries total_milestones alongside active milestones', () => {
+    withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], { title: 'Alpha', id: 'alpha' }),
+    );
+    withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], { title: 'Beta', id: 'beta' }),
+    );
+    withCapture(() => runMilestoneCmd('close', ['alpha', undefined], {}));
+
+    const res = withCapture(() => runStatusCmd({}));
+    expect(res.exit).toBe(0);
+    const payload = JSON.parse(res.stdout.trim()) as {
+      milestones: unknown[];
+      total_milestones: number;
+    };
+    expect(payload.total_milestones).toBe(2);
+    expect(payload.milestones).toHaveLength(1);
+    expect(res.stderr).toContain('1/2 active milestones');
   });
 });
 
@@ -208,6 +229,50 @@ describe('runTaskCmd', () => {
     const payload = JSON.parse(res.stdout.trim());
     expect(payload.linked).toBe(true);
     expect(payload.decision_path).toBe('.prove/decisions/x.md');
+  });
+
+  test('status: drives a valid transition and returns the updated task', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'S', id: 's' }));
+    const res = withCapture(() => runTaskCmd('status', ['s', 'ready'], {}));
+    expect(res.exit).toBe(0);
+    const task = JSON.parse(res.stdout.trim()) as { id: string; status: string };
+    expect(task.id).toBe('s');
+    expect(task.status).toBe('ready');
+    expect(res.stderr).toContain('s -> ready');
+  });
+
+  test('status: rejects an unknown status string with exit 1', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'S2', id: 's2' }));
+    const res = withCapture(() => runTaskCmd('status', ['s2', 'bogus'], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("invalid status 'bogus'");
+  });
+
+  test('status: surfaces invalid-transition errors from the store', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'S3', id: 's3' }));
+    // backlog -> done is not allowed; must go through ready/in_progress first
+    const res = withCapture(() => runTaskCmd('status', ['s3', 'done'], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('invalid transition');
+  });
+
+  test('delete: soft-deletes and hides the task from list', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'D', id: 'd' }));
+    const del = withCapture(() => runTaskCmd('delete', ['d', undefined], {}));
+    expect(del.exit).toBe(0);
+    const payload = JSON.parse(del.stdout.trim()) as { deleted: boolean; task_id: string };
+    expect(payload.deleted).toBe(true);
+    expect(payload.task_id).toBe('d');
+
+    const l = withCapture(() => runTaskCmd('list', [undefined, undefined], {}));
+    const rows = JSON.parse(l.stdout.trim()) as Array<{ id: string }>;
+    expect(rows.some((r) => r.id === 'd')).toBe(false);
+  });
+
+  test('delete: missing <id> exits 1 with a usage hint', () => {
+    const res = withCapture(() => runTaskCmd('delete', [undefined, undefined], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('<id> positional argument required');
   });
 });
 
@@ -312,5 +377,204 @@ describe('runHookCmd', () => {
     const res = withCapture(() => runHookCmd('session-start', { workspaceRoot: workspace }));
     expect(res.exit).toBe(0);
     expect(res.stdout).toBe('');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// alerts-cmd
+// ---------------------------------------------------------------------------
+
+describe('runAlertsCmd', () => {
+  test('empty workspace: zero alerts, stderr summarizes counts', () => {
+    const res = withCapture(() => runAlertsCmd({ workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const payload = JSON.parse(res.stdout.trim()) as {
+      stalled_wip: unknown[];
+      orphan_runs: unknown[];
+      stalled_after_days: number;
+    };
+    expect(payload.stalled_wip).toHaveLength(0);
+    expect(payload.orphan_runs).toHaveLength(0);
+    expect(payload.stalled_after_days).toBe(7);
+    expect(res.stderr).toContain('0 stalled WIP');
+    expect(res.stderr).toContain('0 orphan runs');
+  });
+
+  test('stalled WIP: in_progress task with an old last_event_at surfaces', () => {
+    // Create task, transition it, then rewrite last_event_at directly
+    // so it looks like it's been stalled for 14 days.
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'W', id: 'w' }));
+    withCapture(() => runTaskCmd('status', ['w', 'ready'], {}));
+    withCapture(() => runTaskCmd('status', ['w', 'in_progress'], {}));
+
+    const ancient = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+    // biome-ignore lint/suspicious/noExplicitAny: test-only escape hatch into the unified store
+    const { openScrumStore } = require('../store') as any;
+    const s = openScrumStore({ override: join(workspace, '.prove', 'prove.db') });
+    s.getDb?.() ?? null;
+    // The store doesn't expose a direct last_event_at setter, so edit
+    // the underlying sqlite row to simulate the stalled condition.
+    s.store.getDb().prepare('UPDATE scrum_tasks SET last_event_at = ? WHERE id = ?').run(ancient, 'w');
+    s.close();
+
+    const res = withCapture(() => runAlertsCmd({ workspaceRoot: workspace, stalledAfterDays: 7 }));
+    expect(res.exit).toBe(0);
+    const payload = JSON.parse(res.stdout.trim()) as {
+      stalled_wip: Array<{ id: string; stalled_days: number; status: string }>;
+    };
+    expect(payload.stalled_wip.some((e) => e.id === 'w' && e.status === 'in_progress')).toBe(true);
+    const entry = payload.stalled_wip.find((e) => e.id === 'w');
+    expect(entry?.stalled_days).toBeGreaterThanOrEqual(13);
+  });
+
+  test('orphan runs: untracked .prove/runs/* directories surface', () => {
+    mkdirSync(join(workspace, '.prove', 'runs', 'main', 'ghost-run'), { recursive: true });
+    const res = withCapture(() => runAlertsCmd({ workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const payload = JSON.parse(res.stdout.trim()) as {
+      orphan_runs: Array<{ branch: string; slug: string }>;
+    };
+    expect(payload.orphan_runs).toHaveLength(1);
+    expect(payload.orphan_runs[0]?.branch).toBe('main');
+    expect(payload.orphan_runs[0]?.slug).toBe('ghost-run');
+  });
+
+  test('orphan runs: runs linked in scrum_run_links are NOT flagged', () => {
+    mkdirSync(join(workspace, '.prove', 'runs', 'main', 'tracked-run'), { recursive: true });
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'L', id: 'l' }));
+    const linked = withCapture(() =>
+      runLinkRunCmd('l', join('.prove', 'runs', 'main', 'tracked-run'), { branch: 'main' }),
+    );
+    expect(linked.exit).toBe(0);
+
+    const res = withCapture(() => runAlertsCmd({ workspaceRoot: workspace }));
+    const payload = JSON.parse(res.stdout.trim()) as {
+      orphan_runs: Array<{ slug: string }>;
+    };
+    expect(payload.orphan_runs.some((r) => r.slug === 'tracked-run')).toBe(false);
+  });
+
+  test('--human table is produced when the flag is set', () => {
+    const res = withCapture(() => runAlertsCmd({ workspaceRoot: workspace, human: true }));
+    expect(res.exit).toBe(0);
+    expect(res.stdout).toContain('Stalled WIP');
+    expect(res.stdout).toContain('Orphan runs');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// init-cmd — importer precision (noise filter + ICE dedup + milestone lift)
+// ---------------------------------------------------------------------------
+
+describe('runInitCmd (importer precision)', () => {
+  test('filters section-header noise rows (trailing colon, bare bold)', () => {
+    mkdirSync(join(workspace, 'planning'), { recursive: true });
+    writeFileSync(
+      join(workspace, 'planning', 'ROADMAP.md'),
+      [
+        '## Milestone: Alpha',
+        '- **M1 capstone (2026-04-19)**:',
+        '- **Alpha**',
+        '- real task that should land',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const res = withCapture(() => runInitCmd({ workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const payload = JSON.parse(res.stdout.trim()) as { tasks: number };
+    expect(payload.tasks).toBe(1);
+
+    const list = withCapture(() => runTaskCmd('list', [undefined, undefined], {}));
+    const rows = JSON.parse(list.stdout.trim()) as Array<{ title: string }>;
+    expect(rows.some((r) => r.title.includes('capstone'))).toBe(false);
+    expect(rows.some((r) => r.title === 'real task that should land')).toBe(true);
+  });
+
+  test('filters dependency-prose rows from BACKLOG', () => {
+    mkdirSync(join(workspace, 'planning'), { recursive: true });
+    writeFileSync(
+      join(workspace, 'planning', 'BACKLOG.md'),
+      ['- parser: all depend on AST node type 9', '- see also: other doc', '- real backlog item', ''].join(
+        '\n',
+      ),
+      'utf8',
+    );
+
+    const res = withCapture(() => runInitCmd({ workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const list = withCapture(() => runTaskCmd('list', [undefined, undefined], {}));
+    const rows = JSON.parse(list.stdout.trim()) as Array<{ title: string }>;
+    expect(rows.map((r) => r.title)).toEqual(['real backlog item']);
+  });
+
+  test('dedupes ICE-tagged entries between ROADMAP and BACKLOG', () => {
+    mkdirSync(join(workspace, 'planning'), { recursive: true });
+    writeFileSync(
+      join(workspace, 'planning', 'ROADMAP.md'),
+      ['## Milestone: M1', '- ICE 100 parse negative literals', ''].join('\n'),
+      'utf8',
+    );
+    writeFileSync(
+      join(workspace, 'planning', 'BACKLOG.md'),
+      ['- ICE 100 parse negative literals (merge note)', '- ICE 200 distinct item', ''].join('\n'),
+      'utf8',
+    );
+
+    const res = withCapture(() => runInitCmd({ workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+
+    const list = withCapture(() => runTaskCmd('list', [undefined, undefined], {}));
+    const rows = JSON.parse(list.stdout.trim()) as Array<{ title: string }>;
+    const ice100 = rows.filter((r) => /ICE 100/.test(r.title));
+    expect(ice100).toHaveLength(1);
+    const ice200 = rows.filter((r) => /ICE 200/.test(r.title));
+    expect(ice200).toHaveLength(1);
+  });
+
+  test('raises referenced milestone rows via `## M<n>` anchors', () => {
+    mkdirSync(join(workspace, 'planning'), { recursive: true });
+    writeFileSync(
+      join(workspace, 'planning', 'ROADMAP.md'),
+      [
+        '## M1 capstone (2026-04-19)',
+        '- real task alpha',
+        '',
+        '## M2 later milestone',
+        '- real task beta',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const res = withCapture(() => runInitCmd({ workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const payload = JSON.parse(res.stdout.trim()) as { milestones: number; tasks: number };
+    expect(payload.milestones).toBe(2);
+    expect(payload.tasks).toBe(2);
+
+    const ml = withCapture(() => runMilestoneCmd('list', [undefined, undefined], {}));
+    const milestones = JSON.parse(ml.stdout.trim()) as Array<{ id: string }>;
+    expect(milestones.map((m) => m.id).sort()).toEqual(['m1', 'm2']);
+  });
+
+  test('infers milestone from `M<n>` token in BACKLOG titles, creating placeholder rows', () => {
+    mkdirSync(join(workspace, 'planning'), { recursive: true });
+    writeFileSync(
+      join(workspace, 'planning', 'BACKLOG.md'),
+      ['- M3 something to do later', '- M3 another thing in M3', '- no milestone here', ''].join('\n'),
+      'utf8',
+    );
+
+    const res = withCapture(() => runInitCmd({ workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const payload = JSON.parse(res.stdout.trim()) as { milestones: number; tasks: number };
+    expect(payload.milestones).toBe(1);
+    expect(payload.tasks).toBe(3);
+
+    const ml = withCapture(() => runMilestoneCmd('list', [undefined, undefined], {}));
+    const milestones = JSON.parse(ml.stdout.trim()) as Array<{ id: string }>;
+    expect(milestones.map((m) => m.id)).toContain('m3');
   });
 });

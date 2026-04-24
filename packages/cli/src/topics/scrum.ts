@@ -11,6 +11,9 @@
  *   prove scrum task list                 [--status S] [--milestone M] [--tag T]
  *   prove scrum task tag <id> <tag>
  *   prove scrum task link-decision <id> <decision-path>
+ *   prove scrum task status <id> <new-status>
+ *   prove scrum task delete <id>
+ *   prove scrum alerts                    [--human] [--stalled-after-days N]
  *   prove scrum milestone create          --title X [--description Y] [--target-state S] [--id I]
  *   prove scrum milestone list            [--status S]
  *   prove scrum milestone show <id>
@@ -34,6 +37,7 @@
  */
 
 import type { CAC } from 'cac';
+import { runAlertsCmd } from './scrum/cli/alerts-cmd';
 import { runHookCmd } from './scrum/cli/hook-cmd';
 import { runInitCmd } from './scrum/cli/init-cmd';
 import { runLinkRunCmd } from './scrum/cli/link-run-cmd';
@@ -47,6 +51,7 @@ type ScrumAction =
   | 'init'
   | 'status'
   | 'next-ready'
+  | 'alerts'
   | 'task'
   | 'milestone'
   | 'tag'
@@ -57,6 +62,7 @@ const SCRUM_ACTIONS: ScrumAction[] = [
   'init',
   'status',
   'next-ready',
+  'alerts',
   'task',
   'milestone',
   'tag',
@@ -77,6 +83,7 @@ interface ScrumFlags {
   targetState?: string;
   branch?: string;
   slug?: string;
+  stalledAfterDays?: number | string;
   workspaceRoot?: string;
 }
 
@@ -95,6 +102,7 @@ export function register(cli: CAC): void {
     .option('--target-state <s>', 'Milestone target state (milestone create)')
     .option('--branch <b>', 'Branch name for link-run')
     .option('--slug <g>', 'Run slug for link-run')
+    .option('--stalled-after-days <n>', 'Alerts: stalled WIP threshold in days (default: 7)')
     .option(
       '--workspace-root <w>',
       'Main worktree root; pins store to <root>/.prove/prove.db (default: git common-dir)',
@@ -145,10 +153,17 @@ function dispatch(
         workspaceRoot: flags.workspaceRoot,
       });
 
+    case 'alerts':
+      return runAlertsCmd({
+        human: flags.human,
+        stalledAfterDays: flags.stalledAfterDays,
+        workspaceRoot: flags.workspaceRoot,
+      });
+
     case 'task':
       if (arg1 === undefined) {
         console.error(
-          'error: scrum task: sub-action required (one of: create | show | list | tag | link-decision)',
+          'error: scrum task: sub-action required (one of: create | show | list | tag | link-decision | status | delete)',
         );
         return 1;
       }
