@@ -2,10 +2,10 @@
 name: docs
 description: >
   Unified documentation skill. Generates human-readable docs (READMEs, guides,
-  API references, getting-started), LLM-optimized agent/API docs, and manages
-  CLAUDE.md (full regeneration or single-directive updates). Triggers: "write
-  docs", "document this", "README", "API reference", "getting-started",
-  "LLM docs", "agent docs", "CLAUDE.md", "claude-md update", "add directive".
+  API references, getting-started), LLM-optimized agent/API docs, and
+  regenerates CLAUDE.md. Triggers: "write docs", "document this", "README",
+  "API reference", "getting-started", "LLM docs", "agent docs", "CLAUDE.md".
+  For single-directive CLAUDE.md growth, use `/prove:remember` instead.
 ---
 
 # docs
@@ -18,9 +18,10 @@ Dispatches by subcommand. Follows `references/interaction-patterns.md` for all `
 | `agent [subject]` | LLM-optimized agent/API/module docs |
 | `both [subject]` (default) | Auto-docs: resolve scope, run both audiences |
 | `claude-md generate` | Full CLAUDE.md generation via `claude-prove claude-md` CLI |
-| `claude-md update <directive>` | Append/update single directive with optimization + craft certification |
 
 Parse first token of `$ARGUMENTS` as subcommand. If absent, default to `both` with empty subject (session context).
+
+For single-directive growth of CLAUDE.md outside the prove-managed block, defer to `/prove:remember <directive>` — it owns optimize + certify + safe-insertion.
 
 ---
 
@@ -208,71 +209,6 @@ Safe to re-run — the CLI owns the file.
 
 ---
 
-## Subcommand: `claude-md update <directive>`
-
-Append or update a single directive in project or user-global CLAUDE.md. **Never write `$ARGUMENTS` verbatim** — instead, route it through Step 3 (optimize via `llm-prompt-engineer`) and Step 4 (certify via `/prove:prompting craft`) before writing.
-
-### Step 1 — Resolve scope
-
-`AskUserQuestion` header "Scope":
-- **Project** — write to `<cwd>/CLAUDE.md`
-- **User Global** — write to `$HOME/.claude/CLAUDE.md`
-
-If **User Global**, resolve symlinks before writing:
-
-- Run `readlink -f "$HOME/.claude/CLAUDE.md"` (or `realpath`). If it resolves into `~/.claude-envs/pool/...`, use the resolved path as the write target.
-- **Never replace the symlink with a regular file** — that decouples the active claude-env. Instead, write to the resolved target.
-- If the path does not exist yet and `~/.claude/` is itself a symlink into `~/.claude-envs/<env>/`, create the file at the resolved pool location (`~/.claude-envs/pool/...`).
-
-### Step 2 — Choose action
-
-`AskUserQuestion` header "Action":
-- **Append** — add as new section at end of file
-- **Update Section** — replace an existing named section
-
-If **Update Section**: ask free-form for the section heading. Read target, locate heading, confirm match. If ambiguous or missing, fall back to Append and tell the user.
-
-If target file does not exist, skip this question — the directive becomes the file's first content.
-
-### Step 3 — Optimize via subagent
-
-Invoke `llm-prompt-engineer` (Task tool) with:
-
-> Rewrite the following directive for inclusion in a CLAUDE.md file. CLAUDE.md is consumed as a persistent system directive by Claude on every turn. Apply primacy positioning, operational phrasing (what to do, not how to think), paired constraints (every "never X" gets an "instead, do Y"), and structural anchoring (heading + tight bullets). Preserve all semantic requirements. Output only the rewritten directive markdown — no commentary, no fences.
->
-> Directive:
-> $ARGUMENTS
-
-Capture output as `DRAFT`.
-
-### Step 4 — Certify via craft
-
-Run `/prove:prompting craft` with `DRAFT` as input. Capture certified output as `CERTIFIED`.
-
-If craft flags issues: apply them and re-run once. If it still fails, surface findings and stop.
-
-### Step 5 — Review gate
-
-Show the user:
-- Target path (resolved, post-symlink)
-- Action (Append / Update Section — and which section)
-- `CERTIFIED` text in a fenced block
-
-`AskUserQuestion` header "Review":
-- **Insert** — write to disk
-- **Revise** — return to step 3 with user feedback
-
-### Step 6 — Write
-
-- **Append** or **new file**: append `\n\n` + `CERTIFIED` to target (or create with `CERTIFIED` as sole content). Ensure single trailing newline.
-- **Update Section**: replace from matched heading up to (but excluding) next heading of equal or higher level with `CERTIFIED`. Preserve surrounding content exactly.
-
-Use Edit or Write on the resolved path. Never rewrite `~/.claude/CLAUDE.md` directly when it resolves elsewhere — instead, write to the `readlink -f` target so the symlink stays intact.
-
-Report write with absolute path and byte delta.
-
----
-
 ## Anti-Patterns
 
 | Anti-Pattern | Instead |
@@ -282,8 +218,7 @@ Report write with absolute path and byte delta.
 | Omitting audience from `human` prompt | Always include `Audience:` |
 | Verbose examples with inline commentary (agent docs) | Minimal working examples |
 | Line-by-line code explanation (agent docs) | Document behavior and contracts |
-| Writing raw user directive to CLAUDE.md | Optimize + certify first (update flow) |
-| Overwriting `~/.claude/CLAUDE.md` symlink | Resolve first, write to pool target |
+| Writing raw user directive to CLAUDE.md | Route through `/prove:remember` (optimize + certify + safe-insert) |
 
 ## Committing
 
@@ -291,6 +226,3 @@ Delegate to `commit` skill. Example messages:
 - `docs(docs): add README for cafi tool`
 - `docs(docs): document validation-agent interface`
 - `docs(docs): regenerate CLAUDE.md`
-- `docs(claude-md): add tool vs pack boundary directive`
-
-`claude-md update` never commits automatically — the user decides when.

@@ -1,5 +1,5 @@
 ---
-description: Unified docs — human/agent/both documentation and CLAUDE.md management
+description: Unified docs — human/agent/both documentation and CLAUDE.md generation
 argument-hint: "<human|agent|both|claude-md> [args]"
 ---
 
@@ -11,6 +11,7 @@ Load and follow the `docs` skill (`skills/docs/SKILL.md` from the workflow plugi
 - `agent [subject]` — LLM-optimized agent/API/module docs
 - `both [subject]` (default when no subcommand) — auto-docs: analyze scope, run both audiences
 - `claude-md generate` — full CLAUDE.md regeneration via `claude-prove claude-md` CLI
-- `claude-md update <directive>` — append/update single directive with optimization + craft certification
+
+For single-directive growth of CLAUDE.md outside the prove-managed block, use `/prove:remember <directive>`.
 
 Pass the full `$ARGUMENTS` through to the skill.
