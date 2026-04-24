@@ -6,6 +6,43 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v1.1.0 — Review-UI XSS hardening + broad code-quality pass
+
+Security fix plus a wide steward sweep across the CLI, installer, review-UI client, review-UI server, and shared packages. User-visible behavior change: markdown content rendered by the review-UI is now sanitized through `DOMPurify`, so script/style/event-handler vectors in manifest notes, decisions, or commit bodies no longer execute in the reviewer's browser.
+
+**Added**:
+
+- DOMPurify sanitation in the review-UI Markdown component. Run artifacts reach this component through manifest notes and decision records; anything that looked like HTML used to be injected verbatim via `dangerouslySetInnerHTML`. Adds `isomorphic-dompurify` to `packages/review-ui/web/` and its jsdom-based transitive chain.
+- `resolveBaselineBranch(repoRoot)` on the review-UI server. Repositories whose default branch is not `main` (e.g. `master`, `trunk`, `develop`) now get correct diff ranges instead of always comparing against a hard-coded `"main"`.
+- Node.js fallback for the shared file-walker's git helpers. The Node-based review-UI server can now consume the same walker the Bun-native CLI does; previously a `Bun.spawnSync` reference blew up under Node.
+
+**Changed**:
+
+- ACB verdict vocabulary is canonical across the CLI manifest schema and the review-UI HTTP/DB contract. Legacy dialect values (`approved`, `discuss`) are rewritten by acb migration v3 at DB boundary, and the review-UI HTTP endpoint only accepts canonical (`accepted`, `needs_discussion`, `rework`) strings going forward.
+- Review-UI SSE: one `EventSource` per tab via a reference-counted bus (`sseBus.ts`), instead of one per hook. Heartbeat-driven staleness checks no longer tear down the connection on every activity signal.
+- Review-UI server SSE route: tolerant resource-cleanup handshake. Clients that disconnect mid-setup no longer leave dangling watcher + heartbeat handles.
+- Run-state CLI dispatcher split into per-action sub-dispatchers behind a `Positionals` bundle; handlers destructure only the slots they use.
+- Scrum store routes every dynamic SQL shape through the prep-statement cache; `nextReadyQuery` batches tag-boost lookups and memoizes per-root `computeUnblockDepth` BFS within an invocation.
+- Install CLI: `doctor` now verifies every entry in a hook block (not just `hooks[0]`); `upgrade` rejects non-binary content-types to guard against CDN HTML error pages overwriting the installed binary; `init-config` surfaces corrupt `.prove.json` with a pointed error instead of crashing.
+- Installer bootstrap writes to a pid-scoped `.tmp` path so concurrent bootstraps can't race on the same tempfile.
+- Release workflow reads `plugin.json` as the authoritative current version instead of the latest git tag. Hand-rolled `chore(release):` commits without pushed tags no longer cause the workflow to silently revert `plugin.json` to an older version.
+
+**Removed**:
+
+- Legacy `registerDoctor(cli)` shim from the install topic — `install <action>` dispatch is the canonical entrypoint.
+- `deepCopy` alias in `run-state/state.ts` — every call site now uses canonical `deepCloneJson`.
+- Dead post-marshal JSON re-parse sanity check in `write-settings-hooks.ts`.
+
+**Migration**:
+
+1. No schema change; no `/prove:update` action required.
+2. If you have uncommitted review-UI code that sends `approved` or `discuss` verdicts to `POST /api/review/verdict/...`, switch to `accepted` / `needs_discussion`. The server rejects legacy dialect values at the HTTP edge — migration lives at the DB read boundary, not HTTP ingress.
+3. The `acb` domain in `.prove/prove.db` gains a v3 migration that rewrites legacy verdict strings in-place on first CLI/server startup after upgrade. No manual action.
+
+**Auto-adoption**: Plugin consumers pick up the security fix on next plugin update. The review-UI Docker image ships on its own release channel (GHCR) and will include DOMPurify when its image tag rolls forward.
+
+---
+
 ## v1.0.2 — Skill/command consolidation
 
 Aggressive consolidation after the phase-13 CLI unification. Twenty-five skills collapse to thirteen, thirty-five commands collapse to sixteen. Each merge group routes by a mode flag or subcommand; no functional capability is lost. Description fields on the new skills absorb every trigger phrase from the retired skills so description-matched invocations still route correctly for a release while muscle memory adjusts.
