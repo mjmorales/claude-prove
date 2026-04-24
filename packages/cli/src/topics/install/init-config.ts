@@ -17,7 +17,13 @@ export interface InitConfigOptions {
 
 export function runInitConfig(opts: InitConfigOptions): number {
   const cwd = resolve(opts.cwd ?? process.cwd());
-  bootstrapProveJson(cwd, { force: opts.force });
+  try {
+    bootstrapProveJson(cwd, { force: opts.force });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`prove install init-config: ${msg}`);
+    return 1;
+  }
 
   const target = join(cwd, '.claude', '.prove.json');
   console.log(`prove install init-config: bootstrapped ${target}`);

@@ -27,7 +27,6 @@ import { delimiter, join } from 'node:path';
 import { type Mode, detectMode } from '@claude-prove/installer/detect-mode';
 import { resolvePluginRoot } from '@claude-prove/installer/plugin-root';
 import type { HookBlock, SettingsFile } from '@claude-prove/installer/write-settings-hooks';
-import type { CAC } from 'cac';
 import { CURRENT_SCHEMA_VERSION } from '../schema/schemas';
 
 export type CheckStatus = 'pass' | 'fail' | 'warn';
@@ -54,22 +53,6 @@ const DEFAULT_PROVE_JSON_REL = join('.claude', '.prove.json');
 export function handleDoctorAction(): number {
   const results = runDoctor({ cwd: process.cwd() });
   return printResults(results);
-}
-
-/**
- * Legacy single-action registration. Registers `install doctor` directly
- * on the cac instance — used while sibling install subcommands are still
- * being ported. Safe to delete once `install <action>` dispatch is the
- * canonical entrypoint.
- */
-export function registerDoctor(cli: CAC): void {
-  cli.command('install <action>', 'Installer actions (action: doctor)').action((action: string) => {
-    if (action !== 'doctor') {
-      console.error(`prove install: unknown action '${action}'. expected one of: doctor`);
-      process.exit(1);
-    }
-    process.exit(handleDoctorAction());
-  });
 }
 
 /** Run all checks and return their structured results in execution order. */
@@ -223,41 +206,59 @@ function collectProveBlocks(settings: SettingsFile): HookBlock[] {
  * For shape 1 we stat the script file. For shape 2 we require the binary
  * to be executable (X_OK). Either kind failing yields a `fail` with the
  * `--force` fix hint so `prove install init --force` rewrites the block.
+ *
+ * Iterates every entry in `block.hooks` — multi-entry blocks must not be
+ * silently passed based solely on entry[0]. First failure wins; a block
+ * with zero entries fails with an empty-block message.
  */
 function checkHookBlock(block: HookBlock): CheckResult {
   const tool = block._tool ?? '<unknown>';
   const name = `hook-paths[${tool}:${block.matcher}]`;
-  const entry = block.hooks[0];
-  if (!entry || typeof entry.command !== 'string') {
+
+  if (block.hooks.length === 0) {
     return {
       name,
       status: 'fail',
-      message: 'hook block has no command',
+      message: 'hook block has no entries',
       fix: 'run `prove install init --force`',
     };
   }
 
-  const tokens = entry.command.trim().split(/\s+/);
-  const target = extractHookTarget(tokens);
-  if (!target) {
-    return {
-      name,
-      status: 'fail',
-      message: `could not parse hook command: ${entry.command}`,
-      fix: 'run `prove install init --force`',
-    };
+  const verifiedPaths: string[] = [];
+  for (const entry of block.hooks) {
+    if (!entry || typeof entry.command !== 'string') {
+      return {
+        name,
+        status: 'fail',
+        message: 'hook block has no command',
+        fix: 'run `prove install init --force`',
+      };
+    }
+
+    const tokens = entry.command.trim().split(/\s+/);
+    const target = extractHookTarget(tokens);
+    if (!target) {
+      return {
+        name,
+        status: 'fail',
+        message: `could not parse hook command: ${entry.command}`,
+        fix: 'run `prove install init --force`',
+      };
+    }
+
+    const verdict = verifyHookTarget(target);
+    if (verdict.status !== 'pass') {
+      return {
+        name,
+        status: 'fail',
+        message: verdict.message,
+        fix: 'run `prove install init --force`',
+      };
+    }
+    verifiedPaths.push(target.path);
   }
 
-  const verdict = verifyHookTarget(target);
-  if (verdict.status === 'pass') {
-    return { name, status: 'pass', message: target.path };
-  }
-  return {
-    name,
-    status: 'fail',
-    message: verdict.message,
-    fix: 'run `prove install init --force`',
-  };
+  return { name, status: 'pass', message: verifiedPaths.join(', ') };
 }
 
 interface HookTarget {

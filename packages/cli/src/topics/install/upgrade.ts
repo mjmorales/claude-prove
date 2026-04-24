@@ -102,6 +102,12 @@ async function fetchBinary(url: string): Promise<ArrayBuffer> {
   if (!res.ok) {
     throw new Error(`fetch failed: ${res.status} ${res.statusText} (${url})`);
   }
+  // Guard against CDN/proxy returning an HTML error page with 200 OK.
+  // Release assets must be a binary-ish content type.
+  const contentType = res.headers.get('content-type') ?? '';
+  if (!isBinaryContentType(contentType)) {
+    throw new Error(`unexpected content-type from release URL: ${contentType}`);
+  }
   const bytes = await res.arrayBuffer();
   if (bytes.byteLength === 0) {
     throw new Error(`empty binary at ${url}`);
@@ -109,11 +115,18 @@ async function fetchBinary(url: string): Promise<ArrayBuffer> {
   return bytes;
 }
 
+function isBinaryContentType(contentType: string): boolean {
+  const lower = contentType.toLowerCase();
+  return lower.startsWith('application/octet-stream') || lower.startsWith('application/x-sh');
+}
+
 function tryUnlink(path: string): void {
   try {
     unlinkSync(path);
-  } catch {
-    // best-effort cleanup — the partial tmp file may not exist
+  } catch (err) {
+    // Best-effort cleanup — the partial tmp file may not exist.
+    // Log at warn level so failures are visible without changing control flow.
+    console.warn('prove upgrade: failed to unlink tmp binary:', err);
   }
 }
 
