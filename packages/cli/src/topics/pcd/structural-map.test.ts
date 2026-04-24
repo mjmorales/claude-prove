@@ -1,9 +1,7 @@
 /**
- * Tests for the PCD structural-map generator (TypeScript port of
- * `tools/pcd/test_structural_map.py`).
- *
- * Every assertion mirrors a Python test case verbatim. Changes must land in
- * lockstep with the Python source until retirement.
+ * Tests for the PCD structural-map generator. Originally ported 1:1 from the
+ * retired `tools/pcd/test_structural_map.py`; no longer bound to Python
+ * parity — TypeScript is now the source of truth.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -16,6 +14,7 @@ import {
   _buildDependencyGraph,
   _clusterFiles,
   _countLines,
+  _discoverWorkspacePackages,
   _resolveImportToFile,
   generateStructuralMap,
 } from './structural-map';
@@ -75,65 +74,251 @@ describe('_countLines', () => {
 describe('_resolveImportToFile', () => {
   test('python module file', () => {
     const files = new Set(['cafi/hasher.py', 'cafi/__init__.py']);
-    expect(_resolveImportToFile('cafi.hasher', 'python', files, '/tmp')).toBe('cafi/hasher.py');
+    expect(_resolveImportToFile('app.py', 'cafi.hasher', 'python', files, '/tmp')).toBe(
+      'cafi/hasher.py',
+    );
   });
 
   test('python package init', () => {
     const files = new Set(['cafi/__init__.py']);
-    expect(_resolveImportToFile('cafi', 'python', files, '/tmp')).toBe('cafi/__init__.py');
+    expect(_resolveImportToFile('app.py', 'cafi', 'python', files, '/tmp')).toBe(
+      'cafi/__init__.py',
+    );
   });
 
   test('python relative import returns null', () => {
     const files = new Set(['utils.py']);
-    expect(_resolveImportToFile('.utils', 'python', files, '/tmp')).toBeNull();
+    expect(_resolveImportToFile('app.py', '.utils', 'python', files, '/tmp')).toBeNull();
   });
 
   test('python no match', () => {
     const files = new Set(['other.py']);
-    expect(_resolveImportToFile('nonexistent', 'python', files, '/tmp')).toBeNull();
+    expect(_resolveImportToFile('app.py', 'nonexistent', 'python', files, '/tmp')).toBeNull();
   });
 
   test('rust crate import', () => {
     const files = new Set(['src/parser.rs', 'src/main.rs']);
-    expect(_resolveImportToFile('crate::parser::Parser', 'rust', files, '/tmp')).toBe(
-      'src/parser.rs',
-    );
+    expect(
+      _resolveImportToFile('src/main.rs', 'crate::parser::Parser', 'rust', files, '/tmp'),
+    ).toBe('src/parser.rs');
   });
 
   test('rust crate mod.rs', () => {
     const files = new Set(['src/parser/mod.rs', 'src/main.rs']);
-    expect(_resolveImportToFile('crate::parser::Parser', 'rust', files, '/tmp')).toBe(
-      'src/parser/mod.rs',
-    );
+    expect(
+      _resolveImportToFile('src/main.rs', 'crate::parser::Parser', 'rust', files, '/tmp'),
+    ).toBe('src/parser/mod.rs');
   });
 
   test('js relative import', () => {
     const files = new Set(['utils.js', 'index.js']);
-    expect(_resolveImportToFile('./utils', 'javascript', files, '/tmp')).toBe('utils.js');
+    expect(_resolveImportToFile('index.js', './utils', 'javascript', files, '/tmp')).toBe(
+      'utils.js',
+    );
   });
 
   test('ts relative import', () => {
     const files = new Set(['lib/helpers.ts', 'index.ts']);
-    expect(_resolveImportToFile('./lib/helpers', 'typescript', files, '/tmp')).toBe(
+    expect(_resolveImportToFile('index.ts', './lib/helpers', 'typescript', files, '/tmp')).toBe(
       'lib/helpers.ts',
     );
   });
 
+  test('ts relative import from nested source', () => {
+    const files = new Set([
+      'packages/cli/src/topics/pcd/structural-map.ts',
+      'packages/cli/src/topics/pcd/import-parser.ts',
+    ]);
+    expect(
+      _resolveImportToFile(
+        'packages/cli/src/topics/pcd/structural-map.ts',
+        './import-parser',
+        'typescript',
+        files,
+        '/tmp',
+      ),
+    ).toBe('packages/cli/src/topics/pcd/import-parser.ts');
+  });
+
+  test('ts parent traversal from nested source', () => {
+    const files = new Set([
+      'packages/cli/src/topics/pcd/collapse.ts',
+      'packages/cli/src/topics/schema/detect.ts',
+    ]);
+    expect(
+      _resolveImportToFile(
+        'packages/cli/src/topics/pcd/collapse.ts',
+        '../schema/detect',
+        'typescript',
+        files,
+        '/tmp',
+      ),
+    ).toBe('packages/cli/src/topics/schema/detect.ts');
+  });
+
   test('js index file', () => {
     const files = new Set(['components/index.js']);
-    expect(_resolveImportToFile('./components', 'javascript', files, '/tmp')).toBe(
+    expect(_resolveImportToFile('app.js', './components', 'javascript', files, '/tmp')).toBe(
       'components/index.js',
     );
   });
 
   test('js non-relative returns null', () => {
     const files = new Set(['react.js']);
-    expect(_resolveImportToFile('react', 'javascript', files, '/tmp')).toBeNull();
+    expect(_resolveImportToFile('app.js', 'react', 'javascript', files, '/tmp')).toBeNull();
   });
 
   test('unknown language', () => {
     const files = new Set(['foo.txt']);
-    expect(_resolveImportToFile('foo', 'unknown', files, '/tmp')).toBeNull();
+    expect(_resolveImportToFile('app.ts', 'foo', 'unknown', files, '/tmp')).toBeNull();
+  });
+
+  test('ts workspace alias root export', () => {
+    const files = new Set([
+      'packages/cli/src/main.ts',
+      'packages/shared/src/index.ts',
+      'packages/shared/src/cache.ts',
+    ]);
+    const workspaces = new Map([
+      [
+        '@claude-prove/shared',
+        {
+          root: 'packages/shared',
+          exportsMap: {
+            '.': './src/index.ts',
+            './cache': './src/cache.ts',
+          },
+        },
+      ],
+    ]);
+    expect(
+      _resolveImportToFile(
+        'packages/cli/src/main.ts',
+        '@claude-prove/shared',
+        'typescript',
+        files,
+        '/tmp',
+        workspaces,
+      ),
+    ).toBe('packages/shared/src/index.ts');
+  });
+
+  test('ts workspace alias subpath export', () => {
+    const files = new Set([
+      'packages/cli/src/main.ts',
+      'packages/shared/src/index.ts',
+      'packages/shared/src/cache.ts',
+    ]);
+    const workspaces = new Map([
+      [
+        '@claude-prove/shared',
+        {
+          root: 'packages/shared',
+          exportsMap: {
+            '.': './src/index.ts',
+            './cache': './src/cache.ts',
+          },
+        },
+      ],
+    ]);
+    expect(
+      _resolveImportToFile(
+        'packages/cli/src/main.ts',
+        '@claude-prove/shared/cache',
+        'typescript',
+        files,
+        '/tmp',
+        workspaces,
+      ),
+    ).toBe('packages/shared/src/cache.ts');
+  });
+
+  test('ts workspace alias no match returns null', () => {
+    const files = new Set(['packages/cli/src/main.ts']);
+    const workspaces = new Map([
+      ['@claude-prove/shared', { root: 'packages/shared', exportsMap: { '.': './src/index.ts' } }],
+    ]);
+    expect(
+      _resolveImportToFile(
+        'packages/cli/src/main.ts',
+        'react',
+        'typescript',
+        files,
+        '/tmp',
+        workspaces,
+      ),
+    ).toBeNull();
+  });
+});
+
+// ---- _discoverWorkspacePackages --------------------------------------------
+
+describe('_discoverWorkspacePackages', () => {
+  test('reads workspaces glob and subpackage exports', () => {
+    const tmp = mkTmp();
+    try {
+      write(
+        tmp,
+        'package.json',
+        JSON.stringify({
+          name: 'root',
+          private: true,
+          workspaces: ['packages/*'],
+        }),
+      );
+      write(
+        tmp,
+        'packages/shared/package.json',
+        JSON.stringify({
+          name: '@scope/shared',
+          main: './src/index.ts',
+          exports: { '.': './src/index.ts', './cache': './src/cache.ts' },
+        }),
+      );
+      write(
+        tmp,
+        'packages/util/package.json',
+        JSON.stringify({
+          name: '@scope/util',
+          main: './src/index.ts',
+        }),
+      );
+      const map = _discoverWorkspacePackages(tmp);
+      expect(map.get('@scope/shared')?.root).toBe('packages/shared');
+      expect(map.get('@scope/shared')?.exportsMap).toEqual({
+        '.': './src/index.ts',
+        './cache': './src/cache.ts',
+      });
+      expect(map.get('@scope/util')?.exportsMap).toEqual({ '.': './src/index.ts' });
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('handles explicit workspace paths (no glob)', () => {
+    const tmp = mkTmp();
+    try {
+      write(tmp, 'package.json', JSON.stringify({ name: 'root', workspaces: ['apps/web'] }));
+      write(
+        tmp,
+        'apps/web/package.json',
+        JSON.stringify({ name: '@scope/web', main: './src/main.ts' }),
+      );
+      const map = _discoverWorkspacePackages(tmp);
+      expect(map.get('@scope/web')?.root).toBe('apps/web');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('returns empty map when root lacks workspaces', () => {
+    const tmp = mkTmp();
+    try {
+      write(tmp, 'package.json', JSON.stringify({ name: 'solo' }));
+      expect(_discoverWorkspacePackages(tmp).size).toBe(0);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
 
@@ -489,13 +674,15 @@ function isSuperset<T>(container: Set<T>, sub: Set<T>): boolean {
   return true;
 }
 
-// ---- Python parity fixtures ------------------------------------------------
+// ---- Fixture snapshots -----------------------------------------------------
 //
 // Each case runs `generateStructuralMap` against a fixture project and
-// compares the result (timestamp-normalized) to the Python capture. Scopes
-// mirror `__fixtures__/structural-map/capture.sh`.
+// compares the result (timestamp-normalized) to a pinned JSON snapshot. The
+// `python-captures/` directory retains its historical name (Python source
+// retired in v0.40.0) but is now regenerated from this TypeScript
+// implementation and acts as a regression fence for structural-map output.
 
-describe('python parity fixtures', () => {
+describe('structural-map fixtures', () => {
   const fixturesRoot = join(import.meta.dir, '__fixtures__', 'structural-map');
 
   const cases: Array<{ name: string; scope: string[] }> = [

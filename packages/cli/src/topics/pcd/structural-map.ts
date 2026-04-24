@@ -1,14 +1,14 @@
 /**
  * PCD Round 0a: deterministic structural map generator.
  *
- * Ported 1:1 from `tools/pcd/structural_map.py`. Produces dependency graphs
- * and file clusters from import analysis. Reuses the shared project walker
- * and CAFI cache loader so on-disk output stays byte-identical to Python —
- * key order, module traversal order, cluster IDs, and edge order all match.
+ * Produces dependency graphs and file clusters from import analysis. Reuses
+ * the shared project walker and CAFI cache loader. Originally ported from
+ * `tools/pcd/structural_map.py` (retired in v0.40.0); TypeScript is now the
+ * source of truth for output shape and traversal order.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, extname, join, normalize, resolve, sep } from 'node:path';
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { dirname, extname, join, posix, resolve, sep } from 'node:path';
 import { loadCache, loadToolConfig, walkProject } from '@claude-prove/shared';
 import { type ImportEntry, type Language, detectLanguage, parseImports } from './import-parser';
 
@@ -93,23 +93,43 @@ export function _countLines(filePath: string): number {
 }
 
 /**
+ * One workspace package entry used by JS/TS alias resolution.
+ *
+ * `root` is the project-relative package directory (e.g. `packages/shared`).
+ * `exportsMap` holds string-valued entries from `package.json#exports` (plus
+ * a `.` fallback synthesized from `main`) keyed by their subpath form
+ * (`.`, `./cache`, …) with project-relative paths as values.
+ */
+export interface WorkspacePackage {
+  root: string;
+  exportsMap: Record<string, string>;
+}
+
+export type WorkspaceMap = Map<string, WorkspacePackage>;
+
+/**
  * Resolve a module name to a project-relative file path per language rules.
  *
- * Mirrors `_resolve_import_to_file` in the Python source: Python =
- * package-relative dotted paths, Rust = crate-relative `::` paths, Go =
- * module-prefix-relative paths, JS/TS = `./` + `../` relative file specs.
+ * `sourceFile` is the project-relative path of the importing file and is used
+ * by JS/TS resolution to anchor `./` and `../` specifiers against the source
+ * directory. `workspaces` maps package names (e.g. `@claude-prove/shared`) to
+ * their roots and `exports` subpath tables so bare specifiers that hit a
+ * workspace package resolve to the exported file. Python/Rust/Go resolution
+ * is package/crate/module-prefix based and ignores `sourceFile`/`workspaces`.
  */
 export function _resolveImportToFile(
+  sourceFile: string,
   module: string,
   language: string,
   projectFiles: Set<string>,
   projectRoot: string,
+  workspaces: WorkspaceMap = new Map(),
 ): string | null {
   if (language === 'python') return resolvePython(module, projectFiles);
   if (language === 'rust') return resolveRust(module, projectFiles);
   if (language === 'go') return resolveGo(module, projectFiles, projectRoot);
   if (language === 'javascript' || language === 'typescript') {
-    return resolveJsTs(module, projectFiles);
+    return resolveJsTs(sourceFile, module, projectFiles, workspaces);
   }
   return null;
 }
@@ -184,9 +204,69 @@ function resolveGo(module: string, projectFiles: Set<string>, projectRoot: strin
   return null;
 }
 
-function resolveJsTs(module: string, projectFiles: Set<string>): string | null {
-  if (!module.startsWith('./') && !module.startsWith('../')) return null;
-  const base = normalize(module);
+function resolveJsTs(
+  sourceFile: string,
+  module: string,
+  projectFiles: Set<string>,
+  workspaces: WorkspaceMap,
+): string | null {
+  if (module.startsWith('./') || module.startsWith('../')) {
+    return resolveJsTsRelative(sourceFile, module, projectFiles);
+  }
+  return resolveJsTsWorkspace(module, projectFiles, workspaces);
+}
+
+function resolveJsTsRelative(
+  sourceFile: string,
+  module: string,
+  projectFiles: Set<string>,
+): string | null {
+  // Resolve the relative specifier against the importing file's directory so
+  // `./foo` from `a/b/src.ts` looks up `a/b/foo.*` (not `foo.*` at root).
+  // POSIX join normalizes `../` traversal and always emits `/` separators,
+  // matching the project-relative keys in `projectFiles`.
+  const sourceDir = posix.dirname(sourceFile);
+  const base = posix.join(sourceDir === '' ? '.' : sourceDir, module);
+  return tryResolveBase(base, projectFiles);
+}
+
+/**
+ * Resolve a bare specifier against workspace packages. Matches the longest
+ * package name that is either the full `module` or a `<pkg>/<sub>` prefix,
+ * then looks up `.` or `./<sub>` in that package's `exportsMap`.
+ */
+function resolveJsTsWorkspace(
+  module: string,
+  projectFiles: Set<string>,
+  workspaces: WorkspaceMap,
+): string | null {
+  if (workspaces.size === 0) return null;
+  let matchedName = '';
+  let matchedPkg: WorkspacePackage | null = null;
+  let matchedSubpath = '';
+  for (const [name, pkg] of workspaces) {
+    if (name.length <= matchedName.length) continue;
+    if (module === name) {
+      matchedName = name;
+      matchedPkg = pkg;
+      matchedSubpath = '.';
+    } else if (module.startsWith(`${name}/`)) {
+      matchedName = name;
+      matchedPkg = pkg;
+      matchedSubpath = `./${module.slice(name.length + 1)}`;
+    }
+  }
+  if (matchedPkg === null) return null;
+  const target = matchedPkg.exportsMap[matchedSubpath];
+  if (target === undefined) return null;
+  const rel = target.startsWith('./') ? target.slice(2) : target;
+  const full = posix.join(matchedPkg.root, rel);
+  if (projectFiles.has(full)) return full;
+  // Some package.jsons omit extensions in `main`; try the extension probes.
+  return tryResolveBase(full, projectFiles);
+}
+
+function tryResolveBase(base: string, projectFiles: Set<string>): string | null {
   const extensions = ['.js', '.jsx', '.ts', '.tsx', '.mjs'];
   const ext = extname(base);
   if (extensions.includes(ext)) {
@@ -197,10 +277,99 @@ function resolveJsTs(module: string, projectFiles: Set<string>): string | null {
     if (projectFiles.has(candidate)) return candidate;
   }
   for (const e of extensions) {
-    const candidate = join(base, `index${e}`);
+    const candidate = posix.join(base, `index${e}`);
     if (projectFiles.has(candidate)) return candidate;
   }
   return null;
+}
+
+/**
+ * Discover workspace packages by reading the root `package.json`'s
+ * `workspaces` field and each sub-package's `package.json`. Missing or
+ * malformed files are skipped silently. Returns an empty map when the
+ * root package has no workspaces declaration.
+ */
+export function _discoverWorkspacePackages(projectRoot: string): WorkspaceMap {
+  const map: WorkspaceMap = new Map();
+  const rootPkgPath = join(projectRoot, 'package.json');
+  let rootPkg: unknown;
+  try {
+    rootPkg = JSON.parse(readFileSync(rootPkgPath, 'utf8'));
+  } catch {
+    return map;
+  }
+  const wsGlobs = extractWorkspaceGlobs(rootPkg);
+  const wsDirs: string[] = [];
+  for (const g of wsGlobs) {
+    if (g.endsWith('/*')) {
+      const parentRel = g.slice(0, -2);
+      const parentAbs = join(projectRoot, parentRel);
+      let entries: string[];
+      try {
+        entries = readdirSync(parentAbs);
+      } catch {
+        continue;
+      }
+      for (const name of entries.sort()) {
+        const dirAbs = join(parentAbs, name);
+        try {
+          if (statSync(dirAbs).isDirectory()) wsDirs.push(posix.join(parentRel, name));
+        } catch {
+          // ignore broken symlinks / race conditions
+        }
+      }
+    } else {
+      wsDirs.push(g);
+    }
+  }
+
+  for (const wsRel of wsDirs) {
+    const pkgPath = join(projectRoot, wsRel, 'package.json');
+    let pkg: unknown;
+    try {
+      pkg = JSON.parse(readFileSync(pkgPath, 'utf8'));
+    } catch {
+      continue;
+    }
+    const entry = buildWorkspacePackage(wsRel, pkg);
+    if (entry !== null) map.set(entry.name, entry.pkg);
+  }
+  return map;
+}
+
+function extractWorkspaceGlobs(rootPkg: unknown): string[] {
+  if (typeof rootPkg !== 'object' || rootPkg === null) return [];
+  const ws = (rootPkg as { workspaces?: unknown }).workspaces;
+  if (Array.isArray(ws)) return ws.filter((g): g is string => typeof g === 'string');
+  if (typeof ws === 'object' && ws !== null) {
+    const packages = (ws as { packages?: unknown }).packages;
+    if (Array.isArray(packages)) return packages.filter((g): g is string => typeof g === 'string');
+  }
+  return [];
+}
+
+function buildWorkspacePackage(
+  root: string,
+  pkg: unknown,
+): { name: string; pkg: WorkspacePackage } | null {
+  if (typeof pkg !== 'object' || pkg === null) return null;
+  const name = (pkg as { name?: unknown }).name;
+  if (typeof name !== 'string' || name.length === 0) return null;
+  const exportsMap: Record<string, string> = {};
+  const exportsField = (pkg as { exports?: unknown }).exports;
+  if (typeof exportsField === 'object' && exportsField !== null && !Array.isArray(exportsField)) {
+    for (const [k, v] of Object.entries(exportsField)) {
+      if (typeof v === 'string') exportsMap[k] = v;
+    }
+  } else if (typeof exportsField === 'string') {
+    exportsMap['.'] = exportsField;
+  }
+  const mainField = (pkg as { main?: unknown }).main;
+  if (exportsMap['.'] === undefined && typeof mainField === 'string') {
+    exportsMap['.'] = mainField;
+  }
+  if (Object.keys(exportsMap).length === 0) return null;
+  return { name, pkg: { root, exportsMap } };
 }
 
 // ---------------------------------------------------------------------------
@@ -219,6 +388,7 @@ interface DependencyGraph {
  */
 export function _buildDependencyGraph(files: string[], projectRoot: string): DependencyGraph {
   const projectFiles = new Set(files);
+  const workspaces = _discoverWorkspacePackages(projectRoot);
   const allImports: ImportEntry[] = [];
   const adjacency = new Map<string, string[]>();
   for (const f of files) adjacency.set(f, []);
@@ -243,10 +413,12 @@ export function _buildDependencyGraph(files: string[], projectRoot: string): Dep
     for (const imp of imports) {
       if (imp.import_type !== 'internal' && imp.import_type !== 'external') continue;
       const target = _resolveImportToFile(
+        relPath,
         imp.imported_module,
         language satisfies Language,
         projectFiles,
         projectRoot,
+        workspaces,
       );
       if (target !== null && target !== relPath && !seen.has(target)) {
         seen.add(target);
