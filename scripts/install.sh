@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# install.sh — Install the prove plugin for Claude Code.
+# install.sh — Install the claude-prove plugin for Claude Code.
 #
-# Fetches the compiled `prove` binary from GitHub Releases for the host
-# platform, drops it under $PREFIX (default ~/.local/bin), then runs
-# `prove install init`. Falls back to a shallow git clone + bun invocation
-# when the binary fetch fails.
+# Fetches the compiled `claude-prove` binary from GitHub Releases for the
+# host platform, drops it under $PREFIX (default ~/.local/bin), then runs
+# `claude-prove install init`. Falls back to a shallow git clone + bun
+# invocation when the binary fetch fails.
+#
+# The binary is named `claude-prove` (not `prove`) to avoid collision with
+# the Perl TAP test runner shipped at /usr/bin/prove on macOS and most
+# Linux distros.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/mjmorales/claude-prove/main/scripts/install.sh | bash
@@ -21,8 +25,8 @@ while [[ $# -gt 0 ]]; do case "$1" in
   *) echo "unknown arg: $1" >&2; exit 1 ;;
 esac; done
 TARGET="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
-URL="https://github.com/mjmorales/claude-prove/releases/latest/download/prove-${TARGET}"
-DEST="${PREFIX}/prove"; TMP="${PREFIX}/.prove.tmp.$$"; CLONE="${HOME}/.claude/plugins/prove"
+URL="https://github.com/mjmorales/claude-prove/releases/latest/download/claude-prove-${TARGET}"
+DEST="${PREFIX}/claude-prove"; TMP="${PREFIX}/.claude-prove.tmp.$$"; CLONE="${HOME}/.claude/plugins/prove"
 mkdir -p "$PREFIX"; trap 'rm -f "$TMP"' EXIT
 if curl -fsSL "$URL" -o "$TMP" && [[ -s "$TMP" ]]; then
   chmod +x "$TMP"; mv "$TMP" "$DEST"; CMD=("$DEST"); echo ":: wrote $DEST ($TARGET)"
@@ -35,6 +39,12 @@ if ! [[ ":$PATH:" == *":${PREFIX}:"* ]]; then
   case "${SHELL##*/}" in zsh) RC="${HOME}/.zshrc" ;; bash) RC="${HOME}/.bashrc" ;; *) RC="your shell rc file" ;; esac
   echo ":: warning: ${PREFIX} not on PATH — append to ${RC}: export PATH=\"${PREFIX}:\$PATH\"" >&2
 fi
+# Stale legacy binary from pre-rename installs (<= v1.1.3). Remove quietly
+# so users don't end up with two copies drifting apart. Keep only when the
+# user explicitly used --prefix to a different dir.
+if [[ -f "${PREFIX}/prove" ]] && [[ "$(head -c4 "${PREFIX}/prove" 2>/dev/null || true)" == $'\x7fELF' || "$(file -b "${PREFIX}/prove" 2>/dev/null)" == *Mach-O* ]]; then
+  rm -f "${PREFIX}/prove" && echo ":: removed legacy ${PREFIX}/prove (renamed to claude-prove)"
+fi
 "${CMD[@]}" install init "${INIT_ARGS[@]}"
 if command -v claude >/dev/null 2>&1; then
   claude plugin marketplace add mjmorales/claude-prove --scope "$SCOPE" 2>/dev/null || true
@@ -42,4 +52,4 @@ if command -v claude >/dev/null 2>&1; then
 else
   printf ':: claude CLI not found — run manually:\n   claude plugin marketplace add mjmorales/claude-prove --scope %s\n   claude plugin install prove@prove --scope %s\n' "$SCOPE" "$SCOPE"
 fi
-echo ":: prove installed"
+echo ":: claude-prove installed"

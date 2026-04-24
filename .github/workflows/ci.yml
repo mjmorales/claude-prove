@@ -65,17 +65,17 @@ jobs:
           mkdir -p dist-bin
           bun build --compile \
             --target=${{ matrix.target }} \
-            --outfile dist-bin/prove-${{ matrix.target }} \
+            --outfile dist-bin/claude-prove-${{ matrix.target }} \
             packages/cli/bin/run.ts
       - name: Smoke test binary (linux-x64 only)
         if: matrix.target == 'bun-linux-x64'
         run: |
-          chmod +x dist-bin/prove-${{ matrix.target }}
-          ./dist-bin/prove-${{ matrix.target }} --help
+          chmod +x dist-bin/claude-prove-${{ matrix.target }}
+          ./dist-bin/claude-prove-${{ matrix.target }} --help
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
-          name: prove-${{ matrix.target }}
-          path: dist-bin/prove-${{ matrix.target }}
+          name: claude-prove-${{ matrix.target }}
+          path: dist-bin/claude-prove-${{ matrix.target }}
           retention-days: 14
           if-no-files-found: error

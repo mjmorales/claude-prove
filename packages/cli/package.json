@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "bin": {
-    "prove": "./bin/run.ts"
+    "claude-prove": "./bin/run.ts"
   },
   "exports": {
     "./schema/detect": "./src/topics/schema/detect.ts",

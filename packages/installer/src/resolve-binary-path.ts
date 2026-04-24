@@ -9,7 +9,7 @@ export interface ResolveBinaryPathOptions {
   binaryPath?: string;
 }
 
-const DEFAULT_COMPILED_REL = join('.local', 'bin', 'prove');
+const DEFAULT_COMPILED_REL = join('.local', 'bin', 'claude-prove');
 const DEV_ENTRY_REL = join('packages', 'cli', 'bin', 'run.ts');
 
 /**
@@ -18,7 +18,7 @@ const DEV_ENTRY_REL = join('packages', 'cli', 'bin', 'run.ts');
  * Dev mode returns `bun run <pluginRoot>/packages/cli/bin/run.ts` so the
  * TypeScript entry point is executed directly from the working copy. Compiled
  * mode returns an absolute path to the installed binary, defaulting to
- * `$HOME/.local/bin/prove` when no explicit override is provided.
+ * `$HOME/.local/bin/claude-prove` when no explicit override is provided.
  *
  * Throws when dev mode is requested without a `pluginRoot` -- callers must
  * resolve that via `resolvePluginRoot` before invoking this function.

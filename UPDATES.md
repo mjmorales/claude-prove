@@ -6,6 +6,35 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v1.2.0 — CLI binary renamed to `claude-prove`
+
+The compiled CLI binary is renamed from `prove` to `claude-prove` to end the naming collision with `/usr/bin/prove` (the Perl TAP test runner shipped with macOS and most Linux distros). Slash commands (`/prove:*`), plugin name, marketplace ID, and source paths are unchanged. Only the binary on `$PATH` and the release asset filenames move.
+
+**Changed**:
+
+- `packages/cli/package.json`: `bin."prove"` → `bin."claude-prove"`. `bun install` / `bun link` now exposes the CLI as `claude-prove`.
+- `packages/installer/src/resolve-binary-path.ts`: compiled-mode default is `~/.local/bin/claude-prove` (was `~/.local/bin/prove`). `writeSettingsHooks` picks up the new path on the next `prove install init --force` run.
+- `.github/workflows/release.yml` + `ci.yml`: release artifacts are `claude-prove-{darwin-arm64,darwin-x64,linux-x64,linux-arm64}` (was `prove-*`). `bun build --compile` emits `claude-prove` before the matrix rename step.
+- `scripts/install.sh`: fetches `claude-prove-${TARGET}` from Releases, writes `${PREFIX}/claude-prove`, and best-effort deletes any stale `${PREFIX}/prove` binary left over from v1.1.x installs. Fallback git-clone path unchanged (hands off to `bun run ...` regardless of binary name).
+
+**Behavior changes**:
+
+- Users who previously had `~/.local/bin/prove` on PATH must switch to `claude-prove`. Shell aliases or scripts that shelled out to `prove <subcommand>` need to be updated — `prove` now resolves to the Perl TAP runner again (or errors if not installed).
+- Dev checkouts are unaffected: `.claude/settings.json` hooks generated in dev mode still call `bun run <pluginRoot>/packages/cli/bin/run.ts ...` directly — never touch `$PATH`.
+
+**Migration**:
+
+1. Installed users: re-run `curl -fsSL https://raw.githubusercontent.com/mjmorales/claude-prove/main/scripts/install.sh | bash`. The script deletes the legacy `~/.local/bin/prove` binary, writes `~/.local/bin/claude-prove`, and invokes `claude-prove install init --force` to rewrite `.claude/settings.json` hook paths.
+2. Alternatively: `/prove:update` inside Claude Code calls `prove install init --force` via the installed binary — works once you've replaced the binary.
+3. Dev users: no action needed.
+
+**Auto-adoption**:
+
+- No schema changes; `PROVE_SCHEMA` / `CURRENT_SCHEMA_VERSION` unchanged.
+- Hooks in `.claude/settings.json` are idempotent via `_tool` markers — re-running `install init --force` rewrites the prefix in-place without duplicating entries.
+
+---
+
 ## v1.1.0 — Review-UI XSS hardening + broad code-quality pass
 
 Security fix plus a wide steward sweep across the CLI, installer, review-UI client, review-UI server, and shared packages. User-visible behavior change: markdown content rendered by the review-UI is now sanitized through `DOMPurify`, so script/style/event-handler vectors in manifest notes, decisions, or commit bodies no longer execute in the reviewer's browser.
@@ -230,7 +259,7 @@ Phase 10 of the TypeScript CLI unification (see `.prove/decisions/2026-04-23-pha
 **Behavior changes**:
 
 - `/prove:init` slash command delegates stack detection + `.prove.json` emission to `prove install init-config`. Dev checkouts run `bun run <pluginRoot>/packages/cli/bin/run.ts install init-config`; installed users run `prove install init-config` from PATH.
-- `.claude/settings.json` hook command paths are owned by `writeSettingsHooks` and resolved by `detectMode` — dev checkouts use `bun run <pluginRoot>/packages/cli/bin/run.ts <topic> hook <event>`; installed users use the compiled binary path (`~/.local/bin/prove` by default).
+- `.claude/settings.json` hook command paths are owned by `writeSettingsHooks` and resolved by `detectMode` — dev checkouts use `bun run <pluginRoot>/packages/cli/bin/run.ts <topic> hook <event>`; installed users use the compiled binary path (`~/.local/bin/prove` before v1.2.0, `~/.local/bin/claude-prove` after).
 - First release to ship binary artifacts: `darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`.
 
 **Migration**:
