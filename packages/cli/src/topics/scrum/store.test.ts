@@ -285,6 +285,42 @@ describe('ScrumStore — milestones', () => {
 });
 
 // ===========================================================================
+// setMilestoneStatus
+// ===========================================================================
+
+describe('ScrumStore — setMilestoneStatus', () => {
+  test('planned -> active transitions and returns the updated row', () => {
+    seedMilestone('m1');
+    const updated = store.setMilestoneStatus('m1', 'active');
+    expect(updated.status).toBe('active');
+    expect(store.getMilestone('m1')?.status).toBe('active');
+  });
+
+  test('active -> planned transitions back', () => {
+    seedMilestone('m1', { status: 'active' });
+    const updated = store.setMilestoneStatus('m1', 'planned');
+    expect(updated.status).toBe('planned');
+    expect(store.getMilestone('m1')?.status).toBe('planned');
+  });
+
+  test('planned -> planned is idempotent', () => {
+    seedMilestone('m1');
+    const updated = store.setMilestoneStatus('m1', 'planned');
+    expect(updated.status).toBe('planned');
+  });
+
+  test('throws on unknown id', () => {
+    expect(() => store.setMilestoneStatus('missing', 'active')).toThrow(/unknown milestone/);
+  });
+
+  test('throws when milestone is closed', () => {
+    seedMilestone('m1', { status: 'active' });
+    store.closeMilestone('m1');
+    expect(() => store.setMilestoneStatus('m1', 'active')).toThrow(/closed milestone/);
+  });
+});
+
+// ===========================================================================
 // Tags
 // ===========================================================================
 

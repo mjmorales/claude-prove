@@ -183,7 +183,7 @@ function dispatch(
     case 'milestone':
       if (arg1 === undefined) {
         console.error(
-          'error: scrum milestone: sub-action required (one of: create | list | show | close)',
+          'error: scrum milestone: sub-action required (one of: create | list | show | close | activate | reopen)',
         );
         return 1;
       }
