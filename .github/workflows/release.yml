@@ -41,16 +41,16 @@ jobs:
       - name: Determine version bump
         id: bump
         run: |
-          # Get the latest tag, or read current version from plugin.json
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || true)
+          # plugin.json is the authoritative current version. Tags are
+          # used only to pick the commit range for the changelog —
+          # hand-rolled chore(release) commits that weren't tagged would
+          # otherwise cause the tag-based lookup to silently revert
+          # plugin.json to an older version.
+          CURRENT=$(grep '"version"' .claude-plugin/plugin.json | head -1 | sed 's/.*"version": "\([^"]*\)".*/\1/')
 
-          if [ -z "$LATEST_TAG" ]; then
-            # No tags yet — use version from plugin.json as the base
-            CURRENT=$(grep '"version"' .claude-plugin/plugin.json | head -1 | sed 's/.*"version": "\([^"]*\)".*/\1/')
-            LATEST_TAG="v0.0.0"  # sentinel for changelog range
-            echo "No tags found. Using plugin.json version ($CURRENT) as base."
-          else
-            CURRENT="${LATEST_TAG#v}"
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          if [ "$LATEST_TAG" = "v0.0.0" ]; then
+            echo "No tags found. Using plugin.json version ($CURRENT) as base; changelog range = HEAD."
           fi
 
           echo "latest_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
