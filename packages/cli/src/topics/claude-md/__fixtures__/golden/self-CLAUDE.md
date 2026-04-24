@@ -21,6 +21,10 @@ JavaScript/TypeScript (npm)
 
 ## References
 
+### claude-prove CLI Reference
+
+@__PLUGIN_DIR__/references/claude-prove-reference.md
+
 ### LLM-Optimized Coding Standards
 
 @references/llm-coding-standards.md

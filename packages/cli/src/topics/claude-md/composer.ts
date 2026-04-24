@@ -25,6 +25,17 @@ export const MANAGED_START = '<!-- prove:managed:start -->';
 export const MANAGED_END = '<!-- prove:managed:end -->';
 
 /**
+ * Plugin-level default references injected whenever prove is configured.
+ * Rendered before user-configured references (primacy). Deduped by path.
+ */
+export const PLUGIN_DEFAULT_REFERENCES: ReadonlyArray<ReferenceEntry> = [
+  {
+    path: '$PLUGIN_DIR/references/claude-prove-reference.md',
+    label: 'claude-prove CLI Reference',
+  },
+];
+
+/**
  * Compose CLAUDE.md from scan results.
  *
  * @param scan Output from {@link scanProject}.
@@ -74,9 +85,10 @@ export function compose(scan: ScanResult, pluginDir?: string): string {
     parts.push(renderToolDirectives(prove.tool_directives));
   }
 
-  // External references
-  if (prove.references.length > 0) {
-    parts.push(renderReferences(prove.references, resolvedPluginDir));
+  // References — plugin built-ins first, then user-configured (deduped by path)
+  const mergedRefs = mergeReferences(prove.exists, prove.references);
+  if (mergedRefs.length > 0) {
+    parts.push(renderReferences(mergedRefs, resolvedPluginDir));
   }
 
   // Prove commands (if prove is configured)
@@ -232,6 +244,22 @@ function renderToolDirectives(toolDirectives: ToolDirective[]): string {
     lines.push('');
   }
   return lines.join('\n');
+}
+
+/**
+ * Merge plugin built-ins with user-configured references.
+ *
+ * Built-ins come first (primacy positioning). A user entry with the same
+ * resolved path as a built-in is dropped — the built-in label wins. Comparison
+ * is on the raw path string (before `$PLUGIN_DIR` resolution) for safety; both
+ * forms match because built-ins use the `$PLUGIN_DIR/...` form that survives
+ * round-tripping through `/prove:update` feature-discovery.
+ */
+function mergeReferences(proveExists: boolean, userRefs: ReferenceEntry[]): ReferenceEntry[] {
+  if (!proveExists) return userRefs;
+  const builtInPaths = new Set(PLUGIN_DEFAULT_REFERENCES.map((r) => r.path));
+  const deduped = userRefs.filter((r) => !builtInPaths.has(r.path));
+  return [...PLUGIN_DEFAULT_REFERENCES, ...deduped];
 }
 
 function renderReferences(references: ReferenceEntry[], pluginDir: string): string {

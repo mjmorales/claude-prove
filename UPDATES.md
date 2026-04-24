@@ -64,6 +64,26 @@ Finishes the trailing consumers of the `prove` → `claude-prove` rename shipped
 
 - No end-user migration beyond re-running `scripts/install.sh` (or `claude-prove install upgrade` once the new binary is on PATH). The CI release-binary pipeline will self-heal on the next tag cut now that `build-release-binary` runs in-workflow.
 
+### Built-in CLI reference in the CLAUDE.md managed block
+
+The composer now injects `@$PLUGIN_DIR/references/claude-prove-reference.md` as a plugin-level default reference whenever `.claude/.prove.json` exists. The reference is a CLI-only cheat sheet (topics, actions, flags, canonical invocations) sized for always-on context (~1.7K tokens) and optimized via `llm-prompt-engineer` to maximize first-try invocation correctness.
+
+**Added**:
+
+- `references/claude-prove-reference.md` — `claude-prove` CLI reference covering all 14 topics, sized as an always-on CLAUDE.md import.
+- `PLUGIN_DEFAULT_REFERENCES` constant in `packages/cli/src/topics/claude-md/composer.ts`; `mergeReferences()` prepends built-ins and dedupes against user-configured references by path.
+
+**Changed**:
+
+- `packages/cli/src/topics/claude-md/composer.ts`: References section renders whenever `prove_config.exists` is true (previously required at least one user-configured reference).
+- `commands/init.md` Step 7 and `commands/update.md` Step 5: bundled-reference scans now exclude `claude-prove-reference.md` (it's a built-in, not opt-in).
+- Golden fixture `packages/cli/src/topics/claude-md/__fixtures__/golden/self-CLAUDE.md`: includes the built-in reference first in the References section.
+
+**Migration**:
+
+- Auto-adopted on next `/prove:update` (Step 8 regenerates CLAUDE.md). Manual: `claude-prove claude-md generate --project-root "$(pwd)" --plugin-dir "$PLUGIN_DIR"`.
+- If you previously added `claude-prove-reference.md` to your `.claude/.prove.json` by hand, the composer silently dedupes it — safe to leave or remove.
+
 ---
 
 ## v1.2.0 — CLI binary renamed to `claude-prove`

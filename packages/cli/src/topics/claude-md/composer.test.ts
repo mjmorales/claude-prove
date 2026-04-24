@@ -226,18 +226,47 @@ describe('references', () => {
     expect(r).not.toContain('$PLUGIN_DIR');
   });
 
-  test('no References section when empty', () => {
-    expect(compose(fullScan())).not.toContain('## References');
+  test('built-in CLI reference injected when prove exists and no user refs', () => {
+    const r = compose(fullScan(), '/opt/prove');
+    expect(r).toContain('## References');
+    expect(r).toContain('### claude-prove CLI Reference');
+    expect(r).toContain('@/opt/prove/references/claude-prove-reference.md');
   });
 
-  test('reference without label skips ### heading', () => {
+  test('built-in appears before user-configured references', () => {
+    const scan = fullScan();
+    scan.prove_config.references = [{ path: '~/.claude/user-ref.md', label: 'User Ref' }];
+    const r = compose(scan, '/opt/prove');
+    const builtInPos = r.indexOf('### claude-prove CLI Reference');
+    const userPos = r.indexOf('### User Ref');
+    expect(builtInPos).toBeGreaterThan(-1);
+    expect(userPos).toBeGreaterThan(-1);
+    expect(builtInPos).toBeLessThan(userPos);
+  });
+
+  test('duplicate built-in path in user references is deduped', () => {
+    const scan = fullScan();
+    scan.prove_config.references = [
+      { path: '$PLUGIN_DIR/references/claude-prove-reference.md', label: 'Duplicate Label' },
+    ];
+    const r = compose(scan, '/opt/prove');
+    expect(r).toContain('### claude-prove CLI Reference');
+    expect(r).not.toContain('### Duplicate Label');
+  });
+
+  test('no References section when prove is not configured', () => {
+    expect(compose(minimalScan())).not.toContain('## References');
+  });
+
+  test('reference without label skips ### heading for that entry', () => {
     const scan = fullScan();
     scan.prove_config.references = [{ path: '~/.claude/standards.md', label: '' }];
     const r = compose(scan);
     expect(r).toContain('## References');
     expect(r).toContain('@~/.claude/standards.md');
-    const refsSection = r.split('## References')[1].split('\n## ')[0];
-    expect(refsSection).not.toContain('###');
+    // Label-less user entry should render the @path without a preceding ### heading.
+    // (Built-in still has its own ### heading.)
+    expect(r).toMatch(/\n\n@~\/\.claude\/standards\.md\n/);
   });
 });
 

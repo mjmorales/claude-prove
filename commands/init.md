@@ -91,6 +91,8 @@ Collect candidates from two sources.
 
 Scan `$PLUGIN_DIR/references/` for `.md` files. Use `$PLUGIN_DIR` as the path variable so references resolve regardless of install location.
 
+**Exclude built-in defaults**: skip `claude-prove-reference.md` — the composer injects it automatically when prove is configured. Offering it here would create duplicate `### claude-prove CLI Reference` entries (dedup removes the user-configured copy, but surfacing it confuses the user).
+
 #### Source 2: User's global CLAUDE.md
 
 Read `~/.claude/CLAUDE.md` (skip if missing). Parse lines starting with `@` — extract the file path. Derive labels from filenames: strip extension, replace hyphens/underscores with spaces, title-case.

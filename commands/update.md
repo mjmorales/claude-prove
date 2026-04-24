@@ -60,7 +60,7 @@ Creates `.claude/.prove.<timestamp>.bak` backup.
 
 Check for plugin capabilities not yet configured in `.claude/.prove.json`:
 
-1. **External references**: If `claude_md.references` is absent or empty, scan `$PLUGIN_DIR/references/` for bundled `.md` files. Extract labels from first `# Heading` line (fall back to filename sans extension).
+1. **External references**: If `claude_md.references` is absent or empty, scan `$PLUGIN_DIR/references/` for bundled `.md` files. Extract labels from first `# Heading` line (fall back to filename sans extension). **Exclude `claude-prove-reference.md`** — the composer injects it as a built-in default; offering it here would create a duplicate the dedup logic silently drops.
 
    ```
    New plugin feature: External References
