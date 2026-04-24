@@ -81,7 +81,13 @@ function freshConfig(detected: StoredValidator[]): ProveConfig {
  */
 function mergeWithExisting(path: string, detected: StoredValidator[]): ProveConfig {
   const raw = readFileSync(path, 'utf8');
-  const existing = JSON.parse(raw) as Record<string, unknown>;
+  let existing: Record<string, unknown>;
+  try {
+    existing = JSON.parse(raw) as Record<string, unknown>;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to parse existing .prove.json — file may be corrupt: ${msg}`);
+  }
 
   const existingValidators = Array.isArray(existing.validators)
     ? (existing.validators as StoredValidator[])
@@ -100,11 +106,13 @@ function mergeWithExisting(path: string, detected: StoredValidator[]): ProveConf
 }
 
 /**
- * Atomic write: marshal to a sibling `.tmp`, then rename. Avoids leaving
- * a half-written config behind if the process dies mid-write.
+ * Atomic write: marshal to a sibling pid-scoped tmp file, then rename.
+ * Avoids leaving a half-written config behind if the process dies
+ * mid-write; pid suffix prevents concurrent bootstraps from racing on
+ * the same tmp path.
  */
 function writeAtomic(path: string, config: ProveConfig): void {
-  const tmp = `${path}.tmp`;
+  const tmp = `${path}.tmp.${process.pid}`;
   writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`);
   renameSync(tmp, path);
 }

@@ -155,22 +155,17 @@ function buildCommand(prefix: string, suffix: string): string {
  * Build the canonical hook entry for a spec. Construction order mirrors the
  * current `.claude/settings.json` so JSON.stringify preserves the same key
  * order: `type`, optional `if`, `command`, `timeout`.
+ *
+ * Convention: when `spec.if` is undefined, the `if` key is omitted from the
+ * emitted object entirely (no `if: undefined` slot). Consumers must probe
+ * with `'if' in entry`, not `entry.if === undefined`.
  */
 function buildHookEntry(spec: ProveHookSpec, prefix: string): HookEntry {
-  const entry: HookEntry =
-    spec.if !== undefined
-      ? {
-          type: 'command',
-          if: spec.if,
-          command: buildCommand(prefix, spec.commandSuffix),
-          timeout: spec.timeout,
-        }
-      : {
-          type: 'command',
-          command: buildCommand(prefix, spec.commandSuffix),
-          timeout: spec.timeout,
-        };
-  return entry;
+  const command = buildCommand(prefix, spec.commandSuffix);
+  if (spec.if !== undefined) {
+    return { type: 'command', if: spec.if, command, timeout: spec.timeout };
+  }
+  return { type: 'command', command, timeout: spec.timeout };
 }
 
 /** Build the canonical block object for a spec. Keeps key order stable. */
@@ -277,13 +272,6 @@ export function writeSettingsHooks(
   const serialized = `${JSON.stringify(settings, null, 2)}\n`;
   const tmp = `${settingsPath}.tmp`;
   writeFileSync(tmp, serialized, 'utf8');
-  // Sanity re-parse before rename: if we somehow produced invalid JSON we
-  // want to fail loud rather than overwrite the real file.
-  try {
-    JSON.parse(serialized);
-  } catch (err) {
-    throw new SettingsParseError(tmp, err as Error);
-  }
   renameSync(tmp, settingsPath);
   return true;
 }
