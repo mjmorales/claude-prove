@@ -111,6 +111,11 @@ describe('acb domain registration', () => {
           version: 2,
           description: 'create acb_group_verdicts (absorb review-ui group_verdicts)',
         },
+        {
+          domain: 'acb',
+          version: 3,
+          description: 'normalize acb_group_verdicts.verdict to canonical VerdictValue vocabulary',
+        },
       ]);
     } finally {
       raw.close();
@@ -148,7 +153,7 @@ describe('acb domain registration', () => {
     try {
       const first = runMigrations(raw);
       const firstAcb = first.applied.filter((a) => a.domain === 'acb');
-      expect(firstAcb.map((a) => a.version)).toEqual([1, 2]);
+      expect(firstAcb.map((a) => a.version)).toEqual([1, 2, 3]);
 
       const second = runMigrations(raw);
       expect(second.applied.filter((a) => a.domain === 'acb')).toEqual([]);
@@ -157,7 +162,7 @@ describe('acb domain registration', () => {
         'SELECT version FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['acb'],
       );
-      expect(versions).toEqual([{ version: 1 }, { version: 2 }]);
+      expect(versions).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
     } finally {
       raw.close();
     }
@@ -220,11 +225,14 @@ describe('acb domain registration', () => {
                  ('my-slug', 'g2', 'rework', 'needs tests', 'Do X', '2026-01-02T00:00:00Z');
       `);
 
-      // Now run the v2 migration (via the registered schema).
+      // Now run the pending migrations (v2 backfill + v3 verdict normalization).
       const result = runMigrations(raw);
-      expect(result.applied.filter((a) => a.domain === 'acb').map((a) => a.version)).toEqual([2]);
+      expect(result.applied.filter((a) => a.domain === 'acb').map((a) => a.version)).toEqual([
+        2, 3,
+      ]);
 
-      // Legacy table gone, new table carries the rows verbatim.
+      // Legacy table gone, new table carries the rows — with v3 normalizing
+      // the legacy `'approved'` string to the canonical `'accepted'`.
       const legacyExists = raw.all<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'group_verdicts'",
       );
@@ -244,7 +252,7 @@ describe('acb domain registration', () => {
         {
           slug: 'my-slug',
           group_id: 'g1',
-          verdict: 'approved',
+          verdict: 'accepted',
           note: 'lgtm',
           fix_prompt: null,
           updated_at: '2026-01-01T00:00:00Z',
@@ -294,10 +302,10 @@ describe('AcbStore: group verdicts', () => {
   });
 
   test('upsertGroupVerdict insert round-trips through listGroupVerdicts', () => {
-    const rec = store.upsertGroupVerdict('my-slug', 'g1', 'approved', 'lgtm', null);
+    const rec = store.upsertGroupVerdict('my-slug', 'g1', 'accepted', 'lgtm', null);
     expect(rec.slug).toBe('my-slug');
     expect(rec.groupId).toBe('g1');
-    expect(rec.verdict).toBe('approved');
+    expect(rec.verdict).toBe('accepted');
     expect(rec.note).toBe('lgtm');
     expect(rec.fixPrompt).toBeNull();
     expect(typeof rec.updatedAt).toBe('string');
@@ -308,7 +316,7 @@ describe('AcbStore: group verdicts', () => {
   });
 
   test('upsertGroupVerdict updates on conflict (slug, groupId)', () => {
-    store.upsertGroupVerdict('my-slug', 'g1', 'approved', 'lgtm', null);
+    store.upsertGroupVerdict('my-slug', 'g1', 'accepted', 'lgtm', null);
     const updated = store.upsertGroupVerdict(
       'my-slug',
       'g1',
@@ -325,7 +333,7 @@ describe('AcbStore: group verdicts', () => {
   });
 
   test('clearGroupVerdict deletes the row; no-op when absent', () => {
-    store.upsertGroupVerdict('my-slug', 'g1', 'approved', null, null);
+    store.upsertGroupVerdict('my-slug', 'g1', 'accepted', null, null);
     store.clearGroupVerdict('my-slug', 'g1');
     expect(store.listGroupVerdicts('my-slug')).toEqual([]);
     // Idempotent: second clear throws nothing.
@@ -333,11 +341,11 @@ describe('AcbStore: group verdicts', () => {
   });
 
   test('listGroupVerdicts is slug-scoped', () => {
-    store.upsertGroupVerdict('slug-a', 'g1', 'approved', null, null);
+    store.upsertGroupVerdict('slug-a', 'g1', 'accepted', null, null);
     store.upsertGroupVerdict('slug-b', 'g1', 'rejected', null, null);
     const rowsA = store.listGroupVerdicts('slug-a');
     expect(rowsA).toHaveLength(1);
-    expect(rowsA[0].verdict).toBe('approved');
+    expect(rowsA[0].verdict).toBe('accepted');
   });
 });
 

@@ -8,11 +8,15 @@ import {
 } from "../acb.js";
 import { parseRunKey } from "../parsers.js";
 
+// Canonical `VerdictValue` vocabulary (see `@claude-prove/cli/acb/schemas`).
+// Clients are expected to post canonical strings; legacy aliases (`approved`,
+// `discuss`) are NOT accepted here — the one-way migration lives at the DB
+// read boundary (`coerceLegacyVerdict`), not the HTTP ingress.
 const ALLOWED: ReadonlySet<GroupVerdict> = new Set([
   "pending",
-  "approved",
+  "accepted",
   "rejected",
-  "discuss",
+  "needs_discussion",
   "rework",
 ]);
 
@@ -124,7 +128,7 @@ export function registerReviewRoutes(app: FastifyInstance, repoRoot: string) {
         repoRoot,
         key.composite,
         groupId,
-        "discuss",
+        "needs_discussion",
         note,
         null,
       );

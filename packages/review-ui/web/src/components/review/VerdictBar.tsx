@@ -2,10 +2,12 @@ import { VERDICTS } from "./verdictTokens";
 import type { GroupVerdict } from "../../lib/api";
 import { cn } from "../../lib/cn";
 
-const ORDER: Array<"approved" | "rejected" | "discuss" | "rework"> = [
-  "approved",
+type DecidedVerdict = Exclude<GroupVerdict, "pending">;
+
+const ORDER: DecidedVerdict[] = [
+  "accepted",
   "rejected",
-  "discuss",
+  "needs_discussion",
   "rework",
 ];
 
@@ -18,7 +20,7 @@ export function VerdictBar({
 }: {
   current: GroupVerdict;
   flashing: GroupVerdict | null;
-  onPick: (v: "approved" | "rejected" | "discuss" | "rework") => void;
+  onPick: (v: DecidedVerdict) => void;
   onUndo: () => void;
   canUndo: boolean;
 }) {

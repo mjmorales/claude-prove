@@ -104,9 +104,9 @@ function staleHintFor(item: QueueItem): string {
 
 function verdictShort(v: QueueItem["verdict"]): string {
   const map: Record<QueueItem["verdict"], string> = {
-    approved: "approval",
+    accepted: "approval",
     rejected: "rejection",
-    discuss: "discuss",
+    needs_discussion: "discuss",
     rework: "rework",
     pending: "verdict",
   };

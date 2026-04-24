@@ -1,6 +1,6 @@
 import { cn } from "../../lib/cn";
 import type { GroupVerdict, IntentGroupView } from "../../lib/api";
-import { tokenOf, VERDICTS } from "./verdictTokens";
+import { PALETTE, tokenOf, VERDICTS } from "./verdictTokens";
 import { VerdictStamp } from "./VerdictStamp";
 import { InlineDiff } from "./InlineDiff";
 
@@ -100,7 +100,7 @@ export function GroupCard({
                 <span title="Commits">{group.commits.length}c</span>
                 <span title="Files">{group.files.length}f</span>
                 <span
-                  style={{ color: judgmentCalls.length > 0 ? "#f1fa8c" : undefined }}
+                  style={{ color: judgmentCalls.length > 0 ? PALETTE.accent.judgment : undefined }}
                   title="Judgement calls"
                 >
                   {judgmentCalls.length}⚖
@@ -141,11 +141,14 @@ export function GroupCard({
             {note && (
               <div
                 className="mt-3 px-3 py-2 text-[12.5px] font-mono border-l-2 rounded-r-md bg-bg-deep/60"
-                style={{ borderColor: t?.color ?? "#44475a", color: t?.color ?? "#a9b0c4" }}
+                style={{
+                  borderColor: t?.color ?? PALETTE.surface.border,
+                  color: t?.color ?? PALETTE.accent.neutral,
+                }}
               >
                 <span
                   className="mr-2 text-[11px] font-sans"
-                  style={{ color: t?.color ?? "#a9b0c4" }}
+                  style={{ color: t?.color ?? PALETTE.accent.neutral }}
                 >
                   Reviewer note:
                 </span>
@@ -156,7 +159,7 @@ export function GroupCard({
 
           {/* Verdict CTA strip — per-intent, always visible at the top. */}
           <div className="px-5 pb-3 flex items-center gap-2 flex-wrap">
-            {(["approved", "rejected", "discuss", "rework"] as const).map((k) => {
+            {(["accepted", "rejected", "needs_discussion", "rework"] as const).map((k) => {
               const spec = VERDICTS[k];
               const active = verdict === k;
               const busy = working === k;
@@ -217,7 +220,7 @@ export function GroupCard({
 
           {diffOpen && endBase && endHead && group.fileRefs.length > 0 && (
             <div className="space-y-3">
-              {group.fileRefs.map((ref) => (
+              {group.fileRefs.map((ref, fileIndex) => (
                 <FileSection
                   key={ref.path}
                   ref_={ref}
@@ -225,7 +228,9 @@ export function GroupCard({
                   endBase={endBase}
                   endHead={endHead}
                   annotations={group.annotations.filter(
-                    (a) => isAnchored(a.body) && annotationMatchesFile(a, ref.path),
+                    (a) =>
+                      isAnchored(a.body) &&
+                      annotationMatchesFile(a, ref.path, fileIndex === 0),
                   )}
                 />
               ))}
@@ -266,16 +271,18 @@ function isAnchored(body: string): boolean {
 }
 
 /** Match an annotation to a file. We support an optional `@file:<path> @L…:`
- *  prefix; when absent we fall back to matching the annotation id against
- *  the path (e.g. `ANN-span-1` ↔ `span.go`). */
+ *  prefix; when absent we fall back to rendering the annotation only on the
+ *  canonical (first) file of the group so un-prefixed annotations don't get
+ *  broadcast to every file section. */
 function annotationMatchesFile(
   ann: { id: string; body: string },
   filePath: string,
+  isCanonicalFile: boolean,
 ): boolean {
   const fileMatch = /^@file:(\S+)\s/.exec(ann.body.trimStart());
   if (fileMatch) return filePath.endsWith(fileMatch[1]);
   // Loose heuristic: put annotation on the first file when ids are generic.
-  return true;
+  return isCanonicalFile;
 }
 
 function FileSection({
@@ -327,10 +334,10 @@ function AnchoredAnnotation({
   const body = m ? m[3] : annotation.body;
   const color =
     annotation.type === "judgment_call"
-      ? "#f1fa8c"
+      ? PALETTE.accent.judgment
       : annotation.type === "flag"
-        ? "#ff5555"
-        : "#a9b0c4";
+        ? PALETTE.verdict.rejected
+        : PALETTE.accent.neutral;
   return (
     <div
       className="flex gap-2.5 text-[12.5px] font-mono"
@@ -361,10 +368,14 @@ function AnnotationSummary({
   return (
     <div className="space-y-3">
       {judgmentCalls.length > 0 && (
-        <AnnotationList title="Judgement calls" color="#f1fa8c" items={judgmentCalls} />
+        <AnnotationList title="Judgement calls" color={PALETTE.accent.judgment} items={judgmentCalls} />
       )}
-      {flags.length > 0 && <AnnotationList title="Flags" color="#ff5555" items={flags} />}
-      {notes.length > 0 && <AnnotationList title="Notes" color="#a9b0c4" items={notes} />}
+      {flags.length > 0 && (
+        <AnnotationList title="Flags" color={PALETTE.verdict.rejected} items={flags} />
+      )}
+      {notes.length > 0 && (
+        <AnnotationList title="Notes" color={PALETTE.accent.neutral} items={notes} />
+      )}
     </div>
   );
 }
@@ -414,12 +425,12 @@ function cssId(path: string): string {
 function ClassificationBadge({ classification }: { classification: string }) {
   const c = classification.toLowerCase();
   const map: Record<string, { label: string; color: string }> = {
-    explicit: { label: "Explicit", color: "#bd93f9" },
-    inferred: { label: "Inferred", color: "#8be9fd" },
-    speculative: { label: "Speculative", color: "#ffb86c" },
-    implicit: { label: "No manifest", color: "#ff5555" },
+    explicit: { label: "Explicit", color: PALETTE.classification.explicit },
+    inferred: { label: "Inferred", color: PALETTE.classification.inferred },
+    speculative: { label: "Speculative", color: PALETTE.classification.speculative },
+    implicit: { label: "No manifest", color: PALETTE.classification.implicit },
   };
-  const spec = map[c] ?? { label: classification, color: "#e2e2e6" };
+  const spec = map[c] ?? { label: classification, color: PALETTE.accent.bright };
   return (
     <span
       className="px-2 py-[2px] text-[11px] font-medium rounded-md border"
@@ -445,13 +456,13 @@ const AMBIGUITY_LABELS: Record<string, string> = {
 function AmbiguityChip({ tag }: { tag: string }) {
   const label = AMBIGUITY_LABELS[tag] ?? tag;
   const hot = tag === "scope_creep" || tag === "conflicting_signals";
-  const color = hot ? "#ffb86c" : "#a9b0c4";
+  const color = hot ? PALETTE.ambiguity.hot : PALETTE.ambiguity.cold;
   return (
     <span
       className="px-2 py-[2px] text-[10.5px] font-medium rounded-md border"
       style={{
         color,
-        borderColor: hot ? `${color}55` : "#44475a",
+        borderColor: hot ? `${color}55` : PALETTE.surface.border,
         background: hot ? `${color}14` : "transparent",
       }}
     >
@@ -470,7 +481,12 @@ function RiskBar({
   inferred: boolean;
 }) {
   const level = risky ? 3 : inferred ? 2 : 1;
-  const color = level === 3 ? "#ffb86c" : level === 2 ? "#8be9fd" : "#50fa7b";
+  const color =
+    level === 3
+      ? PALETTE.verdict.rework
+      : level === 2
+        ? PALETTE.verdict.needsDiscussion
+        : PALETTE.verdict.accepted;
   const name = classification.charAt(0).toUpperCase() + classification.slice(1);
   return (
     <div>
@@ -482,7 +498,7 @@ function RiskBar({
           <span
             key={i}
             className="inline-block h-[4px] w-5 rounded-full"
-            style={{ background: i <= level ? color : "#44475a" }}
+            style={{ background: i <= level ? color : PALETTE.surface.border }}
           />
         ))}
       </div>

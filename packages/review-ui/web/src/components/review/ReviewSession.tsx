@@ -81,9 +81,9 @@ export function ReviewSession() {
 
   const tally = useMemo(() => {
     const base: Record<VerdictKey, number> = {
-      approved: 0,
+      accepted: 0,
       rejected: 0,
-      discuss: 0,
+      needs_discussion: 0,
       rework: 0,
     };
     for (const v of verdicts) {
@@ -171,7 +171,7 @@ export function ReviewSession() {
   const submitDiscuss = useCallback(
     async (note: string) => {
       if (!current || !slug) return;
-      setSubmitting("discuss");
+      setSubmitting("needs_discussion");
       try {
         await api.submitDiscuss(slug, current.id, note);
         invalidateReview();
@@ -264,7 +264,7 @@ export function ReviewSession() {
           break;
         case "a":
           e.preventDefault();
-          if (!submitting) submitVerdict("approved");
+          if (!submitting) submitVerdict("accepted");
           break;
         case "r":
           e.preventDefault();
@@ -443,7 +443,7 @@ export function ReviewSession() {
                 endBase={intentsQ.data?.endBase ?? null}
                 endHead={intentsQ.data?.endHead ?? null}
                 onVerdict={(v) => {
-                  if (v === "discuss") {
+                  if (v === "needs_discussion") {
                     setDiscussOpen(true);
                     return;
                   }
@@ -534,7 +534,7 @@ export function ReviewSession() {
       <DiscussDrawer
         open={discussOpen}
         groupTitle={current?.title ?? ""}
-        initial={currentVerdict === "discuss" ? currentNote ?? "" : ""}
+        initial={currentVerdict === "needs_discussion" ? currentNote ?? "" : ""}
         onCancel={() => setDiscussOpen(false)}
         onSubmit={submitDiscuss}
       />

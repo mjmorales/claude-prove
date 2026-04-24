@@ -35,6 +35,7 @@ import {
   registerSchema,
   runMigrations,
 } from '@claude-prove/store';
+import type { VerdictValue } from './schemas';
 
 // ---------------------------------------------------------------------------
 // Schema registration
@@ -99,6 +100,22 @@ CREATE INDEX IF NOT EXISTS idx_acb_group_verdicts_slug ON acb_group_verdicts(slu
 `;
 
 /**
+ * v3: normalize `acb_group_verdicts.verdict` to the canonical `VerdictValue`
+ * vocabulary from `./schemas.ts`. Pre-v3 builds wrote UI-native strings
+ * (`'approved'`, `'discuss'`); this migration rewrites them in place so
+ * every reader sees a single dialect. `'rework'`, `'rejected'`, `'pending'`
+ * pass through unchanged — the mapping is append-only.
+ *
+ * `coerceLegacyVerdict` below is the runtime belt-and-braces companion:
+ * if a concurrent writer lands a legacy value between migration runs, the
+ * read path still normalizes it before returning to callers.
+ */
+const ACB_MIGRATION_V3_SQL = `
+UPDATE acb_group_verdicts SET verdict = 'accepted'         WHERE verdict = 'approved';
+UPDATE acb_group_verdicts SET verdict = 'needs_discussion' WHERE verdict = 'discuss';
+`;
+
+/**
  * Idempotent acb-domain registration. Safe to call from module side-effect
  * AND from tests that previously hit `clearRegistry()` — both paths land
  * a single acb/v1 entry. The guard exists because other test files in the
@@ -140,6 +157,13 @@ export function ensureAcbSchemaRegistered(): void {
           }
         },
       },
+      {
+        version: 3,
+        description: 'normalize acb_group_verdicts.verdict to canonical VerdictValue vocabulary',
+        up: (db: Database) => {
+          db.exec(ACB_MIGRATION_V3_SQL);
+        },
+      },
     ],
   });
 }
@@ -156,8 +180,31 @@ export interface CleanBranchCounts {
   acb_review_state: number;
 }
 
-/** Review-UI verdict value set. Matches the string enum the HTTP API accepts. */
-export type GroupVerdict = 'pending' | 'approved' | 'rejected' | 'discuss' | 'rework';
+/**
+ * Allow-list of every acb-domain table the store manages. `deleteBranchRows`
+ * checks incoming table names against this set before interpolating them
+ * into SQL — table identifiers can't be parameterized in SQLite, so this
+ * closes the latent injection path that naked string concatenation opens.
+ * Keep in sync with the acb migrations above.
+ */
+const ACB_TABLES = new Set<string>([
+  'acb_manifests',
+  'acb_acb_documents',
+  'acb_review_state',
+  'acb_group_verdicts',
+]);
+
+/**
+ * Review-UI verdict value set — alias for the canonical `VerdictValue` from
+ * `./schemas.ts`. The alias is kept so call sites that reason about the
+ * review-UI's DB contract still read idiomatically, but the underlying
+ * vocabulary is the same one the manifest schema validator uses.
+ *
+ * Legacy persisted values (`'approved'`, `'discuss'`) are remapped via
+ * `coerceLegacyVerdict` below on every DB read, and migration v3 rewrites
+ * stored rows in place — so new code never observes a non-canonical value.
+ */
+export type GroupVerdict = VerdictValue;
 
 export interface GroupVerdictRecord {
   slug: string;
@@ -166,6 +213,29 @@ export interface GroupVerdictRecord {
   note: string | null;
   fixPrompt: string | null;
   updatedAt: string;
+}
+
+/**
+ * Normalize a verdict string read from the DB to canonical `VerdictValue`.
+ * Handles legacy values (`'approved'` → `'accepted'`, `'discuss'` →
+ * `'needs_discussion'`) written by pre-v3 review-UI builds. Unknown strings
+ * fall through as-is and are surfaced to callers unchanged — the type
+ * assertion at the call site narrows them.
+ *
+ * Runtime complement to migration v3: when the DB file is at v2 (older
+ * installs on first boot after upgrade) the migration has already run by
+ * the time reads happen, but this helper also catches any value that
+ * slipped in via a race between migration and a concurrent writer.
+ */
+export function coerceLegacyVerdict(raw: string): GroupVerdict {
+  switch (raw) {
+    case 'approved':
+      return 'accepted';
+    case 'discuss':
+      return 'needs_discussion';
+    default:
+      return raw as GroupVerdict;
+  }
 }
 
 /**
@@ -370,7 +440,7 @@ export class AcbStore {
     return rows.map((r) => ({
       slug: r.slug,
       groupId: r.group_id,
-      verdict: r.verdict as GroupVerdict,
+      verdict: coerceLegacyVerdict(r.verdict),
       note: r.note,
       fixPrompt: r.fix_prompt,
       updatedAt: r.updated_at,
@@ -439,11 +509,15 @@ export class AcbStore {
 
   /**
    * Execute `DELETE FROM <table> WHERE branch = ?` and return changes.
-   * `table` is a hard-coded identifier from `cleanBranch`; the value is
-   * never user-controlled, so inlining it avoids the ? placeholder
-   * semantics of table names.
+   * `table` must be a member of `ACB_TABLES`; this constraint defeats any
+   * future refactor that might route user-derived strings into this path
+   * (SQLite does not allow parameterizing table identifiers, so the name
+   * has to be interpolated).
    */
   private deleteBranchRows(table: string, branch: string): number {
+    if (!ACB_TABLES.has(table)) {
+      throw new Error(`deleteBranchRows: unknown acb table "${table}"`);
+    }
     const db = this.store.getDb();
     const stmt = db.prepare<unknown, [string]>(`DELETE FROM ${table} WHERE branch = ?`);
     const result = stmt.run(branch);

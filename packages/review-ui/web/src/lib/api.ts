@@ -16,7 +16,15 @@ export type TaskStatus = "pending" | "in_progress" | "completed" | "failed" | "h
 export type RunStatus = "pending" | "running" | "completed" | "failed" | "halted";
 export type ReviewVerdict = "pending" | "approved" | "rejected" | "n/a";
 
-export type GroupVerdict = "pending" | "approved" | "rejected" | "discuss" | "rework";
+// Canonical review-UI verdict vocabulary. Mirrors `VerdictValue` in
+// `packages/cli/src/topics/acb/schemas.ts`. Legacy dialect values
+// (`approved`, `discuss`) are coerced at the DB read boundary on the server.
+export type GroupVerdict =
+  | "pending"
+  | "accepted"
+  | "rejected"
+  | "needs_discussion"
+  | "rework";
 
 export type AnnotationType = "judgment_call" | "note" | "flag";
 export type IntentAnnotation = {

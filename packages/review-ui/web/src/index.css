@@ -497,7 +497,7 @@
       0 1px 0 rgba(255, 255, 255, 0.03),
       0 14px 32px -18px rgba(0, 0, 0, 0.6);
   }
-  .card-approved {
+  .card-accepted {
     box-shadow:
       inset 4px 0 0 0 #50fa7b,
       0 14px 32px -18px rgba(80, 250, 123, 0.2);
@@ -507,7 +507,7 @@
       inset 4px 0 0 0 #ff5555,
       0 14px 32px -18px rgba(255, 85, 85, 0.2);
   }
-  .card-discuss {
+  .card-needs-discussion {
     box-shadow:
       inset 4px 0 0 0 #8be9fd,
       0 14px 32px -18px rgba(139, 233, 253, 0.18);

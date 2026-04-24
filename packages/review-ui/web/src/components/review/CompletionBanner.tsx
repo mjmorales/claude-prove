@@ -10,6 +10,8 @@ export function CompletionBanner({
   tally: Record<Exclude<GroupVerdict, "pending">, number>;
   onExit: () => void;
 }) {
+  // `rejected` here tallies both hard rejections and rework requests —
+  // both indicate work the user flagged as not ready to merge as-is.
   const rejected = tally.rejected + tally.rework;
   const clean = rejected === 0;
   const statusColor = clean ? "#50fa7b" : "#ffb86c";

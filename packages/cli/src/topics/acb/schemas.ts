@@ -40,7 +40,27 @@ export const NEGATIVE_SPACE_REASONS = [
   'would_require_escalation',
 ] as const;
 
-export const VERDICT_VALUES = ['accepted', 'rejected', 'needs_discussion', 'pending'] as const;
+/**
+ * Canonical verdict vocabulary. Used both by the on-disk manifest schema
+ * (Python-compatible, mirrors `tools/acb/schemas.py`) AND by the review-UI's
+ * live `acb_group_verdicts` DB table via `GroupVerdict` in `./store.ts`.
+ *
+ * `'rework'` is an extension beyond the Python manifest schema — it
+ * represents a review-UI-only state where the group is rejected with a
+ * generated fix brief. The Python manifest validator tolerates it because
+ * `isVerdictValue` here is the single source of truth.
+ *
+ * Legacy values written by earlier TS builds (`'approved'`, `'discuss'`)
+ * are coerced to canonical at the DB read boundary via
+ * `coerceLegacyVerdict` in `./store.ts`; do not add them back here.
+ */
+export const VERDICT_VALUES = [
+  'accepted',
+  'rejected',
+  'needs_discussion',
+  'pending',
+  'rework',
+] as const;
 
 export const OVERALL_VERDICTS = ['approved', 'changes_requested', 'pending'] as const;
 

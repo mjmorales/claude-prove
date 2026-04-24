@@ -43,11 +43,11 @@ afterEach(() => {
 
 describe('verdict round-trip on a fresh db', () => {
   test('upsert → list returns the written record', () => {
-    const rec = upsertVerdict(repoRoot, 'my-slug', 'g1', 'approved', 'lgtm', null);
+    const rec = upsertVerdict(repoRoot, 'my-slug', 'g1', 'accepted', 'lgtm', null);
     expect(rec).toMatchObject({
       slug: 'my-slug',
       groupId: 'g1',
-      verdict: 'approved',
+      verdict: 'accepted',
       note: 'lgtm',
       fixPrompt: null,
     });
@@ -59,7 +59,7 @@ describe('verdict round-trip on a fresh db', () => {
   });
 
   test('upsert twice on the same (slug, groupId) overwrites', () => {
-    upsertVerdict(repoRoot, 'my-slug', 'g1', 'approved', null, null);
+    upsertVerdict(repoRoot, 'my-slug', 'g1', 'accepted', null, null);
     const updated = upsertVerdict(
       repoRoot,
       'my-slug',
@@ -77,7 +77,7 @@ describe('verdict round-trip on a fresh db', () => {
   });
 
   test('clearVerdict removes the row; subsequent clear is a no-op', () => {
-    upsertVerdict(repoRoot, 'my-slug', 'g1', 'approved', null, null);
+    upsertVerdict(repoRoot, 'my-slug', 'g1', 'accepted', null, null);
     clearVerdict(repoRoot, 'my-slug', 'g1');
     expect(listVerdicts(repoRoot, 'my-slug')).toEqual([]);
     // Idempotent: no throw on a fresh slate.
@@ -85,19 +85,19 @@ describe('verdict round-trip on a fresh db', () => {
   });
 
   test('verdicts are scoped by slug', () => {
-    upsertVerdict(repoRoot, 'slug-a', 'g1', 'approved', null, null);
+    upsertVerdict(repoRoot, 'slug-a', 'g1', 'accepted', null, null);
     upsertVerdict(repoRoot, 'slug-b', 'g1', 'rejected', null, null);
     const a = listVerdicts(repoRoot, 'slug-a');
     const b = listVerdicts(repoRoot, 'slug-b');
     expect(a).toHaveLength(1);
-    expect(a[0].verdict).toBe('approved');
+    expect(a[0].verdict).toBe('accepted');
     expect(b).toHaveLength(1);
     expect(b[0].verdict).toBe('rejected');
   });
 
   test('first verdict write auto-creates .prove/prove.db', () => {
     expect(existsSync(join(repoRoot, '.prove/prove.db'))).toBe(false);
-    upsertVerdict(repoRoot, 'my-slug', 'g1', 'approved', null, null);
+    upsertVerdict(repoRoot, 'my-slug', 'g1', 'accepted', null, null);
     expect(existsSync(join(repoRoot, '.prove/prove.db'))).toBe(true);
   });
 });
@@ -161,14 +161,16 @@ describe('legacy group_verdicts backfill', () => {
     `);
     db.close();
 
-    // First call through the adapter triggers the v2 migration. The
-    // legacy row should appear in the listing under the new table.
+    // First call through the adapter triggers the v2 backfill (legacy
+    // `group_verdicts` → `acb_group_verdicts`) and the v3 normalization
+    // (`'approved'` → canonical `'accepted'`). The legacy row should
+    // appear in the listing under the new table with the canonical verdict.
     const rows = listVerdicts(repoRoot, 'pre-phase-11');
     expect(rows).toHaveLength(1);
     expect(rows[0]).toEqual({
       slug: 'pre-phase-11',
       groupId: 'g1',
-      verdict: 'approved',
+      verdict: 'accepted',
       note: 'carryover',
       fixPrompt: null,
       updatedAt: '2026-01-01T00:00:00Z',

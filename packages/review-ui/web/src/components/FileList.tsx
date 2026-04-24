@@ -6,12 +6,14 @@ import { cn } from "../lib/cn";
 import { parseUnifiedDiff } from "../lib/diff";
 import { PanelLoading } from "./PanelLoading";
 import { FileTree } from "./FileTree";
+import { Empty } from "./Empty";
+import { PALETTE } from "./review/verdictTokens";
 
 type ChangeFilter = "A" | "M" | "D";
 const CHANGE_FILTERS: Array<{ key: ChangeFilter; label: string; color: string }> = [
-  { key: "A", label: "Added", color: "#50fa7b" },
-  { key: "M", label: "Modified", color: "#8be9fd" },
-  { key: "D", label: "Deleted", color: "#ff5555" },
+  { key: "A", label: "Added", color: PALETTE.status.added },
+  { key: "M", label: "Modified", color: PALETTE.status.modified },
+  { key: "D", label: "Deleted", color: PALETTE.status.deleted },
 ];
 
 function applyFilters(
@@ -253,9 +255,9 @@ function FilterChip({
       onClick={onClick}
       className="h-6 px-2 rounded-md border text-[11.5px] transition-colors"
       style={{
-        borderColor: active ? color : "#44475a",
+        borderColor: active ? color : PALETTE.surface.border,
         background: active ? `${color}20` : "transparent",
-        color: active ? color : "#a9b0c4",
+        color: active ? color : PALETTE.accent.neutral,
       }}
     >
       {label}
@@ -400,9 +402,9 @@ function Badge({ status }: { status: string }) {
 }
 
 function toneHex(t: "phos" | "amber" | "data"): string {
-  if (t === "phos") return "#bd93f9";
-  if (t === "amber") return "#ffb86c";
-  return "#8be9fd";
+  if (t === "phos") return PALETTE.accent.phos;
+  if (t === "amber") return PALETTE.verdict.rework;
+  return PALETTE.verdict.needsDiscussion;
 }
 
 function fractionPct(num: number, total: number): number {
@@ -444,6 +446,3 @@ function extractPendingFiles(patch: string): FileChange[] {
   return files;
 }
 
-function Empty({ text }: { text: string }) {
-  return <div className="flex h-full items-center justify-center text-fg-dim text-[13px]">{text}</div>;
-}

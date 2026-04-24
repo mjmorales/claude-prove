@@ -96,7 +96,13 @@ describe('enum tuples', () => {
   });
 
   test('VERDICT_VALUES', () => {
-    expect(VERDICT_VALUES).toEqual(['accepted', 'rejected', 'needs_discussion', 'pending']);
+    expect(VERDICT_VALUES).toEqual([
+      'accepted',
+      'rejected',
+      'needs_discussion',
+      'pending',
+      'rework',
+    ]);
   });
 
   test('OVERALL_VERDICTS', () => {

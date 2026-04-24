@@ -4,14 +4,18 @@ import { api, type GroupVerdict } from "../lib/api";
 import { useSelection } from "../lib/store";
 import { useConnection } from "../hooks/useConnection";
 import { cn } from "../lib/cn";
+import { PALETTE } from "./review/verdictTokens";
 
 type VerdictKey = Exclude<GroupVerdict, "pending">;
 
+// Labels diverge from the canonical verdict tokens ("Approved" past-tense vs
+// "Approve" imperative in VERDICTS). Colors are sourced from PALETTE to keep
+// the palette single-source.
 const VERDICT_META: Record<VerdictKey, { label: string; color: string }> = {
-  approved: { label: "Approved", color: "#50fa7b" },
-  rejected: { label: "Rejected", color: "#ff5555" },
-  discuss: { label: "Discuss", color: "#8be9fd" },
-  rework: { label: "Rework", color: "#ffb86c" },
+  accepted: { label: "Approved", color: PALETTE.verdict.accepted },
+  rejected: { label: "Rejected", color: PALETTE.verdict.rejected },
+  needs_discussion: { label: "Discuss", color: PALETTE.verdict.needsDiscussion },
+  rework: { label: "Rework", color: PALETTE.verdict.rework },
 };
 
 export function StatusHeader({
@@ -146,7 +150,7 @@ export function StatusHeader({
             ))}
             <VerdictChip
               label="Pending"
-              color="#6272a4"
+              color={PALETTE.accent.dim}
               value={tally.pending}
               onClick={() => setReviewMode(true)}
               dim
@@ -187,7 +191,12 @@ function SearchBox({ onOpenPalette }: { onOpenPalette: (q?: string) => void }) {
 }
 
 function ProgressChip({ pct, done, total }: { pct: number; done: number; total: number }) {
-  const color = pct === 100 ? "#50fa7b" : pct >= 50 ? "#bd93f9" : "#ffb86c";
+  const color =
+    pct === 100
+      ? PALETTE.verdict.accepted
+      : pct >= 50
+        ? PALETTE.accent.phos
+        : PALETTE.verdict.rework;
   return (
     <div className="flex items-center gap-2">
       <div className="relative w-28 h-1.5 bg-bg-raised rounded-full overflow-hidden">
@@ -223,18 +232,18 @@ function VerdictChip({
       onClick={onClick}
       className="flex items-center gap-1.5 px-2 h-6 rounded-md border transition-colors"
       style={{
-        borderColor: empty ? "#44475a" : color,
+        borderColor: empty ? PALETTE.surface.border : color,
         background: empty ? "transparent" : `${color}14`,
       }}
       title={`${label}: ${value}${onClick ? " — click to review" : ""}`}
     >
       <span
         className="font-mono text-[12px] tabular-nums font-semibold"
-        style={{ color: empty ? "#6272a4" : color }}
+        style={{ color: empty ? PALETTE.accent.dim : color }}
       >
         {value}
       </span>
-      <span className="text-[11.5px]" style={{ color: empty || dim ? "#6272a4" : color }}>
+      <span className="text-[11.5px]" style={{ color: empty || dim ? PALETTE.accent.dim : color }}>
         {label}
       </span>
     </button>
@@ -245,7 +254,14 @@ function computeTally(
   totalGroups: number,
   verdicts: Array<{ groupId: string; verdict: GroupVerdict }>,
 ) {
-  const base = { approved: 0, rejected: 0, discuss: 0, rework: 0, pending: 0, decided: 0 };
+  const base = {
+    accepted: 0,
+    rejected: 0,
+    needs_discussion: 0,
+    rework: 0,
+    pending: 0,
+    decided: 0,
+  };
   for (const v of verdicts) {
     if (v.verdict === "pending") continue;
     base[v.verdict as VerdictKey] += 1;
