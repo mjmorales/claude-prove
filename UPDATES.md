@@ -6,6 +6,47 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v2.4.0 — Decisions persisted in `prove.db`
+
+ADR content now survives file `rm`, `git mv`, archive sweeps, and reclones without `.prove/`. Previously, `scrum_events(kind='decision_linked')` carried only `{ decision_path }` — if the file disappeared the rationale was unrecoverable from the DB alone. This release adds a `scrum_decisions` table (populated on `link-decision` and during brainstorm Phase 4) that owns a durable snapshot of every decision, keyed by filename slug with a sha256 `content_sha` for drift tracking. Event payloads become `{ decision_id, decision_path }`; readers prefer `decision_id` and fall back to `decision_path` for legacy rows. Full rationale: `.prove/decisions/2026-04-24-decision-persistence.md`.
+
+**Changed**:
+
+- `packages/cli/src/topics/scrum/schemas.ts` — scrum domain migration v2 adds `scrum_decisions` (id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent) + indexes on `topic` and `status`.
+- `packages/cli/src/topics/scrum/store.ts` — `recordDecision(input)` / `getDecision(id)` / `listDecisions(filter)` with upsert semantics on id and `content_sha = sha256(content)` for drift detection.
+- `packages/cli/src/topics/scrum/cli/decision-cmd.ts` (new) — CLI subcommand tree exposing the store via `record | get | list | recover`.
+- `packages/cli/src/topics/scrum.ts` — wires the `decision` subcommand and the `--from-git` flag into the scrum dispatcher.
+- `packages/cli/src/topics/scrum/cli/task-cmd.ts` — `link-decision` now reads the file, auto-records the decision if absent, and appends `{ decision_id, decision_path }` payloads. Legacy path-only payloads still parse (reader prefers `decision_id`, falls back to `decision_path`).
+- `packages/cli/src/topics/scrum/reconcile.ts` — `collectDecisions` reads both legacy `{ path, title }` and new `{ decision_id, decision_path }` event payloads.
+- `packages/review-ui/server/src/decisions.ts` + `routes/prove.ts` — `/api/decisions/:id` resolves DB-first via scrum store, falls back to `.prove/decisions/<id>.md` on miss. Response gains an additive `source: 'db' | 'disk'` field.
+- `skills/brainstorm/SKILL.md` — Phase 4 now writes the file AND calls `claude-prove scrum decision record`, halts on record failure, reports file path + decision id.
+- `agents/spec-writer.md` — discovers prior decisions via `claude-prove scrum decision list --human` and `scrum decision get <id>` instead of globbing `.prove/decisions/`.
+
+**New CLI**:
+
+- `claude-prove scrum decision record <path>` — parse markdown (H1 title, `**Topic**:` / `**Status**:` lines, filename slug = id) and upsert. Re-records are idempotent — same `content_sha` when content unchanged; `recorded_at` refreshes.
+- `claude-prove scrum decision get <id>` — emit content byte-for-byte to stdout.
+- `claude-prove scrum decision list [--topic T] [--status S] [--human]` — JSON array or fixed-width table.
+- `claude-prove scrum decision recover --from-git [--workspace-root <path>]` — scan `git log --all --reverse` for every blob version of `.prove/decisions/*.md` and upsert. Idempotent.
+
+**Migration**:
+
+- Schema auto-migrates on next scrum invocation — `@claude-prove/store` runs migration v2 transactionally when the store is opened.
+- Existing `decision_linked` events with path-only payload (`{ decision_path }`) keep working; readers prefer the new `decision_id` and fall back to `decision_path` for legacy rows.
+- `CURRENT_SCHEMA_VERSION` in `packages/cli/src/topics/schema/schemas.ts` is NOT incremented — this is a scrum-domain migration via `@claude-prove/store`, not a `.claude/.prove.json` config-schema change.
+- **Optional backfill**: if your project commits `.prove/decisions/*.md` to git (most do not — `.prove/` is typically gitignored), run `claude-prove scrum decision recover --from-git` to populate the store from git history. In repositories where `.prove/` is gitignored (including this plugin repo), the verb runs cleanly and reports `recovered: 0` — there is nothing in history to recover.
+
+**Auto-adoption**:
+
+- Schema migration: automatic on next store open.
+- Brainstorm skill: Phase 4 now persists to DB; users of `/prove:brainstorm` see the new persistence on their next session.
+- Review UI: DB-first resolution kicks in once users restart the server after the upgrade; pre-upgrade bookmarks continue to work via disk fallback.
+- No `.claude/.prove.json` fields added or changed.
+
+**ADR**: `.prove/decisions/2026-04-24-decision-persistence.md` (scrum task `persist-decisions-in-prove-db-mod1lkx3`).
+
+---
+
 ## v2.3.1 — ACB save-manifest auto-injects missing `timestamp`
 
 The PostToolUse hook's manifest prompt template includes a `timestamp` field, but agents occasionally drop it when filling in `intent_groups` — producing a hard schema failure (`Error: invalid manifest: Missing required field: timestamp`) that blocks the commit flow. The fix mirrors the existing `commit_sha` pinning in `save-manifest-cmd.ts`: if the agent omits (or empties) `timestamp`, the CLI injects a UTC ISO-seconds value server-side using the same `isoSeconds()` helper the hook already uses for its prompt.
