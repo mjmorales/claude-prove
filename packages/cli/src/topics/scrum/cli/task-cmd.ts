@@ -8,6 +8,7 @@
  *   tag <id> <tag>
  *   link-decision <id> <decision-path>
  *   status <id> <new-status>
+ *   move <id>      (--milestone M | --unassign | --milestone="")
  *   delete <id>
  *
  * Stdout contract: JSON result per action on stdout; one-line human
@@ -32,10 +33,19 @@ export interface TaskCmdFlags {
   id?: string;
   status?: string;
   tag?: string;
+  unassign?: boolean;
   workspaceRoot?: string;
 }
 
-export type TaskAction = 'create' | 'show' | 'list' | 'tag' | 'link-decision' | 'status' | 'delete';
+export type TaskAction =
+  | 'create'
+  | 'show'
+  | 'list'
+  | 'tag'
+  | 'link-decision'
+  | 'status'
+  | 'move'
+  | 'delete';
 
 const TASK_ACTIONS: TaskAction[] = [
   'create',
@@ -44,6 +54,7 @@ const TASK_ACTIONS: TaskAction[] = [
   'tag',
   'link-decision',
   'status',
+  'move',
   'delete',
 ];
 
@@ -88,6 +99,8 @@ export function runTaskCmd(
         return doLinkDecision(store, positional[0], positional[1]);
       case 'status':
         return doStatus(store, positional[0], positional[1]);
+      case 'move':
+        return doMove(store, positional[0], flags);
       case 'delete':
         return doDelete(store, positional[0]);
     }
@@ -217,6 +230,54 @@ function doDelete(store: ScrumStore, id: string | undefined): number {
   store.softDeleteTask(id);
   process.stdout.write(`${JSON.stringify({ deleted: true, task_id: id })}\n`);
   process.stderr.write(`scrum task delete: ${id}\n`);
+  return 0;
+}
+
+/**
+ * Reassign a task's milestone. Target resolution:
+ *   --unassign                → null (wins when combined with any --milestone)
+ *   --milestone=""            → null
+ *   --milestone <id>          → <id>
+ *   (neither flag)            → usage error, exit 1
+ *
+ * Closed-milestone warning is surfaced on stderr with exit 0 preserved, so
+ * operators can intentionally move tasks into a closed milestone when
+ * reviving scope.
+ */
+function doMove(store: ScrumStore, id: string | undefined, flags: TaskCmdFlags): number {
+  if (id === undefined || id.length === 0) {
+    process.stderr.write('scrum task move: <id> positional argument required\n');
+    return 1;
+  }
+
+  const unassignRequested = flags.unassign === true;
+  const milestoneFlagProvided = flags.milestone !== undefined;
+
+  if (!unassignRequested && !milestoneFlagProvided) {
+    process.stderr.write('scrum task move: --milestone <id> or --unassign is required\n');
+    return 1;
+  }
+
+  let target: string | null;
+  if (unassignRequested) {
+    target = null;
+  } else if (flags.milestone === undefined || flags.milestone.length === 0) {
+    target = null;
+  } else {
+    target = flags.milestone;
+  }
+
+  const task = store.updateTaskMilestone(id, target);
+
+  if (target !== null) {
+    const milestone = store.getMilestone(target);
+    if (milestone?.status === 'closed') {
+      process.stderr.write(`scrum task move: warning — target milestone '${target}' is closed\n`);
+    }
+  }
+
+  process.stdout.write(`${JSON.stringify(task)}\n`);
+  process.stderr.write(`scrum task move: ${id} -> ${target ?? 'unassigned'}\n`);
   return 0;
 }
 

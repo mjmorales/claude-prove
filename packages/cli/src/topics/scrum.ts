@@ -83,6 +83,7 @@ interface ScrumFlags {
   targetState?: string;
   branch?: string;
   slug?: string;
+  unassign?: boolean;
   stalledAfterDays?: number | string;
   workspaceRoot?: string;
 }
@@ -102,6 +103,7 @@ export function register(cli: CAC): void {
     .option('--target-state <s>', 'Milestone target state (milestone create)')
     .option('--branch <b>', 'Branch name for link-run')
     .option('--slug <g>', 'Run slug for link-run')
+    .option('--unassign', 'Clear milestone_id (scrum task move)')
     .option('--stalled-after-days <n>', 'Alerts: stalled WIP threshold in days (default: 7)')
     .option(
       '--workspace-root <w>',
@@ -163,7 +165,7 @@ function dispatch(
     case 'task':
       if (arg1 === undefined) {
         console.error(
-          'error: scrum task: sub-action required (one of: create | show | list | tag | link-decision | status | delete)',
+          'error: scrum task: sub-action required (one of: create | show | list | tag | link-decision | status | move | delete)',
         );
         return 1;
       }
@@ -174,6 +176,7 @@ function dispatch(
         id: flags.id,
         status: flags.status,
         tag: flags.tag,
+        unassign: flags.unassign,
         workspaceRoot: flags.workspaceRoot,
       });
 

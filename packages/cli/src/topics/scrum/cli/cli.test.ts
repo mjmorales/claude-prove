@@ -274,6 +274,120 @@ describe('runTaskCmd', () => {
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('<id> positional argument required');
   });
+
+  // -------------------------------------------------------------------------
+  // move action
+  // -------------------------------------------------------------------------
+
+  function seedMove(taskId: string, milestoneId?: string, milestoneStatus?: 'closed') {
+    if (milestoneId) {
+      withCapture(() =>
+        runMilestoneCmd('create', [undefined, undefined], {
+          title: `Milestone ${milestoneId}`,
+          id: milestoneId,
+        }),
+      );
+      if (milestoneStatus === 'closed') {
+        withCapture(() => runMilestoneCmd('close', [milestoneId, undefined], {}));
+      }
+    }
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], {
+        title: `Task ${taskId}`,
+        id: taskId,
+        milestone: milestoneId,
+      }),
+    );
+  }
+
+  test('move: reassigns milestone and returns updated task JSON', () => {
+    seedMove('mv-1', 'm1');
+    withCapture(() => runMilestoneCmd('create', [undefined, undefined], { title: 'M2', id: 'm2' }));
+
+    const res = withCapture(() => runTaskCmd('move', ['mv-1', undefined], { milestone: 'm2' }));
+    expect(res.exit).toBe(0);
+    const task = JSON.parse(res.stdout.trim()) as { id: string; milestone_id: string };
+    expect(task.id).toBe('mv-1');
+    expect(task.milestone_id).toBe('m2');
+    expect(res.stderr).toContain('mv-1 -> m2');
+  });
+
+  test('move: --unassign clears milestone_id', () => {
+    seedMove('mv-2', 'm1');
+
+    const res = withCapture(() => runTaskCmd('move', ['mv-2', undefined], { unassign: true }));
+    expect(res.exit).toBe(0);
+    const task = JSON.parse(res.stdout.trim()) as { milestone_id: string | null };
+    expect(task.milestone_id).toBeNull();
+    expect(res.stderr).toContain('mv-2 -> unassigned');
+  });
+
+  test('move: --milestone="" also clears milestone_id', () => {
+    seedMove('mv-3', 'm1');
+
+    const res = withCapture(() => runTaskCmd('move', ['mv-3', undefined], { milestone: '' }));
+    expect(res.exit).toBe(0);
+    const task = JSON.parse(res.stdout.trim()) as { milestone_id: string | null };
+    expect(task.milestone_id).toBeNull();
+    expect(res.stderr).toContain('mv-3 -> unassigned');
+  });
+
+  test('move: neither --milestone nor --unassign → exit 1 with usage hint', () => {
+    seedMove('mv-4');
+
+    const res = withCapture(() => runTaskCmd('move', ['mv-4', undefined], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--milestone <id> or --unassign is required');
+  });
+
+  test('move: missing <id> exits 1 with a usage hint', () => {
+    const res = withCapture(() => runTaskCmd('move', [undefined, undefined], { milestone: 'm1' }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('<id> positional argument required');
+  });
+
+  test('move: unknown target milestone → exit 1, store error bubbles through', () => {
+    seedMove('mv-5');
+
+    const res = withCapture(() =>
+      runTaskCmd('move', ['mv-5', undefined], { milestone: 'nonexistent' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown milestone_id 'nonexistent'");
+  });
+
+  test('move: unknown task id → exit 1', () => {
+    withCapture(() => runMilestoneCmd('create', [undefined, undefined], { title: 'M1', id: 'm1' }));
+
+    const res = withCapture(() => runTaskCmd('move', ['ghost', undefined], { milestone: 'm1' }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown task 'ghost'");
+  });
+
+  test('move: closed target milestone succeeds with stderr warning and exit 0', () => {
+    seedMove('mv-6', 'm-closed', 'closed');
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'MV-7', id: 'mv-7' }));
+
+    const res = withCapture(() =>
+      runTaskCmd('move', ['mv-7', undefined], { milestone: 'm-closed' }),
+    );
+    expect(res.exit).toBe(0);
+    expect(res.stderr).toContain("target milestone 'm-closed' is closed");
+    expect(res.stderr).toContain('mv-7 -> m-closed');
+    const task = JSON.parse(res.stdout.trim()) as { milestone_id: string };
+    expect(task.milestone_id).toBe('m-closed');
+  });
+
+  test('move: --unassign beats --milestone when both provided', () => {
+    seedMove('mv-8', 'm1');
+
+    const res = withCapture(() =>
+      runTaskCmd('move', ['mv-8', undefined], { milestone: 'm1', unassign: true }),
+    );
+    expect(res.exit).toBe(0);
+    const task = JSON.parse(res.stdout.trim()) as { milestone_id: string | null };
+    expect(task.milestone_id).toBeNull();
+  });
 });
 
 // ---------------------------------------------------------------------------
