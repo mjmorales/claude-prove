@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
 import { type ScrumStore, openScrumStore } from '../store';
 import type { MilestoneStatus } from '../types';
+import { generateId } from './scrum-utils';
 
 export interface MilestoneCmdFlags {
   title?: string;
@@ -77,7 +78,10 @@ function doCreate(store: ScrumStore, flags: MilestoneCmdFlags): number {
     process.stderr.write('scrum milestone create: --title is required\n');
     return 1;
   }
-  const id = flags.id !== undefined && flags.id.length > 0 ? flags.id : generateId(flags.title);
+  const id =
+    flags.id !== undefined && flags.id.length > 0
+      ? flags.id
+      : generateId(flags.title, 'milestone');
   const milestone = store.createMilestone({
     id,
     title: flags.title,
@@ -135,12 +139,3 @@ function doClose(store: ScrumStore, id: string | undefined): number {
   return 0;
 }
 
-function generateId(title: string): string {
-  const slug = title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 30);
-  const suffix = Date.now().toString(36);
-  return slug.length > 0 ? `${slug}-${suffix}` : `milestone-${suffix}`;
-}

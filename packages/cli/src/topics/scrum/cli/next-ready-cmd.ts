@@ -47,6 +47,10 @@ export function runNextReadyCmd(flags: NextReadyCmdFlags): number {
     }
     process.stderr.write(`scrum next-ready: ${rows.length} ranked tasks\n`);
     return 0;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`prove scrum next: ${msg}`);
+    return 1;
   } finally {
     store.close();
   }

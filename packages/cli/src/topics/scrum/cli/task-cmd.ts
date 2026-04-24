@@ -21,6 +21,7 @@ import { mainWorktreeRoot } from '@claude-prove/shared';
 import type { ListTasksOptions, ScrumStore } from '../store';
 import { openScrumStore } from '../store';
 import type { TaskStatus } from '../types';
+import { generateId } from './scrum-utils';
 
 export interface TaskCmdFlags {
   title?: string;
@@ -94,7 +95,8 @@ function doCreate(store: ScrumStore, flags: TaskCmdFlags): number {
     process.stderr.write('scrum task create: --title is required\n');
     return 1;
   }
-  const id = flags.id !== undefined && flags.id.length > 0 ? flags.id : generateId(flags.title);
+  const id =
+    flags.id !== undefined && flags.id.length > 0 ? flags.id : generateId(flags.title, 'task');
   const milestoneId =
     flags.milestone !== undefined && flags.milestone.length > 0 ? flags.milestone : null;
   const task = store.createTask({
@@ -167,7 +169,9 @@ function doTag(store: ScrumStore, id: string | undefined, tag: string | undefine
     return 1;
   }
   store.addTag(id, tag);
-  process.stdout.write(`${JSON.stringify({ tagged: true, task_id: id, tag })}\n`);
+  // Stdout contract matches `scrum tag add` (`{added: true, task_id, tag}`)
+  // so downstream consumers can parse either entry point identically.
+  process.stdout.write(`${JSON.stringify({ added: true, task_id: id, tag })}\n`);
   process.stderr.write(`scrum task tag: ${id} += ${tag}\n`);
   return 0;
 }
@@ -204,13 +208,3 @@ function doLinkDecision(
   return 0;
 }
 
-/** Generate a task id from title + timestamp. Best-effort uniqueness. */
-function generateId(title: string): string {
-  const slug = title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 30);
-  const suffix = Date.now().toString(36);
-  return slug.length > 0 ? `${slug}-${suffix}` : `task-${suffix}`;
-}

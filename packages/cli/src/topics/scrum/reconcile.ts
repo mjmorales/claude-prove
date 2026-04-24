@@ -42,6 +42,13 @@ export const ORPHAN_TASK_TITLE = 'Unlinked run detections';
 // ---------------------------------------------------------------------------
 
 export interface ContextBundle {
+  /**
+   * Provenance trail for the task. Each entry is either a repo-relative
+   * file path OR a `'commit:<sha>'` sentinel. The sentinel form is emitted
+   * by `collectFilesTouched` when state.json carries commit shas but no
+   * per-file diff — see that helper for the fallback rationale. Consumers
+   * that only want real file paths must filter out the `commit:` prefix.
+   */
   files: string[];
   decisions: Array<{ path: string; title: string }>;
   runs: Array<{

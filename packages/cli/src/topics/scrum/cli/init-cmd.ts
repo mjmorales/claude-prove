@@ -56,7 +56,7 @@ export function runInitCmd(flags: InitCmdFlags): number {
     }
 
     const summary = importPlanning(store, planningDir);
-    cleanupLegacyFiles(planningDir, summary);
+    cleanupLegacyFiles(workspaceRoot, summary);
 
     process.stdout.write(
       `${JSON.stringify({
@@ -156,9 +156,9 @@ function importPlanning(store: ScrumStore, planningDir: string): ImportSummary {
   const decisionsDir = join(planningDir, 'decisions');
   if (existsSync(decisionsDir) && statSync(decisionsDir).isDirectory()) {
     // Decisions attach to the first task if any exist; otherwise they
-    // count as imported but land as free-floating log lines we can't
-    // attach without a task id. We skip persistence in that case so the
-    // FK stays honest.
+    // land as free-floating log lines we can't attach without a task id.
+    // We skip persistence in that case so the FK stays honest, but warn
+    // loudly so the drop is not silent.
     const tasks = store.listTasks();
     const firstTaskId = tasks[0]?.id;
     const decisionFiles = readdirSync(decisionsDir).filter((f) => f.endsWith('.md'));
@@ -171,6 +171,10 @@ function importPlanning(store: ScrumStore, planningDir: string): ImportSummary {
         });
         summary.events += 1;
       }
+    } else if (decisionFiles.length > 0) {
+      console.warn(
+        `scrum init: dropped ${decisionFiles.length} decision event(s) — no tasks exist to anchor them (FK requires a task id)`,
+      );
     }
     summary.deletedFiles.push('planning/decisions');
   }
@@ -178,9 +182,9 @@ function importPlanning(store: ScrumStore, planningDir: string): ImportSummary {
   return summary;
 }
 
-function cleanupLegacyFiles(planningDir: string, summary: ImportSummary): void {
+function cleanupLegacyFiles(workspaceRoot: string, summary: ImportSummary): void {
   for (const rel of summary.deletedFiles) {
-    const abs = join(planningDir, '..', rel);
+    const abs = join(workspaceRoot, rel);
     try {
       rmSync(abs, { recursive: true, force: true });
     } catch {

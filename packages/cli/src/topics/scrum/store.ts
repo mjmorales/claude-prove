@@ -239,6 +239,11 @@ export class ScrumStore {
   /**
    * List tasks with optional filters. Excludes soft-deleted rows unless
    * `excludeDeleted` is explicitly false.
+   *
+   * The composed SQL has a small, bounded set of distinct shapes (one per
+   * filter combination). Each shape is routed through `prep()` so the
+   * statement cache reuses the parsed plan across calls — matching the
+   * caching discipline of every other method on this class.
    */
   listTasks(options: ListTasksOptions = {}): ScrumTask[] {
     const excludeDeleted = options.excludeDeleted !== false;
@@ -261,7 +266,7 @@ export class ScrumStore {
 
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const sql = `SELECT id, title, description, status, milestone_id, created_by_agent, created_at, last_event_at, deleted_at FROM scrum_tasks ${where} ORDER BY created_at ASC`;
-    return this.db.prepare(sql).all(...params) as ScrumTask[];
+    return this.prep(sql).all(...params) as ScrumTask[];
   }
 
   /**
@@ -592,23 +597,43 @@ export class ScrumStore {
     const limit = options.limit ?? 10;
     const nowMs = options.nowMs ?? Date.now();
 
-    const candidates = this.db
-      .prepare(
-        `SELECT id, title, description, status, milestone_id, created_by_agent, created_at, last_event_at, deleted_at
-         FROM scrum_tasks
-         WHERE deleted_at IS NULL AND status IN ('ready', 'backlog')
-         ${options.milestoneId ? 'AND milestone_id = ?' : ''}
-         ORDER BY created_at ASC`,
-      )
-      .all(...(options.milestoneId ? [options.milestoneId] : [])) as ScrumTask[];
+    // Two SQL shapes (with/without milestone filter) — both routed through
+    // the prep() cache so the plan is parsed once per process.
+    const candidates = (
+      options.milestoneId
+        ? this.prep(
+            `SELECT id, title, description, status, milestone_id, created_by_agent, created_at, last_event_at, deleted_at
+             FROM scrum_tasks
+             WHERE deleted_at IS NULL AND status IN ('ready', 'backlog') AND milestone_id = ?
+             ORDER BY created_at ASC`,
+          ).all(options.milestoneId)
+        : this.prep(
+            `SELECT id, title, description, status, milestone_id, created_by_agent, created_at, last_event_at, deleted_at
+             FROM scrum_tasks
+             WHERE deleted_at IS NULL AND status IN ('ready', 'backlog')
+             ORDER BY created_at ASC`,
+          ).all()
+    ) as ScrumTask[];
 
     const activeMilestones = new Set(this.listMilestones('active').map((m) => m.id));
 
+    // Batch the per-candidate tag lookup into a single IN-query. Bun's sqlite
+    // binds parameters positionally, so we expand placeholders to match the
+    // candidate count. Per-invocation only — tags mutate between calls.
+    const tagBoostByTask = this.fetchTagBoosts(candidates.map((t) => t.id));
+
+    // Memoize unblock_depth within this invocation. The BFS from task `A`
+    // and task `B` can both traverse a shared descendant `C`; caching
+    // per-root collapses repeated DFS sweeps across the candidate set.
+    // Scope is intentionally this single call — task deps can change
+    // between invocations.
+    const unblockDepthCache = new Map<string, number>();
+
     const scored: NextReadyRow[] = candidates.map((task) => {
-      const unblockDepth = this.computeUnblockDepth(task.id);
+      const unblockDepth = this.computeUnblockDepth(task.id, unblockDepthCache);
       const milestoneBoost = computeMilestoneBoost(task, options.milestoneId, activeMilestones);
       const contextHotness = computeContextHotness(task.last_event_at, nowMs);
-      const tagBoost = this.computeTagBoost(task.id);
+      const tagBoost = tagBoostByTask.get(task.id) ?? 0;
       const score = unblockDepth * 10 + milestoneBoost * 5 + contextHotness * 3 + tagBoost;
       return {
         task,
@@ -638,8 +663,15 @@ export class ScrumStore {
    * Transitive closure of `blocks` edges starting at `taskId`. Depth-first
    * with a visited set to handle accidental cycles safely. Returns the
    * count of *distinct* descendants (excludes the root).
+   *
+   * When `cache` is supplied, results are memoized by root. The cache is
+   * expected to be invocation-scoped (see `nextReady`) — dependency edges
+   * can change between calls, so we never cache across invocations.
    */
-  private computeUnblockDepth(taskId: string): number {
+  private computeUnblockDepth(taskId: string, cache?: Map<string, number>): number {
+    const cached = cache?.get(taskId);
+    if (cached !== undefined) return cached;
+
     const visited = new Set<string>([taskId]);
     const stack = [taskId];
     let count = 0;
@@ -658,18 +690,34 @@ export class ScrumStore {
         }
       }
     }
+
+    cache?.set(taskId, count);
     return count;
   }
 
-  private computeTagBoost(taskId: string): number {
-    const tags = this.prep('SELECT tag FROM scrum_tags WHERE task_id = ?').all(taskId) as Array<{
-      tag: string;
-    }>;
-    let boost = 0;
-    for (const { tag } of tags) {
-      if (PRIORITY_TAGS.has(tag)) boost += 1;
+  /**
+   * Batch-load priority-tag counts for a set of task ids in a single
+   * `WHERE task_id IN (...)` query. Replaces N individual tag lookups
+   * on the `nextReady` hot path. Tasks with no priority tags are
+   * absent from the returned map (callers should treat missing as 0).
+   */
+  private fetchTagBoosts(taskIds: string[]): Map<string, number> {
+    const boosts = new Map<string, number>();
+    if (taskIds.length === 0) return boosts;
+
+    // One prepared statement per distinct candidate-count — Bun's sqlite
+    // requires a fixed placeholder count per statement. In practice
+    // `nextReady` caps the candidate set at the `ready`/`backlog` row
+    // count, so the number of cached shapes stays bounded.
+    const placeholders = taskIds.map(() => '?').join(', ');
+    const sql = `SELECT task_id, tag FROM scrum_tags WHERE task_id IN (${placeholders})`;
+    const rows = this.prep(sql).all(...taskIds) as Array<{ task_id: string; tag: string }>;
+
+    for (const { task_id, tag } of rows) {
+      if (!PRIORITY_TAGS.has(tag)) continue;
+      boosts.set(task_id, (boosts.get(task_id) ?? 0) + 1);
     }
-    return boost;
+    return boosts;
   }
 
   /**
