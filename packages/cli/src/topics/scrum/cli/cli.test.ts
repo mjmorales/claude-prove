@@ -14,6 +14,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -926,5 +927,197 @@ describe('runTaskCmd link-decision (auto-record)', () => {
     const show = withCapture(() => runTaskCmd('show', ['z2', undefined], {}));
     const payload = JSON.parse(show.stdout.trim()) as { events: Array<{ kind: string }> };
     expect(payload.events.some((e) => e.kind === 'decision_linked')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// decision recover --from-git — backfill from git history
+// ---------------------------------------------------------------------------
+
+describe('runDecisionCmd recover', () => {
+  /**
+   * The harness's default `workspace` only has a `.git` directory shell
+   * (enough for `mainWorktreeRoot`), not a real repo. The recover path
+   * needs an actual repo with commit history, so each test below creates
+   * its own isolated tempdir inside the per-test `workspace` and runs the
+   * handler with `--workspace-root` pointed at it.
+   */
+
+  function initRepo(dir: string): void {
+    // `git init` writes .git/ into `dir`. -q suppresses the banner.
+    const init = spawnSync('git', ['-C', dir, 'init', '-q', '-b', 'main'], { encoding: 'utf8' });
+    expect(init.status).toBe(0);
+    // Local identity so commits succeed without user-global git config.
+    spawnSync('git', ['-C', dir, 'config', 'user.email', 'test@example.com'], {
+      encoding: 'utf8',
+    });
+    spawnSync('git', ['-C', dir, 'config', 'user.name', 'Test User'], { encoding: 'utf8' });
+  }
+
+  function commitFile(dir: string, relPath: string, content: string, message: string): void {
+    const abs = join(dir, relPath);
+    mkdirSync(join(abs, '..'), { recursive: true });
+    writeFileSync(abs, content, 'utf8');
+    const add = spawnSync('git', ['-C', dir, 'add', relPath], { encoding: 'utf8' });
+    expect(add.status).toBe(0);
+    const commit = spawnSync('git', ['-C', dir, 'commit', '-q', '-m', message], {
+      encoding: 'utf8',
+    });
+    expect(commit.status).toBe(0);
+  }
+
+  test('missing --from-git → exit 1 with flag-usage hint', () => {
+    // Note: we intentionally do NOT construct a real repo here — the flag
+    // check must short-circuit before any git command runs.
+    const res = withCapture(() =>
+      runDecisionCmd('recover', [undefined, undefined], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--from-git');
+  });
+
+  test('non-repo workspace → exit 1, no DB writes', () => {
+    // `workspace` has only a `.git` dir shell; `git rev-parse
+    // --is-inside-work-tree` rejects it because it's not a real repo.
+    const nonRepo = mkdtempSync(join(tmpdir(), 'scrum-recover-nonrepo-'));
+    try {
+      const res = withCapture(() =>
+        runDecisionCmd('recover', [undefined, undefined], {
+          workspaceRoot: nonRepo,
+          fromGit: true,
+        }),
+      );
+      expect(res.exit).toBe(1);
+      expect(res.stderr).toContain('not a git repository');
+      // list against the tmpdir's own prove.db should be empty.
+      const list = withCapture(() =>
+        runDecisionCmd('list', [undefined, undefined], { workspaceRoot: nonRepo }),
+      );
+      const rows = JSON.parse(list.stdout.trim()) as unknown[];
+      expect(rows).toHaveLength(0);
+    } finally {
+      rmSync(nonRepo, { recursive: true, force: true });
+    }
+  });
+
+  test('empty repo (no ADR commits) → exit 0, recovered=0, no DB writes', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'scrum-recover-empty-'));
+    try {
+      initRepo(repo);
+      // One commit that touches something other than decisions/ so git log
+      // has at least one commit to walk.
+      commitFile(repo, 'README.md', '# Not a decision\n', 'chore: init');
+
+      const res = withCapture(() =>
+        runDecisionCmd('recover', [undefined, undefined], {
+          workspaceRoot: repo,
+          fromGit: true,
+        }),
+      );
+      expect(res.exit).toBe(0);
+      const payload = JSON.parse(res.stdout.trim()) as { recovered: number; ids: string[] };
+      expect(payload.recovered).toBe(0);
+      expect(payload.ids).toEqual([]);
+      expect(res.stderr).toContain('recovered 0 decisions');
+
+      const list = withCapture(() =>
+        runDecisionCmd('list', [undefined, undefined], { workspaceRoot: repo }),
+      );
+      const rows = JSON.parse(list.stdout.trim()) as unknown[];
+      expect(rows).toHaveLength(0);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test('happy path: v1 then v2 at same path → v2 content wins on id collision', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'scrum-recover-happy-'));
+    try {
+      initRepo(repo);
+      const relPath = '.prove/decisions/2026-04-24-choice.md';
+
+      commitFile(
+        repo,
+        relPath,
+        '# V1 title\n\n**Topic**: storage\n\nFirst revision body.\n',
+        'docs(adr): v1',
+      );
+      commitFile(
+        repo,
+        relPath,
+        '# V2 title\n\n**Topic**: architecture\n\nSecond revision body.\n',
+        'docs(adr): v2',
+      );
+
+      const res = withCapture(() =>
+        runDecisionCmd('recover', [undefined, undefined], {
+          workspaceRoot: repo,
+          fromGit: true,
+        }),
+      );
+      expect(res.exit).toBe(0);
+      const payload = JSON.parse(res.stdout.trim()) as { recovered: number; ids: string[] };
+      expect(payload.recovered).toBe(1);
+      expect(payload.ids).toEqual(['2026-04-24-choice']);
+
+      // Later commit wins: title, topic, and body all reflect v2.
+      const get = withCapture(() =>
+        runDecisionCmd('get', ['2026-04-24-choice', undefined], { workspaceRoot: repo }),
+      );
+      expect(get.exit).toBe(0);
+      expect(get.stdout).toContain('V2 title');
+      expect(get.stdout).toContain('Second revision body');
+      expect(get.stdout).not.toContain('First revision body');
+
+      const list = withCapture(() =>
+        runDecisionCmd('list', [undefined, undefined], { workspaceRoot: repo }),
+      );
+      const rows = JSON.parse(list.stdout.trim()) as Array<{
+        id: string;
+        title: string;
+        topic: string | null;
+      }>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.title).toBe('V2 title');
+      expect(rows[0]?.topic).toBe('architecture');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test('second run is a clean no-op: list length unchanged, v2 content preserved', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'scrum-recover-idempotent-'));
+    try {
+      initRepo(repo);
+      const relPath = '.prove/decisions/2026-04-24-idem.md';
+      commitFile(repo, relPath, '# V1\n\nBody v1.\n', 'docs(adr): v1');
+      commitFile(repo, relPath, '# V2\n\nBody v2.\n', 'docs(adr): v2');
+
+      const first = withCapture(() =>
+        runDecisionCmd('recover', [undefined, undefined], {
+          workspaceRoot: repo,
+          fromGit: true,
+        }),
+      );
+      expect(first.exit).toBe(0);
+
+      const second = withCapture(() =>
+        runDecisionCmd('recover', [undefined, undefined], {
+          workspaceRoot: repo,
+          fromGit: true,
+        }),
+      );
+      expect(second.exit).toBe(0);
+
+      // Upsert semantics: two runs do NOT duplicate rows.
+      const list = withCapture(() =>
+        runDecisionCmd('list', [undefined, undefined], { workspaceRoot: repo }),
+      );
+      const rows = JSON.parse(list.stdout.trim()) as Array<{ id: string; title: string }>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.title).toBe('V2');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });
