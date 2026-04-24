@@ -23,6 +23,10 @@
  *   claude-prove scrum tag add <task-id> <tag>
  *   claude-prove scrum tag remove <task-id> <tag>
  *   claude-prove scrum tag list                  [--task <id>] [--tag <tag>]
+ *   claude-prove scrum decision record <path>
+ *   claude-prove scrum decision get <id>
+ *   claude-prove scrum decision list             [--topic T] [--status S] [--human]
+ *   claude-prove scrum decision recover          --from-git
  *   claude-prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
  *   claude-prove scrum hook <event>              (event: session-start | subagent-stop | stop)
  *
@@ -40,6 +44,7 @@
 
 import type { CAC } from 'cac';
 import { runAlertsCmd } from './scrum/cli/alerts-cmd';
+import { runDecisionCmd } from './scrum/cli/decision-cmd';
 import { runHookCmd } from './scrum/cli/hook-cmd';
 import { runInitCmd } from './scrum/cli/init-cmd';
 import { runLinkRunCmd } from './scrum/cli/link-run-cmd';
@@ -57,6 +62,7 @@ type ScrumAction =
   | 'task'
   | 'milestone'
   | 'tag'
+  | 'decision'
   | 'link-run'
   | 'hook';
 
@@ -68,6 +74,7 @@ const SCRUM_ACTIONS: ScrumAction[] = [
   'task',
   'milestone',
   'tag',
+  'decision',
   'link-run',
   'hook',
 ];
@@ -82,11 +89,13 @@ interface ScrumFlags {
   status?: string;
   tag?: string;
   task?: string;
+  topic?: string;
   targetState?: string;
   branch?: string;
   slug?: string;
   unassign?: boolean;
   stalledAfterDays?: number | string;
+  fromGit?: boolean;
   workspaceRoot?: string;
 }
 
@@ -102,11 +111,13 @@ export function register(cli: CAC): void {
     .option('--status <s>', 'Status filter (list / close / create)')
     .option('--tag <t>', 'Tag filter')
     .option('--task <id>', 'Task filter for `tag list`')
+    .option('--topic <t>', 'Topic filter for `decision list`')
     .option('--target-state <s>', 'Milestone target state (milestone create)')
     .option('--branch <b>', 'Branch name for link-run')
     .option('--slug <g>', 'Run slug for link-run')
     .option('--unassign', 'Clear milestone_id (scrum task move)')
     .option('--stalled-after-days <n>', 'Alerts: stalled WIP threshold in days (default: 7)')
+    .option('--from-git', 'decision recover: scan git history for .prove/decisions/*.md blobs')
     .option(
       '--workspace-root <w>',
       'Main worktree root; pins store to <root>/.prove/prove.db (default: git common-dir)',
@@ -206,6 +217,21 @@ function dispatch(
       return runTagCmd(arg1, [arg2, arg3], {
         task: flags.task,
         tag: flags.tag,
+        workspaceRoot: flags.workspaceRoot,
+      });
+
+    case 'decision':
+      if (arg1 === undefined) {
+        console.error(
+          'error: scrum decision: sub-action required (one of: record | get | list | recover)',
+        );
+        return 1;
+      }
+      return runDecisionCmd(arg1, [arg2, arg3], {
+        topic: flags.topic,
+        status: flags.status,
+        human: flags.human,
+        fromGit: flags.fromGit,
         workspaceRoot: flags.workspaceRoot,
       });
 

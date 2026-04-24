@@ -14,9 +14,11 @@
  */
 
 import type { Database, Statement } from 'bun:sqlite';
+import { createHash } from 'node:crypto';
 import { type Store, type StoreOptions, openStore, runMigrations } from '@claude-prove/store';
 import { ensureScrumSchemaRegistered } from './schemas';
 import type {
+  DecisionRow,
   DepKind,
   EventKind,
   MilestoneStatus,
@@ -104,6 +106,28 @@ export interface NextReadyOptions {
   limit?: number;
   /** Unix-epoch seconds for the hotness calculation. Defaults to now(). */
   nowMs?: number;
+}
+
+/**
+ * Input to `recordDecision`. `id` is the filename slug; `content` is the
+ * raw markdown body. `content_sha` is derived from `content` at write
+ * time, so callers do not supply it. Status defaults to `'accepted'`
+ * per ADR convention.
+ */
+export interface RecordDecisionInput {
+  id: string;
+  title: string;
+  topic?: string | null;
+  status?: string;
+  content: string;
+  sourcePath?: string | null;
+  recordedByAgent?: string | null;
+}
+
+/** Filter shape for `listDecisions`. Both fields are optional and AND-combined. */
+export interface ListDecisionsFilter {
+  topic?: string;
+  status?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -749,6 +773,98 @@ export class ScrumStore {
     });
 
     return scored.slice(0, limit);
+  }
+
+  // ==========================================================================
+  // Decisions
+  // ==========================================================================
+
+  /**
+   * Upsert a decision row keyed on `id`. On duplicate id the row is
+   * replaced in-place: title/topic/status/content/source_path are
+   * overwritten, `content_sha` is recomputed from the new content, and
+   * `recorded_at` is bumped to now so list order reflects the latest
+   * write. Status defaults to `'accepted'`.
+   *
+   * `content_sha` uses node:crypto sha256 — same std-lib primitive every
+   * other prove domain uses; no new dependency.
+   */
+  recordDecision(input: RecordDecisionInput): DecisionRow {
+    const recordedAt = isoNow();
+    const contentSha = createHash('sha256').update(input.content).digest('hex');
+    const row: DecisionRow = {
+      id: input.id,
+      title: input.title,
+      topic: input.topic ?? null,
+      status: input.status ?? 'accepted',
+      content: input.content,
+      source_path: input.sourcePath ?? null,
+      content_sha: contentSha,
+      recorded_at: recordedAt,
+      recorded_by_agent: input.recordedByAgent ?? null,
+    };
+
+    this.prep(
+      `INSERT INTO scrum_decisions (id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET
+         title = excluded.title,
+         topic = excluded.topic,
+         status = excluded.status,
+         content = excluded.content,
+         source_path = excluded.source_path,
+         content_sha = excluded.content_sha,
+         recorded_at = excluded.recorded_at,
+         recorded_by_agent = excluded.recorded_by_agent`,
+    ).run(
+      row.id,
+      row.title,
+      row.topic,
+      row.status,
+      row.content,
+      row.source_path,
+      row.content_sha,
+      row.recorded_at,
+      row.recorded_by_agent,
+    );
+
+    return row;
+  }
+
+  /** Fetch one decision by id, or null if missing. */
+  getDecision(id: string): DecisionRow | null {
+    const row = this.prep(
+      'SELECT id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent FROM scrum_decisions WHERE id = ?',
+    ).get(id) as DecisionRow | null;
+    return row ?? null;
+  }
+
+  /**
+   * List decisions, newest-first by `recorded_at`. Empty filter returns
+   * all rows; `topic` and `status` filters compose with AND. The composed
+   * SQL has a small, bounded set of shapes — each routed through `prep()`
+   * so the plan cache reuses parsed statements across calls (matches the
+   * discipline of `listTasks`).
+   */
+  listDecisions(filter: ListDecisionsFilter = {}): DecisionRow[] {
+    const clauses: string[] = [];
+    const params: string[] = [];
+    if (filter.topic !== undefined) {
+      clauses.push('lower(topic) = lower(?)');
+      params.push(filter.topic);
+    }
+    if (filter.status !== undefined) {
+      // Status display casing is authored (e.g., `**Status**: Accepted` from the
+      // ADR body becomes stored as `Accepted`), but operator filters read
+      // naturally in lowercase. Comparison is case-insensitive on both sides
+      // so `--status accepted` matches rows stored as `Accepted`, `ACCEPTED`,
+      // or any other case variant without rewriting existing rows.
+      clauses.push('lower(status) = lower(?)');
+      params.push(filter.status);
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+    const sql = `SELECT id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent FROM scrum_decisions ${where} ORDER BY recorded_at DESC`;
+    return this.prep(sql).all(...params) as DecisionRow[];
   }
 
   // ==========================================================================

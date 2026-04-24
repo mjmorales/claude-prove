@@ -14,11 +14,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { runAlertsCmd } from './alerts-cmd';
+import { parseDecisionFile, runDecisionCmd } from './decision-cmd';
 import { runHookCmd } from './hook-cmd';
 import { runInitCmd } from './init-cmd';
 import { runLinkRunCmd } from './link-run-cmd';
@@ -224,11 +226,15 @@ describe('runTaskCmd', () => {
 
   test('link-decision: appends event', () => {
     withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'Z', id: 'z' }));
+    // link-decision now reads the file — seed one so the handler succeeds.
+    mkdirSync(join(workspace, '.prove', 'decisions'), { recursive: true });
+    writeFileSync(join(workspace, '.prove', 'decisions', 'x.md'), '# X decision\n', 'utf8');
     const res = withCapture(() => runTaskCmd('link-decision', ['z', '.prove/decisions/x.md'], {}));
     expect(res.exit).toBe(0);
     const payload = JSON.parse(res.stdout.trim());
     expect(payload.linked).toBe(true);
     expect(payload.decision_path).toBe('.prove/decisions/x.md');
+    expect(payload.decision_id).toBe('x');
   });
 
   test('status: drives a valid transition and returns the updated task', () => {
@@ -698,5 +704,420 @@ describe('runInitCmd (importer precision)', () => {
     const ml = withCapture(() => runMilestoneCmd('list', [undefined, undefined], {}));
     const milestones = JSON.parse(ml.stdout.trim()) as Array<{ id: string }>;
     expect(milestones.map((m) => m.id)).toContain('m3');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseDecisionFile — pure extractor (no store, no I/O)
+// ---------------------------------------------------------------------------
+
+describe('parseDecisionFile', () => {
+  test('extracts id from filename basename without .md', () => {
+    const input = parseDecisionFile(
+      '# Title\n',
+      '.prove/decisions/2026-04-24-decision-persistence.md',
+    );
+    expect(input.id).toBe('2026-04-24-decision-persistence');
+  });
+
+  test('extracts title from the first H1', () => {
+    const input = parseDecisionFile('# Use SQLite for persistence\n\n**Topic**: storage\n', 'x.md');
+    expect(input.title).toBe('Use SQLite for persistence');
+  });
+
+  test('extracts **Topic** field', () => {
+    const input = parseDecisionFile('# Foo\n\n**Topic**: architecture\n\nBody...', 'x.md');
+    expect(input.topic).toBe('architecture');
+  });
+
+  test('extracts plain Topic: field when bold markers absent', () => {
+    const input = parseDecisionFile('# Foo\n\nTopic: storage\n\nBody', 'x.md');
+    expect(input.topic).toBe('storage');
+  });
+
+  test('extracts **Status** field', () => {
+    const input = parseDecisionFile('# Foo\n\n**Status**: proposed\n', 'x.md');
+    expect(input.status).toBe('proposed');
+  });
+
+  test('defaults status to accepted when absent', () => {
+    const input = parseDecisionFile('# Foo\n', 'x.md');
+    expect(input.status).toBe('accepted');
+  });
+
+  test('topic defaults to null when absent', () => {
+    const input = parseDecisionFile('# Foo\n', 'x.md');
+    expect(input.topic).toBeNull();
+  });
+
+  test('preserves full content byte-for-byte', () => {
+    const content = '# Foo\n\nLine 1\nLine 2\n\n**Topic**: x\n';
+    const input = parseDecisionFile(content, 'x.md');
+    expect(input.content).toBe(content);
+  });
+
+  test('sourcePath is the input path, not resolved', () => {
+    const input = parseDecisionFile('# Foo\n', '.prove/decisions/rel.md');
+    expect(input.sourcePath).toBe('.prove/decisions/rel.md');
+  });
+
+  test('title falls back to id when no H1 is present', () => {
+    const input = parseDecisionFile('No heading here\n', 'abc.md');
+    expect(input.title).toBe('abc');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// decision-cmd
+// ---------------------------------------------------------------------------
+
+describe('runDecisionCmd', () => {
+  function writeDecision(relPath: string, body: string): string {
+    const abs = join(workspace, relPath);
+    mkdirSync(join(abs, '..'), { recursive: true });
+    writeFileSync(abs, body, 'utf8');
+    return relPath;
+  }
+
+  test('record: happy path upserts row and prints JSON', () => {
+    const rel = writeDecision(
+      '.prove/decisions/2026-04-24-alpha.md',
+      '# Alpha decision\n\n**Topic**: storage\n\nBody\n',
+    );
+    const res = withCapture(() => runDecisionCmd('record', [rel, undefined], {}));
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as {
+      id: string;
+      title: string;
+      topic: string | null;
+      status: string;
+      content: string;
+    };
+    expect(row.id).toBe('2026-04-24-alpha');
+    expect(row.title).toBe('Alpha decision');
+    expect(row.topic).toBe('storage');
+    expect(row.status).toBe('accepted');
+    expect(res.stderr).toContain('scrum decision record: 2026-04-24-alpha');
+    expect(res.stderr).toMatch(/\(\d+ bytes\)/);
+  });
+
+  test('record: nonexistent file → exit 1, no row', () => {
+    const res = withCapture(() =>
+      runDecisionCmd('record', ['.prove/decisions/ghost.md', undefined], {}),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("file not found '.prove/decisions/ghost.md'");
+    const list = withCapture(() => runDecisionCmd('list', [undefined, undefined], {}));
+    const rows = JSON.parse(list.stdout.trim()) as unknown[];
+    expect(rows).toHaveLength(0);
+  });
+
+  test('get: unknown id → exit 1', () => {
+    const res = withCapture(() => runDecisionCmd('get', ['nope', undefined], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown decision 'nope'");
+  });
+
+  test('get: known id → stdout equals content byte-for-byte', () => {
+    const content = '# Beta decision\n\n**Topic**: ui\n\nWhatever body text.\n';
+    const rel = writeDecision('.prove/decisions/2026-04-24-beta.md', content);
+    withCapture(() => runDecisionCmd('record', [rel, undefined], {}));
+
+    const res = withCapture(() => runDecisionCmd('get', ['2026-04-24-beta', undefined], {}));
+    expect(res.exit).toBe(0);
+    expect(res.stdout).toBe(content);
+  });
+
+  test('list: empty workspace → empty JSON array', () => {
+    const res = withCapture(() => runDecisionCmd('list', [undefined, undefined], {}));
+    expect(res.exit).toBe(0);
+    const rows = JSON.parse(res.stdout.trim()) as unknown[];
+    expect(rows).toHaveLength(0);
+    expect(res.stderr).toContain('0 decisions');
+  });
+
+  test('list: two seeded rows → JSON array of length 2', () => {
+    const a = writeDecision('.prove/decisions/2026-04-24-a.md', '# A\n\n**Topic**: architecture\n');
+    const b = writeDecision('.prove/decisions/2026-04-24-b.md', '# B\n\n**Topic**: ui\n');
+    withCapture(() => runDecisionCmd('record', [a, undefined], {}));
+    withCapture(() => runDecisionCmd('record', [b, undefined], {}));
+
+    const res = withCapture(() => runDecisionCmd('list', [undefined, undefined], {}));
+    expect(res.exit).toBe(0);
+    const rows = JSON.parse(res.stdout.trim()) as Array<{ id: string }>;
+    expect(rows).toHaveLength(2);
+  });
+
+  test('list --topic architecture: filters correctly', () => {
+    const a = writeDecision(
+      '.prove/decisions/2026-04-24-arch.md',
+      '# Arch\n\n**Topic**: architecture\n',
+    );
+    const b = writeDecision('.prove/decisions/2026-04-24-ui.md', '# UI\n\n**Topic**: ui\n');
+    withCapture(() => runDecisionCmd('record', [a, undefined], {}));
+    withCapture(() => runDecisionCmd('record', [b, undefined], {}));
+
+    const res = withCapture(() =>
+      runDecisionCmd('list', [undefined, undefined], { topic: 'architecture' }),
+    );
+    expect(res.exit).toBe(0);
+    const rows = JSON.parse(res.stdout.trim()) as Array<{ id: string; topic: string }>;
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.topic).toBe('architecture');
+  });
+
+  test('list --human: emits a table header on stdout', () => {
+    const rel = writeDecision('.prove/decisions/2026-04-24-h.md', '# H\n\n**Topic**: t\n');
+    withCapture(() => runDecisionCmd('record', [rel, undefined], {}));
+
+    const res = withCapture(() => runDecisionCmd('list', [undefined, undefined], { human: true }));
+    expect(res.exit).toBe(0);
+    expect(res.stdout).toContain('ID');
+    expect(res.stdout).toContain('TITLE');
+    expect(res.stdout).toContain('RECORDED_AT');
+  });
+
+  test('unknown action → exit 1', () => {
+    const res = withCapture(() => runDecisionCmd('bogus', [undefined, undefined], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown decision action 'bogus'");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// task link-decision — auto-record + new-shape payload
+// ---------------------------------------------------------------------------
+
+describe('runTaskCmd link-decision (auto-record)', () => {
+  test('auto-records decision when absent, payload carries decision_id + decision_path', () => {
+    // Seed a task and an on-disk decision file.
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'T', id: 't' }));
+    const rel = '.prove/decisions/2026-04-24-auto.md';
+    mkdirSync(join(workspace, '.prove', 'decisions'), { recursive: true });
+    writeFileSync(join(workspace, rel), '# Auto-recorded decision\n\n**Topic**: storage\n', 'utf8');
+
+    const res = withCapture(() => runTaskCmd('link-decision', ['t', rel], {}));
+    expect(res.exit).toBe(0);
+    const payload = JSON.parse(res.stdout.trim()) as {
+      linked: boolean;
+      task_id: string;
+      decision_id: string;
+      decision_path: string;
+    };
+    expect(payload.linked).toBe(true);
+    expect(payload.decision_id).toBe('2026-04-24-auto');
+    expect(payload.decision_path).toBe(rel);
+
+    // Decision row was upserted by the link step.
+    const get = withCapture(() => runDecisionCmd('get', ['2026-04-24-auto', undefined], {}));
+    expect(get.exit).toBe(0);
+    expect(get.stdout).toContain('Auto-recorded decision');
+  });
+
+  test('nonexistent file → exit 1, no event appended', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'Z', id: 'z2' }));
+
+    const res = withCapture(() =>
+      runTaskCmd('link-decision', ['z2', '.prove/decisions/ghost.md'], {}),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("file not found '.prove/decisions/ghost.md'");
+
+    // No decision_linked event was appended.
+    const show = withCapture(() => runTaskCmd('show', ['z2', undefined], {}));
+    const payload = JSON.parse(show.stdout.trim()) as { events: Array<{ kind: string }> };
+    expect(payload.events.some((e) => e.kind === 'decision_linked')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// decision recover --from-git — backfill from git history
+// ---------------------------------------------------------------------------
+
+describe('runDecisionCmd recover', () => {
+  /**
+   * The harness's default `workspace` only has a `.git` directory shell
+   * (enough for `mainWorktreeRoot`), not a real repo. The recover path
+   * needs an actual repo with commit history, so each test below creates
+   * its own isolated tempdir inside the per-test `workspace` and runs the
+   * handler with `--workspace-root` pointed at it.
+   */
+
+  function initRepo(dir: string): void {
+    // `git init` writes .git/ into `dir`. -q suppresses the banner.
+    const init = spawnSync('git', ['-C', dir, 'init', '-q', '-b', 'main'], { encoding: 'utf8' });
+    expect(init.status).toBe(0);
+    // Local identity so commits succeed without user-global git config.
+    spawnSync('git', ['-C', dir, 'config', 'user.email', 'test@example.com'], {
+      encoding: 'utf8',
+    });
+    spawnSync('git', ['-C', dir, 'config', 'user.name', 'Test User'], { encoding: 'utf8' });
+  }
+
+  function commitFile(dir: string, relPath: string, content: string, message: string): void {
+    const abs = join(dir, relPath);
+    mkdirSync(join(abs, '..'), { recursive: true });
+    writeFileSync(abs, content, 'utf8');
+    const add = spawnSync('git', ['-C', dir, 'add', relPath], { encoding: 'utf8' });
+    expect(add.status).toBe(0);
+    const commit = spawnSync('git', ['-C', dir, 'commit', '-q', '-m', message], {
+      encoding: 'utf8',
+    });
+    expect(commit.status).toBe(0);
+  }
+
+  test('missing --from-git → exit 1 with flag-usage hint', () => {
+    // Note: we intentionally do NOT construct a real repo here — the flag
+    // check must short-circuit before any git command runs.
+    const res = withCapture(() =>
+      runDecisionCmd('recover', [undefined, undefined], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--from-git');
+  });
+
+  test('non-repo workspace → exit 1, no DB writes', () => {
+    // `workspace` has only a `.git` dir shell; `git rev-parse
+    // --is-inside-work-tree` rejects it because it's not a real repo.
+    const nonRepo = mkdtempSync(join(tmpdir(), 'scrum-recover-nonrepo-'));
+    try {
+      const res = withCapture(() =>
+        runDecisionCmd('recover', [undefined, undefined], {
+          workspaceRoot: nonRepo,
+          fromGit: true,
+        }),
+      );
+      expect(res.exit).toBe(1);
+      expect(res.stderr).toContain('not a git repository');
+      // list against the tmpdir's own prove.db should be empty.
+      const list = withCapture(() =>
+        runDecisionCmd('list', [undefined, undefined], { workspaceRoot: nonRepo }),
+      );
+      const rows = JSON.parse(list.stdout.trim()) as unknown[];
+      expect(rows).toHaveLength(0);
+    } finally {
+      rmSync(nonRepo, { recursive: true, force: true });
+    }
+  });
+
+  test('empty repo (no ADR commits) → exit 0, recovered=0, no DB writes', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'scrum-recover-empty-'));
+    try {
+      initRepo(repo);
+      // One commit that touches something other than decisions/ so git log
+      // has at least one commit to walk.
+      commitFile(repo, 'README.md', '# Not a decision\n', 'chore: init');
+
+      const res = withCapture(() =>
+        runDecisionCmd('recover', [undefined, undefined], {
+          workspaceRoot: repo,
+          fromGit: true,
+        }),
+      );
+      expect(res.exit).toBe(0);
+      const payload = JSON.parse(res.stdout.trim()) as { recovered: number; ids: string[] };
+      expect(payload.recovered).toBe(0);
+      expect(payload.ids).toEqual([]);
+      expect(res.stderr).toContain('recovered 0 decisions');
+
+      const list = withCapture(() =>
+        runDecisionCmd('list', [undefined, undefined], { workspaceRoot: repo }),
+      );
+      const rows = JSON.parse(list.stdout.trim()) as unknown[];
+      expect(rows).toHaveLength(0);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test('happy path: v1 then v2 at same path → v2 content wins on id collision', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'scrum-recover-happy-'));
+    try {
+      initRepo(repo);
+      const relPath = '.prove/decisions/2026-04-24-choice.md';
+
+      commitFile(
+        repo,
+        relPath,
+        '# V1 title\n\n**Topic**: storage\n\nFirst revision body.\n',
+        'docs(adr): v1',
+      );
+      commitFile(
+        repo,
+        relPath,
+        '# V2 title\n\n**Topic**: architecture\n\nSecond revision body.\n',
+        'docs(adr): v2',
+      );
+
+      const res = withCapture(() =>
+        runDecisionCmd('recover', [undefined, undefined], {
+          workspaceRoot: repo,
+          fromGit: true,
+        }),
+      );
+      expect(res.exit).toBe(0);
+      const payload = JSON.parse(res.stdout.trim()) as { recovered: number; ids: string[] };
+      expect(payload.recovered).toBe(1);
+      expect(payload.ids).toEqual(['2026-04-24-choice']);
+
+      // Later commit wins: title, topic, and body all reflect v2.
+      const get = withCapture(() =>
+        runDecisionCmd('get', ['2026-04-24-choice', undefined], { workspaceRoot: repo }),
+      );
+      expect(get.exit).toBe(0);
+      expect(get.stdout).toContain('V2 title');
+      expect(get.stdout).toContain('Second revision body');
+      expect(get.stdout).not.toContain('First revision body');
+
+      const list = withCapture(() =>
+        runDecisionCmd('list', [undefined, undefined], { workspaceRoot: repo }),
+      );
+      const rows = JSON.parse(list.stdout.trim()) as Array<{
+        id: string;
+        title: string;
+        topic: string | null;
+      }>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.title).toBe('V2 title');
+      expect(rows[0]?.topic).toBe('architecture');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test('second run is a clean no-op: list length unchanged, v2 content preserved', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'scrum-recover-idempotent-'));
+    try {
+      initRepo(repo);
+      const relPath = '.prove/decisions/2026-04-24-idem.md';
+      commitFile(repo, relPath, '# V1\n\nBody v1.\n', 'docs(adr): v1');
+      commitFile(repo, relPath, '# V2\n\nBody v2.\n', 'docs(adr): v2');
+
+      const first = withCapture(() =>
+        runDecisionCmd('recover', [undefined, undefined], {
+          workspaceRoot: repo,
+          fromGit: true,
+        }),
+      );
+      expect(first.exit).toBe(0);
+
+      const second = withCapture(() =>
+        runDecisionCmd('recover', [undefined, undefined], {
+          workspaceRoot: repo,
+          fromGit: true,
+        }),
+      );
+      expect(second.exit).toBe(0);
+
+      // Upsert semantics: two runs do NOT duplicate rows.
+      const list = withCapture(() =>
+        runDecisionCmd('list', [undefined, undefined], { workspaceRoot: repo }),
+      );
+      const rows = JSON.parse(list.stdout.trim()) as Array<{ id: string; title: string }>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.title).toBe('V2');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });

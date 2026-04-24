@@ -15,7 +15,11 @@ import {
   registerSchema,
   runMigrations,
 } from '@claude-prove/store';
-import { SCRUM_MIGRATION_V1_SQL, ensureScrumSchemaRegistered } from './schemas';
+import {
+  SCRUM_MIGRATION_V1_SQL,
+  SCRUM_MIGRATION_V2_SQL,
+  ensureScrumSchemaRegistered,
+} from './schemas';
 
 describe('scrum domain registration', () => {
   beforeEach(() => {
@@ -38,7 +42,15 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V1_SQL).toContain('CREATE TABLE scrum_context_bundles');
   });
 
-  test('migration creates all 7 scrum_* tables', () => {
+  test('SCRUM_MIGRATION_V2_SQL creates scrum_decisions + both indexes', () => {
+    expect(SCRUM_MIGRATION_V2_SQL).toContain('CREATE TABLE scrum_decisions');
+    expect(SCRUM_MIGRATION_V2_SQL).toContain('CREATE INDEX idx_scrum_decisions_topic');
+    expect(SCRUM_MIGRATION_V2_SQL).toContain('CREATE INDEX idx_scrum_decisions_status');
+    // Default status is 'accepted' per ADR convention.
+    expect(SCRUM_MIGRATION_V2_SQL).toContain("DEFAULT 'accepted'");
+  });
+
+  test('migration creates all 8 scrum_* tables (v1 + v2)', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -49,6 +61,7 @@ describe('scrum domain registration', () => {
         .map((r) => r.name);
       expect(tables).toEqual([
         'scrum_context_bundles',
+        'scrum_decisions',
         'scrum_deps',
         'scrum_events',
         'scrum_milestones',
@@ -61,7 +74,7 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('migration creates all 5 scrum indexes', () => {
+  test('migration creates all 7 scrum indexes (v1 + v2)', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -71,6 +84,8 @@ describe('scrum domain registration', () => {
         )
         .map((r) => r.name);
       expect(indexes).toEqual([
+        'idx_scrum_decisions_status',
+        'idx_scrum_decisions_topic',
         'idx_scrum_deps_to_task',
         'idx_scrum_events_task_ts',
         'idx_scrum_run_links_path',
@@ -154,7 +169,9 @@ describe('scrum domain registration', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       const first = runMigrations(raw);
-      expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([1]);
+      expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
+        1, 2,
+      ]);
 
       const second = runMigrations(raw);
       expect(second.applied.filter((a) => a.domain === 'scrum')).toEqual([]);
@@ -163,7 +180,7 @@ describe('scrum domain registration', () => {
         'SELECT version FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(versions).toEqual([{ version: 1 }]);
+      expect(versions).toEqual([{ version: 1 }, { version: 2 }]);
     } finally {
       raw.close();
     }
@@ -193,12 +210,15 @@ describe('scrum domain registration', () => {
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(log).toHaveLength(1);
-      const [entry] = log;
-      if (!entry) throw new Error('expected one log entry');
-      expect(entry.domain).toBe('scrum');
-      expect(entry.version).toBe(1);
-      expect(entry.description).toContain('scrum_tasks');
+      expect(log).toHaveLength(2);
+      const [v1, v2] = log;
+      if (!v1 || !v2) throw new Error('expected two log entries');
+      expect(v1.domain).toBe('scrum');
+      expect(v1.version).toBe(1);
+      expect(v1.description).toContain('scrum_tasks');
+      expect(v2.domain).toBe('scrum');
+      expect(v2.version).toBe(2);
+      expect(v2.description).toContain('scrum_decisions');
     } finally {
       raw.close();
     }

@@ -171,7 +171,7 @@ export function buildContextBundle(taskId: string, store: ScrumStore): ContextBu
   const events = store.listEventsForTask(taskId, 200);
 
   const files = collectFilesTouched(runs);
-  const decisions = collectDecisions(events);
+  const decisions = collectDecisions(events, store);
   const runSummaries = summarizeRuns(runs).slice(-5);
   const summary_text = buildSummaryText(events);
 
@@ -365,14 +365,40 @@ function collectFilesTouched(runs: ReturnType<ScrumStore['listRunsForTask']>): s
   return Array.from(seen).sort();
 }
 
-function collectDecisions(events: ScrumEvent[]): Array<{ path: string; title: string }> {
+/**
+ * Collect decisions linked to a task, reading two payload shapes:
+ *
+ *   - v2 (current): `{ decision_id, decision_path }` emitted by the
+ *     `scrum task link-decision` CLI after task 2.1. Title is looked up in
+ *     `scrum_decisions` when the store is supplied.
+ *   - v1 (legacy): `{ path, title }` — left behind by seeded events from
+ *     `scrum init` and pre-2.1 event payloads. Preserved for back-compat
+ *     so older `.prove/prove.db` files keep rendering.
+ *
+ * `decision_id` is the new canonical key; consumers that want the slug
+ * should prefer it. `path` stays on the output shape for UI continuity.
+ */
+function collectDecisions(
+  events: ScrumEvent[],
+  store?: ScrumStore,
+): Array<{ path: string; title: string }> {
   const out: Array<{ path: string; title: string }> = [];
   for (const event of events) {
     if (event.kind !== 'decision_linked') continue;
     const payload = event.payload as Record<string, unknown> | null;
     if (!payload) continue;
-    const path = typeof payload.path === 'string' ? payload.path : '';
-    const title = typeof payload.title === 'string' ? payload.title : '';
+
+    const legacyPath = typeof payload.path === 'string' ? payload.path : '';
+    const legacyTitle = typeof payload.title === 'string' ? payload.title : '';
+    const decisionPath = typeof payload.decision_path === 'string' ? payload.decision_path : '';
+    const decisionId = typeof payload.decision_id === 'string' ? payload.decision_id : '';
+
+    const path = decisionPath || legacyPath;
+    let title = legacyTitle;
+    if (!title && decisionId && store) {
+      title = store.getDecision(decisionId)?.title ?? '';
+    }
+
     if (path) out.push({ path, title });
   }
   return out;

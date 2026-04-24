@@ -19,11 +19,13 @@
  *   1  usage error, unknown action, or domain invariant violation
  */
 
-import { join } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { isAbsolute, join, resolve } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
 import type { ListTasksOptions, ScrumStore } from '../store';
 import { openScrumStore } from '../store';
 import type { TaskStatus } from '../types';
+import { parseDecisionFile } from './decision-cmd';
 import { generateId } from './scrum-utils';
 
 export interface TaskCmdFlags {
@@ -281,6 +283,17 @@ function doMove(store: ScrumStore, id: string | undefined, flags: TaskCmdFlags):
   return 0;
 }
 
+/**
+ * Link a decision file to a task. Auto-records the decision in
+ * `scrum_decisions` when absent so the row and the event stay in sync:
+ *
+ *   1. Verify the file exists at `decisionPath` (resolved against cwd).
+ *   2. Look up `scrum_decisions.id` (filename slug). If missing, parse the
+ *      file via `parseDecisionFile` and upsert via `store.recordDecision`.
+ *   3. Append a `decision_linked` event carrying both keys:
+ *      `{ decision_id, decision_path }`. Legacy path-only payloads remain
+ *      readable — see `reconcile.ts::collectDecisions`.
+ */
 function doLinkDecision(
   store: ScrumStore,
   id: string | undefined,
@@ -301,14 +314,33 @@ function doLinkDecision(
     process.stderr.write(`scrum task link-decision: unknown task '${id}'\n`);
     return 1;
   }
+
+  const abs = isAbsolute(decisionPath) ? decisionPath : resolve(process.cwd(), decisionPath);
+  if (!existsSync(abs) || !statSync(abs).isFile()) {
+    process.stderr.write(`scrum task link-decision: file not found '${decisionPath}'\n`);
+    return 1;
+  }
+
+  const content = readFileSync(abs, 'utf8');
+  const parsed = parseDecisionFile(content, decisionPath);
+  if (store.getDecision(parsed.id) === null) {
+    store.recordDecision(parsed);
+  }
+
   const eventId = store.appendEvent({
     taskId: id,
     kind: 'decision_linked',
-    payload: { decision_path: decisionPath },
+    payload: { decision_id: parsed.id, decision_path: decisionPath },
   });
   process.stdout.write(
-    `${JSON.stringify({ linked: true, task_id: id, decision_path: decisionPath, event_id: eventId })}\n`,
+    `${JSON.stringify({
+      linked: true,
+      task_id: id,
+      decision_id: parsed.id,
+      decision_path: decisionPath,
+      event_id: eventId,
+    })}\n`,
   );
-  process.stderr.write(`scrum task link-decision: ${id} -> ${decisionPath}\n`);
+  process.stderr.write(`scrum task link-decision: ${id} -> ${parsed.id} (${decisionPath})\n`);
   return 0;
 }

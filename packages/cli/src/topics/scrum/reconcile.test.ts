@@ -242,7 +242,7 @@ describe('reconcileRunCompleted — orphan run', () => {
 // ===========================================================================
 
 describe('buildContextBundle', () => {
-  test('aggregates decisions from decision_linked events', () => {
+  test('aggregates decisions from decision_linked events (legacy {path, title} payload)', () => {
     store.createTask({ id: 'scrum-20', title: 'Demo' });
     store.appendEvent({
       taskId: 'scrum-20',
@@ -258,6 +258,60 @@ describe('buildContextBundle', () => {
     const bundle = buildContextBundle('scrum-20', store);
     expect(bundle.decisions).toHaveLength(2);
     expect(bundle.decisions.map((d) => d.title).sort()).toEqual(['Use Bun', 'Use SQLite']);
+  });
+
+  test('aggregates decisions from new-shape payload {decision_id, decision_path}', () => {
+    store.createTask({ id: 'scrum-20b', title: 'Demo' });
+    // Seed a scrum_decisions row so the title can be looked up by id.
+    store.recordDecision({
+      id: '2026-04-24-adr',
+      title: 'Adopt ACB',
+      content: '# Adopt ACB\n',
+    });
+    store.appendEvent({
+      taskId: 'scrum-20b',
+      kind: 'decision_linked',
+      payload: {
+        decision_id: '2026-04-24-adr',
+        decision_path: '.prove/decisions/2026-04-24-adr.md',
+      },
+    });
+
+    const bundle = buildContextBundle('scrum-20b', store);
+    expect(bundle.decisions).toHaveLength(1);
+    expect(bundle.decisions[0]?.path).toBe('.prove/decisions/2026-04-24-adr.md');
+    expect(bundle.decisions[0]?.title).toBe('Adopt ACB');
+  });
+
+  test('mixed fixture: legacy and new-shape payloads coexist on one task', () => {
+    store.createTask({ id: 'scrum-20c', title: 'Demo' });
+    store.recordDecision({
+      id: '2026-04-24-mixed',
+      title: 'Mixed decision',
+      content: '# Mixed decision\n',
+    });
+    // Legacy payload.
+    store.appendEvent({
+      taskId: 'scrum-20c',
+      kind: 'decision_linked',
+      payload: { path: '.prove/decisions/legacy.md', title: 'Legacy title' },
+    });
+    // New-shape payload.
+    store.appendEvent({
+      taskId: 'scrum-20c',
+      kind: 'decision_linked',
+      payload: {
+        decision_id: '2026-04-24-mixed',
+        decision_path: '.prove/decisions/2026-04-24-mixed.md',
+      },
+    });
+
+    const bundle = buildContextBundle('scrum-20c', store);
+    expect(bundle.decisions).toHaveLength(2);
+    const paths = bundle.decisions.map((d) => d.path).sort();
+    expect(paths).toEqual(['.prove/decisions/2026-04-24-mixed.md', '.prove/decisions/legacy.md']);
+    const titles = bundle.decisions.map((d) => d.title).sort();
+    expect(titles).toEqual(['Legacy title', 'Mixed decision']);
   });
 
   test('caps run summaries at 5 (last-5 most recent)', () => {
