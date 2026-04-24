@@ -279,8 +279,17 @@ jobs:
           mv claude-prove ${{ matrix.artifact }}
 
       - name: Upload to GitHub Release
+        # `tag_name` is required when the workflow is NOT triggered by a tag
+        # push. This matrix runs on the branch-push event that cut the
+        # release, so GITHUB_REF is refs/heads/main and the action cannot
+        # infer which release to attach assets to — it errors out with
+        # "⚠️ GitHub Releases requires a tag". The release job already
+        # created the release via the `softprops/action-gh-release` action
+        # above, so this call attaches files to the existing release
+        # instead of creating a new one.
         uses: softprops/action-gh-release@v3
         with:
+          tag_name: v${{ needs.release.outputs.new_version }}
           files: ${{ matrix.artifact }}
           fail_on_unmatched_files: true
         env:
