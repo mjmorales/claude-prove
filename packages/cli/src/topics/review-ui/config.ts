@@ -1,5 +1,5 @@
 /**
- * `prove review-ui config` — emit review-ui config as JSON with defaults filled.
+ * `claude-prove review-ui config` — emit review-ui config as JSON with defaults filled.
  *
  * Reads `.claude/.prove.json` from --cwd (default: process.cwd()) and emits
  * `{ port, image, tag }` on stdout. Any missing key falls back to the
@@ -7,7 +7,7 @@
  * `.tag` without their own `${VAR:-default}` chain.
  *
  * Replaces the three `python3 -c 'import json,...'` one-liners in
- * `commands/review-ui.md` with a single `prove review-ui config` call.
+ * `commands/review-ui.md` with a single `claude-prove review-ui config` call.
  *
  * Exit codes:
  *   0  success (including missing config file -> defaults)
@@ -46,7 +46,7 @@ export function runConfig(opts: RunConfigOptions): number {
     parsed = readConfigFile(configPath);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`prove review-ui config: ${msg}`);
+    console.error(`claude-prove review-ui config: ${msg}`);
     return 1;
   }
 

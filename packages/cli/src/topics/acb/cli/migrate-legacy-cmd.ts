@@ -1,5 +1,5 @@
 /**
- * `prove acb migrate-legacy-db [--workspace-root <path>]`
+ * `claude-prove acb migrate-legacy-db [--workspace-root <path>]`
  *
  * User-triggered one-shot migration from standalone `.prove/acb.db` into
  * the unified `.prove/prove.db` acb domain. Wraps `importLegacyDb` — NOT

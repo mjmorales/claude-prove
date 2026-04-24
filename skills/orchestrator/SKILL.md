@@ -52,7 +52,7 @@ After mode + slug are resolved, proceed to the appropriate phase. All downstream
 All run artifacts are JSON and live under `.prove/runs/<branch>/<slug>/`:
 
 - `prd.json`, `plan.json` — write-once inputs
-- `state.json` — hot path, mutated **only** via `scripts/prove-run ...` (thin wrapper over `prove run-state ...`)
+- `state.json` — hot path, mutated **only** via `scripts/prove-run ...` (thin wrapper over `claude-prove run-state ...`)
 - `reports/<step_id>.json` — write-once per step
 
 Direct edits to `state.json` are blocked by a PreToolUse hook. Render human views JIT (`run_state show`).
@@ -396,8 +396,8 @@ Triggered by `--full` without an existing plan. Gathers PRD + plan via a require
 | Script | Purpose |
 |--------|---------|
 | `scripts/prove-run` | Agent wrapper around the run_state CLI — all JSON mutations and renders go through this |
-| `prove orchestrator task-prompt` | Prompt for worktree implementation agents (CLI subcommand) |
-| `prove orchestrator review-prompt` | Review prompt for principal-architect (CLI subcommand) |
+| `claude-prove orchestrator task-prompt` | Prompt for worktree implementation agents (CLI subcommand) |
+| `claude-prove orchestrator review-prompt` | Review prompt for principal-architect (CLI subcommand) |
 | `skills/orchestrator/scripts/manage-worktree.sh` | Create/remove/list sub-task worktrees (writes `.prove-wt-slug.txt`) |
 | `scripts/cleanup.sh` | Archive and remove run artifacts |
 

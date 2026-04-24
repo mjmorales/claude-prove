@@ -1,5 +1,5 @@
 /**
- * `prove scrum task <action> [args] [flags]`
+ * `claude-prove scrum task <action> [args] [flags]`
  *
  * Action dispatch:
  *   create         --title X [--description Y] [--milestone M] [--id I]

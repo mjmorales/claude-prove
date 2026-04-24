@@ -76,7 +76,7 @@ export function runMigrations(store: Store): MigrationResult {
 
 /**
  * Drop every domain table listed in `_migrations_log` plus the log
- * itself. Intended for `prove store reset --confirm`; production code
+ * itself. Intended for `claude-prove store reset --confirm`; production code
  * should never call this implicitly.
  */
 export function dropAllDomainTables(store: Store): void {

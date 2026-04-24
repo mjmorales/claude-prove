@@ -1,5 +1,5 @@
 /**
- * `prove acb assemble [--branch B] [--base main]`
+ * `claude-prove acb assemble [--branch B] [--base main]`
  *
  * Collapse every stored manifest on `branch` into a cumulative ACB document
  * (`assemble()`), upsert it on the branch, then drop the source manifests

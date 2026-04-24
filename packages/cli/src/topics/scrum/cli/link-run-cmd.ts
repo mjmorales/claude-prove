@@ -1,5 +1,5 @@
 /**
- * `prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
+ * `claude-prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
  *                        [--workspace-root W]`
  *
  * Retroactively link an orchestrator run to a scrum task. Used for

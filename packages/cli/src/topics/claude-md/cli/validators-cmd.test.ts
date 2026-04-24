@@ -1,5 +1,5 @@
 /**
- * Parity tests for `prove claude-md validators`.
+ * Parity tests for `claude-prove claude-md validators`.
  *
  * Covers the output format formerly produced by the inline Python in
  * `skills/task/scripts/gather-context.sh`:

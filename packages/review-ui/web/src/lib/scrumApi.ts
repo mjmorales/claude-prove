@@ -4,7 +4,7 @@
  *
  * Intentionally GET-only — the server refuses mutating verbs, and the
  * `/scrum/*` UI surface is a read-only operator dashboard. Mutations happen
- * via the `prove scrum` CLI and the scrum-master agent.
+ * via the `claude-prove scrum` CLI and the scrum-master agent.
  */
 
 import type {

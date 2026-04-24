@@ -1,5 +1,5 @@
 /**
- * `prove pcd collapse [--token-budget N] [--project-root PATH]`
+ * `claude-prove pcd collapse [--token-budget N] [--project-root PATH]`
  *
  * Ports `tools/pcd/__main__.py::cmd_collapse`:
  *   - Reads `<pcd>/triage-manifest.json`; exits 1 with Python-verbatim

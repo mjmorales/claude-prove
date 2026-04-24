@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Capture TS CAFI output against a synthetic project with a stubbed claude CLI.
 #
-# The Python side of parity lands in task 4 once `prove cafi` dispatches to
+# The Python side of parity lands in task 4 once `claude-prove cafi` dispatches to
 # the TS indexer; task 2 pins only TS captures that indexer.test.ts uses.
 #
 # Flow:
@@ -111,4 +111,4 @@ TS
 (cd "$REPO_ROOT" && bun run "$tmp/harness.ts" "$project" "$TS_CAP")
 
 echo "ts captures written to $TS_CAP"
-echo "(python captures deferred to task 4 once prove cafi CLI is wired)"
+echo "(python captures deferred to task 4 once claude-prove cafi CLI is wired)"

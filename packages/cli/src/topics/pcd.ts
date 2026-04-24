@@ -2,13 +2,13 @@
  * Register the `pcd` topic on the cac instance.
  *
  * Mirrors `tools/pcd/__main__.py` 1:1 so hooks, skills, and orchestrator
- * wrappers flip from the Python entrypoint to `prove pcd` without interface
+ * wrappers flip from the Python entrypoint to `claude-prove pcd` without interface
  * drift:
  *
- *   prove pcd map      [--scope FILE,...] [--project-root PATH]
- *   prove pcd collapse [--token-budget N] [--project-root PATH]
- *   prove pcd batch    [--max-files N]    [--project-root PATH]
- *   prove pcd status                      [--project-root PATH]
+ *   claude-prove pcd map      [--scope FILE,...] [--project-root PATH]
+ *   claude-prove pcd collapse [--token-budget N] [--project-root PATH]
+ *   claude-prove pcd batch    [--max-files N]    [--project-root PATH]
+ *   claude-prove pcd status                      [--project-root PATH]
  *
  * Stdout/stderr split matches Python:
  *   - stdout: machine-readable JSON (consumed by LLM agents)

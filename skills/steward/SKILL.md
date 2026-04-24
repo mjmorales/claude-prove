@@ -237,7 +237,7 @@ Progressive Context Distillation -- multi-round pipeline producing structured fi
 ### 1a. Structural Map
 
 ```bash
-prove pcd map --project-root "$PROJECT_ROOT" [--scope <scope>]
+claude-prove pcd map --project-root "$PROJECT_ROOT" [--scope <scope>]
 ```
 
 Produces `.prove/steward/pcd/structural-map.json` (file metadata, dependency edges, clusters).
@@ -267,7 +267,7 @@ Merge into `.prove/steward/pcd/triage-manifest.json`:
 ### 1d. Collapse
 
 ```bash
-prove pcd collapse --project-root "$PROJECT_ROOT"
+claude-prove pcd collapse --project-root "$PROJECT_ROOT"
 ```
 
 Compresses low-risk cards -> `.prove/steward/pcd/collapsed-manifest.json`.
@@ -275,7 +275,7 @@ Compresses low-risk cards -> `.prove/steward/pcd/collapsed-manifest.json`.
 ### 1e. Deep Review (Opus, max 3 concurrent)
 
 ```bash
-prove pcd batch --project-root "$PROJECT_ROOT"
+claude-prove pcd batch --project-root "$PROJECT_ROOT"
 ```
 
 Per batch in `batch-definitions.json`, launch `pcd-reviewer` (`run_in_background: true`):

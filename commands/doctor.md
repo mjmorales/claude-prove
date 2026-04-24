@@ -29,7 +29,7 @@ Core checks gate all subsequent tiers. On any failure, skip Steps 2-3 and go to 
 #### 1.1: .claude/.prove.json
 
 ```bash
-prove schema validate --file "$(pwd)/.claude/.prove.json" 2>&1
+claude-prove schema validate --file "$(pwd)/.claude/.prove.json" 2>&1
 ```
 
 - Pass: valid JSON, no schema errors
@@ -96,7 +96,7 @@ docker info >/dev/null 2>&1
 #### 2.3: Schema Validator
 
 ```bash
-prove schema validate --help 2>&1
+claude-prove schema validate --help 2>&1
 ```
 
 - Pass: CLI loads
@@ -139,7 +139,7 @@ Compare `.claude/.prove.json` mtime vs `CLAUDE.md` mtime.
 #### 3.4: Schema Version
 
 ```bash
-prove schema migrate --file "$(pwd)/.claude/.prove.json" --dry-run 2>&1
+claude-prove schema migrate --file "$(pwd)/.claude/.prove.json" --dry-run 2>&1
 ```
 
 - Pass: latest schema version

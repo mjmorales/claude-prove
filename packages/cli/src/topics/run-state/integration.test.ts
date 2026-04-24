@@ -1,5 +1,5 @@
 /**
- * End-to-end integration tests for the `prove run-state` CLI.
+ * End-to-end integration tests for the `claude-prove run-state` CLI.
  *
  * Each test spawns `bun run <repo>/packages/cli/bin/run.ts run-state <action>`
  * against a fresh tmpdir fixture, captures stdout/stderr/exit, and asserts

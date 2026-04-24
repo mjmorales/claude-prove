@@ -3,7 +3,7 @@
  *
  * Subcommand surface:
  *
- *   prove commit validate-msg <file>
+ *   claude-prove commit validate-msg <file>
  *
  * `validate-msg` is the pre-commit `commit-msg` hook entrypoint (wired via
  * `.pre-commit-config.yaml`). It enforces conventional-commits format and
@@ -46,7 +46,7 @@ function dispatch(action: CommitAction, file: string | undefined): number {
     case 'validate-msg':
       if (!file) {
         console.error('error: commit validate-msg: missing <file> argument');
-        console.error('usage: prove commit validate-msg <commit-msg-file>');
+        console.error('usage: claude-prove commit validate-msg <commit-msg-file>');
         return 1;
       }
       return runValidateMsgCmd(file);

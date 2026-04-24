@@ -5,12 +5,12 @@
  * (plus `validators`, used as a plugin-dir-less fallback in the gather-context
  * script now at `skills/task/scripts/gather-context.sh`).
  * Hooks, the docs skill's `claude-md` subcommand, and direct invocations
- * call `prove claude-md`:
+ * call `claude-prove claude-md`:
  *
- *   prove claude-md generate         [--project-root R] [--plugin-dir P]
- *   prove claude-md scan             [--project-root R] [--plugin-dir P]
- *   prove claude-md subagent-context [--project-root R] [--plugin-dir P]
- *   prove claude-md validators       [--project-root R]
+ *   claude-prove claude-md generate         [--project-root R] [--plugin-dir P]
+ *   claude-prove claude-md scan             [--project-root R] [--plugin-dir P]
+ *   claude-prove claude-md subagent-context [--project-root R] [--plugin-dir P]
+ *   claude-prove claude-md validators       [--project-root R]
  *
  * Subcommand dispatch follows the `schema` / `acb` pattern — a single
  * `claude-md <action>` command with an action enum. Default action is

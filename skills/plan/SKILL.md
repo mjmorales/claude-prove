@@ -82,7 +82,7 @@ Identify edge cases across input boundaries, state conditions, error scenarios. 
 
 Link this run to a scrum backlog task so reconciliation (orchestrator completion -> scrum task state) can fire. The link is the optional top-level `task_id` field on `plan.json`.
 
-1. Run `prove scrum next-ready --limit 5 --json`. Three branches:
+1. Run `claude-prove scrum next-ready --limit 5 --json`. Three branches:
 
    - **Exit 0 with task list** -> scrum enabled, ready tasks exist. Present options via `AskUserQuestion`:
      ```
@@ -92,12 +92,12 @@ Link this run to a scrum backlog task so reconciliation (orchestrator completion
        - label: "<task_id>: <title>"  # one per returned task, up to 3
          description: "<task.status> / wave <task.wave>"
        - label: "Create new task"
-         description: "Invoke `prove scrum task create` inline and use the returned id"
+         description: "Invoke `claude-prove scrum task create` inline and use the returned id"
        - label: "Skip"
          description: "Proceed without task_id (reconciliation is opt-in)"
      ```
      If the operator picks an existing task -> stamp `task_id: "<id>"` on plan.json.
-     If they pick "Create new task" -> ask for a title (free-form), run `prove scrum task create --title "<title>" --json`, parse the returned `id`, stamp it on plan.json.
+     If they pick "Create new task" -> ask for a title (free-form), run `claude-prove scrum task create --title "<title>" --json`, parse the returned `id`, stamp it on plan.json.
      If they pick "Skip" -> omit `task_id` entirely.
 
    - **Exit 0 with empty list** -> scrum enabled but no ready tasks. Offer `AskUserQuestion` with "Create new task" and "Skip" (same flow as above, minus the existing-task options).

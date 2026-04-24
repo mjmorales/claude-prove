@@ -1,5 +1,5 @@
 /**
- * `prove orchestrator review-prompt` — emit the principal-architect review
+ * `claude-prove orchestrator review-prompt` — emit the principal-architect review
  * prompt for a completed task worktree.
  *
  * Replaces `skills/orchestrator/scripts/generate-review-prompt.sh`. Reads

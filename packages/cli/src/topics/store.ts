@@ -21,9 +21,9 @@ const STORE_ACTIONS: StoreAction[] = ['migrate', 'info', 'reset'];
  * cac dispatches commands on the first positional arg only, so sub-actions
  * live under a single `store <action>` command with an action enum instead
  * of space-separated command names. Users still invoke the natural form:
- *   prove store migrate
- *   prove store info
- *   prove store reset --confirm
+ *   claude-prove store migrate
+ *   claude-prove store info
+ *   claude-prove store reset --confirm
  *
  * No domains are registered at phase 2 — downstream domain packages call
  * `registerSchema` in their own modules once they port. `store migrate`
@@ -37,7 +37,7 @@ export function register(cli: CAC): void {
     .action((action: string, flags: StoreFlags) => {
       if (!isStoreAction(action)) {
         console.error(
-          `prove store: unknown action '${action}'. expected one of: ${STORE_ACTIONS.join(', ')}`,
+          `claude-prove store: unknown action '${action}'. expected one of: ${STORE_ACTIONS.join(', ')}`,
         );
         process.exit(1);
       }
@@ -71,7 +71,7 @@ function runStoreCommand(fn: (store: Store) => number): number {
     return fn(store);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`prove store: ${msg}`);
+    console.error(`claude-prove store: ${msg}`);
     return 1;
   } finally {
     store?.close();

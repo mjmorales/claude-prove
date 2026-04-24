@@ -8,21 +8,21 @@
  * `tools/run_state/__main__.py` 1:1 so hooks, skills, and orchestrator
  * wrappers flip over without interface drift:
  *
- *   prove run-state validate <file> [--kind K] [--strict]
- *   prove run-state init --branch B --slug S --plan FILE [--prd FILE] [--overwrite]
- *   prove run-state show [--kind K] [--format md|json]
- *   prove run-state show-report <step_id> [--format md|json]
- *   prove run-state ls
- *   prove run-state summary
- *   prove run-state current [--format json|text]
- *   prove run-state step <start|complete|fail|halt> <step_id> [--commit SHA] [--reason TEXT]
- *   prove run-state step-info <step_id>
- *   prove run-state validator set <step_id> <phase> <status>
- *   prove run-state task review <task_id> --verdict V [--notes T] [--reviewer N]
- *   prove run-state dispatch <record|has> <key> [<event>]
- *   prove run-state report write <step_id> --status S [--commit SHA] [--json FILE] [--notes TEXT]
- *   prove run-state migrate [--dry-run] [--overwrite]
- *   prove run-state hook <guard|validate|session-start|stop|subagent-stop>
+ *   claude-prove run-state validate <file> [--kind K] [--strict]
+ *   claude-prove run-state init --branch B --slug S --plan FILE [--prd FILE] [--overwrite]
+ *   claude-prove run-state show [--kind K] [--format md|json]
+ *   claude-prove run-state show-report <step_id> [--format md|json]
+ *   claude-prove run-state ls
+ *   claude-prove run-state summary
+ *   claude-prove run-state current [--format json|text]
+ *   claude-prove run-state step <start|complete|fail|halt> <step_id> [--commit SHA] [--reason TEXT]
+ *   claude-prove run-state step-info <step_id>
+ *   claude-prove run-state validator set <step_id> <phase> <status>
+ *   claude-prove run-state task review <task_id> --verdict V [--notes T] [--reviewer N]
+ *   claude-prove run-state dispatch <record|has> <key> [<event>]
+ *   claude-prove run-state report write <step_id> --status S [--commit SHA] [--json FILE] [--notes TEXT]
+ *   claude-prove run-state migrate [--dry-run] [--overwrite]
+ *   claude-prove run-state hook <guard|validate|session-start|stop|subagent-stop>
  *
  * Exit codes mirror Python:
  *   0  success

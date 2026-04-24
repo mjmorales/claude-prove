@@ -1,5 +1,5 @@
 /**
- * `prove orchestrator task-prompt` — emit the worktree implementation agent
+ * `claude-prove orchestrator task-prompt` — emit the worktree implementation agent
  * prompt for a specific task id.
  *
  * Replaces `skills/orchestrator/scripts/generate-task-prompt.sh`. The shell

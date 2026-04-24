@@ -4,9 +4,9 @@ description: Detect project tech stack and generate .claude/.prove.json configur
 
 # Initialize .claude/.prove.json
 
-Delegate stack detection and validator emission to `prove install init-config`, then layer interactive UX for scope, validator review, `.gitignore`, references, and CLAUDE.md.
+Delegate stack detection and validator emission to `claude-prove install init-config`, then layer interactive UX for scope, validator review, `.gitignore`, references, and CLAUDE.md.
 
-`prove install init-config` is the source of truth for validator detection. It writes `<cwd>/.claude/.prove.json`, preserves user-custom validators, and carries every other top-level key (`scopes`, `reporters`, `claude_md`, `tools`, ...) across re-runs.
+`claude-prove install init-config` is the source of truth for validator detection. It writes `<cwd>/.claude/.prove.json`, preserves user-custom validators, and carries every other top-level key (`scopes`, `reporters`, `claude_md`, `tools`, ...) across re-runs.
 
 ## Step 0: Guard
 

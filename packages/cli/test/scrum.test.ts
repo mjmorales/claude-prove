@@ -1,5 +1,5 @@
 /**
- * End-to-end integration tests for the `prove scrum` CLI topic.
+ * End-to-end integration tests for the `claude-prove scrum` CLI topic.
  *
  * Spawns `bun run bin/run.ts scrum <subcommand>` in a tmpdir git repo so
  * the full cac dispatch + stdin/stdout/stderr split + exit code contract
@@ -90,7 +90,7 @@ afterAll(() => {
 // init
 // ---------------------------------------------------------------------------
 
-describe('prove scrum init', () => {
+describe('claude-prove scrum init', () => {
   test('empty planning/: clean no-op with informational stderr', () => {
     const repo = trackRepo('init-empty');
     const res = runScrum(['init'], repo);
@@ -156,7 +156,7 @@ describe('prove scrum init', () => {
 // task + milestone + tag + link-run lifecycle
 // ---------------------------------------------------------------------------
 
-describe('prove scrum task lifecycle', () => {
+describe('claude-prove scrum task lifecycle', () => {
   test('create -> show -> list -> tag -> link-decision flow', () => {
     const repo = trackRepo('task-lifecycle');
 
@@ -247,7 +247,7 @@ describe('prove scrum task lifecycle', () => {
 // status + next-ready
 // ---------------------------------------------------------------------------
 
-describe('prove scrum status', () => {
+describe('claude-prove scrum status', () => {
   test('default JSON shape has the three documented keys', () => {
     const repo = trackRepo('status-json');
     // Seed a single task so there's something to report.
@@ -277,7 +277,7 @@ describe('prove scrum status', () => {
   });
 });
 
-describe('prove scrum next-ready', () => {
+describe('claude-prove scrum next-ready', () => {
   test('returns ranked JSON array by default', () => {
     const repo = trackRepo('nr-default');
     // Seed two ready tasks so nextReady has candidates.
@@ -303,7 +303,7 @@ describe('prove scrum next-ready', () => {
 // milestone close + status-filtered list
 // ---------------------------------------------------------------------------
 
-describe('prove scrum milestone', () => {
+describe('claude-prove scrum milestone', () => {
   test('create -> list -> show -> close flow', () => {
     const repo = trackRepo('mlstone-flow');
     runScrum(['milestone', 'create', '--title', 'M1', '--id', 'm1'], repo);
@@ -332,7 +332,7 @@ describe('prove scrum milestone', () => {
 // tag add/remove/list
 // ---------------------------------------------------------------------------
 
-describe('prove scrum tag', () => {
+describe('claude-prove scrum tag', () => {
   test('add -> list -> remove round-trip', () => {
     const repo = trackRepo('tag-flow');
     runScrum(['task', 'create', '--title', 'T', '--id', 't'], repo);
@@ -366,7 +366,7 @@ describe('prove scrum tag', () => {
 // link-run standalone
 // ---------------------------------------------------------------------------
 
-describe('prove scrum link-run', () => {
+describe('claude-prove scrum link-run', () => {
   test('missing positional: exit 1', () => {
     const repo = trackRepo('lr-missing');
     const res = runScrum(['link-run'], repo);
@@ -386,7 +386,7 @@ describe('prove scrum link-run', () => {
 // hook — dispatch-function smoke
 // ---------------------------------------------------------------------------
 
-describe('prove scrum hook', () => {
+describe('claude-prove scrum hook', () => {
   test('unknown event: exit 1 with guidance', () => {
     const repo = trackRepo('hook-bad-event');
     const res = runScrum(['hook', 'not-a-real-event'], repo);
@@ -421,7 +421,7 @@ describe('prove scrum hook', () => {
 // --workspace-root threading — regression for review-round-2 blocking finding
 // ---------------------------------------------------------------------------
 
-describe('prove scrum --workspace-root', () => {
+describe('claude-prove scrum --workspace-root', () => {
   test('writes land in --workspace-root repo, not cwd', () => {
     // repoA is the target workspace; repoB is where we invoke the CLI from.
     // Before the fix, every handler bare-called openScrumStore() which
@@ -452,7 +452,7 @@ describe('prove scrum --workspace-root', () => {
 // Unknown action
 // ---------------------------------------------------------------------------
 
-describe('prove scrum unknown action', () => {
+describe('claude-prove scrum unknown action', () => {
   test('unknown action exits 1 with guidance', () => {
     const repo = trackRepo('scrum-bogus');
     const res = runScrum(['bogus'], repo);

@@ -2,7 +2,7 @@
  * PreToolUse hook — blocks direct Write/Edit/MultiEdit on `state.json`.
  *
  * `state.json` is the hot-path run state file. All mutations must route
- * through `prove run-state step|validator|task|dispatch ...` so transition
+ * through `claude-prove run-state step|validator|task|dispatch ...` so transition
  * invariants hold. This hook denies raw Write/Edit calls whose file_path
  * resolves to any `<runs>/<branch>/<slug>/state.json`.
  *
@@ -36,7 +36,7 @@ export function runGuard(payload: Record<string, unknown> | null): HookResult {
 
   if (process.env.RUN_STATE_ALLOW_DIRECT === '1') return EMPTY_HOOK_RESULT;
 
-  const message = `Direct edits to ${filePath} are blocked. Use \`prove run-state step|validator|task|dispatch ...\` to mutate state.json. Set RUN_STATE_ALLOW_DIRECT=1 only for emergency manual recovery.`;
+  const message = `Direct edits to ${filePath} are blocked. Use \`claude-prove run-state step|validator|task|dispatch ...\` to mutate state.json. Set RUN_STATE_ALLOW_DIRECT=1 only for emergency manual recovery.`;
 
   const body = pyJsonDump({
     hookSpecificOutput: {

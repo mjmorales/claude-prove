@@ -53,7 +53,7 @@ The `/prove:review-ui` slash command is the supported user-facing entry
 point. It pulls `ghcr.io/mjmorales/claude-prove/review-ui` from GHCR, runs
 it as a detached `prove-review` container, bind-mounts the repo at
 `/repo`, waits for `/api/health`, and opens the browser. Config resolution
-flows through `prove review-ui config --cwd <repo-root> | jq`, so the
+flows through `claude-prove review-ui config --cwd <repo-root> | jq`, so the
 slash command has no `python3` dependency.
 
 Config keys (first non-empty wins):
@@ -64,7 +64,7 @@ Config keys (first non-empty wins):
 4. Hardcoded defaults: `5174`, `ghcr.io/mjmorales/claude-prove/review-ui`,
    `latest`
 
-`prove review-ui config` emits all three keys as one JSON line, filling
+`claude-prove review-ui config` emits all three keys as one JSON line, filling
 any missing value with the hardcoded default — the shell resolution in
 `/prove:review-ui` therefore drops one fallback layer.
 
@@ -94,14 +94,14 @@ later-phase concern.
 
 - Task 1: scaffold `packages/review-ui`, copy sources verbatim from
   `tools/review-ui`.
-- Task 2: `prove review-ui config` subcommand added.
+- Task 2: `claude-prove review-ui config` subcommand added.
 - Task 3: server ported to `@claude-prove/store`; `group_verdicts`
   absorbed into the acb domain as `acb_group_verdicts` (migration v2
   with idempotent backfill from legacy bare tables).
 - Task 4: `react-router-dom` + `/acb` and `/scrum` routes.
 - Task 5: Dockerfile switched to `oven/bun:1-alpine`, build context
   repointed to `packages/review-ui/`.
-- Task 6: `/prove:review-ui` rewritten to use `prove review-ui config |
+- Task 6: `/prove:review-ui` rewritten to use `claude-prove review-ui config |
   jq`; `python3` dependency dropped.
 - Task 7: `.github/workflows/review-ui-image.yml` path filter + build
   context updated.

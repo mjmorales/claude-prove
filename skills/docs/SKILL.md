@@ -17,7 +17,7 @@ Dispatches by subcommand. Follows `references/interaction-patterns.md` for all `
 | `human [subject]` | Human-readable docs — delegates to `technical-writer` agent |
 | `agent [subject]` | LLM-optimized agent/API/module docs |
 | `both [subject]` (default) | Auto-docs: resolve scope, run both audiences |
-| `claude-md generate` | Full CLAUDE.md generation via `prove claude-md` CLI |
+| `claude-md generate` | Full CLAUDE.md generation via `claude-prove claude-md` CLI |
 | `claude-md update <directive>` | Append/update single directive with optimization + craft certification |
 
 Parse first token of `$ARGUMENTS` as subcommand. If absent, default to `both` with empty subject (session context).

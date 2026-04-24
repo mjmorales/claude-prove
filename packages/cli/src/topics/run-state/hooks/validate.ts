@@ -64,7 +64,7 @@ export function runValidateHook(payload: Record<string, unknown> | null): HookRe
   lines.push(...formatFindings(result.errors));
   lines.push(
     'Fix the file or revert. state.json must be mutated via ' +
-      '`prove run-state step|validator|task ...`.',
+      '`claude-prove run-state step|validator|task ...`.',
   );
   const message = lines.join('\n');
 

@@ -103,7 +103,7 @@ describe('schema CLI — error paths', () => {
     const { stderr, exitCode } = runCli(['schema', 'bogus']);
     expect(exitCode).toBe(1);
     expect(stderr).toContain(
-      "prove schema: unknown action 'bogus'. expected one of: validate, migrate, diff, summary",
+      "claude-prove schema: unknown action 'bogus'. expected one of: validate, migrate, diff, summary",
     );
   });
 

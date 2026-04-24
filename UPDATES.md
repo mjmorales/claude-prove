@@ -16,9 +16,9 @@ The scrum CLI gains the status-transition and soft-delete actions the operator-f
 
 **Added**:
 
-- `prove scrum task status <id> <new-status>` — drive a task through the lifecycle from the CLI; rejects invalid transitions and unknown statuses.
-- `prove scrum task delete <id>` — soft-delete via `softDeleteTask`; removed tasks stop showing up in `task list`.
-- `prove scrum alerts [--human] [--stalled-after-days N]` — aggregates `stalled_wip` (in_progress/review tasks whose `last_event_at` exceeds the threshold, default 7d) and `orphan_runs` (directories under `.prove/runs/<branch>/<slug>/` with no matching `scrum_run_links` row). Stdout JSON for agents, `--human` table for operators. Exit 0 whether or not alerts are present — this is a report, not a gate.
+- `claude-prove scrum task status <id> <new-status>` — drive a task through the lifecycle from the CLI; rejects invalid transitions and unknown statuses.
+- `claude-prove scrum task delete <id>` — soft-delete via `softDeleteTask`; removed tasks stop showing up in `task list`.
+- `claude-prove scrum alerts [--human] [--stalled-after-days N]` — aggregates `stalled_wip` (in_progress/review tasks whose `last_event_at` exceeds the threshold, default 7d) and `orphan_runs` (directories under `.prove/runs/<branch>/<slug>/` with no matching `scrum_run_links` row). Stdout JSON for agents, `--human` table for operators. Exit 0 whether or not alerts are present — this is a report, not a gate.
 - `status` snapshot now carries `total_milestones` alongside the existing `milestones` array; the `--human` table renders `Active milestones (N of M total)` and the stderr summary reads `N/M active milestones`. Resolves the undercount surprise filed in #16.4.
 - Importer noise filter: bullets ending in `:`, bare `**Header**` rows, and dependency prose (`/\b(all\s+)?depend(s|ed)?\s+on\b/i`, `see also:`, `note:`) are dropped from both ROADMAP and BACKLOG. Fixes the "M1 capstone" and "parser items all depend on AST node type 9" false positives.
 - Importer ICE dedup: ROADMAP tasks with an `ICE <n>` token register the number; matching BACKLOG entries are skipped as duplicates rather than creating parallel records.
@@ -26,18 +26,18 @@ The scrum CLI gains the status-transition and soft-delete actions the operator-f
 
 **Changed**:
 
-- `commands/scrum.md` routing table: `alerts` is a direct CLI passthrough (`prove scrum alerts --human`) rather than an agent delegation. Matches `init|status|next`.
-- `agents/scrum-master.md`: hook-invoked digests pull stalled-WIP + orphan-run signal from `prove scrum alerts` instead of re-deriving it. Frontmatter description + interactive routing no longer advertise `alerts` — the agent reaches for it when useful but is no longer the only entry point.
-- `prove scrum task` error message now lists the full action set (`create | show | list | tag | link-decision | status | delete`).
+- `commands/scrum.md` routing table: `alerts` is a direct CLI passthrough (`claude-prove scrum alerts --human`) rather than an agent delegation. Matches `init|status|next`.
+- `agents/scrum-master.md`: hook-invoked digests pull stalled-WIP + orphan-run signal from `claude-prove scrum alerts` instead of re-deriving it. Frontmatter description + interactive routing no longer advertise `alerts` — the agent reaches for it when useful but is no longer the only entry point.
+- `claude-prove scrum task` error message now lists the full action set (`create | show | list | tag | link-decision | status | delete`).
 
 **Migration**:
 
 - No schema changes. All state lives in the existing `scrum_tasks`, `scrum_milestones`, and `scrum_run_links` tables.
 - Operators who patched around the missing CLI by importing `openScrumStore` directly can now switch to the CLI surface:
-  - `updateTaskStatus(id, s)` → `prove scrum task status <id> <s>`
-  - `softDeleteTask(id)` → `prove scrum task delete <id>`
-  - `createMilestone(...)` for inferred placeholders happens automatically during `prove scrum init`.
-- Projects that previously ran `prove scrum init` against a planning tree with prose-as-task noise, ICE duplicates, or unreferenced milestones should re-run the importer against a fresh `.prove/prove.db` (or use `prove scrum task delete` to trim the existing seed). The importer itself is still idempotent and short-circuits when any tasks exist.
+  - `updateTaskStatus(id, s)` → `claude-prove scrum task status <id> <s>`
+  - `softDeleteTask(id)` → `claude-prove scrum task delete <id>`
+  - `createMilestone(...)` for inferred placeholders happens automatically during `claude-prove scrum init`.
+- Projects that previously ran `claude-prove scrum init` against a planning tree with prose-as-task noise, ICE duplicates, or unreferenced milestones should re-run the importer against a fresh `.prove/prove.db` (or use `claude-prove scrum task delete` to trim the existing seed). The importer itself is still idempotent and short-circuits when any tasks exist.
 
 ### Binary-rename follow-ups
 
@@ -72,7 +72,7 @@ The compiled CLI binary is renamed from `prove` to `claude-prove` to end the nam
 **Changed**:
 
 - `packages/cli/package.json`: `bin."prove"` → `bin."claude-prove"`. `bun install` / `bun link` now exposes the CLI as `claude-prove`.
-- `packages/installer/src/resolve-binary-path.ts`: compiled-mode default is `~/.local/bin/claude-prove` (was `~/.local/bin/prove`). `writeSettingsHooks` picks up the new path on the next `prove install init --force` run.
+- `packages/installer/src/resolve-binary-path.ts`: compiled-mode default is `~/.local/bin/claude-prove` (was `~/.local/bin/prove`). `writeSettingsHooks` picks up the new path on the next `claude-prove install init --force` run.
 - `.github/workflows/release.yml` + `ci.yml`: release artifacts are `claude-prove-{darwin-arm64,darwin-x64,linux-x64,linux-arm64}` (was `prove-*`). `bun build --compile` emits `claude-prove` before the matrix rename step.
 - `scripts/install.sh`: fetches `claude-prove-${TARGET}` from Releases, writes `${PREFIX}/claude-prove`, and best-effort deletes any stale `${PREFIX}/prove` binary left over from v1.1.x installs. Fallback git-clone path unchanged (hands off to `bun run ...` regardless of binary name).
 
@@ -84,7 +84,7 @@ The compiled CLI binary is renamed from `prove` to `claude-prove` to end the nam
 **Migration**:
 
 1. Installed users: re-run `curl -fsSL https://raw.githubusercontent.com/mjmorales/claude-prove/main/scripts/install.sh | bash`. The script deletes the legacy `~/.local/bin/prove` binary, writes `~/.local/bin/claude-prove`, and invokes `claude-prove install init --force` to rewrite `.claude/settings.json` hook paths.
-2. Alternatively: `/prove:update` inside Claude Code calls `prove install init --force` via the installed binary — works once you've replaced the binary.
+2. Alternatively: `/prove:update` inside Claude Code calls `claude-prove install init --force` via the installed binary — works once you've replaced the binary.
 3. Dev users: no action needed.
 
 **Auto-adoption**:
@@ -185,18 +185,18 @@ Post-cutover cleanup. Phase 13 retires the last shell/python bridges that still 
 
 **Added**:
 
-- `prove notify dispatch <event>` — reporter event dispatcher; dedupes via `state.json.dispatch.dispatched[]` through the run_state API, fires matching reporter commands with the `PROVE_*` env surface, prefixes each reporter's combined stdout/stderr with `  [<name>] `. Best-effort: always exits 0.
-- `prove notify test [event]` — notification pipeline probe; reports match counts and invokes `runNotifyDispatch` with synthesized test env.
-- `prove orchestrator task-prompt --run-dir --task-id --project-root [--worktree]` — emits the worktree implementation-agent prompt markdown directly (no sentinel+awk indirection).
-- `prove orchestrator review-prompt --run-dir --task-id --worktree --base-branch` — emits the principal-architect review prompt; runs `git diff <base>...HEAD` inside the worktree via `child_process`.
-- `prove claude-md validators [--project-root]` — emits `- <phase>: \`<command>\`` lines from `.claude/.prove.json`; plugin-dir-less fallback used by `skills/handoff/scripts/gather-context.sh`.
+- `claude-prove notify dispatch <event>` — reporter event dispatcher; dedupes via `state.json.dispatch.dispatched[]` through the run_state API, fires matching reporter commands with the `PROVE_*` env surface, prefixes each reporter's combined stdout/stderr with `  [<name>] `. Best-effort: always exits 0.
+- `claude-prove notify test [event]` — notification pipeline probe; reports match counts and invokes `runNotifyDispatch` with synthesized test env.
+- `claude-prove orchestrator task-prompt --run-dir --task-id --project-root [--worktree]` — emits the worktree implementation-agent prompt markdown directly (no sentinel+awk indirection).
+- `claude-prove orchestrator review-prompt --run-dir --task-id --worktree --base-branch` — emits the principal-architect review prompt; runs `git diff <base>...HEAD` inside the worktree via `child_process`.
+- `claude-prove claude-md validators [--project-root]` — emits `- <phase>: \`<command>\`` lines from `.claude/.prove.json`; plugin-dir-less fallback used by `skills/handoff/scripts/gather-context.sh`.
 - 19 parity tests covering the new CLI surface (validators output, notify dispatch dedup + reporter firing, task/review-prompt rendering).
 
 **Changed**:
 
 - `skills/orchestrator/SKILL.md` — the `generate-{task,review}-prompt.sh` bash invocations are now `bun run "$PLUGIN_DIR/packages/cli/bin/run.ts" orchestrator <task-prompt|review-prompt> ...` with explicit flags.
-- `skills/handoff/scripts/gather-context.sh` — discovery block calls `prove claude-md subagent-context` (primary) or `prove claude-md validators` (fallback via `command -v prove`); no more inline python3 reading `.claude/.prove.json`.
-- `commands/notify/notify-test.md` — invokes `prove notify test` directly.
+- `skills/handoff/scripts/gather-context.sh` — discovery block calls `claude-prove claude-md subagent-context` (primary) or `claude-prove claude-md validators` (fallback via `command -v prove`); no more inline python3 reading `.claude/.prove.json`.
+- `commands/notify/notify-test.md` — invokes `claude-prove notify test` directly.
 - `commands/doctor.md` — Tooling tier renumbered 2.1-2.4 (CAFI, Docker, Schema, Reporters); Step 2.1 Tool Registry Health and Step 2.6 Pack Symlink Health dropped; python3 → bun run for claude-md regen.
 - `commands/init.md` — Step 7 (tool registry setup) dropped; subsequent steps renumbered 7-10; python3 → bun run for claude-md generate.
 - `commands/update.md` — Step 5 subsection 3 (new-tools discovery) dropped; python3 → bun run for CLAUDE.md regen.
@@ -210,7 +210,7 @@ Post-cutover cleanup. Phase 13 retires the last shell/python bridges that still 
 **Migration**:
 
 1. Run `/prove:update` — refreshes the managed CLAUDE.md block to v1.0.1 and regenerates any scrum/ACB/run-state hook blocks if drift is detected. Schema version unchanged (still v5); no data migration required.
-2. External automation that shelled out to `scripts/dispatch-event.sh`, `scripts/notify-test.sh`, or the two orchestrator prompt generators must migrate to `prove notify dispatch|test` or `prove orchestrator task-prompt|review-prompt` (same stdin/stdout contracts).
+2. External automation that shelled out to `scripts/dispatch-event.sh`, `scripts/notify-test.sh`, or the two orchestrator prompt generators must migrate to `claude-prove notify dispatch|test` or `claude-prove orchestrator task-prompt|review-prompt` (same stdin/stdout contracts).
 3. The `/prove:tools` slash command is gone. Tool install/remove/status have no replacement in v1.0.1 because the pack model itself was retired in phase 11; projects that installed community packs before the cutover should bundle them directly under `tools/<pack>/` and wire hooks manually if still needed.
 
 **Auto-adoption**:
@@ -226,19 +226,19 @@ Cutover release. The TypeScript CLI unification (phases 6-11, see `.prove/decisi
 
 **Added**:
 
-- Scrum system on `.prove/prove.db` (schema v5): `scrum_tasks`, `scrum_milestones`, `scrum_tags`, `scrum_task_tags`, `scrum_deps`, `scrum_run_links`, `scrum_context_bundles` — all managed through `prove scrum` and reconciled by `packages/cli/src/topics/scrum/reconcile.ts`
-- `/scrum` slash command — `init|status|next` as direct `prove scrum` passthroughs; `task|milestone|tag|link|alerts` delegate to the `scrum-master` agent
-- `prove scrum` CLI topic — subcommands: `init`, `status`, `next-ready`, `task`, `milestone`, `tag`, `link-run`, `hook`
+- Scrum system on `.prove/prove.db` (schema v5): `scrum_tasks`, `scrum_milestones`, `scrum_tags`, `scrum_task_tags`, `scrum_deps`, `scrum_run_links`, `scrum_context_bundles` — all managed through `claude-prove scrum` and reconciled by `packages/cli/src/topics/scrum/reconcile.ts`
+- `/scrum` slash command — `init|status|next` as direct `claude-prove scrum` passthroughs; `task|milestone|tag|link|alerts` delegate to the `scrum-master` agent
+- `claude-prove scrum` CLI topic — subcommands: `init`, `status`, `next-ready`, `task`, `milestone`, `tag`, `link-run`, `hook`
 - `scrum-master` agent (model: sonnet) — operational: hook-invoked (SessionStart/SubagentStop/Stop) and user-invoked via `/scrum` routes; owns task-state transitions, dep-graph edits, run/decision linkage
 - `product-visionary` agent (model: opus) — strategic: user-invoked only; owns milestone shaping, VISION.md alignment, macro dep-chain leverage
 - `/scrum` UI routes under `packages/review-ui/web/src/routes/scrum/` — 5 read-only views (overview, tasks, milestones, dep-graph, alerts) served by `/api/scrum/*` GET endpoints
 - `plan.json` `task_id` optional field — couples orchestrator runs to scrum tasks; surfaced as linked/unlinked runs in `/scrum alerts`
-- `.claude/settings.json` scrum hooks — three entries tagged `_tool: "scrum"`: SessionStart (`startup|resume|compact`), SubagentStop, Stop — all invoking `prove scrum hook <event>`
+- `.claude/settings.json` scrum hooks — three entries tagged `_tool: "scrum"`: SessionStart (`startup|resume|compact`), SubagentStop, Stop — all invoking `claude-prove scrum hook <event>`
 
 **Changed**:
 
-- `.claude/.prove.json` schema v4 → v5 (adds `tools.scrum` block with `enabled` and `config.*` defaults). Auto-migrated via `/prove:update` or `prove schema migrate --file .claude/.prove.json`; full v0-to-v5 chain is covered by `packages/cli/src/topics/schema/migrate.test.ts`
-- `/prove:task-planner` now prompts for `task_id` when `tools.scrum.enabled` is true and surfaces `prove scrum next-ready` as the picker source
+- `.claude/.prove.json` schema v4 → v5 (adds `tools.scrum` block with `enabled` and `config.*` defaults). Auto-migrated via `/prove:update` or `claude-prove schema migrate --file .claude/.prove.json`; full v0-to-v5 chain is covered by `packages/cli/src/topics/schema/migrate.test.ts`
+- `/prove:task-planner` now prompts for `task_id` when `tools.scrum.enabled` is true and surfaces `claude-prove scrum next-ready` as the picker source
 - `commands/update.md` step 5 grew a **Scrum hooks** note: on schema v5+, `/prove:update` idempotently registers the three scrum hook entries in `.claude/settings.json` when they're missing
 
 **Removed**:
@@ -250,7 +250,7 @@ Cutover release. The TypeScript CLI unification (phases 6-11, see `.prove/decisi
 
 1. Run `/prove:update` — applies the v4 → v5 schema migration, registers the three scrum hooks in `.claude/settings.json`, and refreshes the managed CLAUDE.md block.
 2. Run `/scrum init` once — imports any legacy `planning/*` artifacts (`VISION.md`, `ROADMAP.md`, `BACKLOG.md`, `ship-log.md`) into scrum tasks/milestones/tags; safe to re-run.
-3. Existing orchestrator plans without `task_id` keep working — they run unchanged and surface as unlinked-run alerts in `/scrum alerts`. Backfill via `prove scrum link-run --run <slug> --task <id>` when desired.
+3. Existing orchestrator plans without `task_id` keep working — they run unchanged and surface as unlinked-run alerts in `/scrum alerts`. Backfill via `claude-prove scrum link-run --run <slug> --task <id>` when desired.
 
 **Auto-adoption**:
 
@@ -262,19 +262,19 @@ Cutover release. The TypeScript CLI unification (phases 6-11, see `.prove/decisi
 
 ## v0.43.0 — review-ui absorbed into the monorepo + Bun Docker runtime
 
-Phase 11 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`). The standalone `tools/review-ui/` tree is retired; the review UI now lives at `packages/review-ui/` as a bun workspace, the Docker image runs on `oven/bun:1-alpine` (322MB → 110MB, same `ghcr.io/mjmorales/claude-prove/review-ui` name), and `/prove:review-ui` has shed its `python3` dependency in favour of `prove review-ui config | jq`. The web shell is now route-based: `/acb/*` (existing review flows) and a `/scrum` placeholder for phase 12. The server reads SQLite through `@claude-prove/store` (`bun:sqlite`) — `better-sqlite3` is gone.
+Phase 11 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`). The standalone `tools/review-ui/` tree is retired; the review UI now lives at `packages/review-ui/` as a bun workspace, the Docker image runs on `oven/bun:1-alpine` (322MB → 110MB, same `ghcr.io/mjmorales/claude-prove/review-ui` name), and `/prove:review-ui` has shed its `python3` dependency in favour of `claude-prove review-ui config | jq`. The web shell is now route-based: `/acb/*` (existing review flows) and a `/scrum` placeholder for phase 12. The server reads SQLite through `@claude-prove/store` (`bun:sqlite`) — `better-sqlite3` is gone.
 
 **Added**:
 
 - `packages/review-ui/` — monorepo home for the review UI as a bun workspace (`server/` + `web/` flattened into the root `workspaces` list)
-- `prove review-ui config [--cwd <path>]` — CLI subcommand that emits `{port, image, tag}` as a single JSON line with hardcoded defaults filled for missing keys, consumed by `/prove:review-ui`
+- `claude-prove review-ui config [--cwd <path>]` — CLI subcommand that emits `{port, image, tag}` as a single JSON line with hardcoded defaults filled for missing keys, consumed by `/prove:review-ui`
 - `react-router-dom` in the web shell with `/acb/*` (existing review flows) and `/scrum` (phase 12 placeholder) routes
 
 **Changed**:
 
 - Docker runtime: `node:20-alpine` → `oven/bun:1-alpine`; image name unchanged (`ghcr.io/mjmorales/claude-prove/review-ui`); image size 322MB → 110MB
 - `.github/workflows/review-ui-image.yml` — path filter and build context repointed from `tools/review-ui/` to `packages/review-ui/`
-- `/prove:review-ui` slash command — config resolution now uses `prove review-ui config | jq -r '.<key>'` instead of `python3 -c 'import json...'`; the `python3` precondition is gone
+- `/prove:review-ui` slash command — config resolution now uses `claude-prove review-ui config | jq -r '.<key>'` instead of `python3 -c 'import json...'`; the `python3` precondition is gone
 - Review UI server SQLite access migrated to `@claude-prove/store` (`bun:sqlite`), replacing `better-sqlite3`
 
 **Removed**:
@@ -297,35 +297,35 @@ Phase 11 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typ
 
 ---
 
-## v0.42.0 — installer package + `prove install` CLI + binary release workflow
+## v0.42.0 — installer package + `claude-prove install` CLI + binary release workflow
 
-Phase 10 of the TypeScript CLI unification (see `.prove/decisions/2026-04-23-phase-10-installer.md`). A new `packages/installer/` workspace package centralises plugin-root resolution, settings-hook wiring, and `.prove.json` bootstrap. The `prove install <action>` CLI topic (`init`, `init-hooks`, `init-config`, `doctor`, `upgrade`) replaces the legacy bash installers; dev checkouts and compiled binaries are handled by a single `detectMode` helper. `scripts/install.sh` is now a 30-line bootstrap that fetches a platform-specific binary from GitHub Releases and hands off to `prove install init`. `/prove:init` delegates stack detection + `.prove.json` emission to `prove install init-config`; the AskUserQuestion UX for scope and validator customization is preserved.
+Phase 10 of the TypeScript CLI unification (see `.prove/decisions/2026-04-23-phase-10-installer.md`). A new `packages/installer/` workspace package centralises plugin-root resolution, settings-hook wiring, and `.prove.json` bootstrap. The `claude-prove install <action>` CLI topic (`init`, `init-hooks`, `init-config`, `doctor`, `upgrade`) replaces the legacy bash installers; dev checkouts and compiled binaries are handled by a single `detectMode` helper. `scripts/install.sh` is now a 30-line bootstrap that fetches a platform-specific binary from GitHub Releases and hands off to `claude-prove install init`. `/prove:init` delegates stack detection + `.prove.json` emission to `claude-prove install init-config`; the AskUserQuestion UX for scope and validator customization is preserved.
 
 **Added**:
 
 - `packages/installer/` workspace package: `detectMode`, `resolvePluginRoot`, `resolveBinaryPath`, `writeSettingsHooks` (idempotent `.claude/settings.json` merge via `_tool` markers), `bootstrapProveJson` (stack-detected `.prove.json` emission)
-- `prove install <action>` CLI topic: `init`, `init-hooks`, `init-config`, `doctor`, `upgrade` — unified dispatch over the installer package
+- `claude-prove install <action>` CLI topic: `init`, `init-hooks`, `init-config`, `doctor`, `upgrade` — unified dispatch over the installer package
 - `.github/workflows/release.yml`: four-target `bun build --compile` matrix (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`) uploading artifacts to GitHub Releases on tag push
-- `packages/cli/src/topics/schema/detect.ts`: ported `scripts/init-config.sh` detector logic to TS with public `detectValidators(cwd)` + `DETECTED_VALIDATOR_NAMES` exports, subpath-exported via `@claude-prove/cli/schema/detect` and consumed by `prove install init-config`
+- `packages/cli/src/topics/schema/detect.ts`: ported `scripts/init-config.sh` detector logic to TS with public `detectValidators(cwd)` + `DETECTED_VALIDATOR_NAMES` exports, subpath-exported via `@claude-prove/cli/schema/detect` and consumed by `claude-prove install init-config`
 
 **Removed**:
 
-- `scripts/init-config.sh` — detection logic ported to `packages/cli/src/topics/schema/detect.ts`, consumed by `prove install init-config`
+- `scripts/init-config.sh` — detection logic ported to `packages/cli/src/topics/schema/detect.ts`, consumed by `claude-prove install init-config`
 - `scripts/setup-tools.sh` — superseded by `/prove:tools` command + `tools/registry.py`
 - `scripts/hooks/{post-tool-use,session-stop,subagent-stop}.sh` — hook dispatch now lives under `prove <topic> hook <event>`
-- Legacy 170-line `scripts/install.sh` — replaced with a 30-line bootstrap that fetches the compiled binary and hands off to `prove install init`
+- Legacy 170-line `scripts/install.sh` — replaced with a 30-line bootstrap that fetches the compiled binary and hands off to `claude-prove install init`
 
 **Behavior changes**:
 
-- `/prove:init` slash command delegates stack detection + `.prove.json` emission to `prove install init-config`. Dev checkouts run `bun run <pluginRoot>/packages/cli/bin/run.ts install init-config`; installed users run `prove install init-config` from PATH.
+- `/prove:init` slash command delegates stack detection + `.prove.json` emission to `claude-prove install init-config`. Dev checkouts run `bun run <pluginRoot>/packages/cli/bin/run.ts install init-config`; installed users run `claude-prove install init-config` from PATH.
 - `.claude/settings.json` hook command paths are owned by `writeSettingsHooks` and resolved by `detectMode` — dev checkouts use `bun run <pluginRoot>/packages/cli/bin/run.ts <topic> hook <event>`; installed users use the compiled binary path (`~/.local/bin/prove` before v1.2.0, `~/.local/bin/claude-prove` after).
 - First release to ship binary artifacts: `darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`.
 
 **Migration**:
 
 1. Dev users (plugin authors): no action required — `detectMode` keeps hook commands as `bun run <repo>/packages/cli/bin/run.ts ...`.
-2. Installed users: run `/prove:update` — it invokes `prove install init --force` to rewrite any stale absolute paths in `.claude/settings.json` to the current install location.
-3. New users: `curl -fsSL https://raw.githubusercontent.com/mjmorales/claude-prove/main/scripts/install.sh | bash` — fetches the platform binary, runs `prove install init` to wire hooks and bootstrap `.prove.json`, and optionally registers with Claude Code via `claude plugin install`.
+2. Installed users: run `/prove:update` — it invokes `claude-prove install init --force` to rewrite any stale absolute paths in `.claude/settings.json` to the current install location.
+3. New users: `curl -fsSL https://raw.githubusercontent.com/mjmorales/claude-prove/main/scripts/install.sh | bash` — fetches the platform binary, runs `claude-prove install init` to wire hooks and bootstrap `.prove.json`, and optionally registers with Claude Code via `claude plugin install`.
 
 **Auto-adoption**:
 
@@ -336,21 +336,21 @@ Phase 10 of the TypeScript CLI unification (see `.prove/decisions/2026-04-23-pha
 
 ## v0.41.0 — ACB ported to TypeScript + unified store migration
 
-Phase 9 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`) combined with ACB v2.1 of the unified-store plan (see `.prove/decisions/2026-04-21-unified-prove-store.md`). The Python `tools/acb/` module is retired; the Agent Change Brief assembler, PostToolUse hook, SQLite schema, and CLI now run through `prove acb` backed by `packages/cli/src/topics/acb/`. ACB storage moved from the standalone `.prove/acb.db` to the unified `.prove/prove.db` with `acb_*`-prefixed tables; the first `prove acb` invocation transparently auto-imports any legacy rows and deletes `.prove/acb.db`.
+Phase 9 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`) combined with ACB v2.1 of the unified-store plan (see `.prove/decisions/2026-04-21-unified-prove-store.md`). The Python `tools/acb/` module is retired; the Agent Change Brief assembler, PostToolUse hook, SQLite schema, and CLI now run through `claude-prove acb` backed by `packages/cli/src/topics/acb/`. ACB storage moved from the standalone `.prove/acb.db` to the unified `.prove/prove.db` with `acb_*`-prefixed tables; the first `claude-prove acb` invocation transparently auto-imports any legacy rows and deletes `.prove/acb.db`.
 
 **Removed**:
 
 - `tools/acb/` (all Python sources, tests, `tool.json`, `templates/`, `__main__.py`, `hook.py`, `assembler.py`, `store.py`, `schemas.py`, `_git.py`, `_slug.py`)
-- Standalone `.prove/acb.db` — auto-imported into `.prove/prove.db` on first `prove acb` call, then deleted
+- Standalone `.prove/acb.db` — auto-imported into `.prove/prove.db` on first `claude-prove acb` call, then deleted
 - `python3 -m tools.acb ...` / `python3 $PLUGIN_DIR/tools/acb/hook.py ...` invocation paths
 - `tools/acb` lint-ignore entry in `biome.json`
 
 **Added**:
 
-- `prove acb save-manifest [--branch B] [--sha S] [--slug G] [--workspace-root W]` — reads intent manifest JSON on stdin, validates, inserts into `.prove/prove.db`
-- `prove acb assemble [--branch B] [--base main]` — merges branch manifests into an ACB document, upserts `acb_acb_documents` row, clears manifests
-- `prove acb hook post-commit --workspace-root W` — Claude Code PostToolUse hook (reads payload on stdin)
-- `prove acb migrate-legacy-db [--workspace-root W]` — user-triggered legacy-db importer (auto-invoke runs transparently on first non-migrate call)
+- `claude-prove acb save-manifest [--branch B] [--sha S] [--slug G] [--workspace-root W]` — reads intent manifest JSON on stdin, validates, inserts into `.prove/prove.db`
+- `claude-prove acb assemble [--branch B] [--base main]` — merges branch manifests into an ACB document, upserts `acb_acb_documents` row, clears manifests
+- `claude-prove acb hook post-commit --workspace-root W` — Claude Code PostToolUse hook (reads payload on stdin)
+- `claude-prove acb migrate-legacy-db [--workspace-root W]` — user-triggered legacy-db importer (auto-invoke runs transparently on first non-migrate call)
 - `packages/cli/src/topics/acb/` — full TS port with bun test coverage
 - `packages/shared/src/{git,run-slug}.ts` — cross-topic helpers (git subprocess wrappers, 5-tier run-slug resolver) extracted from `tools/acb/_git.py` and `tools/acb/_slug.py`
 - `acb` domain in the unified store — `acb_manifests`, `acb_acb_documents`, `acb_review_state` tables registered via `@claude-prove/store`
@@ -358,9 +358,9 @@ Phase 9 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-type
 **Migration**:
 
 1. Run `/prove:update` — rewrites `.claude/settings.json` PostToolUse hook command to the TS form. No other manual steps.
-2. The next `prove acb save-manifest`, `prove acb assemble`, or `prove acb hook post-commit` invocation auto-imports `.prove/acb.db` into `.prove/prove.db` and deletes the legacy file. One stderr line announces the import count.
+2. The next `claude-prove acb save-manifest`, `claude-prove acb assemble`, or `claude-prove acb hook post-commit` invocation auto-imports `.prove/acb.db` into `.prove/prove.db` and deletes the legacy file. One stderr line announces the import count.
 3. If the review UI container is running, restart it so the server process opens the new `.prove/prove.db`. The HTTP/response shapes are unchanged.
-4. External scripts that invoked `python3 -m tools.acb save-manifest` must switch to `prove acb save-manifest` (same stdin contract).
+4. External scripts that invoked `python3 -m tools.acb save-manifest` must switch to `claude-prove acb save-manifest` (same stdin contract).
 
 **Auto-adoption**:
 
@@ -372,7 +372,7 @@ Phase 9 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-type
 
 ## v0.40.0 — PCD ported to TypeScript
 
-Phase 7 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`). The Python `tools/pcd/` module is retired; the Progressive Context Distillation deterministic rounds (structural map, collapse, batch formation) now run through `prove pcd` backed by `packages/cli/src/topics/pcd/`. Every steward skill directive that previously invoked `python3 $PLUGIN_DIR/tools/pcd/__main__.py ...` now routes through the TS CLI.
+Phase 7 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`). The Python `tools/pcd/` module is retired; the Progressive Context Distillation deterministic rounds (structural map, collapse, batch formation) now run through `claude-prove pcd` backed by `packages/cli/src/topics/pcd/`. Every steward skill directive that previously invoked `python3 $PLUGIN_DIR/tools/pcd/__main__.py ...` now routes through the TS CLI.
 
 **Removed**:
 
@@ -382,17 +382,17 @@ Phase 7 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-type
 
 **Added**:
 
-- `prove pcd map [--project-root <path>] [--scope <files>]` — Round 0a structural map
-- `prove pcd collapse [--project-root <path>] [--token-budget <n>]` — triage manifest compression
-- `prove pcd batch [--project-root <path>] [--max-files <n>]` — Round 2 batch formation
-- `prove pcd status [--project-root <path>]` — artifact presence check
+- `claude-prove pcd map [--project-root <path>] [--scope <files>]` — Round 0a structural map
+- `claude-prove pcd collapse [--project-root <path>] [--token-budget <n>]` — triage manifest compression
+- `claude-prove pcd batch [--project-root <path>] [--max-files <n>]` — Round 2 batch formation
+- `claude-prove pcd status [--project-root <path>]` — artifact presence check
 - `packages/cli/src/topics/pcd/` — full TS port with bun test coverage and byte-parity fixtures under `__fixtures__/{structural-map,collapse,batch-former}/python-captures/`
 
 **Migration**:
 
 1. Run `/prove:update` — picks up the new CLI. No hook changes needed; no on-disk artifact migration (`.prove/steward/pcd/*.json` schemas unchanged).
-2. If external scripts call `python3 tools/pcd/__main__.py …` directly, rewrite to `prove pcd <map|collapse|batch|status>`.
-3. Steward skill invocations (`skills/steward/SKILL.md`, `skills/steward-review/SKILL.md`, `skills/auto-steward/SKILL.md`) and `agents/pcd/README-pcd.md` already carry the new `prove pcd` form — no user action required.
+2. If external scripts call `python3 tools/pcd/__main__.py …` directly, rewrite to `claude-prove pcd <map|collapse|batch|status>`.
+3. Steward skill invocations (`skills/steward/SKILL.md`, `skills/steward-review/SKILL.md`, `skills/auto-steward/SKILL.md`) and `agents/pcd/README-pcd.md` already carry the new `claude-prove pcd` form — no user action required.
 
 **Auto-adoption**: None required — steward skill directives were rewritten in place. Existing artifact files under `.prove/steward/pcd/` are read back unchanged by the TS CLI.
 
@@ -400,7 +400,7 @@ Phase 7 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-type
 
 ## v0.39.0 — run_state ported to TypeScript
 
-Phase 6 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`). The Python `tools/run_state/` module is retired; orchestrator state mutation now flows through `prove run-state` backed by `packages/cli/src/topics/run-state/`. Every Claude Code hook, shell script, and skill directive that previously invoked `python3 -m tools.run_state ...` now routes through the TS CLI (directly or via `scripts/prove-run`, whose public interface is unchanged).
+Phase 6 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`). The Python `tools/run_state/` module is retired; orchestrator state mutation now flows through `claude-prove run-state` backed by `packages/cli/src/topics/run-state/`. Every Claude Code hook, shell script, and skill directive that previously invoked `python3 -m tools.run_state ...` now routes through the TS CLI (directly or via `scripts/prove-run`, whose public interface is unchanged).
 
 **Removed**:
 
@@ -410,8 +410,8 @@ Phase 6 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-type
 
 **Added**:
 
-- `prove run-state validate, init, show [--kind ...], show-report <id>, ls, summary, current, step <start|complete|fail|halt> <id>, step-info <id>, validator set <id> <phase> <status>, task review <id> --verdict <v>, dispatch <record|has>, report write <id> --status ..., migrate` — full TS port
-- `prove run-state hook <guard|validate|session-start|stop|subagent-stop>` — Claude Code hook entrypoints, read payload from stdin, exit with Python-compatible codes
+- `claude-prove run-state validate, init, show [--kind ...], show-report <id>, ls, summary, current, step <start|complete|fail|halt> <id>, step-info <id>, validator set <id> <phase> <status>, task review <id> --verdict <v>, dispatch <record|has>, report write <id> --status ..., migrate` — full TS port
+- `claude-prove run-state hook <guard|validate|session-start|stop|subagent-stop>` — Claude Code hook entrypoints, read payload from stdin, exit with Python-compatible codes
 - `packages/cli/src/topics/run-state/{schemas,validate,validator-engine,paths,state,migrate,render}.ts` — 312 bun tests and 63+ byte-equal parity captures against the retired Python module
 - `packages/cli/src/topics/run-state/hooks/{guard,validate,session-start,stop,subagent-stop,dispatch,json-compat,types}.ts`
 - `packages/cli/src/topics/run-state/cli/*` — 13 per-action handlers
@@ -421,7 +421,7 @@ Phase 6 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-type
 1. Run `/prove:update` — picks up the new CLI and rewrites the five `.claude/settings.json` hook entries (PreToolUse + PostToolUse Write|Edit|MultiEdit, SessionStart resume|compact, Stop, SubagentStop general-purpose) in place.
 2. Manual fallback for each hook: command body becomes `bun run <plugin>/packages/cli/bin/run.ts run-state hook <event>`; timeouts preserved (3000ms SessionStart, 5000ms everywhere else).
 3. `scripts/prove-run` keeps its public interface unchanged; the body swaps to `bun run <plugin>/packages/cli/bin/run.ts run-state`. Agents calling `scripts/prove-run <subcmd>` need no changes.
-4. If scripts call `python3 -m tools.run_state …` directly, rewrite to `prove run-state …` (or `scripts/prove-run <subcmd>`).
+4. If scripts call `python3 -m tools.run_state …` directly, rewrite to `claude-prove run-state …` (or `scripts/prove-run <subcmd>`).
 5. Schema path references: `tools/run_state/schemas.py` → `packages/cli/src/topics/run-state/schemas.ts`.
 
 **CLI shape divergences** (agents calling the underlying CLI directly — `scripts/prove-run` masks these):
@@ -446,13 +446,13 @@ Phase 5 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-type
 
 **Added**:
 
-- `prove cafi index [--force] [--project-root <path>]`
-- `prove cafi status [--project-root <path>]`
-- `prove cafi get <path> [--project-root <path>]`
-- `prove cafi lookup <keyword> [--project-root <path>]`
-- `prove cafi clear [--project-root <path>]`
-- `prove cafi context [--project-root <path>]`
-- `prove cafi gate` — PreToolUse hook dispatcher; reads the Claude Code hook payload from stdin
+- `claude-prove cafi index [--force] [--project-root <path>]`
+- `claude-prove cafi status [--project-root <path>]`
+- `claude-prove cafi get <path> [--project-root <path>]`
+- `claude-prove cafi lookup <keyword> [--project-root <path>]`
+- `claude-prove cafi clear [--project-root <path>]`
+- `claude-prove cafi context [--project-root <path>]`
+- `claude-prove cafi gate` — PreToolUse hook dispatcher; reads the Claude Code hook payload from stdin
 - `packages/shared/src/{cache,file-walker,tool-config}.ts` — shared helpers reusable by PCD in phase 7
 - `packages/cli/src/topics/cafi/` — full TS port with bun test coverage and parity fixtures under `__fixtures__/`
 - Fix: config is now read from `tools.cafi.config` (post-v4 path); the retired top-level `index` key is no longer consulted (silent fallback-to-defaults bug resolved)
@@ -468,7 +468,7 @@ Phase 5 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-type
 
 ## v0.37.0 — Schema topic ported to TypeScript (breaking config migration)
 
-Phase 4 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`). The Python `tools/schema/` module is retired; `prove schema` is now a real TypeScript topic backed by `packages/cli/src/topics/schema/`. `.claude/.prove.json` migrates from v3 to v4.
+Phase 4 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-typescript-cli-unification.md`). The Python `tools/schema/` module is retired; `claude-prove schema` is now a real TypeScript topic backed by `packages/cli/src/topics/schema/`. `.claude/.prove.json` migrates from v3 to v4.
 
 **Removed**:
 
@@ -479,19 +479,19 @@ Phase 4 of the TypeScript CLI unification (see `.prove/decisions/2026-04-21-type
 
 **Added**:
 
-- `prove schema validate [--file <path>] [--strict]`
-- `prove schema migrate [--file <path>] [--dry-run]`
-- `prove schema diff [--file <path>]`
-- `prove schema summary`
+- `claude-prove schema validate [--file <path>] [--strict]`
+- `claude-prove schema migrate [--file <path>] [--dry-run]`
+- `claude-prove schema diff [--file <path>]`
+- `claude-prove schema summary`
 - `packages/cli/src/topics/schema/` — full TS port with bun test coverage (64 tests) and parity fixtures under `__fixtures__/`
 - v3→v4 migration in `packages/cli/src/topics/schema/migrate.ts` (drops `scopes.tools` + `tools.schema`)
 
 **Migration**:
 
-1. Run `/prove:update` — it picks up the new CLI and runs `prove schema migrate` against `.claude/.prove.json` automatically.
+1. Run `/prove:update` — it picks up the new CLI and runs `claude-prove schema migrate` against `.claude/.prove.json` automatically.
 2. Manual fallback: `bun run <plugin>/packages/cli/bin/run.ts schema migrate --file .claude/.prove.json`.
 3. Remove any `.bak` file the migrator writes (only needed if you want to keep an on-disk backup; git history already covers it).
-4. If you have scripts that call `python3 -m tools.schema …`, rewrite them to call `prove schema …`.
+4. If you have scripts that call `python3 -m tools.schema …`, rewrite them to call `claude-prove schema …`.
 
 **Auto-adoption**: `/prove:update` runs the migration and refreshes command bodies in place. No manual config edits required for standard repos.
 
@@ -602,10 +602,10 @@ Override the Pre hook with `RUN_STATE_ALLOW_DIRECT=1` only for emergency recover
 # into state.json, preserves markdown bodies under prd.body_markdown.
 # (Since v0.39.0 this runs through the TS CLI; prior versions shipped
 #  `python3 -m tools.run_state migrate`, retired with tools/run_state/.)
-prove run-state migrate
+claude-prove run-state migrate
 
 # Review what changed first:
-prove run-state migrate --dry-run
+claude-prove run-state migrate --dry-run
 
 # Then delete legacy md/json:
 find .prove/runs -type f \

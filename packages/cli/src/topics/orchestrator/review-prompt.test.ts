@@ -1,5 +1,5 @@
 /**
- * Parity tests for `prove orchestrator review-prompt`.
+ * Parity tests for `claude-prove orchestrator review-prompt`.
  *
  * Covers structural invariants from the retired shell template:
  *   - top header matches `# Architectural Review: Task <id> — <title>`

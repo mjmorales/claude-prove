@@ -1,5 +1,5 @@
 /**
- * `prove pcd batch [--max-files N] [--project-root PATH]`
+ * `claude-prove pcd batch [--max-files N] [--project-root PATH]`
  *
  * Ports `tools/pcd/__main__.py::cmd_batch`:
  *   - Reads `<pcd>/collapsed-manifest.json` and `<pcd>/structural-map.json`.

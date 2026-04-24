@@ -1,5 +1,5 @@
 /**
- * `prove pcd map [--scope FILE,...] [--project-root PATH]`
+ * `claude-prove pcd map [--scope FILE,...] [--project-root PATH]`
  *
  * Ports `tools/pcd/__main__.py::cmd_map` byte-for-byte on stdout/stderr:
  *   - stdout: `json.dumps(structural_map, indent=2)` (consumed by LLM agents)

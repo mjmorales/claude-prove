@@ -15,16 +15,16 @@ The first token of `$ARGUMENTS` selects the route. No argument → print this ro
 
 | Arg          | Action                                                                 |
 |--------------|------------------------------------------------------------------------|
-| `init`       | Run `prove scrum init` — one-shot importer for legacy `planning/*`.    |
-| `status`     | Run `prove scrum status --human` — compact text overview.              |
-| `next`       | Run `prove scrum next-ready --human` — ranked next tasks.              |
-| `alerts`     | Run `prove scrum alerts --human` — stalled WIP + orphan run report.    |
+| `init`       | Run `claude-prove scrum init` — one-shot importer for legacy `planning/*`.    |
+| `status`     | Run `claude-prove scrum status --human` — compact text overview.              |
+| `next`       | Run `claude-prove scrum next-ready --human` — ranked next tasks.              |
+| `alerts`     | Run `claude-prove scrum alerts --human` — stalled WIP + orphan run report.    |
 | `task`       | Delegate to `scrum-master` agent — interactive task lifecycle.         |
 | `milestone`  | Delegate to `scrum-master` agent — milestone lifecycle.                |
 | `tag`        | Delegate to `scrum-master` agent — tag taxonomy edits.                 |
 | `link`       | Delegate to `scrum-master` agent — link runs to tasks.                 |
 
-`init`, `status`, `next`, `alerts` are direct CLI passthroughs — execute the bash command, surface output verbatim, exit. Pass any extra `$ARGUMENTS` tokens through (e.g., `/scrum next --limit 5` → `prove scrum next-ready --human --limit 5`; `/scrum alerts --stalled-after-days 14` → `prove scrum alerts --human --stalled-after-days 14`).
+`init`, `status`, `next`, `alerts` are direct CLI passthroughs — execute the bash command, surface output verbatim, exit. Pass any extra `$ARGUMENTS` tokens through (e.g., `/scrum next --limit 5` → `claude-prove scrum next-ready --human --limit 5`; `/scrum alerts --stalled-after-days 14` → `claude-prove scrum alerts --human --stalled-after-days 14`).
 
 For `task`, `milestone`, `tag`, `link`: invoke the `scrum-master` agent with the full `$ARGUMENTS` string as task context. The agent owns interactive flows (AskUserQuestion gates, dep-graph reasoning, status-transition proposals).
 

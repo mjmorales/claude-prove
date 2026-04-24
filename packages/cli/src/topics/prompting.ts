@@ -4,10 +4,10 @@
  * Landing for prompt-engineering helpers (currently just token-count,
  * with room for future additions like craft/cache). Mirrors the Python
  * entrypoint `scripts/token-count.py` so skills and docs flip from
- * `python3 scripts/token-count.py …` to `prove prompting token-count …`
+ * `python3 scripts/token-count.py …` to `claude-prove prompting token-count …`
  * without interface drift.
  *
- *   prove prompting token-count <patterns...> [--sort KEY] [--json] [--no-strip]
+ *   claude-prove prompting token-count <patterns...> [--sort KEY] [--json] [--no-strip]
  *
  * Exit codes:
  *   0  success (including empty match sets — matches Python reference)

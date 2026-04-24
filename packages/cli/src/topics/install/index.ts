@@ -4,17 +4,17 @@
  * cac dispatches commands on the first positional arg only, so every
  * sub-action lives under a single `install <action>` command with an
  * action enum. Users still invoke the natural form:
- *   prove install init         [--project <cwd>] [--settings <path>] [--force]
- *   prove install init-hooks   [--settings <path>] [--force]
- *   prove install init-config  [--cwd <path>] [--force]
- *   prove install doctor
- *   prove install upgrade      [--prefix <dir>]
+ *   claude-prove install init         [--project <cwd>] [--settings <path>] [--force]
+ *   claude-prove install init-hooks   [--settings <path>] [--force]
+ *   claude-prove install init-config  [--cwd <path>] [--force]
+ *   claude-prove install doctor
+ *   claude-prove install upgrade      [--prefix <dir>]
  *
  * Semantics:
  *   - init        : bootstrap both `.claude/settings.json` and `.claude/.prove.json`.
  *   - init-hooks  : idempotently merge prove-owned hook blocks into settings.json.
  *   - init-config : write `.claude/.prove.json` with auto-detected validators.
- *   - doctor      : report health of the prove installation (exit 1 on any failure).
+ *   - doctor      : report health of the claude-prove installation (exit 1 on any failure).
  *   - upgrade     : fetch latest binary from GH Releases for the host target (compiled mode only).
  *
  * init* resolve the plugin root (env -> walk-up -> fallback), classify the
@@ -58,7 +58,7 @@ export function register(cli: CAC): void {
     .action(async (action: string, flags: InstallFlags) => {
       if (!isInstallAction(action)) {
         console.error(
-          `prove install: unknown action '${action}'. expected one of: ${INSTALL_ACTIONS.join(', ')}`,
+          `claude-prove install: unknown action '${action}'. expected one of: ${INSTALL_ACTIONS.join(', ')}`,
         );
         process.exit(1);
       }
@@ -97,7 +97,7 @@ async function dispatch(action: InstallAction, flags: InstallFlags): Promise<num
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`prove install: ${msg}`);
+    console.error(`claude-prove install: ${msg}`);
     return 1;
   }
 }

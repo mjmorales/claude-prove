@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# prove-run — thin wrapper around `prove run-state` (TS CLI) for agent use.
+# prove-run — thin wrapper around `claude-prove run-state` (TS CLI) for agent use.
 #
 # Always operates from the main worktree root so .prove/runs/ paths resolve
 # correctly when an agent is inside a sub-worktree. Auto-detects slug from

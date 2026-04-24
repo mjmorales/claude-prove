@@ -1,5 +1,5 @@
 /**
- * `prove prompting token-count <patterns...> [--sort ...] [--json] [--no-strip]`
+ * `claude-prove prompting token-count <patterns...> [--sort ...] [--json] [--no-strip]`
  *
  * Ports `scripts/token-count.py::main`. Output format (both the ranked-text
  * table and the JSON shape) is byte-equal to the Python reference for the

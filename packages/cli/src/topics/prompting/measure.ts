@@ -6,7 +6,7 @@
  * as Python's `Path.glob`. Literal file paths (non-glob strings that resolve
  * to an existing file) are accepted too.
  *
- * Bun runtime required (Bun.Glob). This module is CLI-only — the `prove` CLI
+ * Bun runtime required (Bun.Glob). This module is CLI-only — the `claude-prove` CLI
  * is Bun-native — so no Node.js fallback is provided. If a future consumer
  * needs Node compatibility, swap `Bun.Glob` for the `glob` npm package.
  */

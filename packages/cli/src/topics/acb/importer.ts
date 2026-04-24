@@ -3,7 +3,7 @@
  * SQLite) into the unified `.prove/prove.db` acb-domain tables.
  *
  * Called transparently via `ensureLegacyImported` at the top of every `prove
- * acb <sub>` handler, and explicitly via `prove acb migrate-legacy-db` (see
+ * acb <sub>` handler, and explicitly via `claude-prove acb migrate-legacy-db` (see
  * `cli/migrate-legacy-cmd.ts`). Exactly one successful import can ever run
  * on a given workspace — on success the legacy file is deleted.
  *
@@ -77,7 +77,7 @@ export function importLegacyDb(workspaceRoot: string): ImportResult {
 }
 
 // Per-process memoization for the auto-invoke wrapper. The CLI subcommand
-// (`prove acb migrate-legacy-db`) bypasses this and calls `importLegacyDb`
+// (`claude-prove acb migrate-legacy-db`) bypasses this and calls `importLegacyDb`
 // directly so user-triggered runs always re-check state.
 //
 // Test isolation: `MEMO` is module-level process-scoped state and survives
@@ -87,7 +87,7 @@ export function importLegacyDb(workspaceRoot: string): ImportResult {
 const MEMO = new Map<string, ImportResult>();
 
 /**
- * Check-then-import wrapper for `prove acb <sub>` handlers. Memoizes the
+ * Check-then-import wrapper for `claude-prove acb <sub>` handlers. Memoizes the
  * result per-workspaceRoot per-process so repeated calls within one CLI
  * invocation skip the filesystem check entirely.
  *

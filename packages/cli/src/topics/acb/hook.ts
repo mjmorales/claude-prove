@@ -6,7 +6,7 @@
  * the main-worktree ACB store (unified `prove.db`, acb domain) for a
  * manifest keyed to that SHA, and — if none exists — blocks the agent
  * with a `decision: "block"` JSON response that prompts it to run
- * `prove acb save-manifest` for the real SHA.
+ * `claude-prove acb save-manifest` for the real SHA.
  *
  * Behavior mirrors Python's `tools/acb/hook.py` with two MANIFEST_PROMPT
  * edits: the save-manifest invocation swaps from
@@ -320,7 +320,7 @@ function manifestExists(workspaceRoot: string, commitSha: string, runSlug: strin
       store.close();
     }
   } catch (err) {
-    console.warn('prove acb hook: manifestExists failed, proceeding without manifest:', err);
+    console.warn('claude-prove acb hook: manifestExists failed, proceeding without manifest:', err);
     return false;
   }
 }

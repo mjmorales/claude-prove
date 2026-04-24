@@ -3,8 +3,8 @@
  *
  * Subcommand surface:
  *
- *   prove orchestrator task-prompt   --run-dir R --task-id T --project-root P [--worktree W]
- *   prove orchestrator review-prompt --run-dir R --task-id T --worktree W --base-branch B
+ *   claude-prove orchestrator task-prompt   --run-dir R --task-id T --project-root P [--worktree W]
+ *   claude-prove orchestrator review-prompt --run-dir R --task-id T --worktree W --base-branch B
  *
  * Both subcommands emit their prompt markdown on stdout — the orchestrator
  * SKILL.md captures it into a shell variable and hands it to the Agent call.

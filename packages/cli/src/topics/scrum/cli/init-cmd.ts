@@ -1,5 +1,5 @@
 /**
- * `prove scrum init [--workspace-root W]`
+ * `claude-prove scrum init [--workspace-root W]`
  *
  * One-shot importer that seeds the scrum tables from legacy planning
  * artifacts:

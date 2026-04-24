@@ -1,5 +1,5 @@
 /**
- * Parity tests for `prove notify dispatch`.
+ * Parity tests for `claude-prove notify dispatch`.
  *
  * Covers the contract formerly fulfilled by `scripts/dispatch-event.sh`:
  *   - missing env → silent exit 0 with stderr diagnostic

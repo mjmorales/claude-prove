@@ -1,5 +1,5 @@
 /**
- * Integration tests for `prove install upgrade`.
+ * Integration tests for `claude-prove install upgrade`.
  *
  * Dev mode: a fixture with `packages/cli/src/` present forces `detectMode`
  * to return 'dev'; the command must exit 1 with the documented stderr.
@@ -77,7 +77,7 @@ function currentTarget(): string {
   return `${platform}-${arch}`;
 }
 
-describe('prove install upgrade — dev mode', () => {
+describe('claude-prove install upgrade — dev mode', () => {
   test('exits 1 with the dev-mode error when invoked from a dev checkout', () => {
     const pluginRoot = makeDevPluginFixture();
     try {
@@ -92,7 +92,7 @@ describe('prove install upgrade — dev mode', () => {
   });
 });
 
-describe('prove install upgrade — compiled mode with stubbed CDN', () => {
+describe('claude-prove install upgrade — compiled mode with stubbed CDN', () => {
   const pluginRoot = makeCompiledPluginFixture();
   const payload = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00]); // ELF magic + padding
   const target = currentTarget();

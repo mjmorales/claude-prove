@@ -4,10 +4,10 @@
  * Follows the `store.ts` pattern: cac dispatches on the first positional
  * arg, so every sub-action lives under a single `schema <action>` command
  * with an action enum. Users invoke the natural form:
- *   prove schema validate --file <path> [--strict]
- *   prove schema migrate  --file <path> [--dry-run]
- *   prove schema diff     --file <path>
- *   prove schema summary
+ *   claude-prove schema validate --file <path> [--strict]
+ *   claude-prove schema migrate  --file <path> [--dry-run]
+ *   claude-prove schema diff     --file <path>
+ *   claude-prove schema summary
  *
  * Semantics mirror `tools/schema/__main__.py`:
  *   - validate: default file `.claude/.prove.json`; stdout prints errors
@@ -54,7 +54,7 @@ export function register(cli: CAC): void {
     .action((action: string, flags: SchemaFlags) => {
       if (!isSchemaAction(action)) {
         console.error(
-          `prove schema: unknown action '${action}'. expected one of: ${SCHEMA_ACTIONS.join(', ')}`,
+          `claude-prove schema: unknown action '${action}'. expected one of: ${SCHEMA_ACTIONS.join(', ')}`,
         );
         process.exit(1);
       }
@@ -120,7 +120,7 @@ function cmdMigrate(flags: SchemaFlags): number {
       config = JSON.parse(readFileSync(path, 'utf8')) as ProveConfig;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`prove schema: ${msg}`);
+      console.error(`claude-prove schema: ${msg}`);
       return 1;
     }
 
@@ -143,7 +143,7 @@ function cmdMigrate(flags: SchemaFlags): number {
     result = applyMigration(path);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`prove schema: ${msg}`);
+    console.error(`claude-prove schema: ${msg}`);
     return 1;
   }
 

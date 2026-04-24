@@ -1,5 +1,5 @@
 /**
- * `prove acb hook post-commit --workspace-root W`
+ * `claude-prove acb hook post-commit --workspace-root W`
  *
  * CLI wrapper around `runHookPostCommit`. Reads Claude Code hook JSON from
  * stdin, parses it into a `ClaudeCodeHookPayload`, dispatches, and writes
@@ -30,7 +30,7 @@ function readStdinSync(): string {
 }
 
 /**
- * `prove acb hook post-commit [--workspace-root W]`
+ * `claude-prove acb hook post-commit [--workspace-root W]`
  *
  * Claude Code pipes the PostToolUse payload as JSON on stdin. Malformed or
  * empty stdin silently passes (Python's `except JSONDecodeError: return`).

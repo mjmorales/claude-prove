@@ -3,8 +3,8 @@
  *
  * Subcommand surface:
  *
- *   prove notify dispatch <event-type> [--project-root R] [--config C] [--branch B] [--slug S]
- *   prove notify test     [event-type] [--project-root R]
+ *   claude-prove notify dispatch <event-type> [--project-root R] [--config C] [--branch B] [--slug S]
+ *   claude-prove notify test     [event-type] [--project-root R]
  *
  * `dispatch` replaces `scripts/dispatch-event.sh` — the orchestrator hook
  * layer invokes it whenever a step lifecycle event fires. `test` replaces
@@ -60,7 +60,7 @@ function dispatch(action: NotifyAction, event: string | undefined, flags: Notify
     case 'dispatch':
       if (!event) {
         console.error('error: notify dispatch: missing <event-type> argument');
-        console.error('usage: prove notify dispatch <event-type>');
+        console.error('usage: claude-prove notify dispatch <event-type>');
         return 1;
       }
       return runNotifyDispatch({

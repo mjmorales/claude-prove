@@ -1,5 +1,5 @@
 /**
- * `prove scrum status [--human] [--workspace-root W]`
+ * `claude-prove scrum status [--human] [--workspace-root W]`
  *
  * Snapshot of active scrum state:
  *   - active_tasks      — every non-terminal, non-deleted task

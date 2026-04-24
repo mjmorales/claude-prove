@@ -1,5 +1,5 @@
 /**
- * `prove scrum alerts [--human] [--stalled-after-days N] [--workspace-root W]`
+ * `claude-prove scrum alerts [--human] [--stalled-after-days N] [--workspace-root W]`
  *
  * Operator-facing signal aggregator. Emits two classes of alert:
  *

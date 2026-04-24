@@ -10,8 +10,8 @@ Single entry point for prompt engineering workflows. Parse the first positional 
 | Subcommand | Purpose |
 |------------|---------|
 | `craft [goal] [--research]` | Generate a new optimized prompt via the `llm-prompt-engineer` agent |
-| `cache <list\|add\|prune\|refresh> [args]` | Manage the research cache (wraps `prove prompting cache` CLI) |
-| `token-count <patterns...>` | Estimate token counts (wraps `prove prompting token-count` CLI) |
+| `cache <list\|add\|prune\|refresh> [args]` | Manage the research cache (wraps `claude-prove prompting cache` CLI) |
+| `token-count <patterns...>` | Estimate token counts (wraps `claude-prove prompting token-count` CLI) |
 
 Default to `craft` when the user's intent is "make a prompt" without naming a subcommand. Default to `cache list` when the user says "cache" with no further args. `token-count` requires at least one pattern.
 
@@ -69,7 +69,7 @@ If the user provides a file path, write the final prompt there. Otherwise, outpu
 
 ## Subcommand: cache
 
-Manage the prompt engineering research cache that supplements the bundled guide. Wraps `prove prompting cache` CLI for filesystem operations; research (`add`/`refresh`) is performed by this skill using WebSearch/WebFetch.
+Manage the prompt engineering research cache that supplements the bundled guide. Wraps `claude-prove prompting cache` CLI for filesystem operations; research (`add`/`refresh`) is performed by this skill using WebSearch/WebFetch.
 
 ### Cache Tiers (Priority Order)
 
@@ -152,7 +152,7 @@ Estimate token counts for files via regex-based heuristic tokenizer. Works on an
 Run from the user's project root. Invoke the CLI directly:
 
 ```bash
-prove prompting token-count <patterns...> [flags]
+claude-prove prompting token-count <patterns...> [flags]
 ```
 
 Positional arguments are glob patterns or literal file paths. Multiple patterns combinable.
@@ -168,10 +168,10 @@ Positional arguments are glob patterns or literal file paths. Multiple patterns 
 ### Examples
 
 ```bash
-prove prompting token-count '**/*.md'
-prove prompting token-count agents/llm-prompt-engineer.md
-prove prompting token-count 'agents/**/*.md' 'skills/**/SKILL.md'
-prove prompting token-count '**/*.md' --json
+claude-prove prompting token-count '**/*.md'
+claude-prove prompting token-count agents/llm-prompt-engineer.md
+claude-prove prompting token-count 'agents/**/*.md' 'skills/**/SKILL.md'
+claude-prove prompting token-count '**/*.md' --json
 ```
 
 ### Interpreting Results

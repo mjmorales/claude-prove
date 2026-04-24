@@ -63,7 +63,7 @@ export function runNotifyDispatch(opts: NotifyDispatchOpts): number {
   const paths = RunPaths.forRun(runsRoot, branch, slug);
   if (!existsSync(paths.state)) {
     process.stderr.write(
-      `dispatch-event: no state.json at ${paths.state} — run \`prove run-state init\` first\n`,
+      `dispatch-event: no state.json at ${paths.state} — run \`claude-prove run-state init\` first\n`,
     );
     return 0;
   }

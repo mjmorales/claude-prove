@@ -3,26 +3,26 @@
  *
  * Subcommand surface (agents and operators hit the same CLI):
  *
- *   prove scrum init
- *   prove scrum status                    [--human]
- *   prove scrum next-ready                [--limit N] [--milestone M] [--human]
- *   prove scrum task create               --title X [--description Y] [--milestone M] [--id I]
- *   prove scrum task show <id>
- *   prove scrum task list                 [--status S] [--milestone M] [--tag T]
- *   prove scrum task tag <id> <tag>
- *   prove scrum task link-decision <id> <decision-path>
- *   prove scrum task status <id> <new-status>
- *   prove scrum task delete <id>
- *   prove scrum alerts                    [--human] [--stalled-after-days N]
- *   prove scrum milestone create          --title X [--description Y] [--target-state S] [--id I]
- *   prove scrum milestone list            [--status S]
- *   prove scrum milestone show <id>
- *   prove scrum milestone close <id>
- *   prove scrum tag add <task-id> <tag>
- *   prove scrum tag remove <task-id> <tag>
- *   prove scrum tag list                  [--task <id>] [--tag <tag>]
- *   prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
- *   prove scrum hook <event>              (event: session-start | subagent-stop | stop)
+ *   claude-prove scrum init
+ *   claude-prove scrum status                    [--human]
+ *   claude-prove scrum next-ready                [--limit N] [--milestone M] [--human]
+ *   claude-prove scrum task create               --title X [--description Y] [--milestone M] [--id I]
+ *   claude-prove scrum task show <id>
+ *   claude-prove scrum task list                 [--status S] [--milestone M] [--tag T]
+ *   claude-prove scrum task tag <id> <tag>
+ *   claude-prove scrum task link-decision <id> <decision-path>
+ *   claude-prove scrum task status <id> <new-status>
+ *   claude-prove scrum task delete <id>
+ *   claude-prove scrum alerts                    [--human] [--stalled-after-days N]
+ *   claude-prove scrum milestone create          --title X [--description Y] [--target-state S] [--id I]
+ *   claude-prove scrum milestone list            [--status S]
+ *   claude-prove scrum milestone show <id>
+ *   claude-prove scrum milestone close <id>
+ *   claude-prove scrum tag add <task-id> <tag>
+ *   claude-prove scrum tag remove <task-id> <tag>
+ *   claude-prove scrum tag list                  [--task <id>] [--tag <tag>]
+ *   claude-prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
+ *   claude-prove scrum hook <event>              (event: session-start | subagent-stop | stop)
  *
  * All subcommands accept `--workspace-root W` (default: git common-dir via
  * mainWorktreeRoot(), falling back to process.cwd()).

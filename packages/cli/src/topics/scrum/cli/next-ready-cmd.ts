@@ -1,5 +1,5 @@
 /**
- * `prove scrum next-ready [--limit N] [--milestone M] [--human] [--workspace-root W]`
+ * `claude-prove scrum next-ready [--limit N] [--milestone M] [--human] [--workspace-root W]`
  *
  * Ranked pick-list of actionable tasks via `ScrumStore.nextReady`. Each
  * row carries the composite score + rationale breakdown so agents can
@@ -49,7 +49,7 @@ export function runNextReadyCmd(flags: NextReadyCmdFlags): number {
     return 0;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`prove scrum next: ${msg}`);
+    console.error(`claude-prove scrum next: ${msg}`);
     return 1;
   } finally {
     store.close();

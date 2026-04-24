@@ -1,5 +1,5 @@
 /**
- * Parity tests for the `prove commit validate-msg` port.
+ * Parity tests for the `claude-prove commit validate-msg` port.
  *
  * Each case writes a commit-message file into a temp dir that also carries
  * a synthetic `.claude/.prove.json`, then asserts the exit code matches the

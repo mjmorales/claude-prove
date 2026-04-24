@@ -1,5 +1,5 @@
 /**
- * CLI-level dispatcher for `prove run-state hook <event>`.
+ * CLI-level dispatcher for `claude-prove run-state hook <event>`.
  *
  * Reads the hook payload from stdin, routes to the matching hook module,
  * and writes `stdout`/`stderr` + exits with the module's code. Keeping the

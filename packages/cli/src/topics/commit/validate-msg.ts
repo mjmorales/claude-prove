@@ -9,7 +9,7 @@
  *   - Merge / Revert "auto-message" passthrough
  *   - Error message text and exit codes (0 valid / 1 invalid)
  *
- * Invocation: `prove commit validate-msg <path-to-commit-msg-file>`.
+ * Invocation: `claude-prove commit validate-msg <path-to-commit-msg-file>`.
  * Pre-commit runs the hook from the repo root, so `.claude/.prove.json` is
  * looked up relative to `process.cwd()` — matches the Python resolution
  * (`Path(__file__).resolve().parent.parent / ".claude/.prove.json"`), which

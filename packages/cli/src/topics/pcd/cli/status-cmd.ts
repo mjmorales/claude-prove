@@ -1,5 +1,5 @@
 /**
- * `prove pcd status [--project-root PATH]`
+ * `claude-prove pcd status [--project-root PATH]`
  *
  * Ports `tools/pcd/__main__.py::cmd_status`:
  *   - If `<pcd>/pipeline-status.json` exists, stdout = its JSON, stderr =

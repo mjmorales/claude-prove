@@ -1,15 +1,15 @@
 /**
- * `prove claude-md <generate|scan|subagent-context|validators> [--project-root] [--plugin-dir]`
+ * `claude-prove claude-md <generate|scan|subagent-context|validators> [--project-root] [--plugin-dir]`
  *
  * Mirrors `skills/claude-md/__main__.py` 1:1 plus the `validators` subcommand
  * used by `skills/handoff/scripts/gather-context.sh` as a plugin-dir-less
  * fallback. Hooks, the skill body, and `/prove:docs claude-md` call
- * `prove claude-md` — never `python3 skills/claude-md/__main__.py`.
+ * `claude-prove claude-md` — never `python3 skills/claude-md/__main__.py`.
  *
- *   prove claude-md generate         → scan + write <project-root>/CLAUDE.md; prints JSON status.
- *   prove claude-md scan             → scanner output only; prints pretty JSON.
- *   prove claude-md subagent-context → compact discovery context (markdown).
- *   prove claude-md validators       → list `- <phase>: `<command>`` lines from .claude/.prove.json.
+ *   claude-prove claude-md generate         → scan + write <project-root>/CLAUDE.md; prints JSON status.
+ *   claude-prove claude-md scan             → scanner output only; prints pretty JSON.
+ *   claude-prove claude-md subagent-context → compact discovery context (markdown).
+ *   claude-prove claude-md validators       → list `- <phase>: `<command>`` lines from .claude/.prove.json.
  *
  * Safety guard: refuses to run when `--project-root` resolves to (or under)
  * `~/.claude`, which is the plugin install location — generating against it

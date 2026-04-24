@@ -1,5 +1,5 @@
 /**
- * `prove scrum tag <action> [args]`
+ * `claude-prove scrum tag <action> [args]`
  *
  * Action dispatch:
  *   add <task-id> <tag>

@@ -1,5 +1,5 @@
 /**
- * `prove scrum hook <event>`
+ * `claude-prove scrum hook <event>`
  *
  * Dispatches stdin JSON (Claude Code hook payload) to the matching handler
  * in `../hook`:

@@ -1,5 +1,5 @@
 /**
- * `prove install init-hooks` — merge prove-owned hook blocks into settings.json.
+ * `claude-prove install init-hooks` — merge prove-owned hook blocks into settings.json.
  *
  * User-authored blocks (no `_tool` tag) are preserved byte-for-byte. See
  * `@claude-prove/installer/write-settings-hooks` for the canonical block
@@ -34,7 +34,7 @@ export function runInitHooks(opts: InitHooksOptions): number {
   mkdirSync(dirname(settingsPath), { recursive: true });
   const wrote = writeSettingsHooks(settingsPath, prefix, { force: opts.force });
   console.log(
-    `prove install init-hooks: ${wrote ? 'wrote' : 'up-to-date'} ${settingsPath} (mode=${mode})`,
+    `claude-prove install init-hooks: ${wrote ? 'wrote' : 'up-to-date'} ${settingsPath} (mode=${mode})`,
   );
   return 0;
 }

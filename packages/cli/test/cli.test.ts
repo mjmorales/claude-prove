@@ -49,7 +49,7 @@ function makeTmpGitRepo(): string {
   return root;
 }
 
-describe('prove CLI help', () => {
+describe('claude-prove CLI help', () => {
   test('--help lists every expected topic exactly once', () => {
     const { stdout, status } = runBin(['--help']);
     expect(status).toBe(0);
@@ -60,7 +60,7 @@ describe('prove CLI help', () => {
   });
 });
 
-describe('prove CLI stub topics', () => {
+describe('claude-prove CLI stub topics', () => {
   test('each stub exits 0 with the "not yet implemented" notice', () => {
     for (const topic of STUB_TOPICS) {
       const { stdout, status } = runBin([topic]);
@@ -71,7 +71,7 @@ describe('prove CLI stub topics', () => {
   });
 });
 
-describe('prove store subcommands', () => {
+describe('claude-prove store subcommands', () => {
   test('store migrate applies registered domain migrations', () => {
     // Every `prove` invocation imports the topic tree, which side-effect
     // registers the `acb` schema via `topics/acb.ts`. On a fresh db the

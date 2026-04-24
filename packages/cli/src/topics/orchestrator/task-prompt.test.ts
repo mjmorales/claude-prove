@@ -1,5 +1,5 @@
 /**
- * Parity tests for `prove orchestrator task-prompt`.
+ * Parity tests for `claude-prove orchestrator task-prompt`.
  *
  * Covers structural invariants from the retired shell template:
  *   - worktree cd block is present when --worktree is passed

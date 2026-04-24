@@ -1,5 +1,5 @@
 /**
- * End-to-end parity tests for the `prove claude-md` topic.
+ * End-to-end parity tests for the `claude-prove claude-md` topic.
  *
  * The Python reference implementation (`skills/claude-md/__main__.py`) was
  * run against four fixture projects with deterministic (sorted) filesystem

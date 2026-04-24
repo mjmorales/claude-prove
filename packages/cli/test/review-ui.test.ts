@@ -44,7 +44,7 @@ function makeFixture(label: string, opts: FixtureOptions = {}): string {
   return root;
 }
 
-describe('prove review-ui config', () => {
+describe('claude-prove review-ui config', () => {
   test('all three keys set -> emits them verbatim as JSON', () => {
     const project = makeFixture('all-set', {
       config: JSON.stringify({
@@ -159,7 +159,7 @@ describe('prove review-ui config', () => {
   });
 });
 
-describe('prove review-ui errors', () => {
+describe('claude-prove review-ui errors', () => {
   test('unknown action exits non-zero with a clear diagnostic', () => {
     const { stderr, status } = runBin(['review-ui', 'bogus']);
     expect(status).not.toBe(0);

@@ -20,7 +20,7 @@ Requirements-gathering entry point for `--full` runs without an existing plan.
    )
    ```
    Subagent returns user stories, acceptance criteria, non-goals, technical constraints, verification strategy.
-4. **Author `prd.json`** inline from the subagent's output. Shape: field list in `references/prd-template.md` (that file is a field reference — the on-disk artifact is JSON, not markdown). JSON must validate against the PRD schema in `packages/cli/src/topics/run-state/schemas.ts`; run `prove run-state validate` to confirm.
+4. **Author `prd.json`** inline from the subagent's output. Shape: field list in `references/prd-template.md` (that file is a field reference — the on-disk artifact is JSON, not markdown). JSON must validate against the PRD schema in `packages/cli/src/topics/run-state/schemas.ts`; run `claude-prove run-state validate` to confirm.
 5. **PRD gate**: `AskUserQuestion` header `PRD` — **Approve** / **Request Changes**. On "Request Changes", revise `prd.json` and re-ask.
 6. **Generate `plan.json`** via the `task-planner` skill. Wave-based task graph; every task has `id`, `wave`, `deps`, `steps[]`.
 7. **Plan gate**: `AskUserQuestion` header `Plan` — **Approve** / **Request Changes**. On "Request Changes", revise `plan.json` (or re-run `task-planner`) and re-ask.

@@ -4,7 +4,7 @@
  * cac dispatches on the first positional arg only, so sub-actions live
  * under a single `review-ui <action>` command:
  *
- *   prove review-ui config [--cwd <path>]
+ *   claude-prove review-ui config [--cwd <path>]
  *
  * Semantics:
  *   - config : emit `{ port, image, tag }` as a JSON line on stdout,
@@ -31,7 +31,7 @@ export function register(cli: CAC): void {
     .action((action: string, flags: ReviewUiFlags) => {
       if (!isReviewUiAction(action)) {
         console.error(
-          `prove review-ui: unknown action '${action}'. expected one of: ${REVIEW_UI_ACTIONS.join(
+          `claude-prove review-ui: unknown action '${action}'. expected one of: ${REVIEW_UI_ACTIONS.join(
             ', ',
           )}`,
         );

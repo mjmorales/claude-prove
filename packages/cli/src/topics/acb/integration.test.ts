@@ -1,5 +1,5 @@
 /**
- * End-to-end integration tests for the `prove acb` CLI topic.
+ * End-to-end integration tests for the `claude-prove acb` CLI topic.
  *
  * Unlike the unit tests that drive handlers directly, these spawn
  * `bun run bin/run.ts acb <cmd>` in a real tmpdir git repo so the full
@@ -122,7 +122,7 @@ afterAll(() => {
 // save-manifest
 // ---------------------------------------------------------------------------
 
-describe('prove acb save-manifest', () => {
+describe('claude-prove acb save-manifest', () => {
   test('happy path: valid manifest persists and reports JSON', () => {
     const repo = trackRepo('sm-ok');
     const sha = gitStdout(['git', 'rev-parse', 'HEAD'], repo);
@@ -179,7 +179,7 @@ describe('prove acb save-manifest', () => {
 // assemble
 // ---------------------------------------------------------------------------
 
-describe('prove acb assemble', () => {
+describe('claude-prove acb assemble', () => {
   test('0 manifests: exit 0, empty groups, stderr header present', () => {
     const repo = trackRepo('asm-empty');
     const res = runAcb(['assemble', '--base', 'feat/x', '--branch', 'feat/x'], repo);
@@ -264,7 +264,7 @@ describe('prove acb assemble', () => {
 // hook post-commit
 // ---------------------------------------------------------------------------
 
-describe('prove acb hook post-commit', () => {
+describe('claude-prove acb hook post-commit', () => {
   test('non-Bash tool: silent pass (empty stdout)', () => {
     const repo = trackRepo('hook-nonbash');
     const payload = { tool_name: 'Write', tool_input: {}, cwd: repo };
@@ -322,7 +322,7 @@ describe('prove acb hook post-commit', () => {
 // migrate-legacy-db
 // ---------------------------------------------------------------------------
 
-describe('prove acb migrate-legacy-db', () => {
+describe('claude-prove acb migrate-legacy-db', () => {
   test('no legacy db: exit 0, stderr notes no legacy', () => {
     const repo = trackRepo('mig-none');
     const res = runAcb(['migrate-legacy-db', '--workspace-root', repo], repo);

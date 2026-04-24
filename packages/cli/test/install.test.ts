@@ -37,7 +37,7 @@ function makeNodeFixture(label: string): string {
   return root;
 }
 
-describe('prove install init', () => {
+describe('claude-prove install init', () => {
   test('writes settings.json and .prove.json in a Node fixture tmpdir', () => {
     const project = makeNodeFixture('init-ok');
     try {
@@ -45,7 +45,7 @@ describe('prove install init', () => {
 
       expect(status).toBe(0);
       expect(stderr).toBe('');
-      expect(stdout).toContain('prove install init');
+      expect(stdout).toContain('claude-prove install init');
 
       const settingsPath = join(project, '.claude', 'settings.json');
       const configPath = join(project, '.claude', '.prove.json');
@@ -92,7 +92,7 @@ describe('prove install init', () => {
   });
 });
 
-describe('prove install init-hooks', () => {
+describe('claude-prove install init-hooks', () => {
   test('writes only settings.json, not .prove.json', () => {
     const project = makeNodeFixture('hooks-only');
     try {
@@ -106,7 +106,7 @@ describe('prove install init-hooks', () => {
 
       expect(status).toBe(0);
       expect(stderr).toBe('');
-      expect(stdout).toContain('prove install init-hooks');
+      expect(stdout).toContain('claude-prove install init-hooks');
 
       expect(existsSync(settingsPath)).toBe(true);
       expect(existsSync(join(project, '.claude', '.prove.json'))).toBe(false);
@@ -119,7 +119,7 @@ describe('prove install init-hooks', () => {
   });
 });
 
-describe('prove install init-config', () => {
+describe('claude-prove install init-config', () => {
   test('writes only .prove.json in a Node fixture', () => {
     const project = makeNodeFixture('config-only');
     try {
@@ -127,7 +127,7 @@ describe('prove install init-config', () => {
 
       expect(status).toBe(0);
       expect(stderr).toBe('');
-      expect(stdout).toContain('prove install init-config');
+      expect(stdout).toContain('claude-prove install init-config');
 
       expect(existsSync(join(project, '.claude', '.prove.json'))).toBe(true);
       expect(existsSync(join(project, '.claude', 'settings.json'))).toBe(false);
@@ -137,7 +137,7 @@ describe('prove install init-config', () => {
   });
 });
 
-describe('prove install errors', () => {
+describe('claude-prove install errors', () => {
   test('unknown action exits non-zero with a clear diagnostic', () => {
     const { stderr, status } = runBin(['install', 'bogus']);
     expect(status).not.toBe(0);

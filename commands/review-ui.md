@@ -44,11 +44,11 @@ Port, image, and tag resolve in this order (first non-empty wins):
 3. `.claude/.prove.json` — keys `tools.acb.config.review_ui_port`, `review_ui_image`, `review_ui_tag`
 4. Hard-coded defaults: `5174`, `ghcr.io/mjmorales/claude-prove/review-ui`, `latest`
 
-The `prove review-ui config` subcommand emits `{port, image, tag}` as a single JSON line, filling any missing key with the hardcoded default. So the shell resolution drops one fallback layer — `$CFG_*` is guaranteed non-empty and already carries the default when the config file is absent or incomplete.
+The `claude-prove review-ui config` subcommand emits `{port, image, tag}` as a single JSON line, filling any missing key with the hardcoded default. So the shell resolution drops one fallback layer — `$CFG_*` is guaranteed non-empty and already carries the default when the config file is absent or incomplete.
 
 ```bash
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-CFG_JSON=$(prove review-ui config --cwd "$REPO_ROOT")
+CFG_JSON=$(claude-prove review-ui config --cwd "$REPO_ROOT")
 CFG_PORT=$(echo "$CFG_JSON" | jq -r '.port')
 CFG_IMAGE=$(echo "$CFG_JSON" | jq -r '.image')
 CFG_TAG=$(echo "$CFG_JSON" | jq -r '.tag')
@@ -157,7 +157,7 @@ Stop:    /prove:review-ui --stop   (or: docker stop prove-review)
 Logs:    docker logs -f prove-review
 ```
 
-The `source` line tells the user where `$PORT` came from so they can pin it via `.claude/.prove.json` → `tools.acb.config.review_ui_port` if they want the new value to stick. Report `config` whenever the value came from `$CFG_PORT` — since `prove review-ui config` now fills missing keys with hardcoded defaults, `default` collapses into `config` at this layer. Run `prove review-ui config --cwd "$REPO_ROOT"` to inspect the resolved config JSON directly.
+The `source` line tells the user where `$PORT` came from so they can pin it via `.claude/.prove.json` → `tools.acb.config.review_ui_port` if they want the new value to stick. Report `config` whenever the value came from `$CFG_PORT` — since `claude-prove review-ui config` now fills missing keys with hardcoded defaults, `default` collapses into `config` at this layer. Run `claude-prove review-ui config --cwd "$REPO_ROOT"` to inspect the resolved config JSON directly.
 
 ## Notes
 

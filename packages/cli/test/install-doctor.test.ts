@@ -74,7 +74,7 @@ function makeTmpProject(label: string): string {
   return mkdtempSync(join(tmpdir(), `prove-doctor-${label}-`));
 }
 
-describe('prove install doctor', () => {
+describe('claude-prove install doctor', () => {
   test('healthy fixture reports no failures and exits 0', () => {
     const root = makeTmpProject('healthy');
     try {
@@ -125,7 +125,7 @@ describe('prove install doctor', () => {
               hooks: [
                 {
                   type: 'command',
-                  command: '/nonexistent/prove run-state hook validate',
+                  command: '/nonexistent/claude-prove run-state hook validate',
                   timeout: 5000,
                 },
               ],
@@ -144,7 +144,7 @@ describe('prove install doctor', () => {
 
       expect(status).toBe(1);
       expect(combined).toContain('[FAIL] hook-paths[run_state:Write|Edit|MultiEdit]');
-      expect(combined).toContain('/nonexistent/prove');
+      expect(combined).toContain('/nonexistent/claude-prove');
       expect(combined).toContain('install init --force');
     } finally {
       rmSync(root, { recursive: true, force: true });

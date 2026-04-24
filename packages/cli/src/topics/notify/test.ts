@@ -1,5 +1,5 @@
 /**
- * `prove notify test <event>` — exercise the notification pipeline.
+ * `claude-prove notify test <event>` — exercise the notification pipeline.
  *
  * Replaces `scripts/notify-test.sh`. Flow:
  *   1. Read `.claude/.prove.json` from the current project root.
@@ -94,7 +94,7 @@ export function runNotifyTest(opts: NotifyTestOpts): number {
   process.env.PROVE_STEP = '0';
   process.env.PROVE_STATUS = 'test';
   process.env.PROVE_BRANCH = 'test/notify-test';
-  process.env.PROVE_DETAIL = 'Test notification from prove notify test';
+  process.env.PROVE_DETAIL = 'Test notification from claude-prove notify test';
 
   const dispatchCode = runNotifyDispatch({
     eventType: event,

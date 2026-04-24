@@ -4,13 +4,13 @@
  * Follows the `schema.ts` pattern: cac dispatches on the first positional
  * arg, so every sub-action lives under a single `cafi <action>` command
  * with an action enum. Users invoke the natural form:
- *   prove cafi index   [--force] [--project-root <path>]
- *   prove cafi status  [--project-root <path>]
- *   prove cafi get     <path>    [--project-root <path>]
- *   prove cafi lookup  <keyword> [--project-root <path>]
- *   prove cafi clear   [--project-root <path>]
- *   prove cafi context [--project-root <path>]
- *   prove cafi gate
+ *   claude-prove cafi index   [--force] [--project-root <path>]
+ *   claude-prove cafi status  [--project-root <path>]
+ *   claude-prove cafi get     <path>    [--project-root <path>]
+ *   claude-prove cafi lookup  <keyword> [--project-root <path>]
+ *   claude-prove cafi clear   [--project-root <path>]
+ *   claude-prove cafi context [--project-root <path>]
+ *   claude-prove cafi gate
  *
  * Sub-action semantics:
  *   - index: run full/incremental index; stdout prints JSON summary; on

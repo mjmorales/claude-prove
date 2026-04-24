@@ -3,16 +3,16 @@
  *
  * Mirrors `tools/acb/__main__.py` + `tools/acb/hook.py` + migrate-legacy-db
  * so hooks, skills, and orchestrator wrappers flip from the Python
- * entrypoints to `prove acb` without interface drift:
+ * entrypoints to `claude-prove acb` without interface drift:
  *
- *   prove acb save-manifest     [--branch B] [--sha S] [--slug G] [--workspace-root W]
- *   prove acb assemble          [--branch B] [--base main] [--workspace-root W]
- *   prove acb hook <event>      [--workspace-root W]   (event: post-commit)
- *   prove acb migrate-legacy-db [--workspace-root W]
+ *   claude-prove acb save-manifest     [--branch B] [--sha S] [--slug G] [--workspace-root W]
+ *   claude-prove acb assemble          [--branch B] [--base main] [--workspace-root W]
+ *   claude-prove acb hook <event>      [--workspace-root W]   (event: post-commit)
+ *   claude-prove acb migrate-legacy-db [--workspace-root W]
  *
  * `ensureLegacyImported(workspaceRoot)` runs at the top of every non-migrate
  * handler so the standalone `.prove/acb.db` gets absorbed into the unified
- * `.prove/prove.db` on the first `prove acb` call in a workspace. The
+ * `.prove/prove.db` on the first `claude-prove acb` call in a workspace. The
  * `migrate-legacy-db` subcommand is the user-triggered version and bypasses
  * the memoized wrapper intentionally (see `cli/migrate-legacy-cmd.ts`).
  *

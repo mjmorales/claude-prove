@@ -1,5 +1,5 @@
 /**
- * `prove install init` — bootstrap both settings.json and .prove.json.
+ * `claude-prove install init` — bootstrap both settings.json and .prove.json.
  *
  * Resolves plugin root + mode once, then delegates to writeSettingsHooks
  * (for Claude hook wiring) and bootstrapProveJson (for the validators
@@ -41,7 +41,7 @@ export function runInit(opts: InitOptions): number {
 
   const configPath = join(projectRoot, '.claude', '.prove.json');
   console.log(
-    `prove install init: ${hooksWrote ? 'wrote' : 'up-to-date'} ${settingsPath}; bootstrapped ${configPath} (mode=${mode})`,
+    `claude-prove install init: ${hooksWrote ? 'wrote' : 'up-to-date'} ${settingsPath}; bootstrapped ${configPath} (mode=${mode})`,
   );
   return 0;
 }

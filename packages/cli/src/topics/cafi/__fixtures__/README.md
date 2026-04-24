@@ -49,7 +49,7 @@ different presentation paths:
   it (matches the v1 shared-cache schema).
 
 Full parity capture (including Python stdout captures) lands in task 4
-when the `prove cafi` dispatcher is wired — at that point both CLIs go
+when the `claude-prove cafi` dispatcher is wired — at that point both CLIs go
 through the same presentation layer. Task 2 pins only the TS captures
 required by `indexer.test.ts`:
 

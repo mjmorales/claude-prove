@@ -9,7 +9,7 @@
  *     `server/src/index.ts` alongside the other route registrars
  *
  * **Read-only by contract.** No POST/PUT/DELETE/PATCH routes — operators
- * mutate scrum state via the CLI (`prove scrum task ...`) or the
+ * mutate scrum state via the CLI (`claude-prove scrum task ...`) or the
  * scrum-master agent. Any mutation would bypass event sourcing + agent
  * provenance and is therefore rejected at the route registration boundary.
  */

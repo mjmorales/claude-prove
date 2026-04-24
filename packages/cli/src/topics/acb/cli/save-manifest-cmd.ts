@@ -1,5 +1,5 @@
 /**
- * `prove acb save-manifest [--branch B] [--sha S] [--slug G] --workspace-root W`
+ * `claude-prove acb save-manifest [--branch B] [--sha S] [--slug G] --workspace-root W`
  *
  * Reads an ACB v0.2 intent manifest as JSON on stdin, validates it, and
  * inserts a row into `<workspace-root>/.prove/prove.db` acb_manifests. The
