@@ -278,7 +278,7 @@ jobs:
           mv claude-prove ${{ matrix.artifact }}
 
       - name: Upload to GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v3
         with:
           files: ${{ matrix.artifact }}
           fail_on_unmatched_files: true
