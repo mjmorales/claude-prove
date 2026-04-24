@@ -128,6 +128,11 @@ const ALLOWED_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
 // Tags that boost priority in nextReady ranking.
 const PRIORITY_TAGS = new Set(['p0', 'p1', 'urgent', 'blocker']);
 
+// Tags that suppress a task in nextReady ranking. Each contributes -1 to
+// `tag_boost`, allowing deferred/blocked/wontfix work to net negative even
+// when the task also carries a priority tag.
+const DEFER_TAGS = new Set(['deferred', 'blocked', 'wontfix']);
+
 // ---------------------------------------------------------------------------
 // ScrumStore class
 // ---------------------------------------------------------------------------
@@ -669,7 +674,8 @@ export class ScrumStore {
    *                      planned milestone to the strongest boost.
    *   context_hotness  = sigmoid of hours-since-last-event; fresher tasks
    *                      rank higher. Value in [0, 1].
-   *   tag_boost        = sum of +1 per priority tag attached to the task
+   *   tag_boost        = sum of +1 per priority tag and -1 per defer tag
+   *                      ({deferred, blocked, wontfix}) attached to the task
    *
    * Returns up to `limit` rows sorted by score DESC, then `created_at` ASC
    * for deterministic ordering on ties.
@@ -786,26 +792,40 @@ export class ScrumStore {
   }
 
   /**
-   * Batch-load priority-tag counts for a set of task ids in a single
-   * `WHERE task_id IN (...)` query. Replaces N individual tag lookups
-   * on the `nextReady` hot path. Tasks with no priority tags are
-   * absent from the returned map (callers should treat missing as 0).
+   * Batch-load net tag scores for a set of task ids in a single grouped
+   * query. Each priority tag contributes +1, each defer tag contributes -1;
+   * neutral tags contribute 0. Net scores can be negative — tasks with only
+   * defer tags must still appear in the returned map so callers see the
+   * suppression instead of treating them as neutral. Tasks with no scored
+   * tags at all are absent (callers treat missing as 0).
    */
   private fetchTagBoosts(taskIds: string[]): Map<string, number> {
     const boosts = new Map<string, number>();
     if (taskIds.length === 0) return boosts;
 
-    // One prepared statement per distinct candidate-count — Bun's sqlite
-    // requires a fixed placeholder count per statement. In practice
+    // SQL-side scoring keeps the boost calculation in one round-trip per
+    // candidate set instead of streaming every (task_id, tag) row back to
+    // JS. One prepared statement per distinct candidate-count — Bun's
+    // sqlite requires a fixed placeholder count per statement. In practice
     // `nextReady` caps the candidate set at the `ready`/`backlog` row
     // count, so the number of cached shapes stays bounded.
     const placeholders = taskIds.map(() => '?').join(', ');
-    const sql = `SELECT task_id, tag FROM scrum_tags WHERE task_id IN (${placeholders})`;
-    const rows = this.prep(sql).all(...taskIds) as Array<{ task_id: string; tag: string }>;
+    const priorityList = [...PRIORITY_TAGS].map((t) => `'${t}'`).join(', ');
+    const deferList = [...DEFER_TAGS].map((t) => `'${t}'`).join(', ');
+    const sql = `
+      SELECT task_id,
+             SUM(CASE WHEN tag IN (${priorityList}) THEN 1
+                      WHEN tag IN (${deferList}) THEN -1
+                      ELSE 0 END) AS boost
+      FROM scrum_tags
+      WHERE task_id IN (${placeholders})
+      GROUP BY task_id
+      HAVING boost <> 0
+    `;
+    const rows = this.prep(sql).all(...taskIds) as Array<{ task_id: string; boost: number }>;
 
-    for (const { task_id, tag } of rows) {
-      if (!PRIORITY_TAGS.has(tag)) continue;
-      boosts.set(task_id, (boosts.get(task_id) ?? 0) + 1);
+    for (const { task_id, boost } of rows) {
+      boosts.set(task_id, boost);
     }
     return boosts;
   }
