@@ -76,7 +76,7 @@ jobs:
 
       - name: Build and push
         id: build
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v7
         with:
           # Build context is the monorepo root so workspace deps resolve.
           # The Dockerfile lives under packages/review-ui/ per phase 11 task 5.
