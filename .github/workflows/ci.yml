@@ -73,7 +73,7 @@ jobs:
           chmod +x dist-bin/claude-prove-${{ matrix.target }}
           ./dist-bin/claude-prove-${{ matrix.target }} --help
       - name: Upload binary artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: claude-prove-${{ matrix.target }}
           path: dist-bin/claude-prove-${{ matrix.target }}
