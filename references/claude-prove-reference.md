@@ -43,9 +43,10 @@ Ex: `run-state step --branch main --slug add-login --commit <sha> --verdict pass
 
 ### scrum — tasks, milestones, tags on `.prove/prove.db`
 
-Actions: `init` `status` `next-ready` `alerts` `task <create|show|list|tag|link-decision|status|delete>` `milestone <create|list|show|close>` `tag <add|remove|list>` `link-run` `hook <session-start|subagent-stop|stop>`.
-Flags: `--human` `--limit` `--milestone` `--title` `--description` `--id` `--status` `--tag` `--task` `--target-state` `--branch` `--slug` `--stalled-after-days` (default 7) `--workspace-root`.
+Actions: `init` `status` `next-ready` `compile-plan` `alerts` `task <create|show|list|tag|link-decision|status|delete|add-dep|remove-dep>` `milestone <create|list|show|close|activate|reopen>` `tag <add|remove|list>` `link-run` `hook <session-start|subagent-stop|stop>`.
+Flags: `--human` `--limit` `--milestone` `--title` `--description` `--id` `--status` `--tag` `--task` `--target-state` `--branch` `--slug` `--out` (compile-plan) `--stalled-after-days` (default 7) `--workspace-root`.
 Ex: `scrum task create --title "Add login" --milestone auth-v1 --tag backend`.
+`compile-plan --milestone <id> [--out plan.json]` emits a run-state plan.json (waves from `blocked_by` edges) + a `scrum-map.json` sidecar — the `/prove:workflow` source-compile step.
 `scrum hook` is hook-driven — do not call inline.
 
 ### schema — `.claude/.prove.json` lifecycle
@@ -89,10 +90,11 @@ Action: `validate-msg [file]`. Ex: `commit validate-msg .git/COMMIT_EDITMSG`.
 
 Actions: `generate` `scan` `subagent-context` `validators`. Flags: `--project-root` `--plugin-dir`. Ex: `claude-md scan`.
 
-### orchestrator — render orchestrator prompts
+### orchestrator — render orchestrator prompts + wave schedule
 
-Actions: `task-prompt` `review-prompt`. Flags: `--run-dir` `--task-id` `--project-root` `--worktree` (req for `review-prompt`) `--base-branch` (review-prompt).
+Actions: `task-prompt` `review-prompt` `wave-plan`. Flags: `--run-dir` `--task-id` `--project-root` `--worktree` (req for `review-prompt`) `--base-branch` (review-prompt) `--max-agents` `--format json|md` (wave-plan).
 Ex: `orchestrator task-prompt --run-dir .prove/runs/main/add-login --task-id 1`
+`wave-plan --run-dir <dir> [--max-agents N] [--format md]` emits the read-only dependency-wave dispatch schedule (batches capped at `--max-agents`, `dispatch_rounds`, `peak_concurrency`) — the `/prove:workflow` scheduler + `--dry-run` projection.
 
 ### notify — reporter event dispatcher
 

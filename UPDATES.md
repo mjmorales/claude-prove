@@ -6,6 +6,28 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v2.8.0 — New `/prove:workflow` command: run a whole milestone (or plan.json) as a parallel fan-out
+
+Adds the `/prove:workflow` command + skill. Point it at a **scrum milestone id** or a **`plan.json`** and it runs the dependency graph as one fan-out execution: it compiles the milestone's tasks + `blocked_by` edges into a `plan.json`, runs the tasks in parallel waves through the orchestrator's existing full-mode machinery (worktrees, validators, `principal-architect` review, sequential merge), and mirrors each task's status back to the scrum store (`task status done|blocked` + `link-run`).
+
+The skill is deliberately thin — it reuses orchestrator full-mode rather than reimplementing it. `prove.db` stays the source of truth; the compiled `plan.json` is an ephemeral, regenerable execution view (mapped back via a `scrum-map.json` sidecar). Flags: `--backend auto|dynamic|native` (on the Claude Opus 4.8 dynamic-workflows runtime it renders a background JS driver, else runs natively), `--max-agents` (per-wave fan-out, default 16 dynamic / 4 native), `--verify <tag>` (force adversarial review on tagged tasks), `--decompose` (per-task step trees via `/prove:plan`), and `--dry-run` (print the wave plan + agent-count estimate, write/dispatch nothing).
+
+**New CLI action — `scrum compile-plan`**: `claude-prove scrum compile-plan --milestone <id> [--out plan.json]` compiles a milestone's actionable tasks (skips `done`/`cancelled`) + `blocked_by` edges into a run-state `plan.json` plus a `scrum-map.json` sidecar. Waves are assigned by longest-path depth; `mode` is `full` at >= 4 tasks; dependency cycles error out. The emitted plan passes `run-state validate --kind plan`. This is the Phase 1 source-compile step for `/prove:workflow`; it's also usable standalone to turn a backlog milestone into an orchestrator-ready plan.
+
+**New CLI action — `orchestrator wave-plan`**: `claude-prove orchestrator wave-plan --run-dir <dir> [--max-agents N] [--format json|md]` emits the read-only dependency-wave dispatch schedule for a compiled plan — waves split into batches capped at `--max-agents`, with `dispatch_rounds` and `peak_concurrency`. This is the substrate-agnostic scheduler both `/prove:workflow` backends consume, and the `--format md` projection backs the skill's `--dry-run`.
+
+**Migration**: none. Net-new command + two CLI actions, no schema or config change.
+
+**Auto-adoption**: automatic — `/prove:workflow` is a `core: true` command discovered on plugin load after update; `scrum compile-plan` and `orchestrator wave-plan` ship in the CLI. No config edit required.
+
+Both backends are Claude Code following the skill — `native` fans out via the `Agent` tool, `dynamic` via Claude Code's dynamic-workflows preview. prove emits artifacts (plan, schedule, prompts) and the CLI commands the subagents run; it never spawns Claude itself, so there is no SDK dependency.
+
+**Merge-conflict auto-rebound**: on a sequential merge-back conflict the workflow rebuilds the task on the updated integration HEAD and retries, up to `--max-rebounds` (default 2), instead of halting. New `manage-worktree.sh reset <slug> <task-id>` action resets a task worktree to `orchestrator/<slug>` HEAD so the re-dispatched task fast-forwards on retry. On budget exhaustion it falls back to halt-and-drain (`scrum task status <id> blocked`, independent branches keep merging). Orchestrator full-mode's default halt-on-conflict is unchanged.
+
+**Known follow-ups**: none for v1 — the feature is complete.
+
+---
+
 ## v2.7.1 — Fix: `scrum task add-dep --kind blocked_by` now persists the edge
 
 `add-dep <X> <Y> --kind blocked_by` previously returned `{"added":true}` but wrote a `blocked_by` row that no reader ever queried (`getBlockedBy`/`getBlocking`/`nextReady` all filter `kind='blocks'`), so the edge silently vanished — a data-loss-class bug ([#22](https://github.com/mjmorales/claude-prove/issues/22)). `add-dep`/`remove-dep` now normalize `blocked_by` to its canonical inverse ("X blocked_by Y" === "Y blocks X") before touching the store, so every persisted edge is a `blocks` row that all readers observe.

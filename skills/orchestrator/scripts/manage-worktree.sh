@@ -12,15 +12,17 @@
 #   manage-worktree.sh list <slug>
 #   manage-worktree.sh path <slug> <task-id>
 #   manage-worktree.sh branch <slug> <task-id>
+#   manage-worktree.sh reset <slug> <task-id>
 #
 # Output (create): prints the absolute worktree path on success
 # Output (path):   prints the absolute worktree path (no creation)
 # Output (branch): prints the branch name (no creation)
 # Output (list):   prints one "<task-id> <worktree-path> <branch>" per line
+# Output (reset):  prints the absolute worktree path after resetting to base HEAD
 
 set -euo pipefail
 
-ACTION="${1:?Usage: manage-worktree.sh <create|remove|remove-all|list|path|branch> <slug> [task-id]}"
+ACTION="${1:?Usage: manage-worktree.sh <create|remove|remove-all|list|path|branch|reset> <slug> [task-id]}"
 SLUG="${2:?Missing slug}"
 TASK_ID="${3:-}"
 
@@ -127,8 +129,32 @@ case "$ACTION" in
     branch_name "$TASK_ID"
     ;;
 
+  reset)
+    # Auto-rebound: rebuild a task worktree onto the current integration HEAD.
+    # Hard-resets the task branch to orchestrator/<slug> and clears untracked
+    # files, so a re-dispatch reconstructs the task on the already-merged base
+    # (the next merge then fast-forwards instead of re-conflicting).
+    [[ -z "$TASK_ID" ]] && { echo "ERROR: task-id required for reset" >&2; exit 1; }
+
+    WT_PATH=$(worktree_path "$TASK_ID")
+    BASE_BRANCH="orchestrator/${SLUG}"
+
+    if [[ ! -d "$WT_PATH" ]]; then
+      echo "ERROR: worktree '$WT_PATH' does not exist; create it first." >&2
+      exit 1
+    fi
+    if ! git rev-parse --verify "$BASE_BRANCH" >/dev/null 2>&1; then
+      echo "ERROR: Base branch '$BASE_BRANCH' does not exist." >&2
+      exit 1
+    fi
+
+    git -C "$WT_PATH" reset --hard "$BASE_BRANCH"
+    git -C "$WT_PATH" clean -fd
+    echo "$WT_PATH"
+    ;;
+
   *)
-    echo "ERROR: Unknown action '$ACTION'. Use: create, remove, remove-all, list, path, branch" >&2
+    echo "ERROR: Unknown action '$ACTION'. Use: create, remove, remove-all, list, path, branch, reset" >&2
     exit 1
     ;;
 esac
