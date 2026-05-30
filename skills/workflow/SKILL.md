@@ -142,6 +142,7 @@ counts and the blocked subtree, if any.
 | `--max-agents <n>` | 16 dynamic / 4 native | Per-batch fan-out ceiling; `wave-plan` splits oversized waves into sequential batches at this cap. |
 | `--verify <tag>` | off | Force adversarial review on tagged tasks. |
 | `--decompose` | off | Run `/prove:plan` per task for multi-step trees (else one step/task). |
+| `--max-rebounds <n>` | 2 | Merge-conflict rebound attempts per task before halt-and-drain (Guards). |
 | `--dry-run` | off | Compile + print the DAG, wave plan, and agent-count/cost estimate. Write nothing, dispatch nothing. |
 
 ---
@@ -154,9 +155,19 @@ counts and the blocked subtree, if any.
 - **Halt-and-drain.** A failed task halts its branch only: independent branches keep
   running, dependents stay blocked, and the run reports partial completion. It does not
   wedge the whole milestone.
-- **Merge conflict.** Treat it like a failed task (halt-and-drain): abort that merge,
-  mark the task `blocked`, keep merging independent branches. Auto-rebound — re-queueing
-  the task rebased onto the updated branch — is a v2 enhancement.
+- **Merge conflict → bounded rebound.** Rebuild the task on the updated integration HEAD
+  and retry, instead of wedging the run. `git merge --abort`, then, up to `--max-rebounds`
+  (default 2):
+  1. `bash skills/orchestrator/scripts/manage-worktree.sh reset <slug> <task-id>` — resets
+     the task worktree to integration HEAD, discarding its commits and picking up
+     already-merged work.
+  2. Re-dispatch the task (task-prompt subagent → validators → review), then retry the
+     merge. Rebuilt on the merged base, the retry fast-forwards instead of re-conflicting.
+
+  When the rebound budget is spent, fall back to **halt-and-drain** and keep merging
+  independent branches; for a milestone target also resolve `<scrum-id>` from
+  `scrum-map.json` (Phase 4) and `claude-prove scrum task status <scrum-id> blocked`. The
+  rebound count is tracked per task, reset each run.
 - **Plan-only target.** Skip Phases 1 and 4 entirely; just init + execute.
 
 ---
@@ -165,6 +176,6 @@ counts and the blocked subtree, if any.
 
 - Decision record: `.prove/decisions/2026-05-30-milestone-workflow-skill.md`.
 - Research backing the dynamic-workflows model: `.prove/cache/prompting/opus-4-8-dynamic-workflows.md`.
-- Phase 1 compile = `scrum compile-plan`; Phase 3 scheduling = `orchestrator wave-plan`.
+- Phase 1 compile = `scrum compile-plan`; Phase 3 scheduling = `orchestrator wave-plan`;
+  rebound reset = `manage-worktree.sh reset`.
 - Fan-out is Claude Code's (`Agent` tool / dynamic-workflows) — see the principle above.
-- Open follow-up (decision record): v2 merge-conflict auto-rebound (v1 halt-and-drains).

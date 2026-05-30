@@ -22,7 +22,9 @@ The skill is deliberately thin — it reuses orchestrator full-mode rather than 
 
 Both backends are Claude Code following the skill — `native` fans out via the `Agent` tool, `dynamic` via Claude Code's dynamic-workflows preview. prove emits artifacts (plan, schedule, prompts) and the CLI commands the subagents run; it never spawns Claude itself, so there is no SDK dependency.
 
-**Known follow-up** (tracked in `.prove/decisions/2026-05-30-milestone-workflow-skill.md`): v2 merge-conflict auto-rebound (re-queue a conflicted task rebased); v1 halt-and-drains the conflicted branch and continues independent ones.
+**Merge-conflict auto-rebound**: on a sequential merge-back conflict the workflow rebuilds the task on the updated integration HEAD and retries, up to `--max-rebounds` (default 2), instead of halting. New `manage-worktree.sh reset <slug> <task-id>` action resets a task worktree to `orchestrator/<slug>` HEAD so the re-dispatched task fast-forwards on retry. On budget exhaustion it falls back to halt-and-drain (`scrum task status <id> blocked`, independent branches keep merging). Orchestrator full-mode's default halt-on-conflict is unchanged.
+
+**Known follow-ups**: none for v1 — the feature is complete.
 
 ---
 
