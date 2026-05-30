@@ -168,9 +168,9 @@ function doShow(store: ScrumStore, id: string | undefined): number {
   const events = store.listEventsForTask(id, 50);
   const runs = store.listRunsForTask(id);
   // Dep edges are additive keys on the show payload so operators can
-  // see the graph without a second subcommand. Both arrays use the
-  // 'blocks' kind exclusively — 'blocked_by' edges are inserted but
-  // not read by nextReady/getBlockedBy today (see store.ts:544).
+  // see the graph without a second subcommand. Storage is canonical:
+  // every edge is a 'blocks' row (add-dep normalizes 'blocked_by' to its
+  // inverse), so both arrays read the 'blocks' kind exclusively.
   const blocked_by = store.getBlockedBy(id);
   const blocking = store.getBlocking(id);
   process.stdout.write(`${JSON.stringify({ task, tags, events, runs, blocked_by, blocking })}\n`);

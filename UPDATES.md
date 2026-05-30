@@ -6,6 +6,16 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v2.7.1 — Fix: `scrum task add-dep --kind blocked_by` now persists the edge
+
+`add-dep <X> <Y> --kind blocked_by` previously returned `{"added":true}` but wrote a `blocked_by` row that no reader ever queried (`getBlockedBy`/`getBlocking`/`nextReady` all filter `kind='blocks'`), so the edge silently vanished — a data-loss-class bug ([#22](https://github.com/mjmorales/claude-prove/issues/22)). `add-dep`/`remove-dep` now normalize `blocked_by` to its canonical inverse ("X blocked_by Y" === "Y blocks X") before touching the store, so every persisted edge is a `blocks` row that all readers observe.
+
+**Migration**: none. No schema change. Existing graphs built with `--kind blocks` are unaffected; rebuild any `blocked_by` edges that silently dropped under prior versions.
+
+**Auto-adoption**: automatic on `/prove:update` (ships in the CLI).
+
+---
+
 ## v2.7.0 — Schema v6: `dev_mode` flag routes codegen between installed-binary and working-tree invocation
 
 Adds top-level `dev_mode: boolean` to `.claude/.prove.json` (schema v6). The v2.6.1 CLAUDE.md directive told user-facing markdown to always say `claude-prove`, which breaks plugin developers running from a git checkout (where `claude-prove` isn't on PATH). This release restores the dev-mode path through config: installed users (`dev_mode: false`, default) see bare `claude-prove <topic>`; plugin developers (`dev_mode: true`) see `bun run ${pluginDir}/packages/cli/bin/run.ts <topic>`. Routing applies to composer-generated CLAUDE.md sections, `composeSubagentContext`, and the ACB PostToolUse hook's MANIFEST_PROMPT.

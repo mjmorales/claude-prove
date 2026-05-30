@@ -518,24 +518,31 @@ export class ScrumStore {
    * Record a dependency. Idempotent on the `(from, to, kind)` PK. Rejects
    * self-edges and unknown task ids (FK pragma catches the latter when
    * enabled, but the explicit check keeps :memory: tests honest).
+   *
+   * Storage is canonical: every edge is persisted as `kind: 'blocks'`,
+   * because all readers (getBlockedBy/getBlocking/nextReady) query that
+   * kind exclusively. `blocked_by` is the inverse relation, so we
+   * normalize "X blocked_by Y" to the equivalent "Y blocks X" by
+   * swapping the endpoints before insert. Without this, `blocked_by`
+   * rows would persist but never be read — a silent no-op (issue #22).
    */
   addDep(fromTaskId: string, toTaskId: string, kind: DepKind): void {
-    if (fromTaskId === toTaskId) {
+    const [from, to] = normalizeDepEdge(fromTaskId, toTaskId, kind);
+    if (from === to) {
       throw new Error(`addDep: self-dependency rejected for task '${fromTaskId}'`);
     }
-    if (!this.getTask(fromTaskId)) throw new Error(`addDep: unknown from_task '${fromTaskId}'`);
-    if (!this.getTask(toTaskId)) throw new Error(`addDep: unknown to_task '${toTaskId}'`);
+    if (!this.getTask(from)) throw new Error(`addDep: unknown from_task '${from}'`);
+    if (!this.getTask(to)) throw new Error(`addDep: unknown to_task '${to}'`);
     this.prep(
       'INSERT OR IGNORE INTO scrum_deps (from_task_id, to_task_id, kind) VALUES (?, ?, ?)',
-    ).run(fromTaskId, toTaskId, kind);
+    ).run(from, to, 'blocks');
   }
 
   removeDep(fromTaskId: string, toTaskId: string, kind: DepKind): void {
-    this.prep('DELETE FROM scrum_deps WHERE from_task_id = ? AND to_task_id = ? AND kind = ?').run(
-      fromTaskId,
-      toTaskId,
-      kind,
-    );
+    const [from, to] = normalizeDepEdge(fromTaskId, toTaskId, kind);
+    this.prep(
+      "DELETE FROM scrum_deps WHERE from_task_id = ? AND to_task_id = ? AND kind = 'blocks'",
+    ).run(from, to);
   }
 
   /** Tasks that *block* `taskId`. SELECT is keyed off `idx_scrum_deps_to_task`. */
@@ -966,6 +973,20 @@ export class ScrumStore {
 
 function isoNow(): string {
   return new Date().toISOString();
+}
+
+/**
+ * Resolve a `(from, to, kind)` edge to its canonical `blocks` endpoints.
+ * `blocks` passes through unchanged; `blocked_by` is the inverse, so the
+ * endpoints swap ("X blocked_by Y" === "Y blocks X"). The kind is dropped
+ * by callers since canonical storage is always `blocks`.
+ */
+function normalizeDepEdge(
+  fromTaskId: string,
+  toTaskId: string,
+  kind: DepKind,
+): [from: string, to: string] {
+  return kind === 'blocked_by' ? [toTaskId, fromTaskId] : [fromTaskId, toTaskId];
 }
 
 function decodeEvent(row: {
