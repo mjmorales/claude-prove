@@ -398,6 +398,36 @@ describe('ScrumStore — dependencies', () => {
     expect(store.getBlockedBy('b')).toHaveLength(1);
   });
 
+  // Regression: issue #22 — `blocked_by` must persist as the inverse
+  // `blocks` edge so getBlockedBy/getBlocking/nextReady observe it.
+  test('addDep --kind blocked_by normalizes to the inverse blocks edge', () => {
+    // "a blocked_by b" === "b blocks a"
+    store.addDep('a', 'b', 'blocked_by');
+
+    const blockedByA = store.getBlockedBy('a');
+    expect(blockedByA).toHaveLength(1);
+    const [edge] = blockedByA;
+    if (!edge) throw new Error('expected one edge');
+    expect(edge.from_task_id).toBe('b');
+    expect(edge.to_task_id).toBe('a');
+    expect(edge.kind).toBe('blocks');
+
+    expect(store.getBlocking('b').map((d) => d.to_task_id)).toEqual(['a']);
+  });
+
+  test('addDep --kind blocked_by coincides with the equivalent blocks edge', () => {
+    store.addDep('a', 'b', 'blocked_by');
+    store.addDep('b', 'a', 'blocks');
+    // Both express "b blocks a" — idempotent on the canonical PK.
+    expect(store.getBlockedBy('a')).toHaveLength(1);
+  });
+
+  test('removeDep --kind blocked_by deletes the inverse blocks edge', () => {
+    store.addDep('b', 'a', 'blocks');
+    store.removeDep('a', 'b', 'blocked_by');
+    expect(store.getBlockedBy('a')).toHaveLength(0);
+  });
+
   test('addDep rejects self-edge', () => {
     expect(() => store.addDep('a', 'a', 'blocks')).toThrow(/self-dependency/);
   });
