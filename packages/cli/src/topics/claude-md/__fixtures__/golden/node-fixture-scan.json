@@ -67,6 +67,10 @@
     {
       "name": "scrum",
       "summary": "Operate the scrum store backed by `.prove/prove.db` (tasks, milestones, tags, run-links)"
+    },
+    {
+      "name": "workflow",
+      "summary": "Run a milestone/task tree as parallel waves via orchestrator full-mode, mirroring status to scrum"
     }
   ],
   "plugin_version": "__PLUGIN_VERSION__",
