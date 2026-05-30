@@ -6,6 +6,7 @@
  *   claude-prove scrum init
  *   claude-prove scrum status                    [--human]
  *   claude-prove scrum next-ready                [--limit N] [--milestone M] [--human]
+ *   claude-prove scrum compile-plan              --milestone M [--out plan.json]
  *   claude-prove scrum task create               --title X [--description Y] [--milestone M] [--id I]
  *   claude-prove scrum task show <id>
  *   claude-prove scrum task list                 [--status S] [--milestone M] [--tag T]
@@ -46,6 +47,7 @@
 
 import type { CAC } from 'cac';
 import { runAlertsCmd } from './scrum/cli/alerts-cmd';
+import { runCompilePlanCmd } from './scrum/cli/compile-plan-cmd';
 import { runDecisionCmd } from './scrum/cli/decision-cmd';
 import { runHookCmd } from './scrum/cli/hook-cmd';
 import { runInitCmd } from './scrum/cli/init-cmd';
@@ -60,6 +62,7 @@ type ScrumAction =
   | 'init'
   | 'status'
   | 'next-ready'
+  | 'compile-plan'
   | 'alerts'
   | 'task'
   | 'milestone'
@@ -72,6 +75,7 @@ const SCRUM_ACTIONS: ScrumAction[] = [
   'init',
   'status',
   'next-ready',
+  'compile-plan',
   'alerts',
   'task',
   'milestone',
@@ -99,6 +103,7 @@ interface ScrumFlags {
   kind?: string;
   stalledAfterDays?: number | string;
   fromGit?: boolean;
+  out?: string;
   workspaceRoot?: string;
 }
 
@@ -125,6 +130,7 @@ export function register(cli: CAC): void {
     )
     .option('--stalled-after-days <n>', 'Alerts: stalled WIP threshold in days (default: 7)')
     .option('--from-git', 'decision recover: scan git history for .prove/decisions/*.md blobs')
+    .option('--out <path>', 'compile-plan: write plan.json here + scrum-map.json sibling')
     .option(
       '--workspace-root <w>',
       'Main worktree root; pins store to <root>/.prove/prove.db (default: git common-dir)',
@@ -172,6 +178,13 @@ function dispatch(
         limit: flags.limit,
         milestone: flags.milestone,
         human: flags.human,
+        workspaceRoot: flags.workspaceRoot,
+      });
+
+    case 'compile-plan':
+      return runCompilePlanCmd({
+        milestone: flags.milestone,
+        out: flags.out,
         workspaceRoot: flags.workspaceRoot,
       });
 

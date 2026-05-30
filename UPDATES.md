@@ -12,11 +12,13 @@ Adds the `/prove:workflow` command + skill. Point it at a **scrum milestone id**
 
 The skill is deliberately thin — it reuses orchestrator full-mode rather than reimplementing it. `prove.db` stays the source of truth; the compiled `plan.json` is an ephemeral, regenerable execution view (mapped back via a `scrum-map.json` sidecar). Flags: `--backend auto|dynamic|native` (on the Claude Opus 4.8 dynamic-workflows runtime it renders a background JS driver, else runs natively), `--max-agents` (per-wave fan-out, default 16 dynamic / 4 native), `--verify <tag>` (force adversarial review on tagged tasks), `--decompose` (per-task step trees via `/prove:plan`), and `--dry-run` (print the wave plan + agent-count estimate, write/dispatch nothing).
 
-**Migration**: none. Net-new command, no schema or config change.
+**New CLI action — `scrum compile-plan`**: `claude-prove scrum compile-plan --milestone <id> [--out plan.json]` compiles a milestone's actionable tasks (skips `done`/`cancelled`) + `blocked_by` edges into a run-state `plan.json` plus a `scrum-map.json` sidecar. Waves are assigned by longest-path depth; `mode` is `full` at >= 4 tasks; dependency cycles error out. The emitted plan passes `run-state validate --kind plan`. This is the Phase 1 source-compile step for `/prove:workflow`; it's also usable standalone to turn a backlog milestone into an orchestrator-ready plan.
 
-**Auto-adoption**: automatic — `/prove:workflow` is a `core: true` command discovered on plugin load after update. No config edit required.
+**Migration**: none. Net-new command + CLI action, no schema or config change.
 
-**Known follow-ups** (tracked in `.prove/decisions/2026-05-30-milestone-workflow-skill.md`): a native `scrum compile-plan --milestone` CLI action (the skill currently assembles the plan from `scrum task list`/`task show` reads), and a v2 merge-conflict-rebound mechanism (v1 reuses the orchestrator's halt-on-conflict).
+**Auto-adoption**: automatic — `/prove:workflow` is a `core: true` command discovered on plugin load after update; `scrum compile-plan` ships in the CLI. No config edit required.
+
+**Known follow-ups** (tracked in `.prove/decisions/2026-05-30-milestone-workflow-skill.md`): the `--backend dynamic` JS-driver renderer, and a v2 merge-conflict-rebound mechanism (v1 reuses the orchestrator's halt-on-conflict).
 
 ---
 

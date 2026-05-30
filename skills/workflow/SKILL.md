@@ -42,23 +42,21 @@ it has no scrum tasks to update.
 ## Phase 1: Compile milestone → plan.json
 
 Goal: produce a standard `plan.json` (the schema the orchestrator already runs) from
-the milestone's tasks and `blocked_by` edges.
+the milestone's tasks and `blocked_by` edges. One command does it:
 
-Assemble the plan from existing scrum reads (the `scrum compile-plan` CLI action is a planned follow-up — do **not** assume it exists; verify with `claude-prove scrum --help` before calling it, else use the steps below):
+```bash
+claude-prove scrum compile-plan --milestone <id> --out .prove/runs/<branch>/<slug>/plan.json
+```
 
-1. `claude-prove scrum task list --milestone <id>` — the task set.
-2. `claude-prove scrum task show <task-id>` per task — read `blocked_by` for edges.
-3. Map each scrum task → one plan task: `deps[]` = blocked-by task ids; `wave` =
-   topological level (sources = wave 1, each dependent = max(dep wave)+1);
-   `description` = the scrum description. v1 emits **one step per task**; pass
-   `--decompose` to run `/prove:plan` per task for richer step trees.
-4. Set `mode: "full"`. Write a sidecar `scrum-map.json` next to the plan
-   (`{ "<plan-task-id>": "<scrum-task-id>" }`) so Phase 4 can resolve each plan task
-   back to its scrum task — this survives plan regeneration; do **not** stuff the id
-   into the title/description.
+This writes the `plan.json` **and** a `scrum-map.json` sidecar (`{ "<plan-task-id>":
+"<scrum-task-id>" }`) that Phase 4 uses to resolve each plan task back to its scrum task.
+Compile rules (handled by the CLI): actionable tasks only (skips `done`/`cancelled`);
+`deps[]` = in-scope `blocked_by` predecessors; `wave` = longest-path depth + 1; `mode`
+= `full` at >= 4 tasks; one step per task. Dependency cycles error out.
 
-Write the plan under `.prove/runs/<branch>/<slug>/` where `<slug>` is the milestone
-slug. This is regenerable — never hand-edit it; re-run compile instead.
+The plan is **regenerable** — to change it, re-run compile rather than hand-editing.
+For richer per-task step trees, pass `--decompose` to follow up with `/prove:plan` per
+task (else one step/task). `<slug>` is the milestone slug.
 
 ---
 
@@ -151,5 +149,5 @@ counts and the blocked subtree, if any.
 
 - Decision record: `.prove/decisions/2026-05-30-milestone-workflow-skill.md`.
 - Research backing the dynamic-workflows model: `.prove/cache/prompting/opus-4-8-dynamic-workflows.md`.
-- Open follow-up: a native `scrum compile-plan` CLI action (Phase 1) is preferred over
-  shell assembly — see the decision record's follow-ups.
+- The JS-driver renderer for `--backend dynamic` and v2 merge-conflict-rebound remain
+  open follow-ups — see the decision record.

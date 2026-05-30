@@ -43,9 +43,10 @@ Ex: `run-state step --branch main --slug add-login --commit <sha> --verdict pass
 
 ### scrum — tasks, milestones, tags on `.prove/prove.db`
 
-Actions: `init` `status` `next-ready` `alerts` `task <create|show|list|tag|link-decision|status|delete>` `milestone <create|list|show|close>` `tag <add|remove|list>` `link-run` `hook <session-start|subagent-stop|stop>`.
-Flags: `--human` `--limit` `--milestone` `--title` `--description` `--id` `--status` `--tag` `--task` `--target-state` `--branch` `--slug` `--stalled-after-days` (default 7) `--workspace-root`.
+Actions: `init` `status` `next-ready` `compile-plan` `alerts` `task <create|show|list|tag|link-decision|status|delete|add-dep|remove-dep>` `milestone <create|list|show|close|activate|reopen>` `tag <add|remove|list>` `link-run` `hook <session-start|subagent-stop|stop>`.
+Flags: `--human` `--limit` `--milestone` `--title` `--description` `--id` `--status` `--tag` `--task` `--target-state` `--branch` `--slug` `--out` (compile-plan) `--stalled-after-days` (default 7) `--workspace-root`.
 Ex: `scrum task create --title "Add login" --milestone auth-v1 --tag backend`.
+`compile-plan --milestone <id> [--out plan.json]` emits a run-state plan.json (waves from `blocked_by` edges) + a `scrum-map.json` sidecar — the `/prove:workflow` source-compile step.
 `scrum hook` is hook-driven — do not call inline.
 
 ### schema — `.claude/.prove.json` lifecycle
