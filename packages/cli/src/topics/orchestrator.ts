@@ -5,11 +5,15 @@
  *
  *   claude-prove orchestrator task-prompt   --run-dir R --task-id T --project-root P [--worktree W]
  *   claude-prove orchestrator review-prompt --run-dir R --task-id T --worktree W --base-branch B
+ *   claude-prove orchestrator wave-plan     --run-dir R [--max-agents N] [--format json|md]
  *
- * Both subcommands emit their prompt markdown on stdout — the orchestrator
- * SKILL.md captures it into a shell variable and hands it to the Agent call.
- * Replaces `skills/orchestrator/scripts/generate-{task,review}-prompt.sh`;
+ * `task-prompt`/`review-prompt` emit prompt markdown on stdout — the
+ * orchestrator SKILL.md captures it into a shell variable and hands it to the
+ * Agent call. Replaces `skills/orchestrator/scripts/generate-{task,review}-prompt.sh`;
  * no sentinel+awk indirection remains.
+ *
+ * `wave-plan` emits the dependency-wave dispatch schedule (read-only) that
+ * `/prove:workflow` schedules against and renders for `--dry-run`.
  *
  * Exit codes:
  *   0  success
@@ -20,10 +24,11 @@
 import type { CAC } from 'cac';
 import { runReviewPrompt } from './orchestrator/review-prompt';
 import { runTaskPrompt } from './orchestrator/task-prompt';
+import { runWavePlan } from './orchestrator/wave-plan';
 
-type OrchestratorAction = 'task-prompt' | 'review-prompt';
+type OrchestratorAction = 'task-prompt' | 'review-prompt' | 'wave-plan';
 
-const ORCHESTRATOR_ACTIONS: OrchestratorAction[] = ['task-prompt', 'review-prompt'];
+const ORCHESTRATOR_ACTIONS: OrchestratorAction[] = ['task-prompt', 'review-prompt', 'wave-plan'];
 
 interface OrchestratorFlags {
   runDir?: string;
@@ -31,6 +36,8 @@ interface OrchestratorFlags {
   projectRoot?: string;
   worktree?: string;
   baseBranch?: string;
+  maxAgents?: number | string;
+  format?: string;
 }
 
 export function register(cli: CAC): void {
@@ -44,6 +51,8 @@ export function register(cli: CAC): void {
     .option('--project-root <p>', 'Project root for .claude/.prove.json validator lookup')
     .option('--worktree <w>', 'Worktree path (task-prompt: optional; review-prompt: required)')
     .option('--base-branch <b>', 'Review base branch for git diff (review-prompt only)')
+    .option('--max-agents <n>', 'wave-plan: per-wave dispatch cap (default: unlimited)')
+    .option('--format <fmt>', 'wave-plan: output format json|md (default: json)')
     .action((action: string, flags: OrchestratorFlags) => {
       if (!isOrchestratorAction(action)) {
         console.error(
@@ -92,7 +101,29 @@ function dispatch(action: OrchestratorAction, flags: OrchestratorFlags): number 
         baseBranch: flags.baseBranch as string,
       });
     }
+    case 'wave-plan': {
+      const missing = requireFlags(flags, ['runDir']);
+      if (missing.length > 0) {
+        console.error(
+          `error: orchestrator wave-plan: missing required flag(s): ${missing.join(', ')}`,
+        );
+        return 1;
+      }
+      const format = flags.format === 'md' ? 'md' : 'json';
+      return runWavePlan({
+        runDir: flags.runDir as string,
+        maxAgents: coerceInt(flags.maxAgents),
+        format,
+      });
+    }
   }
+}
+
+function coerceInt(value: number | string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === 'number') return Math.trunc(value);
+  const parsed = Number.parseInt(value, 10);
+  return Number.isNaN(parsed) ? undefined : parsed;
 }
 
 function requireFlags(flags: OrchestratorFlags, names: (keyof OrchestratorFlags)[]): string[] {

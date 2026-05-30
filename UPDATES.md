@@ -14,11 +14,13 @@ The skill is deliberately thin — it reuses orchestrator full-mode rather than 
 
 **New CLI action — `scrum compile-plan`**: `claude-prove scrum compile-plan --milestone <id> [--out plan.json]` compiles a milestone's actionable tasks (skips `done`/`cancelled`) + `blocked_by` edges into a run-state `plan.json` plus a `scrum-map.json` sidecar. Waves are assigned by longest-path depth; `mode` is `full` at >= 4 tasks; dependency cycles error out. The emitted plan passes `run-state validate --kind plan`. This is the Phase 1 source-compile step for `/prove:workflow`; it's also usable standalone to turn a backlog milestone into an orchestrator-ready plan.
 
-**Migration**: none. Net-new command + CLI action, no schema or config change.
+**New CLI action — `orchestrator wave-plan`**: `claude-prove orchestrator wave-plan --run-dir <dir> [--max-agents N] [--format json|md]` emits the read-only dependency-wave dispatch schedule for a compiled plan — waves split into batches capped at `--max-agents`, with `dispatch_rounds` and `peak_concurrency`. This is the substrate-agnostic scheduler both `/prove:workflow` backends consume, and the `--format md` projection backs the skill's `--dry-run`.
 
-**Auto-adoption**: automatic — `/prove:workflow` is a `core: true` command discovered on plugin load after update; `scrum compile-plan` ships in the CLI. No config edit required.
+**Migration**: none. Net-new command + two CLI actions, no schema or config change.
 
-**Known follow-ups** (tracked in `.prove/decisions/2026-05-30-milestone-workflow-skill.md`): the `--backend dynamic` JS-driver renderer, and a v2 merge-conflict-rebound mechanism (v1 reuses the orchestrator's halt-on-conflict).
+**Auto-adoption**: automatic — `/prove:workflow` is a `core: true` command discovered on plugin load after update; `scrum compile-plan` and `orchestrator wave-plan` ship in the CLI. No config edit required.
+
+**Known follow-ups** (tracked in `.prove/decisions/2026-05-30-milestone-workflow-skill.md`): the `--backend dynamic` driver's runtime spawn primitive (no in-repo SDK for the Opus 4.8 dynamic-workflows runtime yet — the deterministic scheduling/compile kernel is done; only the spawn seam remains), and a v2 merge-conflict-rebound mechanism (v1 reuses the orchestrator's halt-on-conflict).
 
 ---
 

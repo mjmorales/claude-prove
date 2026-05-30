@@ -66,7 +66,7 @@ Default `--backend auto`:
 
 | Backend | When | How |
 |---------|------|-----|
-| `dynamic` | Dynamic-workflows runtime available (Opus 4.8, Max/Team). | Render a background JS driver that runs the Phase 3 loop by calling the same `claude-prove` commands. Session stays responsive; plan state lives in the script + `prove.db`, not the context window. |
+| `dynamic` | Dynamic-workflows runtime available (Opus 4.8, Max/Team). | Render a background JS driver that walks the `orchestrator wave-plan` schedule and, per batch, calls the same `claude-prove` commands — spawning each task subagent through the runtime's spawn primitive (the one runtime-specific seam). Session stays responsive; plan state lives in the script + `prove.db`, not the context window. |
 | `native` | No dynamic-workflows runtime. | Run the Phase 3 loop in-session via the orchestrator. |
 | `auto` | Default. | Detect and pick `dynamic`, else `native`. |
 
@@ -86,18 +86,24 @@ claude-prove run-state init --branch <branch> --slug <slug> \
   --plan .prove/runs/<branch>/<slug>/plan.json
 ```
 
-Then drive the standard full-mode loop (`skills/orchestrator/SKILL.md`, "Full Mode"):
-per wave, create a worktree per task → dispatch `general-purpose` subagents in parallel
-→ run validators → `principal-architect` review loop → sequential merge-back. The
-orchestrator already enforces **driver-owns-writes** (subagents never call
+Compute the dispatch schedule once, up front:
+
+```bash
+claude-prove orchestrator wave-plan --run-dir .prove/runs/<branch>/<slug> --max-agents <n>
+```
+
+It returns the waves split into batches capped at `--max-agents`, plus
+`dispatch_rounds` and `peak_concurrency`. Dispatch each batch in order; fan out in
+parallel within a batch. This is the scheduler both backends share — no ad-hoc ordering.
+
+Then drive the standard full-mode loop (`skills/orchestrator/SKILL.md`, "Full Mode")
+over those batches: create a worktree per task → dispatch `general-purpose` subagents in
+parallel → run validators → `principal-architect` review loop → sequential merge-back.
+The orchestrator already enforces **driver-owns-writes** (subagents never call
 `step-complete`) and **halt-on-conflict**.
 
-Two deltas this skill applies:
+One delta this skill applies beyond the schedule:
 
-- **Fan-out cap** = `--max-agents` (default **16** on `dynamic`, **4** on `native`).
-  When a wave exceeds the cap, schedule by `scrum next-ready` order — its `score` /
-  `rationale.unblock_depth` already ranks tasks by dependents freed. No extra ordering
-  logic needed.
 - **`--verify <tag>`**: tasks carrying `<tag>` always run the adversarial
   `principal-architect` review (refute-until-approved), even if global review is off.
 
@@ -125,7 +131,7 @@ counts and the blocked subtree, if any.
 | Flag | Default | Effect |
 |------|---------|--------|
 | `--backend auto\|dynamic\|native` | `auto` | Execution substrate (Phase 2). |
-| `--max-agents <n>` | 16 dynamic / 4 native | Per-wave fan-out ceiling. |
+| `--max-agents <n>` | 16 dynamic / 4 native | Per-batch fan-out ceiling; `wave-plan` splits oversized waves into sequential batches at this cap. |
 | `--verify <tag>` | off | Force adversarial review on tagged tasks. |
 | `--decompose` | off | Run `/prove:plan` per task for multi-step trees (else one step/task). |
 | `--dry-run` | off | Compile + print the DAG, wave plan, and agent-count/cost estimate. Write nothing, dispatch nothing. |
@@ -135,7 +141,8 @@ counts and the blocked subtree, if any.
 ## Guards & failure handling
 
 - **`--dry-run` before any large run.** A milestone can spawn up to the dynamic-workflows
-  ceiling (1000 agents/run) — print the projected wave plan and agent count first.
+  ceiling (1000 agents/run) — print the projected wave plan first and dispatch nothing:
+  `claude-prove orchestrator wave-plan --run-dir <dir> --max-agents <n> --format md`.
 - **Halt-and-drain.** A failed task halts its branch only: independent branches keep
   running, dependents stay blocked, and the run reports partial completion. It does not
   wedge the whole milestone.
@@ -149,5 +156,6 @@ counts and the blocked subtree, if any.
 
 - Decision record: `.prove/decisions/2026-05-30-milestone-workflow-skill.md`.
 - Research backing the dynamic-workflows model: `.prove/cache/prompting/opus-4-8-dynamic-workflows.md`.
-- The JS-driver renderer for `--backend dynamic` and v2 merge-conflict-rebound remain
-  open follow-ups — see the decision record.
+- Phase 1 compile = `scrum compile-plan`; Phase 3 scheduling = `orchestrator wave-plan`.
+- Open follow-ups (decision record): the `--backend dynamic` driver's only unbuilt piece
+  is the runtime spawn primitive (no SDK in-repo yet); and v2 merge-conflict-rebound.

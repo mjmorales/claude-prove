@@ -90,10 +90,11 @@ Action: `validate-msg [file]`. Ex: `commit validate-msg .git/COMMIT_EDITMSG`.
 
 Actions: `generate` `scan` `subagent-context` `validators`. Flags: `--project-root` `--plugin-dir`. Ex: `claude-md scan`.
 
-### orchestrator — render orchestrator prompts
+### orchestrator — render orchestrator prompts + wave schedule
 
-Actions: `task-prompt` `review-prompt`. Flags: `--run-dir` `--task-id` `--project-root` `--worktree` (req for `review-prompt`) `--base-branch` (review-prompt).
+Actions: `task-prompt` `review-prompt` `wave-plan`. Flags: `--run-dir` `--task-id` `--project-root` `--worktree` (req for `review-prompt`) `--base-branch` (review-prompt) `--max-agents` `--format json|md` (wave-plan).
 Ex: `orchestrator task-prompt --run-dir .prove/runs/main/add-login --task-id 1`
+`wave-plan --run-dir <dir> [--max-agents N] [--format md]` emits the read-only dependency-wave dispatch schedule (batches capped at `--max-agents`, `dispatch_rounds`, `peak_concurrency`) — the `/prove:workflow` scheduler + `--dry-run` projection.
 
 ### notify — reporter event dispatcher
 
