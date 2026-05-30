@@ -6,26 +6,26 @@ description: >
   "fan out the milestone", "parallel milestone", "run the whole task tree",
   "milestone autopilot". Compiles the dependency graph to a plan, runs its tasks
   in parallel waves through the orchestrator's full-mode machinery (worktrees,
-  validators, principal-architect review, sequential merge), and mirrors task
-  status back to the scrum store. Raises per-wave fan-out above the orchestrator
-  default.
+  validators, principal-architect review, sequential merge), mirrors task status
+  back to the scrum store, and auto-rebounds on merge conflicts. Raises per-wave
+  fan-out above the orchestrator default.
 ---
 
 # Workflow Skill
 
-Runs an **entire milestone or task tree** as one fan-out execution. The dependency
-graph is the plan; tasks fan out in parallel waves; the orchestrator's existing
-full-mode machinery does the per-task work; status flows back to the scrum store.
+You are the **driver**: you compile a milestone (or a ready `plan.json`) into a run,
+schedule its tasks into dependency waves, and fan them out as one parallel execution.
+The orchestrator's full-mode machinery does the per-task work (worktrees, validators,
+review, merge); you wrap it with a scrum→plan compile, wave scheduling, status
+mirror-back, and merge-conflict auto-rebound.
 
 **Source of truth stays in `prove.db`.** The compiled `plan.json` is an *ephemeral
-execution view* — disposable, regenerated from the milestone. This skill adds only
-three things over the orchestrator: the scrum→plan compile, the status mirror-back,
-and a raised fan-out cap. Everything else is reused.
+execution view* — disposable, regenerated from the milestone.
 
-**prove never spawns Claude — you do.** Every "dispatch" below is *you* launching a
+**prove never spawns Claude — you do.** Every "dispatch" below is you launching a
 *Claude Code* subagent (the `Agent` tool, or Claude Code's dynamic-workflows fan-out),
-not an external process or a prove-rendered script. prove only emits artifacts (the plan,
-the wave schedule, per-task prompts) and the CLI commands those subagents run.
+never an external process or a prove-rendered script. prove only emits artifacts (the
+plan, the wave schedule, per-task prompts) and the CLI commands those subagents run.
 
 ---
 
@@ -71,14 +71,13 @@ Default `--backend auto`:
 
 | Backend | When | How |
 |---------|------|-----|
-| `dynamic` | Claude Code's dynamic-workflows preview is available (Opus 4.8, Max/Team). | Instruct Claude Code to launch a dynamic workflow that executes the `wave-plan` schedule — fanning the per-batch task subagents out in the background, each running the same `claude-prove` commands. Claude Code writes and runs the orchestration itself; prove emits no script. Session stays responsive; plan state lives in `prove.db`, not the context window. |
+| `dynamic` | Dynamic-workflows preview available (Opus 4.8, Max/Team). | Launch a Claude Code dynamic workflow that executes the `wave-plan` schedule, fanning per-batch task subagents out in the background. The session stays responsive; plan state lives in `prove.db`, not the context window. |
 | `native` | No dynamic-workflows preview. | Run the Phase 3 loop in-session: dispatch each batch's task subagents with the `Agent` tool (`run_in_background: true`), as orchestrator full mode already does. |
 | `auto` | Default. | Detect and pick `dynamic`, else `native`. |
 
 Both backends drive the **same** `claude-prove` commands and the same `wave-plan`
-schedule — only the fan-out mechanism differs (Claude Code's dynamic workflow vs. the
-`Agent` tool). That shared vocabulary is what makes the skill substrate-agnostic; don't
-add an abstraction layer over it.
+schedule — only the fan-out mechanism differs (dynamic workflow vs. `Agent` tool). Don't
+add an abstraction layer over that shared vocabulary.
 
 ---
 
@@ -103,12 +102,11 @@ It returns the waves split into batches capped at `--max-agents`, plus
 parallel within a batch. This is the scheduler both backends share — no ad-hoc ordering.
 
 Then drive the standard full-mode loop (`skills/orchestrator/SKILL.md`, "Full Mode")
-over those batches: create a worktree per task → launch one `general-purpose` Claude Code
-subagent per task (the `Agent` tool, or the dynamic workflow's parallel fan-out), each
-prompted via `claude-prove orchestrator task-prompt --run-dir <dir> --task-id <id>` →
-run validators → `principal-architect` review loop → sequential merge-back. The
-orchestrator already enforces **driver-owns-writes** (subagents never call
-`step-complete`).
+over those batches: create a worktree per task → launch one `general-purpose` subagent
+per task, each prompted via `claude-prove orchestrator task-prompt --run-dir <dir>
+--task-id <id>` → run validators → `principal-architect` review loop → sequential
+merge-back. As in orchestrator full mode, subagents only commit and exit; you own every
+step and scrum write.
 
 One delta this skill applies beyond the schedule:
 
@@ -119,8 +117,8 @@ One delta this skill applies beyond the schedule:
 
 ## Phase 4: Mirror status back to scrum (milestone target only)
 
-The driver owns every scrum write. Resolve `<scrum-id>` from `scrum-map.json` (Phase 1).
-After each task reaches a terminal state:
+Resolve `<scrum-id>` from `scrum-map.json` (Phase 1). After each task reaches a terminal
+state, write its outcome:
 
 | Task outcome | Scrum write |
 |--------------|-------------|
@@ -164,9 +162,8 @@ counts and the blocked subtree, if any.
   2. Re-dispatch the task (task-prompt subagent → validators → review), then retry the
      merge. Rebuilt on the merged base, the retry fast-forwards instead of re-conflicting.
 
-  When the rebound budget is spent, fall back to **halt-and-drain** and keep merging
-  independent branches; for a milestone target also resolve `<scrum-id>` from
-  `scrum-map.json` (Phase 4) and `claude-prove scrum task status <scrum-id> blocked`. The
+  When the rebound budget is spent, fall back to **halt-and-drain**: keep merging
+  independent branches, and for a milestone target mark the task blocked via Phase 4. The
   rebound count is tracked per task, reset each run.
 - **Plan-only target.** Skip Phases 1 and 4 entirely; just init + execute.
 
@@ -178,4 +175,5 @@ counts and the blocked subtree, if any.
 - Research backing the dynamic-workflows model: `.prove/cache/prompting/opus-4-8-dynamic-workflows.md`.
 - Phase 1 compile = `scrum compile-plan`; Phase 3 scheduling = `orchestrator wave-plan`;
   rebound reset = `manage-worktree.sh reset`.
-- Fan-out is Claude Code's (`Agent` tool / dynamic-workflows) — see the principle above.
+- For large milestones, run the session at high effort (`xhigh`/`ultracode`) — the research
+  ref recommends it for extended async fan-out.
