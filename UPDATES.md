@@ -20,7 +20,9 @@ The skill is deliberately thin — it reuses orchestrator full-mode rather than 
 
 **Auto-adoption**: automatic — `/prove:workflow` is a `core: true` command discovered on plugin load after update; `scrum compile-plan` and `orchestrator wave-plan` ship in the CLI. No config edit required.
 
-**Known follow-ups** (tracked in `.prove/decisions/2026-05-30-milestone-workflow-skill.md`): the `--backend dynamic` driver's runtime spawn primitive (no in-repo SDK for the Opus 4.8 dynamic-workflows runtime yet — the deterministic scheduling/compile kernel is done; only the spawn seam remains), and a v2 merge-conflict-rebound mechanism (v1 reuses the orchestrator's halt-on-conflict).
+Both backends are Claude Code following the skill — `native` fans out via the `Agent` tool, `dynamic` via Claude Code's dynamic-workflows preview. prove emits artifacts (plan, schedule, prompts) and the CLI commands the subagents run; it never spawns Claude itself, so there is no SDK dependency.
+
+**Known follow-up** (tracked in `.prove/decisions/2026-05-30-milestone-workflow-skill.md`): v2 merge-conflict auto-rebound (re-queue a conflicted task rebased); v1 halt-and-drains the conflicted branch and continues independent ones.
 
 ---
 

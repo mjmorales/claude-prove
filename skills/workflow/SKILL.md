@@ -22,6 +22,11 @@ execution view* — disposable, regenerated from the milestone. This skill adds 
 three things over the orchestrator: the scrum→plan compile, the status mirror-back,
 and a raised fan-out cap. Everything else is reused.
 
+**prove never spawns Claude — you do.** Every "dispatch" below is *you* launching a
+*Claude Code* subagent (the `Agent` tool, or Claude Code's dynamic-workflows fan-out),
+not an external process or a prove-rendered script. prove only emits artifacts (the plan,
+the wave schedule, per-task prompts) and the CLI commands those subagents run.
+
 ---
 
 ## Input Resolution
@@ -66,13 +71,14 @@ Default `--backend auto`:
 
 | Backend | When | How |
 |---------|------|-----|
-| `dynamic` | Dynamic-workflows runtime available (Opus 4.8, Max/Team). | Render a background JS driver that walks the `orchestrator wave-plan` schedule and, per batch, calls the same `claude-prove` commands — spawning each task subagent through the runtime's spawn primitive (the one runtime-specific seam). Session stays responsive; plan state lives in the script + `prove.db`, not the context window. |
-| `native` | No dynamic-workflows runtime. | Run the Phase 3 loop in-session via the orchestrator. |
+| `dynamic` | Claude Code's dynamic-workflows preview is available (Opus 4.8, Max/Team). | Instruct Claude Code to launch a dynamic workflow that executes the `wave-plan` schedule — fanning the per-batch task subagents out in the background, each running the same `claude-prove` commands. Claude Code writes and runs the orchestration itself; prove emits no script. Session stays responsive; plan state lives in `prove.db`, not the context window. |
+| `native` | No dynamic-workflows preview. | Run the Phase 3 loop in-session: dispatch each batch's task subagents with the `Agent` tool (`run_in_background: true`), as orchestrator full mode already does. |
 | `auto` | Default. | Detect and pick `dynamic`, else `native`. |
 
-Both backends call the **same** `claude-prove` commands — that shared vocabulary is
-what makes the skill substrate-agnostic. Do not build a separate abstraction layer;
-instead, route every backend through those CLI commands.
+Both backends drive the **same** `claude-prove` commands and the same `wave-plan`
+schedule — only the fan-out mechanism differs (Claude Code's dynamic workflow vs. the
+`Agent` tool). That shared vocabulary is what makes the skill substrate-agnostic; don't
+add an abstraction layer over it.
 
 ---
 
@@ -97,10 +103,12 @@ It returns the waves split into batches capped at `--max-agents`, plus
 parallel within a batch. This is the scheduler both backends share — no ad-hoc ordering.
 
 Then drive the standard full-mode loop (`skills/orchestrator/SKILL.md`, "Full Mode")
-over those batches: create a worktree per task → dispatch `general-purpose` subagents in
-parallel → run validators → `principal-architect` review loop → sequential merge-back.
-The orchestrator already enforces **driver-owns-writes** (subagents never call
-`step-complete`) and **halt-on-conflict**.
+over those batches: create a worktree per task → launch one `general-purpose` Claude Code
+subagent per task (the `Agent` tool, or the dynamic workflow's parallel fan-out), each
+prompted via `claude-prove orchestrator task-prompt --run-dir <dir> --task-id <id>` →
+run validators → `principal-architect` review loop → sequential merge-back. The
+orchestrator already enforces **driver-owns-writes** (subagents never call
+`step-complete`).
 
 One delta this skill applies beyond the schedule:
 
@@ -146,8 +154,9 @@ counts and the blocked subtree, if any.
 - **Halt-and-drain.** A failed task halts its branch only: independent branches keep
   running, dependents stay blocked, and the run reports partial completion. It does not
   wedge the whole milestone.
-- **Merge conflict.** v1 reuses the orchestrator's halt-on-conflict. (Conflict-rebound
-  into a fresh ready task is a planned v2 enhancement.)
+- **Merge conflict.** Treat it like a failed task (halt-and-drain): abort that merge,
+  mark the task `blocked`, keep merging independent branches. Auto-rebound — re-queueing
+  the task rebased onto the updated branch — is a v2 enhancement.
 - **Plan-only target.** Skip Phases 1 and 4 entirely; just init + execute.
 
 ---
@@ -157,5 +166,5 @@ counts and the blocked subtree, if any.
 - Decision record: `.prove/decisions/2026-05-30-milestone-workflow-skill.md`.
 - Research backing the dynamic-workflows model: `.prove/cache/prompting/opus-4-8-dynamic-workflows.md`.
 - Phase 1 compile = `scrum compile-plan`; Phase 3 scheduling = `orchestrator wave-plan`.
-- Open follow-ups (decision record): the `--backend dynamic` driver's only unbuilt piece
-  is the runtime spawn primitive (no SDK in-repo yet); and v2 merge-conflict-rebound.
+- Fan-out is Claude Code's (`Agent` tool / dynamic-workflows) — see the principle above.
+- Open follow-up (decision record): v2 merge-conflict auto-rebound (v1 halt-and-drains).
