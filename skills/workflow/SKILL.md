@@ -156,7 +156,7 @@ counts and the blocked subtree, if any.
 - **Merge conflict → bounded rebound.** Rebuild the task on the updated integration HEAD
   and retry, instead of wedging the run. `git merge --abort`, then, up to `--max-rebounds`
   (default 2):
-  1. `bash skills/orchestrator/scripts/manage-worktree.sh reset <slug> <task-id>` — resets
+  1. `claude-prove worktree reset <slug> <task-id>` — resets
      the task worktree to integration HEAD, discarding its commits and picking up
      already-merged work.
   2. Re-dispatch the task (task-prompt subagent → validators → review), then retry the
@@ -172,6 +172,6 @@ counts and the blocked subtree, if any.
 ## Notes
 
 - Phase 1 compile = `scrum compile-plan`; Phase 3 scheduling = `orchestrator wave-plan`;
-  rebound reset = `manage-worktree.sh reset`.
+  rebound reset = `claude-prove worktree reset`.
 - For large milestones, run the session at high effort (`xhigh`/`ultracode`) — the research
  recommends it for extended async fan-out.

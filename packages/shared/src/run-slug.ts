@@ -11,7 +11,7 @@
  *  1. `PROVE_RUN_SLUG` environment variable — set by the orchestrator when
  *     spawning a worktree subagent.
  *  2. `<worktreeRoot>/.prove-wt-slug.txt` marker written by
- *     `manage-worktree.sh create`. Cheapest unambiguous lookup; pinned to
+ *     `claude-prove worktree create`. Cheapest unambiguous lookup; pinned to
  *     the worktree itself.
  *  3. Scan `<mainWorktreeRoot>/.prove/runs/**\/plan.json` and match the
  *     task's `worktree.path` against the current worktree root (canonical

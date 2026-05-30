@@ -93,7 +93,7 @@ const SKIP_BRANCHES = new Set(['main', 'master']);
 
 /**
  * Orchestrator-managed branch prefixes. A missing run_slug on these prefixes
- * indicates a worktree created outside `manage-worktree.sh`; the hook refuses
+ * indicates a worktree created outside `claude-prove worktree`; the hook refuses
  * to proceed rather than producing orphan manifests.
  */
 const ORCHESTRATOR_BRANCH_PREFIXES = ['orchestrator/', 'task/'] as const;
@@ -363,7 +363,7 @@ function headDiffStat(sha: string, cwd: string): string {
 
 function orchestratorSlugGuardReason(branch: string): string {
   // Byte-equal to Python's f-string at hook.py lines 267-272.
-  return `ACB: branch \`${branch}\` looks orchestrator-managed but no run slug resolved. Expected .prove-wt-slug.txt in this worktree or PROVE_RUN_SLUG env var. Run \`bash skills/orchestrator/scripts/manage-worktree.sh create <slug> <task-id>\` to create the worktree, or write the marker manually.`;
+  return `ACB: branch \`${branch}\` looks orchestrator-managed but no run slug resolved. Expected .prove-wt-slug.txt in this worktree or PROVE_RUN_SLUG env var. Run \`claude-prove worktree create <slug> <task-id>\` to create the worktree, or write the marker manually.`;
 }
 
 function isDir(path: string): boolean {

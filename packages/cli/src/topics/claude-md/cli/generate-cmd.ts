@@ -2,7 +2,7 @@
  * `claude-prove claude-md <generate|scan|subagent-context|validators> [--project-root] [--plugin-dir]`
  *
  * Mirrors `skills/claude-md/__main__.py` 1:1 plus the `validators` subcommand
- * used by `skills/handoff/scripts/gather-context.sh` as a plugin-dir-less
+ * used by `claude-prove handoff gather` as a plugin-dir-less
  * fallback. Hooks, the skill body, and `/prove:docs claude-md` call
  * `claude-prove claude-md` — never `python3 skills/claude-md/__main__.py`.
  *
@@ -112,7 +112,7 @@ interface ValidatorEntry {
  * `validators` — emit one `- <phase>: `<command>`` line per validator with a
  * non-empty command. Reads `.claude/.prove.json` from `--project-root` (or
  * cwd). Missing file, missing `validators` key, malformed JSON → no output,
- * exit 0 (matches the Python fallback in `gather-context.sh` which wrapped
+ * exit 0 (matches the former gather-context.sh fallback which wrapped
  * the read in `|| true`).
  */
 export function runValidators(opts: ClaudeMdOpts): number {

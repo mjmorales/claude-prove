@@ -22,7 +22,11 @@ The skill is deliberately thin — it reuses orchestrator full-mode rather than 
 
 Both backends are Claude Code following the skill — `native` fans out via the `Agent` tool, `dynamic` via Claude Code's dynamic-workflows preview. prove emits artifacts (plan, schedule, prompts) and the CLI commands the subagents run; it never spawns Claude itself, so there is no SDK dependency.
 
-**Merge-conflict auto-rebound**: on a sequential merge-back conflict the workflow rebuilds the task on the updated integration HEAD and retries, up to `--max-rebounds` (default 2), instead of halting. New `manage-worktree.sh reset <slug> <task-id>` action resets a task worktree to `orchestrator/<slug>` HEAD so the re-dispatched task fast-forwards on retry. On budget exhaustion it falls back to halt-and-drain (`scrum task status <id> blocked`, independent branches keep merging). Orchestrator full-mode's default halt-on-conflict is unchanged.
+**Merge-conflict auto-rebound**: on a sequential merge-back conflict the workflow rebuilds the task on the updated integration HEAD and retries, up to `--max-rebounds` (default 2), instead of halting. The `claude-prove worktree reset <slug> <task-id>` command resets a task worktree to `orchestrator/<slug>` HEAD so the re-dispatched task fast-forwards on retry. On budget exhaustion it falls back to halt-and-drain (`scrum task status <id> blocked`, independent branches keep merging). Orchestrator full-mode's default halt-on-conflict is unchanged.
+
+**Shell scripts ported to the CLI**: the two helper scripts under `skills/` are gone, replaced by hardened, tested CLI topics. `skills/orchestrator/scripts/manage-worktree.sh` → **`claude-prove worktree <create|remove|remove-all|list|path|branch|reset>`** (git calls now run through arg-arrays — no shell injection; slug/task-id validated against a safe charset; distinct exit codes for usage vs git failure). `skills/task/scripts/gather-context.sh` → **`claude-prove handoff gather --project-root <p> [--plugin-dir <d>]`** (composes Discovery + task-plan steps in-process; fixes a latent unbound-variable crash on repos with no `main`/`master`). The orchestrator, workflow, and task skills and the baked CLI error messages now point at the CLI commands.
+
+**Migration (scripts)**: automatic on `/prove:update` — the CLI ships the new topics and the skills reference them. Any out-of-tree caller of the old `.sh` paths must switch to the `claude-prove worktree` / `claude-prove handoff` commands.
 
 **Known follow-ups**: none for v1 — the feature is complete.
 

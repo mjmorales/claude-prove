@@ -138,7 +138,7 @@ For each task in the wave:
 
 1. Create worktree (also writes `.prove-wt-slug.txt` with the run slug):
    ```bash
-   WT_PATH=$(bash skills/orchestrator/scripts/manage-worktree.sh create <slug> <task-id>)
+   WT_PATH=$(claude-prove worktree create <slug> <task-id>)
    ```
 2. Generate the agent prompt from JSON:
    ```bash
@@ -188,7 +188,7 @@ Every task requires principal-architect approval before merge.
 REVIEW LOOP (max 3 iterations per task):
 
 1. Build review prompt:
-   WT_PATH=$(bash skills/orchestrator/scripts/manage-worktree.sh path <slug> <task-id>)
+   WT_PATH=$(claude-prove worktree path <slug> <task-id>)
    RUN_DIR=".prove/runs/<branch>/<slug>"
    REVIEW_PROMPT=$(claude-prove orchestrator review-prompt \
      --worktree "$WT_PATH" --task-id <task-id> --run-dir "$RUN_DIR" --base-branch <base-branch>)
@@ -238,13 +238,13 @@ After all wave tasks are approved:
 1. Merge each task (in order) into the orchestrator worktree:
    ```bash
    cd .claude/worktrees/orchestrator-<slug>
-   BRANCH=$(bash skills/orchestrator/scripts/manage-worktree.sh branch <slug> <task-id>)
+   BRANCH=$(claude-prove worktree branch <slug> <task-id>)
    git merge "$BRANCH" --no-ff -m "merge: task <id> - <name>"
    ```
 
 2. Clean up task worktree + branch:
    ```bash
-   bash skills/orchestrator/scripts/manage-worktree.sh remove <slug> <task-id>
+   claude-prove worktree remove <slug> <task-id>
    ```
 
 3. Merge conflict: halt, ask user. No force-merge.
@@ -364,13 +364,13 @@ Triggered by `--full` without an existing plan. Gathers PRD + plan via a require
 | Unclear requirements | Halt, ask user |
 | Review deadlock (3 rounds) | AskUserQuestion: Force Approve / Fix Manually / Abort |
 | state.json write rejected by hook | Use `scripts/prove-run`; never `Write`/`Edit` state.json directly |
-| No slug resolved | Ensure you are inside a worktree with `.prove-wt-slug.txt` (created by `scripts/manage-worktree.sh create`) |
+| No slug resolved | Ensure you are inside a worktree with `.prove-wt-slug.txt` (created by `claude-prove worktree create`) |
 
 ## Rules
 
 - All state mutations through `scripts/prove-run` — never direct-edit `state.json`, never inline `python3 -c`, `jq`, or `sed` for run state
 - Never write markdown status files (`PROGRESS.md`, `run-log.md`, `report.md`) — views render JIT from JSON via the CLI
-- Slug is resolved from `.prove-wt-slug.txt`; agents must not invent or pass slugs ad-hoc. If no slug, hard-error and surface the fix (create marker or run `scripts/manage-worktree.sh create`)
+- Slug is resolved from `.prove-wt-slug.txt`; agents must not invent or pass slugs ad-hoc. If no slug, hard-error and surface the fix (create marker or run `claude-prove worktree create`)
 - Do not force-push or rewrite history on the orchestrator branch
 - Every step passes validation before proceeding
 - All work on the feature branch — main stays clean
@@ -378,7 +378,7 @@ Triggered by `--full` without an existing plan. Gathers PRD + plan via a require
 
 ## Conventions
 
-**Branches**: `orchestrator/<slug>` (worktree: `.claude/worktrees/orchestrator-<slug>`). Sub-tasks: `task/<slug>/<task-id>` (worktree: `.claude/worktrees/<slug>-task-<task-id>`). Managed by `skills/orchestrator/scripts/manage-worktree.sh`.
+**Branches**: `orchestrator/<slug>` (worktree: `.claude/worktrees/orchestrator-<slug>`). Sub-tasks: `task/<slug>/<task-id>` (worktree: `.claude/worktrees/<slug>-task-<task-id>`). Managed by `claude-prove worktree`.
 
 **Run directory**:
 ```
@@ -398,7 +398,7 @@ Triggered by `--full` without an existing plan. Gathers PRD + plan via a require
 | `scripts/prove-run` | Agent wrapper around the run_state CLI — all JSON mutations and renders go through this |
 | `claude-prove orchestrator task-prompt` | Prompt for worktree implementation agents (CLI subcommand) |
 | `claude-prove orchestrator review-prompt` | Review prompt for principal-architect (CLI subcommand) |
-| `skills/orchestrator/scripts/manage-worktree.sh` | Create/remove/list sub-task worktrees (writes `.prove-wt-slug.txt`) |
+| `claude-prove worktree` | Create/remove/list/reset sub-task worktrees (writes `.prove-wt-slug.txt`) |
 | `scripts/cleanup.sh` | Archive and remove run artifacts |
 
 ## References

@@ -3,7 +3,7 @@
  *
  * Historic parity: ported from the retired `skills/claude-md/__main__.py`
  * (plus `validators`, used as a plugin-dir-less fallback in the gather-context
- * script now at `skills/task/scripts/gather-context.sh`).
+ * now the `claude-prove handoff gather` CLI command).
  * Hooks, the docs skill's `claude-md` subcommand, and direct invocations
  * call `claude-prove claude-md`:
  *

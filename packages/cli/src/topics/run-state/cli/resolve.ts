@@ -53,8 +53,8 @@ export function resolvePaths(selection: RunSelection): ResolvedRun {
   if (!slug) {
     throw new ResolveError(
       'no run slug found. Expected .prove-wt-slug.txt in the worktree root ' +
-        '(written by skills/orchestrator/scripts/manage-worktree.sh create) or PROVE_RUN_SLUG env var. ' +
-        'Run `skills/orchestrator/scripts/manage-worktree.sh create <slug> <task-id>` or set the marker manually.',
+        '(written by claude-prove worktree create) or PROVE_RUN_SLUG env var. ' +
+        'Run `claude-prove worktree create <slug> <task-id>` or set the marker manually.',
     );
   }
 
