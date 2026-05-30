@@ -6,6 +6,20 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v2.8.0 — New `/prove:workflow` command: run a whole milestone (or plan.json) as a parallel fan-out
+
+Adds the `/prove:workflow` command + skill. Point it at a **scrum milestone id** or a **`plan.json`** and it runs the dependency graph as one fan-out execution: it compiles the milestone's tasks + `blocked_by` edges into a `plan.json`, runs the tasks in parallel waves through the orchestrator's existing full-mode machinery (worktrees, validators, `principal-architect` review, sequential merge), and mirrors each task's status back to the scrum store (`task status done|blocked` + `link-run`).
+
+The skill is deliberately thin — it reuses orchestrator full-mode rather than reimplementing it. `prove.db` stays the source of truth; the compiled `plan.json` is an ephemeral, regenerable execution view (mapped back via a `scrum-map.json` sidecar). Flags: `--backend auto|dynamic|native` (on the Claude Opus 4.8 dynamic-workflows runtime it renders a background JS driver, else runs natively), `--max-agents` (per-wave fan-out, default 16 dynamic / 4 native), `--verify <tag>` (force adversarial review on tagged tasks), `--decompose` (per-task step trees via `/prove:plan`), and `--dry-run` (print the wave plan + agent-count estimate, write/dispatch nothing).
+
+**Migration**: none. Net-new command, no schema or config change.
+
+**Auto-adoption**: automatic — `/prove:workflow` is a `core: true` command discovered on plugin load after update. No config edit required.
+
+**Known follow-ups** (tracked in `.prove/decisions/2026-05-30-milestone-workflow-skill.md`): a native `scrum compile-plan --milestone` CLI action (the skill currently assembles the plan from `scrum task list`/`task show` reads), and a v2 merge-conflict-rebound mechanism (v1 reuses the orchestrator's halt-on-conflict).
+
+---
+
 ## v2.7.1 — Fix: `scrum task add-dep --kind blocked_by` now persists the edge
 
 `add-dep <X> <Y> --kind blocked_by` previously returned `{"added":true}` but wrote a `blocked_by` row that no reader ever queried (`getBlockedBy`/`getBlocking`/`nextReady` all filter `kind='blocks'`), so the edge silently vanished — a data-loss-class bug ([#22](https://github.com/mjmorales/claude-prove/issues/22)). `add-dep`/`remove-dep` now normalize `blocked_by` to its canonical inverse ("X blocked_by Y" === "Y blocks X") before touching the store, so every persisted edge is a `blocks` row that all readers observe.
