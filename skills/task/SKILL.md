@@ -52,7 +52,7 @@ Create `.prove/handoff.md` so a fresh session picks up where this one left off.
 ### Phase 1: Gather Context
 
 ```bash
-bash "$PLUGIN_DIR/skills/task/scripts/gather-context.sh" "$PROJECT_ROOT" "$PLUGIN_DIR"
+claude-prove handoff gather --project-root "$PROJECT_ROOT" --plugin-dir "$PLUGIN_DIR"
 ```
 
 Capture the full output — this becomes the body of the handoff file. If an extra

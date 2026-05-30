@@ -21,7 +21,9 @@ Examples below omit the prefix.
 - Count prompt tokens -> `prompting`
 - Scaffold `.claude/`, doctor, upgrade binary -> `install`
 - Generate/scan CLAUDE.md -> `claude-md`
-- Render orchestrator task/review prompt -> `orchestrator`
+- Render orchestrator task/review/wave-plan prompt -> `orchestrator`
+- Create/remove/reset sub-task git worktrees -> `worktree`
+- Gather session-handoff context (git + artifacts) -> `handoff`
 - Dispatch reporter event (Slack/Discord/MCP) -> `notify`
 - Inspect/migrate/reset `.prove/prove.db` -> `store`
 - Review UI config -> `review-ui`; commit message check -> `commit`
@@ -95,6 +97,18 @@ Actions: `generate` `scan` `subagent-context` `validators`. Flags: `--project-ro
 Actions: `task-prompt` `review-prompt` `wave-plan`. Flags: `--run-dir` `--task-id` `--project-root` `--worktree` (req for `review-prompt`) `--base-branch` (review-prompt) `--max-agents` `--format json|md` (wave-plan).
 Ex: `orchestrator task-prompt --run-dir .prove/runs/main/add-login --task-id 1`
 `wave-plan --run-dir <dir> [--max-agents N] [--format md]` emits the read-only dependency-wave dispatch schedule (batches capped at `--max-agents`, `dispatch_rounds`, `peak_concurrency`) — the `/prove:workflow` scheduler + `--dry-run` projection.
+
+### worktree — namespaced sub-task git worktrees
+
+Actions: `create` `remove` `remove-all` `list` `path` `branch` `reset`. Flags: `--base <branch>` (create/reset; default `orchestrator/<slug>`) `--workspace-root`.
+Naming: path `.claude/worktrees/<slug>-task-<id>`, branch `task/<slug>/<id>`. `create`/`path`/`branch`/`reset` print the path on stdout; `list` prints JSON. Exit: 1 usage, 2 git failure.
+Ex: `worktree create add-login 1` · `worktree reset add-login 1` (auto-rebound).
+
+### handoff — session-handoff context
+
+Action: `gather`. Flags: `--project-root` (req) `--plugin-dir` (enables the Discovery section).
+Emits deterministic markdown (git state + files + recent commits + prove artifacts + discovery + task-plan steps). No LLM calls.
+Ex: `handoff gather --project-root "$PWD" --plugin-dir "$PLUGIN_DIR"`
 
 ### notify — reporter event dispatcher
 

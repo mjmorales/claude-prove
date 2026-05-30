@@ -5,6 +5,7 @@ import { register as registerAcb } from '../src/topics/acb';
 import { register as registerCafi } from '../src/topics/cafi';
 import { register as registerClaudeMd } from '../src/topics/claude-md';
 import { register as registerCommit } from '../src/topics/commit';
+import { register as registerHandoff } from '../src/topics/handoff';
 import { register as registerHook } from '../src/topics/hook';
 import { register as registerInstall } from '../src/topics/install';
 import { register as registerNotify } from '../src/topics/notify';
@@ -16,6 +17,7 @@ import { register as registerRunState } from '../src/topics/run-state';
 import { register as registerSchema } from '../src/topics/schema';
 import { register as registerScrum } from '../src/topics/scrum';
 import { register as registerStore } from '../src/topics/store';
+import { register as registerWorktree } from '../src/topics/worktree';
 
 const cli = cac('claude-prove');
 
@@ -39,6 +41,8 @@ registerClaudeMd(cli);
 registerOrchestrator(cli);
 registerNotify(cli);
 registerHook(cli);
+registerWorktree(cli);
+registerHandoff(cli);
 
 cli.help();
 cli.version(pjson.version);
