@@ -171,9 +171,7 @@ counts and the blocked subtree, if any.
 
 ## Notes
 
-- Decision record: `.prove/decisions/2026-05-30-milestone-workflow-skill.md`.
-- Research backing the dynamic-workflows model: `.prove/cache/prompting/opus-4-8-dynamic-workflows.md`.
 - Phase 1 compile = `scrum compile-plan`; Phase 3 scheduling = `orchestrator wave-plan`;
   rebound reset = `manage-worktree.sh reset`.
 - For large milestones, run the session at high effort (`xhigh`/`ultracode`) — the research
-  ref recommends it for extended async fan-out.
+ recommends it for extended async fan-out.
