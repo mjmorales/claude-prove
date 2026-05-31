@@ -7,6 +7,10 @@
  *   list                       [--topic T] [--status S] [--human]
  *   recover --from-git         Backfill scrum_decisions from every .prove/decisions/*.md
  *                              version ever committed. Idempotent (upsert semantics).
+ *   supersede <id> --by <new-id> --reason <text>
+ *                              Append-only retire: flips <id> to status
+ *                              'superseded', points it at <new-id>, records
+ *                              <text>. Never hard-deletes (audit §5.3).
  *
  * Stdout contract: JSON result per action on stdout; one-line human
  * summary on stderr. `list` returns a JSON array (or a table with `--human`).
@@ -34,11 +38,15 @@ export interface DecisionCmdFlags {
   workspaceRoot?: string;
   /** Required by `recover`; absent triggers a usage error. */
   fromGit?: boolean;
+  /** `supersede`: id of the replacement decision (`--by`). */
+  by?: string;
+  /** `supersede`: rationale recorded on the retired decision (`--reason`). */
+  reason?: string;
 }
 
-export type DecisionAction = 'record' | 'get' | 'list' | 'recover';
+export type DecisionAction = 'record' | 'get' | 'list' | 'recover' | 'supersede';
 
-const DECISION_ACTIONS: DecisionAction[] = ['record', 'get', 'list', 'recover'];
+const DECISION_ACTIONS: DecisionAction[] = ['record', 'get', 'list', 'recover', 'supersede'];
 
 /** ADR default per `.prove/decisions/` convention. */
 const DEFAULT_DECISION_STATUS = 'accepted';
@@ -70,6 +78,8 @@ export function runDecisionCmd(
         return doList(store, flags);
       case 'recover':
         return doRecover(store, workspaceRoot, flags);
+      case 'supersede':
+        return doSupersede(store, positional[0], flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -158,6 +168,37 @@ function renderHumanTable(rows: DecisionRow[]): string {
   lines.push(format(header));
   for (const row of body) lines.push(format(row));
   return `${lines.join('\n')}\n`;
+}
+
+// ---------------------------------------------------------------------------
+// supersede — append-only retire (audit §5.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * `decision supersede <id> --by <new-id> --reason <text>`. Delegates to
+ * `store.supersedeDecision`, which flips <id> to status 'superseded',
+ * points it at <new-id>, and records <text> — never hard-deleting. Prints
+ * the updated old row as JSON. Store-level rejections (unknown id, missing
+ * replacement, already terminal) surface as exit 1 via the caller's catch.
+ */
+function doSupersede(store: ScrumStore, id: string | undefined, flags: DecisionCmdFlags): number {
+  if (id === undefined || id.length === 0) {
+    process.stderr.write('scrum decision supersede: <id> positional argument required\n');
+    return 1;
+  }
+  if (flags.by === undefined || flags.by.length === 0) {
+    process.stderr.write('scrum decision supersede: --by <new-id> is required\n');
+    return 1;
+  }
+  if (flags.reason === undefined || flags.reason.length === 0) {
+    process.stderr.write('scrum decision supersede: --reason <text> is required\n');
+    return 1;
+  }
+
+  const row = store.supersedeDecision(id, flags.by, flags.reason);
+  process.stdout.write(`${JSON.stringify(row)}\n`);
+  process.stderr.write(`scrum decision supersede: ${row.id} -> ${flags.by}\n`);
+  return 0;
 }
 
 // ---------------------------------------------------------------------------

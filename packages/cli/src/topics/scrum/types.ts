@@ -131,7 +131,14 @@ export interface ScrumContextBundle {
  *
  * `status` defaults to `'accepted'` per ADR convention; the column is
  * `TEXT` (not a typed enum) so downstream domains can extend the
- * vocabulary without a schema migration.
+ * vocabulary without a schema migration. The canonical closed vocabulary
+ * is `accepted | superseded | deprecated` (audit §5.3) — kept as TEXT, not
+ * a CHECK constraint, to preserve the forward-compatible convention above.
+ *
+ * Supersession is append-only (audit §5.3 / design-principles §4): a
+ * retired decision is never hard-deleted. Instead its `status` flips to
+ * `'superseded'`, `superseded_by` points at the replacement's `id`, and
+ * `reason` records why. Both are NULL on current (non-retired) decisions.
  */
 export interface DecisionRow {
   id: string;
@@ -144,6 +151,10 @@ export interface DecisionRow {
   /** ISO-8601 timestamp. */
   recorded_at: string;
   recorded_by_agent: string | null;
+  /** Self-FK to the replacement decision's `id`. NULL = current/not retired. */
+  superseded_by: string | null;
+  /** Rationale recorded at supersession time. NULL until superseded. */
+  reason: string | null;
 }
 
 // ---------------------------------------------------------------------------

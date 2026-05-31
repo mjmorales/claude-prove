@@ -986,6 +986,65 @@ describe('runDecisionCmd', () => {
     expect(res.stdout).toContain('RECORDED_AT');
   });
 
+  test('supersede: happy path flips old to superseded with pointer + reason', () => {
+    const oldRel = writeDecision('.prove/decisions/2026-04-24-old.md', '# Old\n');
+    const newRel = writeDecision('.prove/decisions/2026-04-24-new.md', '# New\n');
+    withCapture(() => runDecisionCmd('record', [oldRel, undefined], {}));
+    withCapture(() => runDecisionCmd('record', [newRel, undefined], {}));
+
+    const res = withCapture(() =>
+      runDecisionCmd('supersede', ['2026-04-24-old', undefined], {
+        by: '2026-04-24-new',
+        reason: 'better approach',
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as {
+      id: string;
+      status: string;
+      superseded_by: string | null;
+      reason: string | null;
+    };
+    expect(row.status).toBe('superseded');
+    expect(row.superseded_by).toBe('2026-04-24-new');
+    expect(row.reason).toBe('better approach');
+
+    // Append-only: the superseded row still lists.
+    const list = withCapture(() => runDecisionCmd('list', [undefined, undefined], {}));
+    const rows = JSON.parse(list.stdout.trim()) as Array<{ id: string }>;
+    expect(rows.map((r) => r.id).sort()).toEqual(['2026-04-24-new', '2026-04-24-old']);
+  });
+
+  test('supersede: missing --by → exit 1', () => {
+    const rel = writeDecision('.prove/decisions/2026-04-24-x.md', '# X\n');
+    withCapture(() => runDecisionCmd('record', [rel, undefined], {}));
+    const res = withCapture(() =>
+      runDecisionCmd('supersede', ['2026-04-24-x', undefined], { reason: 'why' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--by <new-id> is required');
+  });
+
+  test('supersede: missing --reason → exit 1', () => {
+    const rel = writeDecision('.prove/decisions/2026-04-24-y.md', '# Y\n');
+    withCapture(() => runDecisionCmd('record', [rel, undefined], {}));
+    const res = withCapture(() =>
+      runDecisionCmd('supersede', ['2026-04-24-y', undefined], { by: '2026-04-24-y' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--reason <text> is required');
+  });
+
+  test('supersede: unknown replacement → exit 1', () => {
+    const rel = writeDecision('.prove/decisions/2026-04-24-z.md', '# Z\n');
+    withCapture(() => runDecisionCmd('record', [rel, undefined], {}));
+    const res = withCapture(() =>
+      runDecisionCmd('supersede', ['2026-04-24-z', undefined], { by: 'ghost', reason: 'why' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown replacement decision 'ghost'");
+  });
+
   test('unknown action → exit 1', () => {
     const res = withCapture(() => runDecisionCmd('bogus', [undefined, undefined], {}));
     expect(res.exit).toBe(1);
