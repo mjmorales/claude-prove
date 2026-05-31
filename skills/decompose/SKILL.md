@@ -171,7 +171,10 @@ claude-prove scrum task acceptance list <story-id>
 ```
 
 This returns each criterion's `id`, `text`, `verifies_by` (`bash`|`assert`|`gate`|`agent`),
-`check`, and `status`. Skip `status: superseded` criteria — only `active` ones gate close.
+`check`, `status`, and `idempotent` (the parallel / `failed_only` path requires every active
+criterion `idempotent: true`). Skip `status: superseded` criteria — only `active` ones gate
+close. Note `acceptance list` emits the **criteria array only**; the `acceptance.policy`
+(eval order) lives on the task — read it from `claude-prove scrum task show <story-id>`.
 
 ### Phase C2: Dispatch each criterion by `verifies_by`
 
@@ -192,6 +195,12 @@ Per criterion, write one reasoning-log entry. The native **Write** tool writes t
 file (one entry per file — no Bash quoting of multi-line bodies); `acb log append` is the
 validated ingest path. The run dir is the story's run directory
 (`.prove/runs/<branch>/<slug>`).
+
+Entry validation is **strict-closed**: only the envelope (`id`/`ts`/`type`/`agent`/`run_path`/
+`body`) plus each type's required fields are allowed — extra keys are rejected. Encode
+criterion detail in `body`, not new keys. (`acb log append` ingests from any `--file` path;
+the scripts below stage entries in a disposable `_staging/` scratch dir before ingest — that
+dir is the script's own convention, not a required run-dir structure.)
 
 ```bash
 # entry file written by the native Write tool, then ingested:
@@ -399,7 +408,10 @@ async function verify(c) {
   return { c, pass };
 }
 
-const order = criteria.find((c) => c)?.eval_order; // policy lives on the task; default fifo
+// eval order lives on the task's acceptance.policy, NOT on a criterion, and `acceptance
+// list` returns only the criteria array — fetch the policy from `task show`.
+const task = JSON.parse((await sh(`claude-prove scrum task show ${storyId}`)).stdout).task;
+const order = task.acceptance?.policy?.eval_order ?? "fifo";
 const results = order === "parallel"
   ? await parallel(criteria.map((c) => () => verify(c)), { limit: 8 })
   : await sequence(criteria.map((c) => () => verify(c)));
@@ -423,8 +435,9 @@ await sh(`claude-prove acb log episodes --run-dir ${runDir}`);
 await sh(`claude-prove acb assemble --branch ${branch} --base ${base}`);
 
 // C5: review + PR — delegate to orchestrator full-mode (do NOT reimplement).
-//   validators → prove:principal-architect review loop → merge → gh pr create
-await runOrchestratorFullMode({ storyId, runDir, branch, slug, base });
+//   Not a CLI call and not defined here — an intentional delegation seam: drive
+//   skills/orchestrator/SKILL.md "Full Mode" §2c-2e —
+//   validators → prove:principal-architect review loop → merge → gh pr create. See prose C5.
 
 // Mirror status back to scrum.
 await sh(`claude-prove scrum task status ${storyId} done`);
