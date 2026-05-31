@@ -92,6 +92,9 @@ describe('ScrumStore — decisions: schema materialization', () => {
       'content_sha:TEXT:1',
       'recorded_at:TEXT:1',
       'recorded_by_agent:TEXT:0',
+      // v4 columns are appended (ADD COLUMN lands them at the end), NULL default.
+      'superseded_by:TEXT:0',
+      'reason:TEXT:0',
     ]);
   });
 });
@@ -233,6 +236,82 @@ describe('ScrumStore — decisions: record + get', () => {
     expect(row.source_path).toBeNull();
     expect(row.recorded_by_agent).toBeNull();
     expect(row.status).toBe('accepted');
+    // v4: a freshly recorded decision is current, not superseded.
+    expect(row.superseded_by).toBeNull();
+    expect(row.reason).toBeNull();
+  });
+});
+
+// ===========================================================================
+// 4b. supersedeDecision — append-only retire (audit §5.3)
+// ===========================================================================
+
+describe('ScrumStore — decisions: supersedeDecision', () => {
+  beforeEach(() => {
+    store.recordDecision({ id: 'old', title: 'Old decision', content: 'old body' });
+    store.recordDecision({ id: 'new', title: 'New decision', content: 'new body' });
+  });
+
+  test('happy path: old flips to superseded with pointer + reason; never deleted', () => {
+    const updated = store.supersedeDecision('old', 'new', 'new approach chosen');
+    expect(updated.status).toBe('superseded');
+    expect(updated.superseded_by).toBe('new');
+    expect(updated.reason).toBe('new approach chosen');
+
+    // The original row survives — append-only, not a hard delete.
+    const fetched = store.getDecision('old');
+    if (!fetched) throw new Error('superseded decision must remain in the store');
+    expect(fetched.status).toBe('superseded');
+    expect(fetched.superseded_by).toBe('new');
+    expect(fetched.reason).toBe('new approach chosen');
+    expect(fetched.content).toBe('old body'); // content untouched
+
+    // The replacement stays current.
+    const replacement = store.getDecision('new');
+    if (!replacement) throw new Error('expected replacement row');
+    expect(replacement.status).toBe('accepted');
+    expect(replacement.superseded_by).toBeNull();
+
+    // Both rows still present — nothing was removed.
+    const count = store
+      .getStore()
+      .all<{ count: number }>('SELECT COUNT(*) AS count FROM scrum_decisions');
+    expect(count).toEqual([{ count: 2 }]);
+  });
+
+  test('refuses when the decision is missing', () => {
+    expect(() => store.supersedeDecision('ghost', 'new', 'why')).toThrow(
+      /unknown decision 'ghost'/,
+    );
+  });
+
+  test('refuses when the replacement is missing', () => {
+    expect(() => store.supersedeDecision('old', 'ghost', 'why')).toThrow(
+      /unknown replacement decision 'ghost'/,
+    );
+  });
+
+  test('refuses to supersede a decision by itself', () => {
+    expect(() => store.supersedeDecision('old', 'old', 'why')).toThrow(/cannot supersede itself/);
+  });
+
+  test('refuses when the decision is already superseded', () => {
+    store.supersedeDecision('old', 'new', 'first supersession');
+    store.recordDecision({ id: 'newer', title: 'Newer', content: 'newer body' });
+    expect(() => store.supersedeDecision('old', 'newer', 'second')).toThrow(/already superseded/);
+  });
+
+  test('listDecisions still returns superseded rows by default (append-only)', () => {
+    store.supersedeDecision('old', 'new', 'retired');
+
+    const all = store.listDecisions();
+    expect(all.map((d) => d.id).sort()).toEqual(['new', 'old']);
+
+    // The superseded row is filterable but never auto-hidden.
+    const superseded = store.listDecisions({ status: 'superseded' });
+    expect(superseded.map((d) => d.id)).toEqual(['old']);
+    expect(superseded[0]?.superseded_by).toBe('new');
+    expect(superseded[0]?.reason).toBe('retired');
   });
 });
 

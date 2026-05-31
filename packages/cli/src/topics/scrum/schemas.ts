@@ -167,10 +167,37 @@ ALTER TABLE scrum_tasks ADD COLUMN layer TEXT;
 CREATE INDEX idx_scrum_tasks_parent ON scrum_tasks(parent_id);
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v4 — append-only supersession on scrum_decisions (audit §5.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * v4: add append-only supersession to `scrum_decisions` (audit §5.3,
+ * design-principles §4). Two nullable columns, no hard-delete path:
+ *
+ *   superseded_by — self-FK to the replacement decision's `id`. NULL = the
+ *                   decision is current (not retired). When set, the row's
+ *                   `status` flips to `'superseded'` and this points at the
+ *                   replacement, so the supersession graph is explicit and
+ *                   the original stays auditable.
+ *   reason        — free-text rationale recorded at supersession time. NULL
+ *                   on every pre-v4 row and on any decision never superseded.
+ *
+ * SQLite permits `ADD COLUMN ... REFERENCES` only because the added column's
+ * default is NULL (no existing row needs a replacement), so the ALTER is safe
+ * on a populated table. No CHECK on `status` — the column stays forward-
+ * compatible TEXT (matches the v2 convention); the closed vocabulary
+ * `accepted | superseded | deprecated` is documented on `DecisionRow`.
+ */
+export const SCRUM_MIGRATION_V4_SQL = `
+ALTER TABLE scrum_decisions ADD COLUMN superseded_by TEXT REFERENCES scrum_decisions(id);
+ALTER TABLE scrum_decisions ADD COLUMN reason TEXT;
+`;
+
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that previously hit `clearRegistry()` — both
- * paths land a single scrum/{v1,v2} entry set. Matches
+ * paths land a single scrum/{v1,v2,v3,v4} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -202,6 +229,14 @@ export function ensureScrumSchemaRegistered(): void {
           'add scrum_tasks.parent_id (self-FK) + scrum_tasks.layer + idx_scrum_tasks_parent',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V3_SQL);
+        },
+      },
+      {
+        version: 4,
+        description:
+          'add scrum_decisions.superseded_by (self-FK) + scrum_decisions.reason for append-only supersession',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V4_SQL);
         },
       },
     ],
