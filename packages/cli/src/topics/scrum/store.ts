@@ -30,6 +30,7 @@ import type {
   ScrumRunLink,
   ScrumTag,
   ScrumTask,
+  TaskLayer,
   TaskStatus,
 } from './types';
 
@@ -59,6 +60,10 @@ export interface CreateTaskInput {
   description?: string | null;
   status?: TaskStatus;
   milestoneId?: string | null;
+  /** Containing task id (the tree). Validated to exist, like `milestoneId`. */
+  parentId?: string | null;
+  /** Containment tier; NULL = flat. */
+  layer?: TaskLayer | null;
   createdByAgent?: string | null;
   /** ISO-8601 timestamp; defaults to now(). */
   createdAt?: string;
@@ -149,6 +154,14 @@ const ALLOWED_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   cancelled: [],
 };
 
+/**
+ * Canonical `scrum_tasks` column list, in declaration order. Every SELECT
+ * routes through this so the v3 `parent_id`/`layer` columns stay in lockstep
+ * with the `ScrumTask` row type and decode cast.
+ */
+const TASK_COLUMNS =
+  'id, title, description, status, milestone_id, parent_id, layer, created_by_agent, created_at, last_event_at, deleted_at';
+
 // Tags that boost priority in nextReady ranking.
 const PRIORITY_TAGS = new Set(['p0', 'p1', 'urgent', 'blocker']);
 
@@ -201,11 +214,19 @@ export class ScrumStore {
     const createdAt = input.createdAt ?? isoNow();
     const status: TaskStatus = input.status ?? 'backlog';
     const milestoneId = input.milestoneId ?? null;
+    const parentId = input.parentId ?? null;
 
     if (milestoneId !== null) {
       const exists = this.getMilestone(milestoneId);
       if (!exists) {
         throw new Error(`createTask: unknown milestone_id '${milestoneId}'`);
+      }
+    }
+
+    if (parentId !== null) {
+      const parent = this.getTask(parentId);
+      if (!parent) {
+        throw new Error(`createTask: unknown parent_id '${parentId}'`);
       }
     }
 
@@ -215,6 +236,8 @@ export class ScrumStore {
       description: input.description ?? null,
       status,
       milestone_id: milestoneId,
+      parent_id: parentId,
+      layer: input.layer ?? null,
       created_by_agent: input.createdByAgent ?? null,
       created_at: createdAt,
       last_event_at: createdAt,
@@ -223,13 +246,15 @@ export class ScrumStore {
 
     const tx = this.db.transaction(() => {
       this.prep(
-        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, created_by_agent, created_at, last_event_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)',
+        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, parent_id, layer, created_by_agent, created_at, last_event_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
       ).run(
         row.id,
         row.title,
         row.description,
         row.status,
         row.milestone_id,
+        row.parent_id,
+        row.layer,
         row.created_by_agent,
         row.created_at,
         row.last_event_at,
@@ -260,7 +285,7 @@ export class ScrumStore {
   /** Fetch one task by id, or null if missing or soft-deleted. */
   getTask(id: string): ScrumTask | null {
     const row = this.prep(
-      'SELECT id, title, description, status, milestone_id, created_by_agent, created_at, last_event_at, deleted_at FROM scrum_tasks WHERE id = ? AND deleted_at IS NULL',
+      `SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE id = ? AND deleted_at IS NULL`,
     ).get(id) as ScrumTask | null;
     return row ?? null;
   }
@@ -294,7 +319,7 @@ export class ScrumStore {
     }
 
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-    const sql = `SELECT id, title, description, status, milestone_id, created_by_agent, created_at, last_event_at, deleted_at FROM scrum_tasks ${where} ORDER BY created_at ASC`;
+    const sql = `SELECT ${TASK_COLUMNS} FROM scrum_tasks ${where} ORDER BY created_at ASC`;
     return this.prep(sql).all(...params) as ScrumTask[];
   }
 
@@ -396,6 +421,65 @@ export class ScrumStore {
     const task = this.getTask(id);
     if (!task) throw new Error(`softDeleteTask: unknown task '${id}'`);
     this.prep('UPDATE scrum_tasks SET deleted_at = ? WHERE id = ?').run(isoNow(), id);
+  }
+
+  // ==========================================================================
+  // Containment tree (v3) — parent_id hierarchy + derived status rollup
+  // ==========================================================================
+
+  /**
+   * Direct children of `taskId` via `parent_id`, ordered by `created_at` ASC.
+   * Excludes soft-deleted rows. Returns `[]` for a leaf or unknown id —
+   * callers treat both the same.
+   */
+  getChildren(taskId: string): ScrumTask[] {
+    return this.prep(
+      `SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE parent_id = ? AND deleted_at IS NULL ORDER BY created_at ASC`,
+    ).all(taskId) as ScrumTask[];
+  }
+
+  /**
+   * Status of `taskId` rolled up from its subtree (audit §3.4). Computed,
+   * never stored. A leaf (no live children) returns its authored status, so
+   * pre-v3 flat tasks behave exactly as before. A parent folds its children's
+   * DERIVED statuses post-order by precedence:
+   *
+   *   in_progress — any child derives in_progress
+   *   blocked     — any child blocked AND none in_progress
+   *   done        — ≥1 non-cancelled child AND every non-cancelled child done
+   *   review      — any child review
+   *   ready       — any child ready
+   *   backlog     — otherwise (incl. all-cancelled subtree)
+   *
+   * Cancelled children are excluded from the `done` quorum so a fully
+   * cancelled subtree never reads as done. Recursion is invocation-scoped;
+   * a `visited` set guards a malformed `parent_id` cycle (returns the
+   * authored status for the re-entered node rather than recursing forever).
+   */
+  derivedStatus(taskId: string): TaskStatus {
+    const task = this.getTask(taskId);
+    if (!task) throw new Error(`derivedStatus: unknown task '${taskId}'`);
+    return this.rollupStatus(task, new Set<string>());
+  }
+
+  /**
+   * Post-order fold backing `derivedStatus`. `visited` carries the ancestor
+   * chain on the current DFS path; re-entering a node (a parent_id cycle)
+   * short-circuits to its authored status instead of recursing.
+   */
+  private rollupStatus(task: ScrumTask, visited: Set<string>): TaskStatus {
+    if (visited.has(task.id)) return task.status;
+    visited.add(task.id);
+
+    const children = this.getChildren(task.id);
+    if (children.length === 0) {
+      visited.delete(task.id);
+      return task.status;
+    }
+
+    const childStatuses = children.map((child) => this.rollupStatus(child, visited));
+    visited.delete(task.id);
+    return foldChildStatuses(childStatuses);
   }
 
   // ==========================================================================
@@ -502,7 +586,7 @@ export class ScrumStore {
 
   listTasksForTag(tag: string): ScrumTask[] {
     return this.prep(
-      `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.created_by_agent, t.created_at, t.last_event_at, t.deleted_at
+      `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.parent_id, t.layer, t.created_by_agent, t.created_at, t.last_event_at, t.deleted_at
        FROM scrum_tasks t
        INNER JOIN scrum_tags g ON g.task_id = t.id
        WHERE g.tag = ? AND t.deleted_at IS NULL
@@ -720,13 +804,13 @@ export class ScrumStore {
     const candidates = (
       options.milestoneId
         ? this.prep(
-            `SELECT id, title, description, status, milestone_id, created_by_agent, created_at, last_event_at, deleted_at
+            `SELECT ${TASK_COLUMNS}
              FROM scrum_tasks
              WHERE deleted_at IS NULL AND status IN ('ready', 'backlog') AND milestone_id = ?
              ORDER BY created_at ASC`,
           ).all(options.milestoneId)
         : this.prep(
-            `SELECT id, title, description, status, milestone_id, created_by_agent, created_at, last_event_at, deleted_at
+            `SELECT ${TASK_COLUMNS}
              FROM scrum_tasks
              WHERE deleted_at IS NULL AND status IN ('ready', 'backlog')
              ORDER BY created_at ASC`,
@@ -973,6 +1057,27 @@ export class ScrumStore {
 
 function isoNow(): string {
   return new Date().toISOString();
+}
+
+/**
+ * Fold a parent's children's DERIVED statuses into the parent's rolled-up
+ * status. Precedence (see `derivedStatus`): in_progress > blocked > done >
+ * review > ready > backlog. `done` requires a non-empty non-cancelled quorum
+ * where every non-cancelled child is done, so an all-cancelled subtree rolls
+ * up to backlog rather than done. Invariant: callers only invoke this for a
+ * parent with ≥1 live child.
+ */
+function foldChildStatuses(childStatuses: TaskStatus[]): TaskStatus {
+  const anyOf = (s: TaskStatus): boolean => childStatuses.includes(s);
+  if (anyOf('in_progress')) return 'in_progress';
+  if (anyOf('blocked')) return 'blocked';
+
+  const nonCancelled = childStatuses.filter((s) => s !== 'cancelled');
+  if (nonCancelled.length > 0 && nonCancelled.every((s) => s === 'done')) return 'done';
+
+  if (anyOf('review')) return 'review';
+  if (anyOf('ready')) return 'ready';
+  return 'backlog';
 }
 
 /**

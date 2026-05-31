@@ -42,7 +42,13 @@ beforeEach(() => {
 
 afterEach(() => {
   store.close();
-  // Restore canonical registration so downstream test files see v1+v2.
+  // Restore canonical registration so downstream test files see the full
+  // ladder. The migration tests below call `registerSchema` with a partial
+  // (v1/v1+v2-only) scrum def, which leaves `'scrum'` present in the
+  // registry — so a bare `ensureScrumSchemaRegistered()` would no-op and
+  // leak the stale def (dropping v3+). Clear first, then re-register the
+  // canonical schema. Mirrors the teardown discipline in schemas.test.ts.
+  clearRegistry();
   ensureScrumSchemaRegistered();
 });
 
