@@ -138,6 +138,35 @@ CREATE INDEX idx_scrum_decisions_topic ON scrum_decisions(topic);
 CREATE INDEX idx_scrum_decisions_status ON scrum_decisions(status);
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v3 — optional containment tree + layer tagging on scrum_tasks
+// ---------------------------------------------------------------------------
+
+/**
+ * v3: add an OPTIONAL hierarchy to `scrum_tasks` (audit §3.4/§5.4). Two
+ * nullable columns plus a parent index:
+ *
+ *   parent_id — self-FK; the containment tree (epic→story→task). Separate
+ *               from `scrum_deps`, which stays purely for blocking edges.
+ *               NULL = a flat, parent-less task (the pre-v3 shape).
+ *   layer     — 'epic' | 'story' | 'task'; NULL = untiered/flat. No CHECK
+ *               constraint so older databases stay forward-compatible and
+ *               the vocabulary can extend without a migration.
+ *
+ * SQLite permits `ADD COLUMN ... REFERENCES` only because the added column's
+ * default is NULL (no existing row needs a parent), so both ALTERs are safe
+ * on a populated table. The parent index backs `getChildren` /
+ * `derivedStatus` tree walks.
+ *
+ * Depth is optional: existing flat tasks (parent_id NULL, layer NULL) keep
+ * their exact pre-v3 behavior.
+ */
+export const SCRUM_MIGRATION_V3_SQL = `
+ALTER TABLE scrum_tasks ADD COLUMN parent_id TEXT REFERENCES scrum_tasks(id);
+ALTER TABLE scrum_tasks ADD COLUMN layer TEXT;
+CREATE INDEX idx_scrum_tasks_parent ON scrum_tasks(parent_id);
+`;
+
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that previously hit `clearRegistry()` — both
@@ -165,6 +194,14 @@ export function ensureScrumSchemaRegistered(): void {
           'create scrum_decisions + idx_scrum_decisions_topic + idx_scrum_decisions_status',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V2_SQL);
+        },
+      },
+      {
+        version: 3,
+        description:
+          'add scrum_tasks.parent_id (self-FK) + scrum_tasks.layer + idx_scrum_tasks_parent',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V3_SQL);
         },
       },
     ],

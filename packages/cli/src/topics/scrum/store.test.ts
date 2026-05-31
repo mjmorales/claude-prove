@@ -66,6 +66,24 @@ describe('ScrumStore — tasks', () => {
     expect(task.milestone_id).toBe('m1');
   });
 
+  test('createTask defaults parent_id and layer to null (flat task)', () => {
+    const task = seedTask('t1');
+    expect(task.parent_id).toBeNull();
+    expect(task.layer).toBeNull();
+    // Round-trips through SELECT, not just the in-memory return value.
+    expect(store.getTask('t1')?.parent_id).toBeNull();
+    expect(store.getTask('t1')?.layer).toBeNull();
+  });
+
+  test('createTask with parentId persists the edge and validates parent existence', () => {
+    expect(() => seedTask('child', { parentId: 'missing' })).toThrow(/unknown parent_id/);
+    seedTask('epic', { layer: 'epic' });
+    const child = seedTask('story', { parentId: 'epic', layer: 'story' });
+    expect(child.parent_id).toBe('epic');
+    expect(child.layer).toBe('story');
+    expect(store.getTask('story')?.parent_id).toBe('epic');
+  });
+
   test('getTask returns null for missing and soft-deleted tasks', () => {
     expect(store.getTask('nope')).toBeNull();
     seedTask('t1');
@@ -127,6 +145,115 @@ describe('ScrumStore — tasks', () => {
         .map((t) => t.id)
         .sort(),
     ).toEqual(['t1', 't2']);
+  });
+});
+
+// ===========================================================================
+// Containment tree — getChildren + derivedStatus (v3)
+// ===========================================================================
+
+describe('ScrumStore — containment tree', () => {
+  test('getChildren returns direct children ordered by created_at, excluding deleted', () => {
+    seedTask('epic', { layer: 'epic' });
+    seedTask('s1', { parentId: 'epic', layer: 'story', createdAt: '2026-01-01T00:00:00Z' });
+    seedTask('s2', { parentId: 'epic', layer: 'story', createdAt: '2026-01-02T00:00:00Z' });
+    seedTask('s3', { parentId: 'epic', layer: 'story', createdAt: '2026-01-03T00:00:00Z' });
+    seedTask('grandchild', { parentId: 's1' }); // not a direct child of epic
+    store.softDeleteTask('s3');
+
+    expect(store.getChildren('epic').map((t) => t.id)).toEqual(['s1', 's2']);
+    expect(store.getChildren('s1').map((t) => t.id)).toEqual(['grandchild']);
+    expect(store.getChildren('grandchild')).toEqual([]);
+  });
+
+  test('derivedStatus of a childless task is its authored status (flat behavior unchanged)', () => {
+    seedTask('flat', { status: 'review' });
+    expect(store.derivedStatus('flat')).toBe('review');
+  });
+
+  test('derivedStatus throws on unknown task', () => {
+    expect(() => store.derivedStatus('missing')).toThrow(/unknown task/);
+  });
+
+  test('derivedStatus rolls up in_progress when any descendant is in_progress', () => {
+    // 3-layer epic -> story -> task. One leaf in_progress dominates everything.
+    seedTask('epic', { layer: 'epic' });
+    seedTask('story', { parentId: 'epic', layer: 'story' });
+    seedTask('task-a', { parentId: 'story', layer: 'task', status: 'in_progress' });
+    seedTask('task-b', { parentId: 'story', layer: 'task', status: 'done' });
+    seedTask('task-c', { parentId: 'story', layer: 'task', status: 'blocked' });
+
+    expect(store.derivedStatus('story')).toBe('in_progress');
+    expect(store.derivedStatus('epic')).toBe('in_progress');
+  });
+
+  test('derivedStatus rolls up blocked when any child blocked and none in_progress', () => {
+    seedTask('story', { layer: 'story' });
+    seedTask('t1', { parentId: 'story', status: 'blocked' });
+    seedTask('t2', { parentId: 'story', status: 'ready' });
+    expect(store.derivedStatus('story')).toBe('blocked');
+  });
+
+  test('derivedStatus rolls up done only when every non-cancelled child is done', () => {
+    seedTask('story', { layer: 'story' });
+    seedTask('t1', { parentId: 'story', status: 'done' });
+    seedTask('t2', { parentId: 'story', status: 'done' });
+    expect(store.derivedStatus('story')).toBe('done');
+
+    // One non-done child demotes the rollup below done.
+    seedTask('t3', { parentId: 'story', status: 'ready' });
+    expect(store.derivedStatus('story')).toBe('ready');
+  });
+
+  test('derivedStatus excludes cancelled children from the done quorum', () => {
+    seedTask('story', { layer: 'story' });
+    seedTask('t1', { parentId: 'story', status: 'done' });
+    seedTask('t2', { parentId: 'story', status: 'cancelled' });
+    // The only non-cancelled child is done -> rolls up done.
+    expect(store.derivedStatus('story')).toBe('done');
+
+    // An all-cancelled subtree has no quorum -> backlog, never done.
+    seedTask('empty', { layer: 'story' });
+    seedTask('c1', { parentId: 'empty', status: 'cancelled' });
+    expect(store.derivedStatus('empty')).toBe('backlog');
+  });
+
+  test('derivedStatus precedence: review over ready, ready over backlog', () => {
+    seedTask('review-story', { layer: 'story' });
+    seedTask('r1', { parentId: 'review-story', status: 'review' });
+    seedTask('r2', { parentId: 'review-story', status: 'ready' });
+    seedTask('r3', { parentId: 'review-story', status: 'backlog' });
+    expect(store.derivedStatus('review-story')).toBe('review');
+
+    seedTask('ready-story', { layer: 'story' });
+    seedTask('y1', { parentId: 'ready-story', status: 'ready' });
+    seedTask('y2', { parentId: 'ready-story', status: 'backlog' });
+    expect(store.derivedStatus('ready-story')).toBe('ready');
+  });
+
+  test('derivedStatus folds DERIVED (not authored) child statuses post-order', () => {
+    // epic's only child `story` authored backlog, but story's leaf is in_progress.
+    // The fold must use story's DERIVED status, not its stored backlog.
+    seedTask('epic', { layer: 'epic', status: 'backlog' });
+    seedTask('story', { parentId: 'epic', layer: 'story', status: 'backlog' });
+    seedTask('leaf', { parentId: 'story', layer: 'task', status: 'in_progress' });
+    expect(store.derivedStatus('story')).toBe('in_progress');
+    expect(store.derivedStatus('epic')).toBe('in_progress');
+  });
+
+  test('derivedStatus survives a malformed parent_id cycle via the visited guard', () => {
+    // Create two flat tasks, then force a cycle directly at the SQL layer
+    // (createTask validates parent existence so it cannot build a cycle).
+    seedTask('a', { status: 'review' });
+    seedTask('b', { status: 'ready' });
+    const db = store.getStore().getDb();
+    db.prepare('UPDATE scrum_tasks SET parent_id = ? WHERE id = ?').run('b', 'a');
+    db.prepare('UPDATE scrum_tasks SET parent_id = ? WHERE id = ?').run('a', 'b');
+
+    // a's child is b; b's child is a (re-entered -> short-circuits to authored).
+    // Must terminate rather than recurse forever; assertion is liveness.
+    expect(() => store.derivedStatus('a')).not.toThrow();
+    expect(typeof store.derivedStatus('a')).toBe('string');
   });
 });
 

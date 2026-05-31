@@ -18,6 +18,7 @@ import {
 import {
   SCRUM_MIGRATION_V1_SQL,
   SCRUM_MIGRATION_V2_SQL,
+  SCRUM_MIGRATION_V3_SQL,
   ensureScrumSchemaRegistered,
 } from './schemas';
 
@@ -74,7 +75,16 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('migration creates all 7 scrum indexes (v1 + v2)', () => {
+  test('SCRUM_MIGRATION_V3_SQL adds parent_id + layer + idx_scrum_tasks_parent', () => {
+    expect(SCRUM_MIGRATION_V3_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN parent_id');
+    expect(SCRUM_MIGRATION_V3_SQL).toContain('REFERENCES scrum_tasks(id)');
+    expect(SCRUM_MIGRATION_V3_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN layer');
+    expect(SCRUM_MIGRATION_V3_SQL).toContain(
+      'CREATE INDEX idx_scrum_tasks_parent ON scrum_tasks(parent_id)',
+    );
+  });
+
+  test('migration creates all 8 scrum indexes (v1 + v2 + v3)', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -90,6 +100,7 @@ describe('scrum domain registration', () => {
         'idx_scrum_events_task_ts',
         'idx_scrum_run_links_path',
         'idx_scrum_tags_tag',
+        'idx_scrum_tasks_parent',
         'idx_scrum_tasks_status_event',
       ]);
     } finally {
@@ -97,7 +108,7 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('scrum_tasks column shape matches spec', () => {
+  test('scrum_tasks column shape matches spec (v3 adds parent_id + layer)', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -116,7 +127,27 @@ describe('scrum domain registration', () => {
         'created_at:TEXT:1',
         'last_event_at:TEXT:0',
         'deleted_at:TEXT:0',
+        // v3 columns are appended (ADD COLUMN lands them at the end), NULL default.
+        'parent_id:TEXT:0',
+        'layer:TEXT:0',
       ]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('v3 ADD COLUMN defaults parent_id + layer to NULL on existing rows', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      raw.exec(
+        "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ parent_id: string | null; layer: string | null }>(
+        'SELECT parent_id, layer FROM scrum_tasks WHERE id = ?',
+        ['t1'],
+      );
+      expect(row).toEqual([{ parent_id: null, layer: null }]);
     } finally {
       raw.close();
     }
@@ -170,7 +201,7 @@ describe('scrum domain registration', () => {
     try {
       const first = runMigrations(raw);
       expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2,
+        1, 2, 3,
       ]);
 
       const second = runMigrations(raw);
@@ -180,7 +211,7 @@ describe('scrum domain registration', () => {
         'SELECT version FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(versions).toEqual([{ version: 1 }, { version: 2 }]);
+      expect(versions).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
     } finally {
       raw.close();
     }
@@ -210,15 +241,18 @@ describe('scrum domain registration', () => {
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(log).toHaveLength(2);
-      const [v1, v2] = log;
-      if (!v1 || !v2) throw new Error('expected two log entries');
+      expect(log).toHaveLength(3);
+      const [v1, v2, v3] = log;
+      if (!v1 || !v2 || !v3) throw new Error('expected three log entries');
       expect(v1.domain).toBe('scrum');
       expect(v1.version).toBe(1);
       expect(v1.description).toContain('scrum_tasks');
       expect(v2.domain).toBe('scrum');
       expect(v2.version).toBe(2);
       expect(v2.description).toContain('scrum_decisions');
+      expect(v3.domain).toBe('scrum');
+      expect(v3.version).toBe(3);
+      expect(v3.description).toContain('parent_id');
     } finally {
       raw.close();
     }
