@@ -32,7 +32,13 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
 import type { ListTasksOptions, ScrumStore } from '../store';
 import { openScrumStore } from '../store';
-import type { AcceptanceCriterion, AcceptanceVerifiesBy, DepKind, TaskStatus } from '../types';
+import type {
+  AcceptanceCriterion,
+  AcceptanceVerifiesBy,
+  DepKind,
+  TaskLayer,
+  TaskStatus,
+} from '../types';
 import { parseDecisionFile } from './decision-cmd';
 import { generateId } from './scrum-utils';
 
@@ -41,6 +47,8 @@ export interface TaskCmdFlags {
   description?: string;
   milestone?: string;
   id?: string;
+  parent?: string;
+  layer?: string;
   status?: string;
   tag?: string;
   unassign?: boolean;
@@ -87,6 +95,8 @@ const TASK_ACTIONS: TaskAction[] = [
 const VALID_DEP_KINDS: DepKind[] = ['blocks', 'blocked_by'];
 
 const VALID_VERIFIES_BY: AcceptanceVerifiesBy[] = ['bash', 'assert', 'gate', 'agent'];
+
+const VALID_LAYERS: TaskLayer[] = ['epic', 'story', 'task'];
 
 const VALID_STATUSES: TaskStatus[] = [
   'backlog',
@@ -162,11 +172,29 @@ function doCreate(store: ScrumStore, flags: TaskCmdFlags): number {
     flags.id !== undefined && flags.id.length > 0 ? flags.id : generateId(flags.title, 'task');
   const milestoneId =
     flags.milestone !== undefined && flags.milestone.length > 0 ? flags.milestone : null;
+  const parentId = flags.parent !== undefined && flags.parent.length > 0 ? flags.parent : null;
+
+  // --layer tags the containment tier (epic|story|task) for the decompose
+  // ladder; null = flat. Validated against the closed set before the store
+  // call so a typo fails loud rather than landing an off-vocabulary layer.
+  let layer: TaskLayer | null = null;
+  if (flags.layer !== undefined && flags.layer.length > 0) {
+    if (!VALID_LAYERS.includes(flags.layer as TaskLayer)) {
+      process.stderr.write(
+        `scrum task create: invalid --layer '${flags.layer}'. expected one of: ${VALID_LAYERS.join(', ')}\n`,
+      );
+      return 1;
+    }
+    layer = flags.layer as TaskLayer;
+  }
+
   const task = store.createTask({
     id,
     title: flags.title,
     description: flags.description ?? null,
     milestoneId,
+    parentId,
+    layer,
   });
   process.stdout.write(`${JSON.stringify(task)}\n`);
   process.stderr.write(`scrum task create: ${task.id}\n`);
