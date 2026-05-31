@@ -103,6 +103,8 @@ interface ScrumFlags {
   kind?: string;
   stalledAfterDays?: number | string;
   fromGit?: boolean;
+  by?: string;
+  reason?: string;
   out?: string;
   workspaceRoot?: string;
 }
@@ -130,6 +132,8 @@ export function register(cli: CAC): void {
     )
     .option('--stalled-after-days <n>', 'Alerts: stalled WIP threshold in days (default: 7)')
     .option('--from-git', 'decision recover: scan git history for .prove/decisions/*.md blobs')
+    .option('--by <id>', 'decision supersede: id of the replacement decision')
+    .option('--reason <text>', 'decision supersede: rationale recorded on the retired decision')
     .option('--out <path>', 'compile-plan: write plan.json here + scrum-map.json sibling')
     .option(
       '--workspace-root <w>',
@@ -244,7 +248,7 @@ function dispatch(
     case 'decision':
       if (arg1 === undefined) {
         console.error(
-          'error: scrum decision: sub-action required (one of: record | get | list | recover)',
+          'error: scrum decision: sub-action required (one of: record | get | list | recover | supersede)',
         );
         return 1;
       }
@@ -253,6 +257,8 @@ function dispatch(
         status: flags.status,
         human: flags.human,
         fromGit: flags.fromGit,
+        by: flags.by,
+        reason: flags.reason,
         workspaceRoot: flags.workspaceRoot,
       });
 

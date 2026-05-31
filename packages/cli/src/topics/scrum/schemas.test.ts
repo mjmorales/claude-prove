@@ -19,6 +19,7 @@ import {
   SCRUM_MIGRATION_V1_SQL,
   SCRUM_MIGRATION_V2_SQL,
   SCRUM_MIGRATION_V3_SQL,
+  SCRUM_MIGRATION_V4_SQL,
   ensureScrumSchemaRegistered,
 } from './schemas';
 
@@ -196,12 +197,77 @@ describe('scrum domain registration', () => {
     }
   });
 
+  test('SCRUM_MIGRATION_V4_SQL adds superseded_by (self-FK) + reason', () => {
+    expect(SCRUM_MIGRATION_V4_SQL).toContain(
+      'ALTER TABLE scrum_decisions ADD COLUMN superseded_by',
+    );
+    expect(SCRUM_MIGRATION_V4_SQL).toContain('REFERENCES scrum_decisions(id)');
+    expect(SCRUM_MIGRATION_V4_SQL).toContain('ALTER TABLE scrum_decisions ADD COLUMN reason');
+  });
+
+  test('scrum_decisions column shape gains v4 superseded_by + reason', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      const cols = raw
+        .all<{ name: string; type: string; notnull: number }>(
+          "SELECT name, type, [notnull] FROM pragma_table_info('scrum_decisions') ORDER BY cid",
+        )
+        .map((c) => `${c.name}:${c.type}:${c.notnull}`);
+      expect(cols).toEqual([
+        'id:TEXT:0',
+        'title:TEXT:1',
+        'topic:TEXT:0',
+        'status:TEXT:1',
+        'content:TEXT:1',
+        'source_path:TEXT:0',
+        'content_sha:TEXT:1',
+        'recorded_at:TEXT:1',
+        'recorded_by_agent:TEXT:0',
+        // v4 appends, NULL default.
+        'superseded_by:TEXT:0',
+        'reason:TEXT:0',
+      ]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('v4 ADD COLUMN defaults superseded_by + reason to NULL on existing rows', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      raw.exec(
+        "INSERT INTO scrum_decisions (id, title, status, content, content_sha, recorded_at) VALUES ('d1', 'D1', 'accepted', 'body', 'deadbeef', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ superseded_by: string | null; reason: string | null }>(
+        'SELECT superseded_by, reason FROM scrum_decisions WHERE id = ?',
+        ['d1'],
+      );
+      expect(row).toEqual([{ superseded_by: null, reason: null }]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('full migration chain from v0 applies v1..v4 in order', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      const result = runMigrations(raw);
+      expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
+        1, 2, 3, 4,
+      ]);
+    } finally {
+      raw.close();
+    }
+  });
+
   test('migration is idempotent — rerunning does not duplicate log rows', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       const first = runMigrations(raw);
       expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3,
+        1, 2, 3, 4,
       ]);
 
       const second = runMigrations(raw);
@@ -211,7 +277,7 @@ describe('scrum domain registration', () => {
         'SELECT version FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(versions).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }]);
+      expect(versions).toEqual([{ version: 1 }, { version: 2 }, { version: 3 }, { version: 4 }]);
     } finally {
       raw.close();
     }
@@ -241,9 +307,9 @@ describe('scrum domain registration', () => {
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(log).toHaveLength(3);
-      const [v1, v2, v3] = log;
-      if (!v1 || !v2 || !v3) throw new Error('expected three log entries');
+      expect(log).toHaveLength(4);
+      const [v1, v2, v3, v4] = log;
+      if (!v1 || !v2 || !v3 || !v4) throw new Error('expected four log entries');
       expect(v1.domain).toBe('scrum');
       expect(v1.version).toBe(1);
       expect(v1.description).toContain('scrum_tasks');
@@ -253,6 +319,9 @@ describe('scrum domain registration', () => {
       expect(v3.domain).toBe('scrum');
       expect(v3.version).toBe(3);
       expect(v3.description).toContain('parent_id');
+      expect(v4.domain).toBe('scrum');
+      expect(v4.version).toBe(4);
+      expect(v4.description).toContain('superseded_by');
     } finally {
       raw.close();
     }

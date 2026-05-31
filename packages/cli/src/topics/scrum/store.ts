@@ -893,11 +893,16 @@ export class ScrumStore {
       content_sha: contentSha,
       recorded_at: recordedAt,
       recorded_by_agent: input.recordedByAgent ?? null,
+      // Supersession is set only via `supersedeDecision`; a freshly recorded
+      // decision is always current. On upsert these are deliberately reset to
+      // null so re-recording a decision file does not preserve a stale pointer.
+      superseded_by: null,
+      reason: null,
     };
 
     this.prep(
-      `INSERT INTO scrum_decisions (id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO scrum_decisions (id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          title = excluded.title,
          topic = excluded.topic,
@@ -906,7 +911,9 @@ export class ScrumStore {
          source_path = excluded.source_path,
          content_sha = excluded.content_sha,
          recorded_at = excluded.recorded_at,
-         recorded_by_agent = excluded.recorded_by_agent`,
+         recorded_by_agent = excluded.recorded_by_agent,
+         superseded_by = excluded.superseded_by,
+         reason = excluded.reason`,
     ).run(
       row.id,
       row.title,
@@ -917,15 +924,49 @@ export class ScrumStore {
       row.content_sha,
       row.recorded_at,
       row.recorded_by_agent,
+      row.superseded_by,
+      row.reason,
     );
 
     return row;
   }
 
+  /**
+   * Supersede a decision (audit §5.3, append-only). Sets the OLD decision's
+   * `status` to `'superseded'`, points `superseded_by` at `supersededById`,
+   * and records `reason`. Never hard-deletes — the original row stays
+   * auditable, so `listDecisions`/`getDecision` keep returning it.
+   *
+   * Rejects when the decision is missing, the replacement is missing, the
+   * replacement is the decision itself, or the decision is already terminal
+   * (`status` already `'superseded'`). Returns the updated old row.
+   */
+  supersedeDecision(id: string, supersededById: string, reason: string): DecisionRow {
+    const existing = this.getDecision(id);
+    if (!existing) throw new Error(`supersedeDecision: unknown decision '${id}'`);
+    if (existing.status === 'superseded') {
+      throw new Error(`supersedeDecision: decision '${id}' is already superseded`);
+    }
+    if (id === supersededById) {
+      throw new Error(`supersedeDecision: decision '${id}' cannot supersede itself`);
+    }
+    if (!this.getDecision(supersededById)) {
+      throw new Error(`supersedeDecision: unknown replacement decision '${supersededById}'`);
+    }
+
+    this.prep(
+      "UPDATE scrum_decisions SET status = 'superseded', superseded_by = ?, reason = ? WHERE id = ?",
+    ).run(supersededById, reason, id);
+
+    const updated = this.getDecision(id);
+    if (!updated) throw new Error(`supersedeDecision: decision '${id}' vanished mid-update`);
+    return updated;
+  }
+
   /** Fetch one decision by id, or null if missing. */
   getDecision(id: string): DecisionRow | null {
     const row = this.prep(
-      'SELECT id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent FROM scrum_decisions WHERE id = ?',
+      'SELECT id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason FROM scrum_decisions WHERE id = ?',
     ).get(id) as DecisionRow | null;
     return row ?? null;
   }
@@ -954,7 +995,7 @@ export class ScrumStore {
       params.push(filter.status);
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-    const sql = `SELECT id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent FROM scrum_decisions ${where} ORDER BY recorded_at DESC`;
+    const sql = `SELECT id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason FROM scrum_decisions ${where} ORDER BY recorded_at DESC`;
     return this.prep(sql).all(...params) as DecisionRow[];
   }
 
