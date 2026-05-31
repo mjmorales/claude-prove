@@ -194,10 +194,39 @@ ALTER TABLE scrum_decisions ADD COLUMN superseded_by TEXT REFERENCES scrum_decis
 ALTER TABLE scrum_decisions ADD COLUMN reason TEXT;
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v5 — first-class acceptance criteria on scrum_tasks (audit §5.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * v5: add first-class acceptance criteria to `scrum_tasks` (audit §5.2). One
+ * nullable JSON column, matching the `scrum_context_bundles.bundle_json`
+ * JSON-column precedent (no new table):
+ *
+ *   acceptance_json — JSON-encoded `Acceptance` object
+ *                     `{ criteria: AcceptanceCriterion[], policy?: AcceptancePolicy }`.
+ *                     NULL = a task with no authored acceptance (the pre-v5
+ *                     shape). Decoded to `ScrumTask.acceptance` at the row
+ *                     boundary in `store.ts`.
+ *
+ * Criteria are append-only (audit §5.2 / §5.3, design-principles §4): a
+ * retired criterion is never removed from the array. Instead its `status`
+ * flips to `'superseded'` with a `reason` and an optional `superseded_by`
+ * pointer — the supersession discipline mirrors v4's `scrum_decisions`.
+ *
+ * `ADD COLUMN` with a NULL default is safe on a populated table (no existing
+ * row needs acceptance). No CHECK constraint — the column stays
+ * forward-compatible TEXT, with the closed `verifies_by` / `status` / policy
+ * vocabularies documented on the `Acceptance` types in `types.ts`.
+ */
+export const SCRUM_MIGRATION_V5_SQL = `
+ALTER TABLE scrum_tasks ADD COLUMN acceptance_json TEXT;
+`;
+
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that previously hit `clearRegistry()` — both
- * paths land a single scrum/{v1,v2,v3,v4} entry set. Matches
+ * paths land a single scrum/{v1,v2,v3,v4,v5} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -237,6 +266,14 @@ export function ensureScrumSchemaRegistered(): void {
           'add scrum_decisions.superseded_by (self-FK) + scrum_decisions.reason for append-only supersession',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V4_SQL);
+        },
+      },
+      {
+        version: 5,
+        description:
+          'add scrum_tasks.acceptance_json (nullable JSON) for first-class acceptance criteria',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V5_SQL);
         },
       },
     ],

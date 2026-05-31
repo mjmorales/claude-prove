@@ -506,6 +506,82 @@ describe('runTaskCmd', () => {
 });
 
 // ---------------------------------------------------------------------------
+// task acceptance (v5) — positional = [sub-action, task-id]
+// ---------------------------------------------------------------------------
+
+describe('runTaskCmd acceptance', () => {
+  function seedAcTask(id = 'at') {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: id, id }));
+  }
+
+  test('add + list round-trip', () => {
+    seedAcTask();
+    const add = withCapture(() =>
+      runTaskCmd('acceptance', ['add', 'at'], {
+        text: 'builds clean',
+        verifiesBy: 'bash',
+        check: 'bun run build',
+        idempotent: true,
+        criterion: 'c1',
+      }),
+    );
+    expect(add.exit).toBe(0);
+
+    const list = withCapture(() => runTaskCmd('acceptance', ['list', 'at'], {}));
+    expect(list.exit).toBe(0);
+    const criteria = JSON.parse(list.stdout.trim()) as Array<{ id: string; idempotent: boolean }>;
+    expect(criteria.map((c) => c.id)).toEqual(['c1']);
+    expect(criteria[0]?.idempotent).toBe(true);
+  });
+
+  test('add rejects an invalid --verifies-by', () => {
+    seedAcTask();
+    const res = withCapture(() =>
+      runTaskCmd('acceptance', ['add', 'at'], { text: 't', verifiesBy: 'bogus', check: 'x' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--verifies-by must be one of');
+  });
+
+  test('add requires --text and --check', () => {
+    seedAcTask();
+    const noText = withCapture(() =>
+      runTaskCmd('acceptance', ['add', 'at'], { verifiesBy: 'bash', check: 'x' }),
+    );
+    expect(noText.exit).toBe(1);
+    expect(noText.stderr).toContain('--text is required');
+  });
+
+  test('supersede flips status, retains the criterion (append-only)', () => {
+    seedAcTask();
+    withCapture(() =>
+      runTaskCmd('acceptance', ['add', 'at'], {
+        text: 'old',
+        verifiesBy: 'bash',
+        check: 'x',
+        criterion: 'c1',
+      }),
+    );
+    const res = withCapture(() =>
+      runTaskCmd('acceptance', ['supersede', 'at'], { criterion: 'c1', reason: 'replaced' }),
+    );
+    expect(res.exit).toBe(0);
+
+    const list = withCapture(() => runTaskCmd('acceptance', ['list', 'at'], {}));
+    const criteria = JSON.parse(list.stdout.trim()) as Array<{ id: string; status: string }>;
+    expect(criteria).toHaveLength(1);
+    expect(criteria[0]?.status).toBe('superseded');
+  });
+
+  test('unknown acceptance sub-action: exit 1', () => {
+    seedAcTask();
+    const res = withCapture(() => runTaskCmd('acceptance', ['nope', 'at'], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('sub-action required');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // milestone-cmd
 // ---------------------------------------------------------------------------
 
