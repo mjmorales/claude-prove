@@ -9,6 +9,7 @@
  *   claude-prove acb assemble          [--branch B] [--base main] [--workspace-root W]
  *   claude-prove acb hook <event>      [--workspace-root W]   (event: post-commit)
  *   claude-prove acb migrate-legacy-db [--workspace-root W]
+ *   claude-prove acb log <sub>         [--run-dir D] [--file F]  (sub: append|list|episodes)
  *
  * `ensureLegacyImported(workspaceRoot)` runs at the top of every non-migrate
  * handler so the standalone `.prove/acb.db` gets absorbed into the unified
@@ -29,12 +30,13 @@
 import type { CAC } from 'cac';
 import { runAssemble } from './acb/cli/assemble-cmd';
 import { runHookCmd } from './acb/cli/hook-cmd';
+import { runLog } from './acb/cli/log-cmd';
 import { runMigrateLegacy } from './acb/cli/migrate-legacy-cmd';
 import { runSaveManifest } from './acb/cli/save-manifest-cmd';
 
-type AcbAction = 'save-manifest' | 'assemble' | 'hook' | 'migrate-legacy-db';
+type AcbAction = 'save-manifest' | 'assemble' | 'hook' | 'migrate-legacy-db' | 'log';
 
-const ACB_ACTIONS: AcbAction[] = ['save-manifest', 'assemble', 'hook', 'migrate-legacy-db'];
+const ACB_ACTIONS: AcbAction[] = ['save-manifest', 'assemble', 'hook', 'migrate-legacy-db', 'log'];
 
 type HookEvent = 'post-commit';
 
@@ -46,6 +48,8 @@ interface AcbFlags {
   slug?: string;
   base?: string;
   workspaceRoot?: string;
+  runDir?: string;
+  file?: string;
 }
 
 export function register(cli: CAC): void {
@@ -62,6 +66,8 @@ export function register(cli: CAC): void {
       '--workspace-root <w>',
       'Main worktree root; pins store to <root>/.prove/prove.db (default: git common-dir)',
     )
+    .option('--run-dir <d>', 'Run directory holding log/<agent>/<id>.json entries (log)')
+    .option('--file <f>', 'Entry JSON file path (log append; default: stdin)')
     .action((action: string, arg: string | undefined, flags: AcbFlags) => {
       if (!isAcbAction(action)) {
         console.error(
@@ -118,5 +124,8 @@ function dispatch(action: AcbAction, arg: string | undefined, flags: AcbFlags): 
 
     case 'migrate-legacy-db':
       return runMigrateLegacy({ workspaceRoot: flags.workspaceRoot });
+
+    case 'log':
+      return runLog(arg, { runDir: flags.runDir, file: flags.file });
   }
 }
