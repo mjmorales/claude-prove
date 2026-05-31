@@ -6,6 +6,24 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v2.10.0 — onleash methodology on prove machinery: the `decompose` skill + layered task creation
+
+Lands onleash's two structured-agent methodologies (audit §2.2a/b) as a driver skill on top of the foundation shipped over the prior tasks (scrum hierarchy `parent_id`/`layer`, decision supersession, first-class acceptance criteria + the four verification kinds, and the `acb` reasoning log). You are the driver Claude session — prove emits the scrum tree, the criteria, and the reasoning log, and the Agent tool / native `/workflows` does the fan-out; prove never spawns Claude.
+
+**New skill — `decompose`** (`skills/decompose/SKILL.md`): two methodologies on prove primitives.
+- **Decompose ladder** (B1): top-down `charter/VISION → epic → story → task`. Per layer, a planning subagent emits a child list via a native structured-output schema (replacing onleash's `*_list.json`), each child is written as a layered scrum task (`backlog` ≈ `proposed`), an `AskUserQuestion` accept gate (or `--auto-accept-through <layer>`) promotes `backlog→ready`, and the ladder recurses. Forced bubble-up on a `discovery` finding is documented for both the in-run (branch to re-plan) and across-session (`scrum task status blocked` + reconciler + `next-ready`) paths.
+- **AC-gated story-close** (B2): reads a story's acceptance criteria from the scrum store (`scrum task acceptance list`, not the compiled plan), dispatches each by `verifies_by` (`bash`→exit 0, `assert`→expression, `gate`→`AskUserQuestion`, `agent`→`prove:validation-agent`), writes a `verification` reasoning-log entry per criterion plus a closing `synthesis` entry (native Write → `acb log append`, one JSON file per entry), assembles the Review Brief via the existing `acb` PR path (the multipass synthesizer is flagged as a `TODO(reasoning-brief):` future task), and then **delegates** worktree/validation/`principal-architect` review/merge to orchestrator full-mode rather than reimplementing it.
+
+The skill embeds the canonical native `/workflows` (Workflow tool) script for each methodology as runnable-shaped `phase()`/`agent({schema})`/`parallel()`/`AskUserQuestion` control flow, referencing only verified `claude-prove` commands.
+
+**New CLI flags — `scrum task create --parent <id> --layer <epic|story|task>`**: the `task create` action now writes layered children into the `parent_id` containment tree and tags the `layer` tier. `--layer` is validated against the closed `epic|story|task` set (exit 1 on a typo); an unknown `--parent` surfaces the store's `unknown parent_id` error as exit 1. These flags are what the decompose ladder uses to write children — the store layer already accepted `parentId`/`layer`; this wires the CLI surface.
+
+**Migration**: none for the schema — the scrum hierarchy/AC/supersession migrations (v3–v5) shipped in the prior tasks; this release is the additive skill + CLI flags on top of them. Ensure your `.prove/prove.db` is migrated (`claude-prove store migrate`) if you are coming from before v3.
+
+**Auto-adoption**: the `decompose` skill is discovered on plugin load after update; the `scrum task create --parent/--layer` flags ship in the CLI. No config edit required. Run `/prove:update` to sync.
+
+---
+
 ## v2.8.0 — New `/prove:workflow` command: run a whole milestone (or plan.json) as a parallel fan-out
 
 Adds the `/prove:workflow` command + skill. Point it at a **scrum milestone id** or a **`plan.json`** and it runs the dependency graph as one fan-out execution: it compiles the milestone's tasks + `blocked_by` edges into a `plan.json`, runs the tasks in parallel waves through the orchestrator's existing full-mode machinery (worktrees, validators, `principal-architect` review, sequential merge), and mirrors each task's status back to the scrum store (`task status done|blocked` + `link-run`).
