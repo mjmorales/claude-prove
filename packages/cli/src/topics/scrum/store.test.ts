@@ -9,6 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { type ScrumStore, openScrumStore } from './store';
+import type { Acceptance, AcceptanceCriterion } from './types';
 
 let store: ScrumStore;
 
@@ -884,5 +885,144 @@ describe('ScrumStore — nextReady', () => {
     const first = store.nextReady({ nowMs }).map((r) => r.task.id);
     const second = store.nextReady({ nowMs }).map((r) => r.task.id);
     expect(first).toEqual(second);
+  });
+});
+
+// ===========================================================================
+// Acceptance criteria (v5, audit §5.2)
+// ===========================================================================
+
+function ac(id: string, overrides: Partial<AcceptanceCriterion> = {}): AcceptanceCriterion {
+  return {
+    id,
+    text: `criterion ${id}`,
+    verifies_by: 'bash',
+    check: 'exit 0',
+    status: 'active',
+    idempotent: false,
+    superseded_by: null,
+    reason: null,
+    inherited_from: null,
+    ...overrides,
+  };
+}
+
+describe('ScrumStore — acceptance criteria', () => {
+  test('createTask without acceptance stores NULL acceptance', () => {
+    const task = seedTask('t1');
+    expect(task.acceptance).toBeNull();
+    expect(store.getTask('t1')?.acceptance).toBeNull();
+  });
+
+  test('createTask with acceptance round-trips through acceptance_json', () => {
+    const acceptance: Acceptance = { criteria: [ac('c1'), ac('c2')] };
+    seedTask('t1', { acceptance });
+    const reloaded = store.getTask('t1');
+    expect(reloaded?.acceptance).toEqual(acceptance);
+  });
+
+  test('setAcceptance replaces the whole acceptance object; null clears it', () => {
+    seedTask('t1', { acceptance: { criteria: [ac('c1')] } });
+    const updated = store.setAcceptance('t1', { criteria: [ac('c2'), ac('c3')] });
+    expect(updated.acceptance?.criteria.map((c) => c.id)).toEqual(['c2', 'c3']);
+    const cleared = store.setAcceptance('t1', null);
+    expect(cleared.acceptance).toBeNull();
+  });
+
+  test('addCriterion appends; creates the acceptance object on a bare task', () => {
+    seedTask('t1');
+    store.addCriterion('t1', ac('c1'));
+    const task = store.addCriterion('t1', ac('c2'));
+    expect(task.acceptance?.criteria.map((c) => c.id)).toEqual(['c1', 'c2']);
+  });
+
+  test('addCriterion rejects a duplicate criterion id', () => {
+    seedTask('t1', { acceptance: { criteria: [ac('c1')] } });
+    expect(() => store.addCriterion('t1', ac('c1'))).toThrow(/duplicate criterion id 'c1'/);
+  });
+
+  test('supersedeCriterion is append-only — flips status, retains the row', () => {
+    seedTask('t1', { acceptance: { criteria: [ac('c1'), ac('c2')] } });
+    const task = store.supersedeCriterion('t1', 'c1', 'no longer needed', 'c2');
+    expect(task.acceptance?.criteria).toHaveLength(2);
+    const c1 = task.acceptance?.criteria.find((c) => c.id === 'c1');
+    expect(c1?.status).toBe('superseded');
+    expect(c1?.reason).toBe('no longer needed');
+    expect(c1?.superseded_by).toBe('c2');
+    // The other criterion is untouched.
+    expect(task.acceptance?.criteria.find((c) => c.id === 'c2')?.status).toBe('active');
+  });
+
+  test('supersedeCriterion rejects unknown criterion and double-supersede', () => {
+    seedTask('t1', { acceptance: { criteria: [ac('c1')] } });
+    expect(() => store.supersedeCriterion('t1', 'nope', 'r')).toThrow(/unknown criterion 'nope'/);
+    store.supersedeCriterion('t1', 'c1', 'first');
+    expect(() => store.supersedeCriterion('t1', 'c1', 'again')).toThrow(/already superseded/);
+  });
+
+  test('shared_acceptance inheritance copies active parent criteria with inherited_from', () => {
+    seedTask('parent', {
+      acceptance: { criteria: [ac('c1'), ac('c2', { status: 'superseded' })] },
+    });
+    const child = store.createTask({ id: 'child', title: 'Child', parentId: 'parent' });
+    // Only the active criterion is inherited.
+    expect(child.acceptance?.criteria).toHaveLength(1);
+    const inherited = child.acceptance?.criteria[0];
+    expect(inherited?.id).toBe('c1');
+    expect(inherited?.inherited_from).toBe('parent');
+    expect(inherited?.status).toBe('active');
+  });
+
+  test('inherited copies are independent of later parent edits', () => {
+    seedTask('parent', { acceptance: { criteria: [ac('c1')] } });
+    store.createTask({ id: 'child', title: 'Child', parentId: 'parent' });
+    // Mutate the parent after the child inherited.
+    store.supersedeCriterion('parent', 'c1', 'parent moved on');
+    const childCriterion = store.getTask('child')?.acceptance?.criteria[0];
+    expect(childCriterion?.status).toBe('active');
+    expect(childCriterion?.reason).toBeNull();
+  });
+
+  test('explicit child acceptance wins over parent inheritance', () => {
+    seedTask('parent', { acceptance: { criteria: [ac('p1')] } });
+    const child = store.createTask({
+      id: 'child',
+      title: 'Child',
+      parentId: 'parent',
+      acceptance: { criteria: [ac('own')] },
+    });
+    expect(child.acceptance?.criteria.map((c) => c.id)).toEqual(['own']);
+  });
+
+  test('policy validation rejects parallel/failed_only with a non-idempotent criterion', () => {
+    const bad: Acceptance = {
+      criteria: [ac('c1', { idempotent: false })],
+      policy: { eval_order: 'parallel', rerun_policy: 'all' },
+    };
+    expect(() => store.createTask({ id: 't1', title: 'T1', acceptance: bad })).toThrow(
+      /requires every criterion to be idempotent/,
+    );
+    // Same invariant on the in-place setter.
+    seedTask('t2');
+    expect(() => store.setAcceptance('t2', bad)).toThrow(
+      /requires every criterion to be idempotent/,
+    );
+  });
+
+  test('policy validation accepts parallel/failed_only when every criterion is idempotent', () => {
+    const ok: Acceptance = {
+      criteria: [ac('c1', { idempotent: true }), ac('c2', { idempotent: true })],
+      policy: { eval_order: 'parallel', rerun_policy: 'failed_only' },
+    };
+    const task = store.createTask({ id: 't1', title: 'T1', acceptance: ok });
+    expect(task.acceptance?.policy?.eval_order).toBe('parallel');
+  });
+
+  test('fifo/all policy passes regardless of idempotence', () => {
+    const seq: Acceptance = {
+      criteria: [ac('c1', { idempotent: false })],
+      policy: { eval_order: 'fifo', rerun_policy: 'all' },
+    };
+    expect(() => store.createTask({ id: 't1', title: 'T1', acceptance: seq })).not.toThrow();
   });
 });

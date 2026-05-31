@@ -16,6 +16,9 @@
  *   claude-prove scrum task delete <id>
  *   claude-prove scrum task add-dep <from> <to>    [--kind blocks|blocked_by]
  *   claude-prove scrum task remove-dep <from> <to> [--kind blocks|blocked_by]
+ *   claude-prove scrum task acceptance add <id>    --text T --verifies-by K --check C [--idempotent] [--timeout 30s] [--criterion ID]
+ *   claude-prove scrum task acceptance list <id>
+ *   claude-prove scrum task acceptance supersede <id> --criterion ID --reason R [--by NEW-ID]
  *   claude-prove scrum alerts                    [--human] [--stalled-after-days N]
  *   claude-prove scrum milestone create          --title X [--description Y] [--target-state S] [--id I]
  *   claude-prove scrum milestone list            [--status S]
@@ -107,6 +110,13 @@ interface ScrumFlags {
   reason?: string;
   out?: string;
   workspaceRoot?: string;
+  // `task acceptance` authoring flags (v5).
+  text?: string;
+  verifiesBy?: string;
+  check?: string;
+  idempotent?: boolean;
+  timeout?: string;
+  criterion?: string;
 }
 
 export function register(cli: CAC): void {
@@ -135,6 +145,12 @@ export function register(cli: CAC): void {
     .option('--by <id>', 'decision supersede: id of the replacement decision')
     .option('--reason <text>', 'decision supersede: rationale recorded on the retired decision')
     .option('--out <path>', 'compile-plan: write plan.json here + scrum-map.json sibling')
+    .option('--text <t>', 'task acceptance add: criterion text')
+    .option('--verifies-by <k>', 'task acceptance add: bash | assert | gate | agent')
+    .option('--check <c>', 'task acceptance add: kind-specific check payload (command/expr/prompt)')
+    .option('--idempotent', 'task acceptance add: mark the criterion safe to re-run')
+    .option('--timeout <t>', 'task acceptance add: optional wall-clock budget (e.g. 30s)')
+    .option('--criterion <id>', 'task acceptance: explicit criterion id (default: generated)')
     .option(
       '--workspace-root <w>',
       'Main worktree root; pins store to <root>/.prove/prove.db (default: git common-dir)',
@@ -202,7 +218,7 @@ function dispatch(
     case 'task':
       if (arg1 === undefined) {
         console.error(
-          'error: scrum task: sub-action required (one of: create | show | list | tag | link-decision | status | move | delete | add-dep | remove-dep)',
+          'error: scrum task: sub-action required (one of: create | show | list | tag | link-decision | status | move | delete | add-dep | remove-dep | acceptance)',
         );
         return 1;
       }
@@ -215,6 +231,14 @@ function dispatch(
         tag: flags.tag,
         unassign: flags.unassign,
         kind: flags.kind,
+        text: flags.text,
+        verifiesBy: flags.verifiesBy,
+        check: flags.check,
+        idempotent: flags.idempotent,
+        timeout: flags.timeout,
+        criterion: flags.criterion,
+        reason: flags.reason,
+        by: flags.by,
         workspaceRoot: flags.workspaceRoot,
       });
 

@@ -18,6 +18,8 @@ import { createHash } from 'node:crypto';
 import { type Store, type StoreOptions, openStore, runMigrations } from '@claude-prove/store';
 import { ensureScrumSchemaRegistered } from './schemas';
 import type {
+  Acceptance,
+  AcceptanceCriterion,
   DecisionRow,
   DepKind,
   EventKind,
@@ -64,6 +66,13 @@ export interface CreateTaskInput {
   parentId?: string | null;
   /** Containment tier; NULL = flat. */
   layer?: TaskLayer | null;
+  /**
+   * Acceptance criteria authored at create time (v5). Validated for the
+   * idempotent/policy invariant before insert. When omitted, the task's
+   * `acceptance_json` stays NULL unless `parentId` carries inheritable
+   * criteria (see `inheritAcceptance`).
+   */
+  acceptance?: Acceptance | null;
   createdByAgent?: string | null;
   /** ISO-8601 timestamp; defaults to now(). */
   createdAt?: string;
@@ -156,11 +165,20 @@ const ALLOWED_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
 
 /**
  * Canonical `scrum_tasks` column list, in declaration order. Every SELECT
- * routes through this so the v3 `parent_id`/`layer` columns stay in lockstep
- * with the `ScrumTask` row type and decode cast.
+ * routes through this so the v3 `parent_id`/`layer` and v5 `acceptance_json`
+ * columns stay in lockstep with the `ScrumTaskRow` shape. Raw rows carry
+ * `acceptance_json: string | null`; `decodeTask` turns it into the decoded
+ * `ScrumTask.acceptance` field at the public boundary.
  */
 const TASK_COLUMNS =
-  'id, title, description, status, milestone_id, parent_id, layer, created_by_agent, created_at, last_event_at, deleted_at';
+  'id, title, description, status, milestone_id, parent_id, layer, acceptance_json, created_by_agent, created_at, last_event_at, deleted_at';
+
+/**
+ * Raw `scrum_tasks` SELECT shape — identical to `ScrumTask` except the v5
+ * acceptance column arrives as its on-disk JSON string. `decodeTask` is the
+ * sole bridge from this to the public `ScrumTask`.
+ */
+type ScrumTaskRow = Omit<ScrumTask, 'acceptance'> & { acceptance_json: string | null };
 
 // Tags that boost priority in nextReady ranking.
 const PRIORITY_TAGS = new Set(['p0', 'p1', 'urgent', 'blocker']);
@@ -230,6 +248,17 @@ export class ScrumStore {
       }
     }
 
+    // Resolve acceptance: explicit input wins; otherwise inherit the parent's
+    // shared_acceptance criteria (independent copies tagged `inherited_from`).
+    // Validated for the idempotent/policy invariant before insert.
+    const authored = input.acceptance ?? null;
+    let acceptance: Acceptance | null = authored;
+    if (authored === null && parentId !== null) {
+      const inherited = this.inheritAcceptance(parentId);
+      acceptance = inherited.length > 0 ? { criteria: inherited } : null;
+    }
+    if (acceptance !== null) validateAcceptance(acceptance);
+
     const row: ScrumTask = {
       id: input.id,
       title: input.title,
@@ -238,6 +267,7 @@ export class ScrumStore {
       milestone_id: milestoneId,
       parent_id: parentId,
       layer: input.layer ?? null,
+      acceptance,
       created_by_agent: input.createdByAgent ?? null,
       created_at: createdAt,
       last_event_at: createdAt,
@@ -246,7 +276,7 @@ export class ScrumStore {
 
     const tx = this.db.transaction(() => {
       this.prep(
-        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, parent_id, layer, created_by_agent, created_at, last_event_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
+        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, parent_id, layer, acceptance_json, created_by_agent, created_at, last_event_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
       ).run(
         row.id,
         row.title,
@@ -255,6 +285,7 @@ export class ScrumStore {
         row.milestone_id,
         row.parent_id,
         row.layer,
+        acceptance === null ? null : JSON.stringify(acceptance),
         row.created_by_agent,
         row.created_at,
         row.last_event_at,
@@ -286,8 +317,8 @@ export class ScrumStore {
   getTask(id: string): ScrumTask | null {
     const row = this.prep(
       `SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE id = ? AND deleted_at IS NULL`,
-    ).get(id) as ScrumTask | null;
-    return row ?? null;
+    ).get(id) as ScrumTaskRow | null;
+    return row ? decodeTask(row) : null;
   }
 
   /**
@@ -320,7 +351,7 @@ export class ScrumStore {
 
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const sql = `SELECT ${TASK_COLUMNS} FROM scrum_tasks ${where} ORDER BY created_at ASC`;
-    return this.prep(sql).all(...params) as ScrumTask[];
+    return (this.prep(sql).all(...params) as ScrumTaskRow[]).map(decodeTask);
   }
 
   /**
@@ -433,9 +464,11 @@ export class ScrumStore {
    * callers treat both the same.
    */
   getChildren(taskId: string): ScrumTask[] {
-    return this.prep(
-      `SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE parent_id = ? AND deleted_at IS NULL ORDER BY created_at ASC`,
-    ).all(taskId) as ScrumTask[];
+    return (
+      this.prep(
+        `SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE parent_id = ? AND deleted_at IS NULL ORDER BY created_at ASC`,
+      ).all(taskId) as ScrumTaskRow[]
+    ).map(decodeTask);
   }
 
   /**
@@ -480,6 +513,128 @@ export class ScrumStore {
     const childStatuses = children.map((child) => this.rollupStatus(child, visited));
     visited.delete(task.id);
     return foldChildStatuses(childStatuses);
+  }
+
+  // ==========================================================================
+  // Acceptance criteria (v5, audit §5.2) — append-only, never hard-delete
+  //
+  // TODO(story-close): the wave-4 story-close workflow consumes these criteria
+  // and dispatches by `verifies_by` (bash→validators, assert→expression,
+  // gate→AskUserQuestion, agent→validation-agent). This task only lands the
+  // data model + authoring surface; no evaluation happens here.
+  // ==========================================================================
+
+  /**
+   * Replace a task's entire acceptance object. Validates the
+   * idempotent/policy invariant (audit §5.2): `parallel` eval_order or
+   * `failed_only` rerun_policy require every criterion to be
+   * `idempotent: true`. Throws on an unknown task id. Pass `null` to clear.
+   */
+  setAcceptance(taskId: string, acceptance: Acceptance | null): ScrumTask {
+    const task = this.getTask(taskId);
+    if (!task) throw new Error(`setAcceptance: unknown task '${taskId}'`);
+    if (acceptance !== null) validateAcceptance(acceptance);
+    this.writeAcceptance(taskId, acceptance);
+    return this.requireTask(taskId, 'setAcceptance');
+  }
+
+  /**
+   * Append one criterion to a task's acceptance list (audit §5.2). Creates
+   * the acceptance object if the task had none. Rejects a duplicate criterion
+   * id and re-validates the idempotent/policy invariant against any existing
+   * policy. Append-only — existing criteria are never mutated or removed.
+   */
+  addCriterion(taskId: string, criterion: AcceptanceCriterion): ScrumTask {
+    const task = this.getTask(taskId);
+    if (!task) throw new Error(`addCriterion: unknown task '${taskId}'`);
+    const current = task.acceptance;
+    const criteria = current ? [...current.criteria] : [];
+    if (criteria.some((c) => c.id === criterion.id)) {
+      throw new Error(`addCriterion: duplicate criterion id '${criterion.id}' on task '${taskId}'`);
+    }
+    criteria.push(criterion);
+    const next: Acceptance = current?.policy ? { criteria, policy: current.policy } : { criteria };
+    validateAcceptance(next);
+    this.writeAcceptance(taskId, next);
+    return this.requireTask(taskId, 'addCriterion');
+  }
+
+  /**
+   * Supersede a criterion in place (audit §5.2 / §5.3, append-only). Flips
+   * its `status` to `'superseded'`, records `reason`, and optionally points
+   * `superseded_by` at a replacement criterion id. Never removes the row —
+   * the retired criterion stays in the array for audit, mirroring
+   * `supersedeDecision`. Rejects unknown task/criterion ids and an
+   * already-superseded criterion.
+   */
+  supersedeCriterion(
+    taskId: string,
+    criterionId: string,
+    reason: string,
+    supersededBy?: string | null,
+  ): ScrumTask {
+    const task = this.getTask(taskId);
+    if (!task) throw new Error(`supersedeCriterion: unknown task '${taskId}'`);
+    if (!task.acceptance) {
+      throw new Error(`supersedeCriterion: task '${taskId}' has no acceptance criteria`);
+    }
+    const target = task.acceptance.criteria.find((c) => c.id === criterionId);
+    if (!target) {
+      throw new Error(`supersedeCriterion: unknown criterion '${criterionId}' on task '${taskId}'`);
+    }
+    if (target.status === 'superseded') {
+      throw new Error(`supersedeCriterion: criterion '${criterionId}' is already superseded`);
+    }
+
+    const criteria = task.acceptance.criteria.map((c) =>
+      c.id === criterionId
+        ? { ...c, status: 'superseded' as const, reason, superseded_by: supersededBy ?? null }
+        : c,
+    );
+    const next: Acceptance = task.acceptance.policy
+      ? { criteria, policy: task.acceptance.policy }
+      : { criteria };
+    this.writeAcceptance(taskId, next);
+    return this.requireTask(taskId, 'supersedeCriterion');
+  }
+
+  /**
+   * The criteria a child should inherit from `parentId` via shared_acceptance
+   * (audit §5.2). Returns independent deep copies of the parent's ACTIVE
+   * criteria, each tagged `inherited_from: parentId` and reset to
+   * `status: 'active'` with cleared supersession pointers. Returns `[]` when
+   * the parent is unknown or carries no active criteria.
+   *
+   * Copies are intentionally independent: a later edit to the parent's
+   * criterion does NOT retroactively change a child that already inherited it.
+   */
+  inheritAcceptance(parentId: string): AcceptanceCriterion[] {
+    const parent = this.getTask(parentId);
+    if (!parent?.acceptance) return [];
+    return parent.acceptance.criteria
+      .filter((c) => c.status === 'active')
+      .map((c) => ({
+        ...c,
+        status: 'active' as const,
+        superseded_by: null,
+        reason: null,
+        inherited_from: parentId,
+      }));
+  }
+
+  /** Persist an acceptance object (or NULL) to `scrum_tasks.acceptance_json`. */
+  private writeAcceptance(taskId: string, acceptance: Acceptance | null): void {
+    this.prep('UPDATE scrum_tasks SET acceptance_json = ? WHERE id = ?').run(
+      acceptance === null ? null : JSON.stringify(acceptance),
+      taskId,
+    );
+  }
+
+  /** Re-fetch a task that must exist after a same-method write. */
+  private requireTask(taskId: string, method: string): ScrumTask {
+    const updated = this.getTask(taskId);
+    if (!updated) throw new Error(`${method}: task '${taskId}' vanished mid-update`);
+    return updated;
   }
 
   // ==========================================================================
@@ -585,13 +740,15 @@ export class ScrumStore {
   }
 
   listTasksForTag(tag: string): ScrumTask[] {
-    return this.prep(
-      `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.parent_id, t.layer, t.created_by_agent, t.created_at, t.last_event_at, t.deleted_at
+    return (
+      this.prep(
+        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.parent_id, t.layer, t.acceptance_json, t.created_by_agent, t.created_at, t.last_event_at, t.deleted_at
        FROM scrum_tasks t
        INNER JOIN scrum_tags g ON g.task_id = t.id
        WHERE g.tag = ? AND t.deleted_at IS NULL
        ORDER BY t.created_at ASC`,
-    ).all(tag) as ScrumTask[];
+      ).all(tag) as ScrumTaskRow[]
+    ).map(decodeTask);
   }
 
   // ==========================================================================
@@ -801,7 +958,7 @@ export class ScrumStore {
 
     // Two SQL shapes (with/without milestone filter) — both routed through
     // the prep() cache so the plan is parsed once per process.
-    const candidates = (
+    const candidateRows = (
       options.milestoneId
         ? this.prep(
             `SELECT ${TASK_COLUMNS}
@@ -815,7 +972,8 @@ export class ScrumStore {
              WHERE deleted_at IS NULL AND status IN ('ready', 'backlog')
              ORDER BY created_at ASC`,
           ).all()
-    ) as ScrumTask[];
+    ) as ScrumTaskRow[];
+    const candidates = candidateRows.map(decodeTask);
 
     // Snapshot active and closed milestone ids in one pass each — both
     // sets feed `computeMilestoneBoost`. Per-invocation lookup keeps the
@@ -1098,6 +1256,39 @@ export class ScrumStore {
 
 function isoNow(): string {
   return new Date().toISOString();
+}
+
+/**
+ * Decode a raw `scrum_tasks` SELECT row into the public `ScrumTask`. The only
+ * transform is `acceptance_json` (TEXT|NULL) → `acceptance` (Acceptance|null);
+ * every other column passes through unchanged. NULL JSON → `null`.
+ */
+function decodeTask(row: ScrumTaskRow): ScrumTask {
+  const { acceptance_json, ...rest } = row;
+  return {
+    ...rest,
+    acceptance: acceptance_json === null ? null : (JSON.parse(acceptance_json) as Acceptance),
+  };
+}
+
+/**
+ * Enforce the policy invariant (audit §5.2): a `parallel` eval_order or a
+ * `failed_only` rerun_policy is only valid when every criterion is
+ * `idempotent: true`. Non-idempotent criteria cannot be safely re-run or
+ * run concurrently, so the policy is rejected at write time. No policy (the
+ * default sequential / re-run-all behavior) always passes.
+ */
+function validateAcceptance(acceptance: Acceptance): void {
+  const policy = acceptance.policy;
+  if (!policy) return;
+  const needsIdempotent = policy.eval_order === 'parallel' || policy.rerun_policy === 'failed_only';
+  if (!needsIdempotent) return;
+  const offender = acceptance.criteria.find((c) => !c.idempotent);
+  if (offender) {
+    throw new Error(
+      `acceptance policy '${policy.eval_order}/${policy.rerun_policy}' requires every criterion to be idempotent; criterion '${offender.id}' is not`,
+    );
+  }
 }
 
 /**
