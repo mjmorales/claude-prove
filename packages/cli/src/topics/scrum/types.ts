@@ -25,6 +25,14 @@ export type TaskStatus =
 export type MilestoneStatus = 'planned' | 'active' | 'closed';
 
 /**
+ * Optional containment tier for a task (audit §3.4). Matches
+ * `scrum_tasks.layer`; NULL on the column means flat/untiered. The column
+ * has no CHECK constraint, so this union documents the canonical set
+ * without pinning the schema.
+ */
+export type TaskLayer = 'epic' | 'story' | 'task';
+
+/**
  * Canonical set of event kinds appended to `scrum_events.kind`. New kinds
  * extend this union — the column itself has no CHECK constraint so older
  * databases stay forward-compatible.
@@ -57,6 +65,10 @@ export interface ScrumTask {
   description: string | null;
   status: TaskStatus;
   milestone_id: string | null;
+  /** Self-FK to the containing task (the epic→story→task tree). NULL = flat. */
+  parent_id: string | null;
+  /** Containment tier. NULL = untiered/flat task. */
+  layer: TaskLayer | null;
   created_by_agent: string | null;
   created_at: string;
   last_event_at: string | null;
