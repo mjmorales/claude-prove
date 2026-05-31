@@ -167,20 +167,29 @@ function compile(
     const planId = scrumToPlan.get(task.id) as string;
     const wave = (level.get(task.id) ?? 0) + 1;
     const description = task.description ?? '';
+    // Forward each active acceptance criterion's `text` into the plan task.
+    // TODO(plan-ac-shape): run-state TASK_PLAN_SPEC.acceptance_criteria is a
+    // list<str>, so only the criterion text survives — the structured shape
+    // (verifies_by/check/idempotent/policy) is dropped here. Carrying it
+    // requires a run-state schema bump (a second cross-domain migration, out
+    // of scope for this task). Superseded criteria are excluded.
+    const acceptanceCriteria = (task.acceptance?.criteria ?? [])
+      .filter((c) => c.status === 'active')
+      .map((c) => c.text);
     return {
       id: planId,
       title: task.title,
       wave,
       deps: (deps.get(task.id) ?? []).map((id) => scrumToPlan.get(id) as string),
       description,
-      acceptance_criteria: [],
+      acceptance_criteria: acceptanceCriteria,
       worktree: { path: '', branch: '' },
       steps: [
         {
           id: `${planId}.1`,
           title: task.title,
           description,
-          acceptance_criteria: [],
+          acceptance_criteria: acceptanceCriteria,
         },
       ],
     };

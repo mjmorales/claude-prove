@@ -56,6 +56,83 @@ export type EventKind =
 export type DepKind = 'blocks' | 'blocked_by';
 
 // ---------------------------------------------------------------------------
+// Acceptance criteria (v5, audit §5.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * How a single acceptance criterion is verified (audit §5.2). The four kinds
+ * map onto existing prove machinery at story-close time (NOT this task — see
+ * the `// TODO(story-close):` seam in store.ts):
+ *
+ *   bash   — `check` is a shell command; pass = exit 0 (→ a `validator`)
+ *   assert — `check` is a boolean expression evaluated against run context
+ *   gate   — `check` is a prompt shown to the operator via `AskUserQuestion`
+ *   agent  — `check` is a prompt judged by the `validation-agent`
+ *
+ * Closed vocabulary documented here, not pinned by a SQL CHECK — the value
+ * lives inside `acceptance_json`, so the schema stays forward-compatible.
+ */
+export type AcceptanceVerifiesBy = 'bash' | 'assert' | 'gate' | 'agent';
+
+/** Lifecycle of a single criterion. Append-only: retire via supersession. */
+export type AcceptanceCriterionStatus = 'active' | 'superseded';
+
+/**
+ * One acceptance criterion on a task (audit §5.2). Criteria are append-only:
+ * a retired criterion flips `status` to `'superseded'` with a `reason` (and
+ * optional `superseded_by` pointer) rather than being removed — mirrors the
+ * v4 `scrum_decisions` supersession discipline.
+ *
+ *   idempotent     — safe to re-run without side effects; required true for
+ *                    `parallel` eval_order or `failed_only` rerun_policy.
+ *   timeout        — optional wall-clock budget (e.g. `'30s'`); story-close
+ *                    interprets it. Free-form string, not validated here.
+ *   inherited_from — set when copied from a parent task's `shared_acceptance`
+ *                    (the parent task id); null on locally-authored criteria.
+ *                    Copies are independent — editing the parent does not
+ *                    retroactively change an existing child copy.
+ */
+export interface AcceptanceCriterion {
+  id: string;
+  text: string;
+  verifies_by: AcceptanceVerifiesBy;
+  /** Kind-specific check payload (command / expression / prompt). */
+  check: string;
+  status: AcceptanceCriterionStatus;
+  idempotent: boolean;
+  timeout?: string;
+  /** Set on supersession to the replacement criterion id. NULL = current. */
+  superseded_by?: string | null;
+  /** Rationale recorded at supersession time. NULL until superseded. */
+  reason?: string | null;
+  /** Parent task id when copied via shared_acceptance inheritance. */
+  inherited_from?: string | null;
+}
+
+/**
+ * Evaluation policy for a task's criteria (audit §5.2). `parallel`/`failed_only`
+ * are gated on every criterion being `idempotent: true` — enforced by
+ * `ScrumStore.setAcceptance`/`addCriterion`.
+ *
+ *   eval_order    — `fifo` (run in array order) | `parallel` (run concurrently)
+ *   rerun_policy  — `all` (re-run every criterion) | `failed_only`
+ */
+export interface AcceptancePolicy {
+  eval_order: 'fifo' | 'parallel';
+  rerun_policy: 'all' | 'failed_only';
+}
+
+/**
+ * Decoded `scrum_tasks.acceptance_json`. NULL column → `null` on
+ * `ScrumTask.acceptance`. `policy` is optional; absent = default
+ * sequential, re-run-all behavior at story-close time.
+ */
+export interface Acceptance {
+  criteria: AcceptanceCriterion[];
+  policy?: AcceptancePolicy;
+}
+
+// ---------------------------------------------------------------------------
 // Row types — one per scrum_* table
 // ---------------------------------------------------------------------------
 
@@ -69,6 +146,12 @@ export interface ScrumTask {
   parent_id: string | null;
   /** Containment tier. NULL = untiered/flat task. */
   layer: TaskLayer | null;
+  /**
+   * Decoded from `scrum_tasks.acceptance_json` at the row boundary (v5).
+   * NULL = no authored acceptance. Criteria are append-only (supersede,
+   * never remove).
+   */
+  acceptance: Acceptance | null;
   created_by_agent: string | null;
   created_at: string;
   last_event_at: string | null;
