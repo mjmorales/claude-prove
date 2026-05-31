@@ -208,6 +208,51 @@ describe('runTaskCmd', () => {
     expect(shown.task.id).toBe('hi');
   });
 
+  test('create --parent --layer: persists the containment tree', () => {
+    const epic = withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], {
+        title: 'Auth epic',
+        id: 'epic-1',
+        layer: 'epic',
+      }),
+    );
+    expect(epic.exit).toBe(0);
+    expect(JSON.parse(epic.stdout.trim()).layer).toBe('epic');
+
+    const story = withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], {
+        title: 'Login story',
+        id: 'story-1',
+        parent: 'epic-1',
+        layer: 'story',
+      }),
+    );
+    expect(story.exit).toBe(0);
+    const row = JSON.parse(story.stdout.trim());
+    expect(row.parent_id).toBe('epic-1');
+    expect(row.layer).toBe('story');
+  });
+
+  test('create --layer: rejects an off-vocabulary tier with exit 1', () => {
+    const res = withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'X', id: 'x-bad', layer: 'sprint' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("invalid --layer 'sprint'");
+  });
+
+  test('create --parent: unknown parent surfaces the store error as exit 1', () => {
+    const res = withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], {
+        title: 'Orphan',
+        id: 'orphan-1',
+        parent: 'nonexistent',
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown parent_id 'nonexistent'");
+  });
+
   test('unknown action: exit 1', () => {
     const res = withCapture(() => runTaskCmd('bogus', [undefined, undefined], {}));
     expect(res.exit).toBe(1);
