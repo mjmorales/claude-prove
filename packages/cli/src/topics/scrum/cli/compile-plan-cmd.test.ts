@@ -48,7 +48,14 @@ interface PlanShape {
   kind: string;
   mode: string;
   task_id: string;
-  tasks: Array<{ id: string; title: string; wave: number; deps: string[]; steps: unknown[] }>;
+  tasks: Array<{
+    id: string;
+    title: string;
+    wave: number;
+    deps: string[];
+    acceptance_criteria: string[];
+    steps: Array<{ acceptance_criteria: string[] }>;
+  }>;
 }
 
 function parsePlan(stdout: string): {
@@ -237,5 +244,58 @@ describe('runCompilePlanCmd — compilation', () => {
     const { plan_path, map_path } = parsePlan(res.stdout);
     expect(plan_path).toBe(planPath);
     expect(map_path).toBe(mapPath);
+  });
+
+  test('forwards a task acceptance criteria texts (active only) into plan + step', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    store.createTask({
+      id: 'a',
+      title: 'Task a',
+      milestoneId: 'm1',
+      createdAt: '2026-01-01T00:00:01.000Z',
+      acceptance: {
+        criteria: [
+          {
+            id: 'c1',
+            text: 'builds clean',
+            verifies_by: 'bash',
+            check: 'bun run build',
+            status: 'active',
+            idempotent: true,
+            superseded_by: null,
+            reason: null,
+            inherited_from: null,
+          },
+          {
+            id: 'c2',
+            text: 'dropped criterion',
+            verifies_by: 'bash',
+            check: 'true',
+            status: 'superseded',
+            idempotent: true,
+            superseded_by: null,
+            reason: 'obsolete',
+            inherited_from: null,
+          },
+        ],
+      },
+    });
+
+    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const { plan } = parsePlan(res.stdout);
+    const task = plan.tasks[0];
+    if (!task) throw new Error('expected one plan task');
+    // Superseded criterion is excluded; only the active text forwards.
+    expect(task.acceptance_criteria).toEqual(['builds clean']);
+    expect(task.steps[0]?.acceptance_criteria).toEqual(['builds clean']);
+  });
+
+  test('task with no acceptance forwards an empty criteria list', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    seedTask(store, 'a', 'm1', 1);
+    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    const { plan } = parsePlan(res.stdout);
+    expect(plan.tasks[0]?.acceptance_criteria).toEqual([]);
   });
 });

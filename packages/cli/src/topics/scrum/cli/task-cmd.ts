@@ -12,6 +12,10 @@
  *   delete <id>
  *   add-dep <from> <to>     [--kind blocks|blocked_by]   (default: blocks)
  *   remove-dep <from> <to>  [--kind blocks|blocked_by]   (default: blocks)
+ *   acceptance add <id>     --text T --verifies-by K --check C [--idempotent]
+ *                                                     [--timeout 30s] [--criterion ID]
+ *   acceptance list <id>
+ *   acceptance supersede <id> --criterion ID --reason R [--by NEW-ID]
  *
  * Stdout contract: JSON result per action on stdout; one-line human
  * summary on stderr. The `list` action returns a JSON array. The `show`
@@ -28,7 +32,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
 import type { ListTasksOptions, ScrumStore } from '../store';
 import { openScrumStore } from '../store';
-import type { DepKind, TaskStatus } from '../types';
+import type { AcceptanceCriterion, AcceptanceVerifiesBy, DepKind, TaskStatus } from '../types';
 import { parseDecisionFile } from './decision-cmd';
 import { generateId } from './scrum-utils';
 
@@ -42,6 +46,15 @@ export interface TaskCmdFlags {
   unassign?: boolean;
   kind?: string;
   workspaceRoot?: string;
+  // `acceptance` sub-action flags (v5).
+  text?: string;
+  verifiesBy?: string;
+  check?: string;
+  idempotent?: boolean;
+  timeout?: string;
+  criterion?: string;
+  reason?: string;
+  by?: string;
 }
 
 export type TaskAction =
@@ -54,7 +67,8 @@ export type TaskAction =
   | 'move'
   | 'delete'
   | 'add-dep'
-  | 'remove-dep';
+  | 'remove-dep'
+  | 'acceptance';
 
 const TASK_ACTIONS: TaskAction[] = [
   'create',
@@ -67,9 +81,12 @@ const TASK_ACTIONS: TaskAction[] = [
   'delete',
   'add-dep',
   'remove-dep',
+  'acceptance',
 ];
 
 const VALID_DEP_KINDS: DepKind[] = ['blocks', 'blocked_by'];
+
+const VALID_VERIFIES_BY: AcceptanceVerifiesBy[] = ['bash', 'assert', 'gate', 'agent'];
 
 const VALID_STATUSES: TaskStatus[] = [
   'backlog',
@@ -120,6 +137,8 @@ export function runTaskCmd(
         return doAddDep(store, positional[0], positional[1], flags);
       case 'remove-dep':
         return doRemoveDep(store, positional[0], positional[1], flags);
+      case 'acceptance':
+        return doAcceptance(store, positional[0], positional[1], flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -422,4 +441,120 @@ function resolveDepKind(raw: string | undefined, action: 'add-dep' | 'remove-dep
     return null;
   }
   return raw as DepKind;
+}
+
+// ---------------------------------------------------------------------------
+// acceptance — author/list/supersede acceptance criteria (v5, audit §5.2)
+//
+//   task acceptance add <task-id> --text T --verifies-by K --check C
+//                                 [--idempotent] [--timeout 30s] [--criterion ID]
+//   task acceptance list <task-id>
+//   task acceptance supersede <task-id> --criterion ID --reason R [--by NEW-ID]
+//
+// Append-only: `supersede` flips a criterion's status, never removing it.
+// ---------------------------------------------------------------------------
+
+type AcceptanceSubAction = 'add' | 'list' | 'supersede';
+
+const ACCEPTANCE_SUB_ACTIONS: AcceptanceSubAction[] = ['add', 'list', 'supersede'];
+
+function doAcceptance(
+  store: ScrumStore,
+  sub: string | undefined,
+  taskId: string | undefined,
+  flags: TaskCmdFlags,
+): number {
+  if (sub === undefined || !(ACCEPTANCE_SUB_ACTIONS as string[]).includes(sub)) {
+    process.stderr.write(
+      `scrum task acceptance: sub-action required (one of: ${ACCEPTANCE_SUB_ACTIONS.join(' | ')})\n`,
+    );
+    return 1;
+  }
+  if (taskId === undefined || taskId.length === 0) {
+    process.stderr.write(`scrum task acceptance ${sub}: <task-id> positional argument required\n`);
+    return 1;
+  }
+  switch (sub as AcceptanceSubAction) {
+    case 'add':
+      return doAcceptanceAdd(store, taskId, flags);
+    case 'list':
+      return doAcceptanceList(store, taskId);
+    case 'supersede':
+      return doAcceptanceSupersede(store, taskId, flags);
+  }
+}
+
+function doAcceptanceAdd(store: ScrumStore, taskId: string, flags: TaskCmdFlags): number {
+  if (flags.text === undefined || flags.text.length === 0) {
+    process.stderr.write('scrum task acceptance add: --text is required\n');
+    return 1;
+  }
+  if (flags.check === undefined || flags.check.length === 0) {
+    process.stderr.write('scrum task acceptance add: --check is required\n');
+    return 1;
+  }
+  if (
+    flags.verifiesBy === undefined ||
+    !VALID_VERIFIES_BY.includes(flags.verifiesBy as AcceptanceVerifiesBy)
+  ) {
+    process.stderr.write(
+      `scrum task acceptance add: --verifies-by must be one of: ${VALID_VERIFIES_BY.join(', ')}\n`,
+    );
+    return 1;
+  }
+
+  const criterion: AcceptanceCriterion = {
+    id:
+      flags.criterion && flags.criterion.length > 0
+        ? flags.criterion
+        : generateId(flags.text, 'ac'),
+    text: flags.text,
+    verifies_by: flags.verifiesBy as AcceptanceVerifiesBy,
+    check: flags.check,
+    status: 'active',
+    idempotent: flags.idempotent === true,
+    superseded_by: null,
+    reason: null,
+    inherited_from: null,
+  };
+  if (flags.timeout !== undefined && flags.timeout.length > 0) criterion.timeout = flags.timeout;
+
+  const task = store.addCriterion(taskId, criterion);
+  process.stdout.write(`${JSON.stringify(task)}\n`);
+  process.stderr.write(`scrum task acceptance add: ${taskId} += ${criterion.id}\n`);
+  return 0;
+}
+
+function doAcceptanceList(store: ScrumStore, taskId: string): number {
+  const task = store.getTask(taskId);
+  if (task === null) {
+    process.stderr.write(`scrum task acceptance list: task '${taskId}' not found\n`);
+    return 1;
+  }
+  const criteria = task.acceptance?.criteria ?? [];
+  process.stdout.write(`${JSON.stringify(criteria)}\n`);
+  process.stderr.write(`scrum task acceptance list: ${taskId} (${criteria.length} criteria)\n`);
+  return 0;
+}
+
+function doAcceptanceSupersede(store: ScrumStore, taskId: string, flags: TaskCmdFlags): number {
+  if (flags.criterion === undefined || flags.criterion.length === 0) {
+    process.stderr.write('scrum task acceptance supersede: --criterion <id> is required\n');
+    return 1;
+  }
+  if (flags.reason === undefined || flags.reason.length === 0) {
+    process.stderr.write('scrum task acceptance supersede: --reason <text> is required\n');
+    return 1;
+  }
+  const task = store.supersedeCriterion(
+    taskId,
+    flags.criterion,
+    flags.reason,
+    flags.by && flags.by.length > 0 ? flags.by : null,
+  );
+  process.stdout.write(`${JSON.stringify(task)}\n`);
+  process.stderr.write(
+    `scrum task acceptance supersede: ${taskId} / ${flags.criterion} -> superseded\n`,
+  );
+  return 0;
 }
