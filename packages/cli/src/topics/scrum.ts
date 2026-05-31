@@ -7,7 +7,7 @@
  *   claude-prove scrum status                    [--human]
  *   claude-prove scrum next-ready                [--limit N] [--milestone M] [--human]
  *   claude-prove scrum compile-plan              --milestone M [--out plan.json]
- *   claude-prove scrum task create               --title X [--description Y] [--milestone M] [--id I]
+ *   claude-prove scrum task create               --title X [--description Y] [--milestone M] [--id I] [--parent P] [--layer epic|story|task]
  *   claude-prove scrum task show <id>
  *   claude-prove scrum task list                 [--status S] [--milestone M] [--tag T]
  *   claude-prove scrum task tag <id> <tag>
@@ -99,6 +99,8 @@ interface ScrumFlags {
   tag?: string;
   task?: string;
   topic?: string;
+  parent?: string;
+  layer?: string;
   targetState?: string;
   branch?: string;
   slug?: string;
@@ -128,6 +130,8 @@ export function register(cli: CAC): void {
     .option('--title <t>', 'Task or milestone title (create actions)')
     .option('--description <d>', 'Task or milestone description')
     .option('--id <id>', 'Explicit id (create actions; default: generated from title)')
+    .option('--parent <id>', 'Parent task id for `task create` (the epic→story→task tree)')
+    .option('--layer <l>', 'Containment tier for `task create` (epic | story | task)')
     .option('--status <s>', 'Status filter (list / close / create)')
     .option('--tag <t>', 'Tag filter')
     .option('--task <id>', 'Task filter for `tag list`')
@@ -227,6 +231,8 @@ function dispatch(
         description: flags.description,
         milestone: flags.milestone,
         id: flags.id,
+        parent: flags.parent,
+        layer: flags.layer,
         status: flags.status,
         tag: flags.tag,
         unassign: flags.unassign,
