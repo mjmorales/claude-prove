@@ -223,10 +223,45 @@ export const SCRUM_MIGRATION_V5_SQL = `
 ALTER TABLE scrum_tasks ADD COLUMN acceptance_json TEXT;
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v6 — optional declared bounds on scrum_tasks (declared-bounds §2)
+// ---------------------------------------------------------------------------
+
+/**
+ * v6: add an OPTIONAL declared-bounds authoring column to `scrum_tasks`
+ * (decision `.prove/decisions/2026-05-31-declared-bounds-home.md` §2 — the
+ * deferred scrum half). One nullable JSON column, matching the v5
+ * `acceptance_json` JSON-column precedent (no new table):
+ *
+ *   bounds_json — JSON-encoded `TaskBounds` object
+ *                 `{ read?, write?, tools?: { allow?, deny? },
+ *                    budgets?: { tokens?, tool_calls?, wall_clock_s? } }`.
+ *                 NULL = a task with no authored bounds (the pre-v6 shape,
+ *                 absent = unbounded). Decoded to `ScrumTask.bounds` at the
+ *                 row boundary in `store.ts`.
+ *
+ * The column is the optional milestone-authored authoring SOURCE: a bound set
+ * here survives `compile-plan` into the emitted plan's `tasks[].bounds`
+ * (mirroring the run-state v3 `TASK_PLAN_SPEC.bounds` shape) instead of being
+ * re-authored every run. The canonical ENFORCEMENT input stays the ephemeral
+ * `plan.json tasks[].bounds`; this column only feeds it. Per the decision's
+ * post-implementation correction: `write[]`/`read[]`/`budgets` are advisory
+ * (the git worktree is the write wall), `tools` map to native permissions —
+ * there is NO native deny-outside rule.
+ *
+ * `ADD COLUMN` with a NULL default is safe on a populated table (no existing
+ * row needs bounds). No CHECK constraint — the column stays
+ * forward-compatible TEXT, with the closed shape documented on the
+ * `TaskBounds` type in `types.ts` and validated on write in `store.ts`.
+ */
+export const SCRUM_MIGRATION_V6_SQL = `
+ALTER TABLE scrum_tasks ADD COLUMN bounds_json TEXT;
+`;
+
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that previously hit `clearRegistry()` — both
- * paths land a single scrum/{v1,v2,v3,v4,v5} entry set. Matches
+ * paths land a single scrum/{v1,v2,v3,v4,v5,v6} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -274,6 +309,14 @@ export function ensureScrumSchemaRegistered(): void {
           'add scrum_tasks.acceptance_json (nullable JSON) for first-class acceptance criteria',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V5_SQL);
+        },
+      },
+      {
+        version: 6,
+        description:
+          'add scrum_tasks.bounds_json (nullable JSON) for milestone-authored declared bounds',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V6_SQL);
         },
       },
     ],

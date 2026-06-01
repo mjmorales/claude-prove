@@ -32,6 +32,7 @@ import type {
   ScrumRunLink,
   ScrumTag,
   ScrumTask,
+  TaskBounds,
   TaskLayer,
   TaskStatus,
 } from './types';
@@ -73,6 +74,12 @@ export interface CreateTaskInput {
    * criteria (see `inheritAcceptance`).
    */
   acceptance?: Acceptance | null;
+  /**
+   * Declared bounds authored at create time (v6). Validated for the
+   * closed-top-level-key shape before insert. When omitted, the task's
+   * `bounds_json` stays NULL (absent = unbounded).
+   */
+  bounds?: TaskBounds | null;
   createdByAgent?: string | null;
   /** ISO-8601 timestamp; defaults to now(). */
   createdAt?: string;
@@ -165,20 +172,24 @@ const ALLOWED_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
 
 /**
  * Canonical `scrum_tasks` column list, in declaration order. Every SELECT
- * routes through this so the v3 `parent_id`/`layer` and v5 `acceptance_json`
- * columns stay in lockstep with the `ScrumTaskRow` shape. Raw rows carry
- * `acceptance_json: string | null`; `decodeTask` turns it into the decoded
- * `ScrumTask.acceptance` field at the public boundary.
+ * routes through this so the v3 `parent_id`/`layer`, v5 `acceptance_json`,
+ * and v6 `bounds_json` columns stay in lockstep with the `ScrumTaskRow`
+ * shape. Raw rows carry `acceptance_json`/`bounds_json: string | null`;
+ * `decodeTask` turns them into the decoded `ScrumTask.acceptance`/`.bounds`
+ * fields at the public boundary.
  */
 const TASK_COLUMNS =
-  'id, title, description, status, milestone_id, parent_id, layer, acceptance_json, created_by_agent, created_at, last_event_at, deleted_at';
+  'id, title, description, status, milestone_id, parent_id, layer, acceptance_json, bounds_json, created_by_agent, created_at, last_event_at, deleted_at';
 
 /**
  * Raw `scrum_tasks` SELECT shape — identical to `ScrumTask` except the v5
- * acceptance column arrives as its on-disk JSON string. `decodeTask` is the
- * sole bridge from this to the public `ScrumTask`.
+ * acceptance and v6 bounds columns arrive as their on-disk JSON strings.
+ * `decodeTask` is the sole bridge from this to the public `ScrumTask`.
  */
-type ScrumTaskRow = Omit<ScrumTask, 'acceptance'> & { acceptance_json: string | null };
+type ScrumTaskRow = Omit<ScrumTask, 'acceptance' | 'bounds'> & {
+  acceptance_json: string | null;
+  bounds_json: string | null;
+};
 
 // Tags that boost priority in nextReady ranking.
 const PRIORITY_TAGS = new Set(['p0', 'p1', 'urgent', 'blocker']);
@@ -259,6 +270,11 @@ export class ScrumStore {
     }
     if (acceptance !== null) validateAcceptance(acceptance);
 
+    // Declared bounds (v6): explicit input only — never inherited. Validated
+    // for the closed-top-level-key shape before insert; null = unbounded.
+    const bounds = input.bounds ?? null;
+    if (bounds !== null) validateBounds(bounds);
+
     const row: ScrumTask = {
       id: input.id,
       title: input.title,
@@ -268,6 +284,7 @@ export class ScrumStore {
       parent_id: parentId,
       layer: input.layer ?? null,
       acceptance,
+      bounds,
       created_by_agent: input.createdByAgent ?? null,
       created_at: createdAt,
       last_event_at: createdAt,
@@ -276,7 +293,7 @@ export class ScrumStore {
 
     const tx = this.db.transaction(() => {
       this.prep(
-        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, parent_id, layer, acceptance_json, created_by_agent, created_at, last_event_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
+        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, parent_id, layer, acceptance_json, bounds_json, created_by_agent, created_at, last_event_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
       ).run(
         row.id,
         row.title,
@@ -286,6 +303,7 @@ export class ScrumStore {
         row.parent_id,
         row.layer,
         acceptance === null ? null : JSON.stringify(acceptance),
+        bounds === null ? null : JSON.stringify(bounds),
         row.created_by_agent,
         row.created_at,
         row.last_event_at,
@@ -638,6 +656,31 @@ export class ScrumStore {
   }
 
   // ==========================================================================
+  // Declared bounds (v6, declared-bounds decision §2)
+  //
+  // The optional milestone-authored authoring source for per-task bounds.
+  // `compile-plan` forwards this into the emitted plan's `tasks[].bounds`;
+  // enforcement (native permissions + worktree wall) happens downstream via
+  // prep-permissions reading the plan, NOT here.
+  // ==========================================================================
+
+  /**
+   * Replace a task's declared bounds. Validates the closed-top-level-key
+   * shape (rejects unknown keys; all sub-fields optional) before the write.
+   * Throws on an unknown task id. Pass `null` to clear (→ unbounded).
+   */
+  setBounds(taskId: string, bounds: TaskBounds | null): ScrumTask {
+    const task = this.getTask(taskId);
+    if (!task) throw new Error(`setBounds: unknown task '${taskId}'`);
+    if (bounds !== null) validateBounds(bounds);
+    this.prep('UPDATE scrum_tasks SET bounds_json = ? WHERE id = ?').run(
+      bounds === null ? null : JSON.stringify(bounds),
+      taskId,
+    );
+    return this.requireTask(taskId, 'setBounds');
+  }
+
+  // ==========================================================================
   // Milestones
   // ==========================================================================
 
@@ -742,7 +785,7 @@ export class ScrumStore {
   listTasksForTag(tag: string): ScrumTask[] {
     return (
       this.prep(
-        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.parent_id, t.layer, t.acceptance_json, t.created_by_agent, t.created_at, t.last_event_at, t.deleted_at
+        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.parent_id, t.layer, t.acceptance_json, t.bounds_json, t.created_by_agent, t.created_at, t.last_event_at, t.deleted_at
        FROM scrum_tasks t
        INNER JOIN scrum_tags g ON g.task_id = t.id
        WHERE g.tag = ? AND t.deleted_at IS NULL
@@ -1307,16 +1350,42 @@ function isoNow(): string {
 }
 
 /**
- * Decode a raw `scrum_tasks` SELECT row into the public `ScrumTask`. The only
- * transform is `acceptance_json` (TEXT|NULL) → `acceptance` (Acceptance|null);
- * every other column passes through unchanged. NULL JSON → `null`.
+ * Decode a raw `scrum_tasks` SELECT row into the public `ScrumTask`. The two
+ * transforms are `acceptance_json` (TEXT|NULL) → `acceptance` and `bounds_json`
+ * (TEXT|NULL) → `bounds`; every other column passes through unchanged. NULL
+ * JSON → `null`.
  */
 function decodeTask(row: ScrumTaskRow): ScrumTask {
-  const { acceptance_json, ...rest } = row;
+  const { acceptance_json, bounds_json, ...rest } = row;
   return {
     ...rest,
     acceptance: acceptance_json === null ? null : (JSON.parse(acceptance_json) as Acceptance),
+    bounds: bounds_json === null ? null : (JSON.parse(bounds_json) as TaskBounds),
   };
+}
+
+/** Closed top-level key set for `TaskBounds` (declared-bounds decision §2). */
+const BOUNDS_TOP_LEVEL_KEYS = new Set(['read', 'write', 'tools', 'budgets']);
+
+/**
+ * Validate a `TaskBounds` shape on write (createTask / setBounds). Rejects
+ * unknown top-level keys so a typo (`reads`, `tool`) fails loud rather than
+ * landing silently-ignored bounds; every recognized sub-field is optional, so
+ * `{}` and any subset of `{ read, write, tools, budgets }` pass. The contents
+ * of the sub-fields are NOT deeply type-checked — the column is
+ * forward-compatible JSON, and the plan-side run-state schema re-validates the
+ * forwarded shape on load. Mirrors `validateAcceptance`'s write-time guard.
+ */
+function validateBounds(bounds: TaskBounds): void {
+  if (typeof bounds !== 'object' || bounds === null || Array.isArray(bounds)) {
+    throw new Error('bounds must be a JSON object');
+  }
+  const unknown = Object.keys(bounds).filter((k) => !BOUNDS_TOP_LEVEL_KEYS.has(k));
+  if (unknown.length > 0) {
+    throw new Error(
+      `bounds: unknown top-level key(s) '${unknown.join(', ')}'; expected a subset of: read, write, tools, budgets`,
+    );
+  }
 }
 
 /**

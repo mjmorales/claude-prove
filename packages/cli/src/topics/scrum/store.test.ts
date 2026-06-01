@@ -9,7 +9,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { type ScrumStore, openScrumStore } from './store';
-import type { Acceptance, AcceptanceCriterion } from './types';
+import type { Acceptance, AcceptanceCriterion, TaskBounds } from './types';
 
 let store: ScrumStore;
 
@@ -1024,5 +1024,66 @@ describe('ScrumStore — acceptance criteria', () => {
       policy: { eval_order: 'fifo', rerun_policy: 'all' },
     };
     expect(() => store.createTask({ id: 't1', title: 'T1', acceptance: seq })).not.toThrow();
+  });
+});
+
+// ===========================================================================
+// Declared bounds (v6, declared-bounds decision §2)
+// ===========================================================================
+
+describe('ScrumStore — declared bounds', () => {
+  const fullBounds: TaskBounds = {
+    read: ['src/auth/**'],
+    write: ['src/auth/**'],
+    tools: { allow: ['Bash(go test *)'], deny: ['Bash(git push *)'] },
+    budgets: { tokens: 200000, tool_calls: 100, wall_clock_s: 1800 },
+  };
+
+  test('createTask without bounds stores NULL bounds', () => {
+    const task = seedTask('t1');
+    expect(task.bounds).toBeNull();
+    expect(store.getTask('t1')?.bounds).toBeNull();
+  });
+
+  test('createTask with bounds round-trips through bounds_json', () => {
+    seedTask('t1', { bounds: fullBounds });
+    expect(store.getTask('t1')?.bounds).toEqual(fullBounds);
+  });
+
+  test('createTask accepts a partial bounds object (all sub-fields optional)', () => {
+    const partial: TaskBounds = { tools: { deny: ['Bash(rm *)'] } };
+    seedTask('t1', { bounds: partial });
+    expect(store.getTask('t1')?.bounds).toEqual(partial);
+  });
+
+  test('setBounds replaces the whole bounds object; null clears it', () => {
+    seedTask('t1', { bounds: { read: ['a/**'] } });
+    const updated = store.setBounds('t1', fullBounds);
+    expect(updated.bounds).toEqual(fullBounds);
+    const cleared = store.setBounds('t1', null);
+    expect(cleared.bounds).toBeNull();
+  });
+
+  test('setBounds rejects an unknown task id', () => {
+    expect(() => store.setBounds('nope', fullBounds)).toThrow(/unknown task 'nope'/);
+  });
+
+  test('createTask rejects bounds with an unknown top-level key', () => {
+    const bad = { reads: ['oops'] } as unknown as TaskBounds;
+    expect(() => store.createTask({ id: 't1', title: 'T1', bounds: bad })).toThrow(
+      /unknown top-level key/,
+    );
+  });
+
+  test('setBounds rejects bounds with an unknown top-level key', () => {
+    seedTask('t1');
+    const bad = { budget: { tokens: 1 } } as unknown as TaskBounds;
+    expect(() => store.setBounds('t1', bad)).toThrow(/unknown top-level key/);
+  });
+
+  test('bounds are never inherited from a parent (unlike acceptance)', () => {
+    seedTask('parent', { bounds: fullBounds });
+    const child = store.createTask({ id: 'child', title: 'Child', parentId: 'parent' });
+    expect(child.bounds).toBeNull();
   });
 });

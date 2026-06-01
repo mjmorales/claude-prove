@@ -39,7 +39,7 @@ Lands onleash's per-task `bounds` (audit §6.2) as **declarations enforced by na
 
 All sub-fields are optional; **absent `bounds` = current behavior** (unbounded). `budgets.*` are **advisory only** — claude-prove has no enforcement daemon; nothing blocks on them.
 
-**Behavior — `prep-permissions` now consumes `tasks[].bounds`** (`skills/prep-permissions/SKILL.md`): `tools.allow`/`tools.deny` merge into native `permissions.allow`/`permissions.deny`; `write[]` globs emit `Edit`/`Write` deny rules outside them (the git worktree remains the primary write wall); `read[]` and `budgets` render into the task prompt as advisory guidance (no native surface). It emits ONE workspace `settings.local.json` — the **union** of all tasks' rules (known limitation: task A can use task B's tools; per-worktree isolation is deferred). `prep-permissions` is still **operator-invoked** — it is NOT auto-wired into orchestrator/workflow dispatch.
+**Behavior — `prep-permissions` now consumes `tasks[].bounds`** (`skills/prep-permissions/SKILL.md`): `tools.allow`/`tools.deny` merge into native `permissions.allow`/`permissions.deny`; `write[]` is advisory — the git worktree is the write wall (native permission deny rules match a set, not its complement, so no "deny outside X" rule exists); `read[]` and `budgets` render into the task prompt as advisory guidance (no native surface). It emits ONE workspace `settings.local.json` — the **union** of all tasks' rules (known limitation: task A can use task B's tools; per-worktree isolation is deferred). `prep-permissions` is still **operator-invoked** — it is NOT auto-wired into orchestrator/workflow dispatch.
 
 **Migration — run-state schema v1 → v2**: `CURRENT_SCHEMA_VERSION` bumped `'1'` → `'2'`. The hop (`packages/cli/src/topics/run-state/schema-migrate.ts`, `_migrate_v1_to_v2`) is a pure version bump — `bounds` is added as optional, and absent bounds preserves v1 behavior, so no data is rewritten. Existing `plan.json` files keep working unchanged; newly created plans carry `schema_version: "2"`.
 
@@ -65,6 +65,37 @@ Only `text` is required; everything else is optional, so a bare `{ "text": "..."
 **Migration — run-state schema v2 → v3**: `CURRENT_SCHEMA_VERSION` bumped `'2'` → `'3'`. The hop (`packages/cli/src/topics/run-state/schema-migrate.ts`, `_migrate_v2_to_v3`) rewrites each plan-task/step `acceptance_criteria` **string** into `{ "text": <string> }` — no data loss, no injected fields; already-structured items pass through (idempotent on v3 data). For `prd`/`state`/`report` artifacts (no plan-task acceptance) it is a pure version bump. A v2 plan with string criteria migrates cleanly to v3, and the run-state validator does not enforce `schema_version` equality, so unmigrated v2 plans keep validating. Run `claude-prove run-state migrate` to advance on-disk artifacts.
 
 **Auto-adoption**: the schema, migrator, and `compile-plan` change ship in the CLI; the edited orchestrator prompt renderers are picked up on plugin load. No config edit required. Run `/prove:update` to sync.
+
+### Scrum `bounds_json` authoring column: `task create --bounds` / `task bounds` + compile-plan forwarding
+
+The deferred scrum half of declared bounds (decision `.prove/decisions/2026-05-31-declared-bounds-home.md` §2). A scrum task can now carry **declared bounds** so a milestone-authored bound survives `compile-plan` into the plan's `tasks[].bounds` instead of being re-authored every run. Mirrors how acceptance criteria flow.
+
+**New scrum column — `scrum_tasks.bounds_json`** (nullable JSON, matches the `acceptance_json` precedent): decoded to `ScrumTask.bounds` at the row boundary. The shape mirrors the run-state v3 plan-side `tasks[].bounds`:
+
+```jsonc
+"bounds": {
+  "read":  ["src/auth/**"],
+  "write": ["src/auth/**"],
+  "tools": { "allow": ["Bash(go test *)"], "deny": ["Bash(git push *)"] },
+  "budgets": { "tokens": 200000, "tool_calls": 100, "wall_clock_s": 1800 }
+}
+```
+
+All top-level keys (`read | write | tools | budgets`) are optional; **NULL column = no authored bounds (absent = unbounded)**, the pre-migration behavior. Write-time validation rejects unknown top-level keys (a typo like `reads` fails loud); sub-field contents are not deeply type-checked (forward-compatible JSON; the run-state plan schema re-validates the forwarded shape). Enforcement is unchanged from the §2 decision: **`tools` is the only native surface** (allow/deny merge into `settings.local.json` permissions via `prep-permissions`); `read`/`write`/`budgets` are **advisory** — the git worktree is the write wall, and there is **no native deny-outside (`Edit(!glob)`) rule**. Bounds are never inherited from a parent task.
+
+**New CLI surface** (`claude-prove scrum task`):
+
+- `task create --title X --bounds '<json>'` — author bounds at create time.
+- `task bounds set <id> --bounds '<json>'` — set/replace bounds; pass `--bounds ''` to clear (→ unbounded).
+- `task bounds show <id>` — print the task's bounds object (or `null`).
+
+`--bounds` takes a single JSON blob (bounds is a nested dict — no per-field flag explosion). Malformed JSON or an unknown top-level key exits 1.
+
+**Behavior — `scrum compile-plan` now forwards `bounds`**: each scrum task's `bounds` is emitted verbatim into the corresponding `plan.tasks[].bounds` (the run-state v3 plan supports it). A task with no bounds emits **no `bounds` key** (absent = unbounded) — null-bounds tasks never crash compilation.
+
+**Migration — scrum store schema v5 → v6**: a new scrum domain migration appends `ALTER TABLE scrum_tasks ADD COLUMN bounds_json TEXT;`. Append-only — v1–v5 migrations are untouched; the column defaults NULL on every existing row, so no data is rewritten. The unified store migrates on next open (any `claude-prove scrum …` command, or `claude-prove store migrate`). No manual step.
+
+**Auto-adoption**: the column, CLI flags, and `compile-plan` forwarding ship in the CLI; the store self-migrates on next open. No config edit required. Run `/prove:update` to sync.
 
 ---
 
