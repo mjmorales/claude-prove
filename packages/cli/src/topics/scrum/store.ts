@@ -570,10 +570,11 @@ export class ScrumStore {
     if (!task) throw new Error(`softDeleteTask: unknown task '${id}'`);
 
     const ts = isoNow();
+    const { workerId, runId } = resolveRunContext();
     const tx = this.db.transaction(() => {
       this.prep(
-        'UPDATE scrum_tasks SET deleted_at = ?, last_modified_by = NULL, last_modified_at = ? WHERE id = ?',
-      ).run(ts, ts, id);
+        'UPDATE scrum_tasks SET deleted_at = ?, last_modified_by = NULL, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+      ).run(ts, ts, workerId, runId, id);
       this.prep(
         'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
       ).run(id, ts, 'task_deleted', null, JSON.stringify({ status: task.status }));
