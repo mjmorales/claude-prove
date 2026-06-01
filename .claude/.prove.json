@@ -1,5 +1,5 @@
 {
-  "schema_version": "7",
+  "schema_version": "8",
   "scopes": {
     "agents": "agents/",
     "cache": "cache/",
@@ -74,5 +74,16 @@
       "config": {}
     }
   },
-  "dev_mode": true
+  "dev_mode": true,
+  "brief": {
+    "single_pass_token_threshold": 8000,
+    "max_synthesis_retries": 2,
+    "prose_judge_on": true
+  },
+  "memory": {
+    "stale_threshold_days": 90
+  },
+  "decomposition": {
+    "auto_accept_through": "none"
+  }
 }

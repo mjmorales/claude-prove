@@ -16,7 +16,7 @@
 
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
-import { reconcileMilestoneClosed } from '../reconcile';
+import { gatherMilestoneStories, reconcileMilestoneClosed } from '../reconcile';
 import { type ScrumStore, openScrumStore } from '../store';
 import type { MilestoneStatus } from '../types';
 import { generateId } from './scrum-utils';
@@ -148,21 +148,26 @@ function doClose(store: ScrumStore, id: string | undefined, workspaceRoot: strin
     process.stderr.write('scrum milestone close: <id> positional argument required\n');
     return 1;
   }
-  // Capture prior status before the close so the curation trigger fires only
-  // on a real planned/active → closed transition. Re-closing an already-closed
-  // milestone must not re-emit curation_proposed events — the forced curation
-  // bubble-up fires once per close transition.
+  // Capture prior status before the close so the close-transition work fires
+  // only on a real planned/active → closed transition. Re-closing an
+  // already-closed milestone must not re-emit curation_proposed events — the
+  // forced bubble-up fires once per close transition.
   const prior = store.getMilestone(id);
   const milestone = store.closeMilestone(id);
 
-  let curationNote = '';
+  let closeNote = '';
   if (prior !== null && prior.status !== 'closed') {
     const curation = reconcileMilestoneClosed(id, store, workspaceRoot);
-    curationNote = ` (curation: ${curation.emitted.length} task(s) proposed)`;
+    // The same close transition surfaces the stakeholder milestone brief. The
+    // brief is rendered on demand via `acb milestone-brief render --milestone
+    // <id>`; here we just report how many constituent stories it will roll up
+    // so the operator knows the rollup is available.
+    const stories = gatherMilestoneStories(id, store, workspaceRoot);
+    closeNote = ` (curation: ${curation.emitted.length} task(s) proposed; milestone brief: ${stories.length} stor(ies) — render via 'acb milestone-brief render --milestone ${id}')`;
   }
 
   process.stdout.write(`${JSON.stringify(milestone)}\n`);
-  process.stderr.write(`scrum milestone close: ${id}${curationNote}\n`);
+  process.stderr.write(`scrum milestone close: ${id}${closeNote}\n`);
   return 0;
 }
 
