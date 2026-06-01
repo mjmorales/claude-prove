@@ -39,7 +39,7 @@
       "enabled": true
     },
     "acb": {
-      "enabled": true,
+      "enabled": false,
       "scope": "user",
       "config": {
         "base_branch": "main",
