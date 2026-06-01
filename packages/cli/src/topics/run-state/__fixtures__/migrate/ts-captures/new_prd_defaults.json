@@ -2,7 +2,7 @@
   "name": "new_prd_defaults",
   "artifact": "prd",
   "data": {
-    "schema_version": "2",
+    "schema_version": "3",
     "kind": "prd",
     "context": "",
     "goals": [],

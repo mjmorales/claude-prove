@@ -104,19 +104,35 @@ export interface StateData {
   dispatch: DispatchLedger;
 }
 
+/**
+ * Structured acceptance criterion on a plan task/step (run-state v3). `text`
+ * is the only required field; `compile-plan` forwards the scrum shape, while a
+ * migrated v2 plan carries a bare `{ text }`. Mirrors `ACCEPTANCE_CRITERION_SPEC`
+ * in schemas.ts.
+ */
+export interface PlanCriterionInput {
+  id?: string;
+  text: string;
+  verifies_by?: string;
+  check?: string;
+  status?: string;
+  idempotent?: boolean;
+  [extra: string]: unknown;
+}
+
 export interface PlanTaskInput {
   id: string;
   title: string;
   wave?: number;
   deps?: string[];
   description?: string;
-  acceptance_criteria?: string[];
+  acceptance_criteria?: PlanCriterionInput[];
   worktree?: { path: string; branch: string };
   steps: Array<{
     id: string;
     title: string;
     description?: string;
-    acceptance_criteria?: string[];
+    acceptance_criteria?: PlanCriterionInput[];
   }>;
   [extra: string]: unknown;
 }

@@ -28,11 +28,25 @@ interface PlanStep {
   title?: string;
 }
 
+/**
+ * Acceptance criterion on a plan task. The v3 shape is structured (`text` +
+ * optional `verifies_by`/`check`, forwarded from scrum via `compile-plan`); a
+ * legacy v2 string (an unmigrated plan.json) is tolerated and renders as its
+ * own text. PRD acceptance_criteria stay bare strings.
+ */
+type PlanCriterion =
+  | string
+  | {
+      text?: string;
+      verifies_by?: string;
+      check?: string;
+    };
+
 interface PlanTask {
   id: string;
   title?: string;
   description?: string;
-  acceptance_criteria?: string[];
+  acceptance_criteria?: PlanCriterion[];
   steps?: PlanStep[];
 }
 
@@ -159,7 +173,7 @@ function renderTaskPrompt(input: RenderInput): string {
   if (ac.length > 0) {
     sections.push('## Task Acceptance Criteria');
     sections.push('');
-    sections.push(formatBulletList(ac));
+    sections.push(formatCriteriaList(ac));
     sections.push('');
   }
 
@@ -259,6 +273,23 @@ function renderTaskPrompt(input: RenderInput): string {
 
 function formatBulletList(items: string[]): string {
   return items.map((c) => `- ${c}`).join('\n');
+}
+
+/**
+ * Render structured plan-task criteria as a bullet list. Each line is the
+ * criterion `text`, annotated with `(verifies_by: check)` when a verification
+ * kind is present so the implementer sees how the criterion will be checked.
+ */
+function formatCriteriaList(criteria: PlanCriterion[]): string {
+  return criteria
+    .map((c) => {
+      if (typeof c === 'string') return `- ${c}`;
+      const text = c.text ?? '';
+      if (!c.verifies_by) return `- ${text}`;
+      const check = c.check ? `: ${c.check}` : '';
+      return `- ${text} (${c.verifies_by}${check})`;
+    })
+    .join('\n');
 }
 
 function readJson<T>(path: string): T | null {

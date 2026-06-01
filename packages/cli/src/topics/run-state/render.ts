@@ -172,6 +172,18 @@ export function renderPrd(prd: PrdData, options: RenderPrdOptions = {}): string 
 // Plan view
 // ---------------------------------------------------------------------------
 
+/**
+ * Structured acceptance criterion on a plan task (run-state v3). Only `text`
+ * is guaranteed; `verifies_by`/`check` are present when forwarded from scrum.
+ */
+type PlanCriterionView =
+  | string
+  | {
+      text?: string;
+      verifies_by?: string;
+      check?: string;
+    };
+
 interface PlanStepView {
   id: string;
   title: string;
@@ -184,13 +196,28 @@ interface PlanTaskView {
   deps?: string[];
   worktree?: { path?: string; branch?: string };
   description?: string;
-  acceptance_criteria?: string[];
+  acceptance_criteria?: PlanCriterionView[];
   steps?: PlanStepView[];
 }
 
 interface PlanView {
   mode?: string;
   tasks?: PlanTaskView[];
+}
+
+/**
+ * Render one acceptance criterion to a single markdown line body. The v3 shape
+ * is a structured dict (`text` + optional `verifies_by`/`check`); a `verifies_by`
+ * kind is appended as a `(verifies_by: check)` annotation so the verification
+ * mechanism survives into the rendered plan. A legacy v2 string (a plan.json
+ * not yet migrated) renders as its own text, so unmigrated files stay readable.
+ */
+function renderCriterion(c: PlanCriterionView): string {
+  if (typeof c === 'string') return c;
+  const text = c.text ?? '';
+  if (!c.verifies_by) return text;
+  const check = c.check ? `: ${c.check}` : '';
+  return `${text} (${c.verifies_by}${check})`;
 }
 
 /** Render a plan as markdown or pretty-printed JSON. */
@@ -240,7 +267,7 @@ export function renderPlan(plan: PlanData, options: RenderPlanOptions = {}): str
       if (ac.length > 0) {
         lines.push('');
         lines.push('**Acceptance Criteria**');
-        for (const c of ac) lines.push(`- ${c}`);
+        for (const c of ac) lines.push(`- ${renderCriterion(c)}`);
       }
       const steps = task.steps ?? [];
       if (steps.length > 0) {
