@@ -1,8 +1,9 @@
 ---
 name: curate
 description: >
-  Lift reasoning-log findings into durable scrum decisions at milestone close
-  (onleash Codex curation, §8.3-8.4, §8.10). Triggers on "curate", "curate the
+  Lift reasoning-log findings into durable scrum decisions at milestone close —
+  the milestone-close curation pass that promotes findings into the durable
+  decision store. Triggers on "curate", "curate the
   milestone", "promote findings", "journal to codex", "promote to decisions",
   "curate reasoning log", "milestone curation", "promote hacks/risks/decisions".
   You are the driver Claude session: the scrum reconciler emits a
@@ -14,23 +15,25 @@ description: >
 
 # Curate Skill
 
-You are the **driver**. prove never spawns Claude — you do. The split is the
-engine boundary (`references/onleash-design-principles.md` §1): the CLI already
-did the mechanical half at milestone close — the reconciler walked the
-milestone's tasks and emitted one `curation_proposed` event per task carrying
-candidate findings. **This skill is the judgment half**: which findings become
-durable memory, and as what kind. That requires reading prose and weighing
-significance, so it is the model's, gated by a human.
+You are the **driver**. prove never spawns Claude — you do. The split follows the
+engine boundary: the engine owns state, scheduling, and mechanical floors, while
+the model owns substantive judgment. The CLI already did the mechanical half at
+milestone close — the reconciler walked the milestone's tasks and emitted one
+`curation_proposed` event per task carrying candidate findings. **This skill is
+the judgment half**: which findings become durable memory, and as what kind. That
+requires reading prose and weighing significance, so it is the model's, gated by
+a human.
 
 Three invariants govern every phase below:
 
 - **Source of truth is `prove.db`.** A promotion is a row in `scrum_decisions`,
   authored from a `.prove/decisions/<id>.md` file and `recorded` via the CLI,
   linked back to its task. Nothing here is a throwaway in-context structure.
-- **Append-only (design-principles §4).** Curation only *promotes* findings into
-  the Codex — it never edits or deletes the reasoning log. A skipped finding
-  stays in the log for a later pass; a replaced decision is **superseded**, not
-  overwritten.
+- **Append-only with supersession.** Curation only *promotes* findings into
+  the durable decision store — it never edits or deletes the reasoning log. A
+  skipped finding stays in the log for a later pass; a replaced decision is
+  **superseded** (the new decision carries a pointer back to the old one with a
+  reason), not overwritten.
 - **Every promotion is human-gated.** `AskUserQuestion` before any
   `decision record` — no silent auto-promotion.
 
@@ -76,14 +79,15 @@ or list the run's log: `claude-prove acb log list --run-dir <run_path>`.
 Classify by **content**, not by source type — the source `type` is a prior, not
 a rule. A finding may also be **noise** (skip it; it stays in the log).
 
-| Codex kind | What belongs here | Typical source |
+| Decision kind | What belongs here | Typical source |
 |------------|-------------------|----------------|
 | `adr` | An engineering decision of record: what was chosen, the alternatives, the rationale. | `decision` (and any `risk`/`hack` that drove a real choice) |
 | `glossary` | A durable definition or a resolved assumption that became a project fact. | `assumption` (once resolved), naming decisions |
 | `pattern` | A recurring solution shape, an anti-pattern, or tracked tech-debt with a cleanup condition. | `hack`, `risk` |
 
 Promote a finding only when it carries signal **beyond this run** — something a
-future session must not rediscover. Run-local narration is not Codex material.
+future session must not rediscover. Run-local narration is not durable-store
+material.
 
 ---
 
@@ -91,7 +95,7 @@ future session must not rediscover. Run-local narration is not Codex material.
 
 Gate one `AskUserQuestion` per task — not one per candidate — so a multi-finding
 task is decided in a single prompt (`references/interaction-patterns.md`,
-Approval Gate), header `"Curate"`. State each candidate's proposed `kind` and
+Approval Gate pattern), header `"Curate"`. State each candidate's proposed `kind` and
 one-line title so the operator decides with full context:
 
 - **Promote all** — record every proposed promotion as classified.
@@ -101,24 +105,25 @@ one-line title so the operator decides with full context:
 
 ## Phase 4: Record each promotion
 
-First dedup against the standing Codex so curation never duplicates an existing
-decision:
+First dedup against the standing decision store so curation never duplicates an
+existing decision:
 
 ```bash
 claude-prove scrum decision list --kind <kind>     # add --topic for a tighter match
 ```
 
 If an equivalent decision already exists and this finding refines or replaces
-it, **supersede** instead of adding (append-only §4) — record the new decision
-first, then point the old one at it:
+it, **supersede** instead of adding (append-only: never overwrite) — record the
+new decision first, then point the old one at it:
 
 ```bash
 claude-prove scrum decision supersede <old-id> --by <new-id> --reason "<why it changed>"
 ```
 
 For a fresh promotion, author the decision file with the native **Write** tool
-(prose lives in a file, never an inline flag — design-principles §2), then record
-and link it so the brief and context bundle see it:
+(prose lives in a file, never an inline flag — model-consumed text must be
+reviewable as text), then record and link it so the brief and context bundle see
+it:
 
 ```bash
 # 1. Write .prove/decisions/<YYYY-MM-DD>-<slug>.md  (native Write tool):
@@ -128,7 +133,7 @@ and link it so the brief and context bundle see it:
 #      <body: the finding, its rationale, and provenance —
 #       source entry_id, run_path, milestone>
 
-# 2. Record under its Codex kind (only adr|glossary|pattern, case-insensitive;
+# 2. Record under its decision kind (only adr|glossary|pattern, case-insensitive;
 #    any other value is rejected):
 claude-prove scrum decision record .prove/decisions/<id>.md --kind <adr|glossary|pattern>
 
@@ -141,13 +146,13 @@ The decision file is the durable artifact; `prove.db` is the re-derivable index
 
 ---
 
-## Phase 5: Compact the journal (onleash §8.7)
+## Phase 5: Compact the journal
 
 Close with a short summary of what was lifted and what stayed in the log — the
-milestone's Codex delta. "Compaction" here means *summarizing*, not pruning: per
-the append-only invariant, leave every reasoning-log entry intact. Record the
-summary as a `pattern` decision (or a brief note) so the next session sees the
-milestone's curated outcome without re-reading every run log.
+milestone's decision-store delta. "Compaction" here means *summarizing*, not
+pruning: per the append-only invariant, leave every reasoning-log entry intact.
+Record the summary as a `pattern` decision (or a brief note) so the next session
+sees the milestone's curated outcome without re-reading every run log.
 
 > The full stakeholder rollup — deduped hacks/risks across stories, outcomes
 > shipped, what-did-not-ship — is the **milestone-level Brief**, a separate task
@@ -171,7 +176,6 @@ milestone's curated outcome without re-reading every run log.
 
 | File | Purpose |
 |------|---------|
-| `references/onleash-design-principles.md` | Engine boundary (§1), native primitives (§2), append-only/supersession (§4) |
+| `references/design-principles.md` | Design principles: engine boundary, native primitives, append-only/supersession |
 | `references/interaction-patterns.md` | The `AskUserQuestion` promotion gate |
 | `skills/decompose/SKILL.md` | The reasoning-log entry shapes curation reads (the writer side) |
-| `docs/onleash-port-audit.md` (§8) | The Codex curation methodology this skill ports |
