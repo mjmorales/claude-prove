@@ -229,6 +229,33 @@ export interface TaskBounds {
 // Row types — one per scrum_* table
 // ---------------------------------------------------------------------------
 
+/**
+ * Reusable per-artifact provenance block — the standing attribution shape every
+ * scrum row carries. Assembled once at the row boundary (see `taskProvenance`
+ * in `store.ts`) from the row's stored columns plus the domain schema version,
+ * rather than re-declaring the same five fields ad hoc per consumer.
+ *
+ *   created_by       — agent that authored the artifact; never overwritten.
+ *   created_at       — ISO-8601 creation timestamp.
+ *   last_modified_by — agent of the most recent row mutation, or NULL when the
+ *                      mutation carried no agent.
+ *   last_modified_at — ISO-8601 timestamp of the most recent row write.
+ *   worker_id        — executing unit (leaf worker / driver) of the last write,
+ *                      or NULL when no worker context was in scope.
+ *   run_id           — orchestrator run slug the last write happened under, or
+ *                      NULL when no run context was in scope.
+ *   schema_version   — the domain store version the artifact was read under.
+ */
+export interface Provenance {
+  created_by: string | null;
+  created_at: string;
+  last_modified_by: string | null;
+  last_modified_at: string | null;
+  worker_id: string | null;
+  run_id: string | null;
+  schema_version: number;
+}
+
 export interface ScrumTask {
   id: string;
   title: string;
@@ -270,12 +297,30 @@ export interface ScrumTask {
    * the store method receives one (status / milestone / cancel), else NULL.
    * Seeded to (`created_by_agent`, `created_at`) at creation. Distinct from
    * `last_event_at` (bumped on any event append) and `created_by_agent` (the
-   * creator, never overwritten). The executing run/worker id stays in
-   * `scrum_run_links` — this pair is the lightweight last-touch attribution.
+   * creator, never overwritten). Pairs with `worker_id`/`run_id` for the full
+   * executing attribution; together they form the reusable `Provenance` block.
    */
   last_modified_by: string | null;
   last_modified_at: string | null;
+  /**
+   * Executing-worker/run attribution of the most recent row write (v11).
+   * `worker_id` is the opaque executing unit (leaf worker / driver session);
+   * `run_id` is the orchestrator run slug the write happened under. Both NULL
+   * when no run context was in scope (a bare CLI edit) or on every legacy row.
+   * Stamped from the run env at write time. The agent + timestamp half of the
+   * attribution lives in `last_modified_by`/`_at`.
+   */
+  worker_id: string | null;
+  run_id: string | null;
   deleted_at: string | null;
+  /**
+   * Reusable per-artifact provenance block, assembled at the row boundary by
+   * `decodeTask` from the stored columns plus the domain schema version. A
+   * read-only convenience view (`created_by`, `created_at`, `last_modified_by`,
+   * `last_modified_at`, `worker_id`, `run_id`, `schema_version`) — the
+   * authoritative values stay on the snake_case columns above.
+   */
+  provenance: Provenance;
 }
 
 export interface ScrumMilestone {

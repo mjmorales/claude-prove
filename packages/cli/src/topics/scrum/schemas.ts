@@ -358,10 +358,48 @@ export const SCRUM_MIGRATION_V10_SQL = `
 ALTER TABLE scrum_milestones ADD COLUMN initiative TEXT;
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v11 — executing-worker/run attribution on scrum_tasks
+// ---------------------------------------------------------------------------
+
+/**
+ * v11: record WHICH worker/run last wrote a task — executing attribution. Two
+ * nullable TEXT columns, no new table:
+ *
+ *   worker_id — opaque id of the executing unit (leaf worker / driver session)
+ *               that last wrote the row. NULL when no worker context was in
+ *               scope (a bare CLI edit) or on every legacy row.
+ *   run_id    — the orchestrator run slug the write happened under. NULL when
+ *               no run context was in scope or on every legacy row.
+ *
+ * This pair extends the last-touch provenance (`last_modified_by`/`_at`, which
+ * carry the mutating AGENT and TIMESTAMP) with the executing UNIT and RUN, so a
+ * task row alone answers "who, when, under which worker and run". The CLI
+ * sources both from the run env the orchestrator sets at dispatch
+ * (`PROVE_WORKER_ID` / `PROVE_RUN_SLUG`), defaulting NULL when absent.
+ *
+ * `ADD COLUMN` with a NULL default is safe on a populated table (no existing
+ * row needs attribution). No CHECK — the columns stay forward-compatible TEXT,
+ * matching the v2–v10 convention.
+ */
+export const SCRUM_MIGRATION_V11_SQL = `
+ALTER TABLE scrum_tasks ADD COLUMN worker_id TEXT;
+ALTER TABLE scrum_tasks ADD COLUMN run_id TEXT;
+`;
+
+/**
+ * Current scrum-domain store version — the highest migration version this
+ * module registers. Stamped as the per-artifact `schema_version` on the
+ * reusable provenance block (see `taskProvenance` in `store.ts`), so every
+ * scrum row reports the schema it was read under. Bump in lockstep with the
+ * top migration version on every additive hop.
+ */
+export const SCRUM_SCHEMA_VERSION = 11;
+
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that have hit `clearRegistry()` — both
- * paths land a single scrum/{v1..v10} entry set. Matches
+ * paths land a single scrum/{v1..v11} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -447,6 +485,14 @@ export function ensureScrumSchemaRegistered(): void {
         description: 'add scrum_milestones.initiative (nullable) for the initiative grouping tier',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V10_SQL);
+        },
+      },
+      {
+        version: 11,
+        description:
+          'add scrum_tasks.worker_id + scrum_tasks.run_id for executing-worker/run attribution',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V11_SQL);
         },
       },
     ],
