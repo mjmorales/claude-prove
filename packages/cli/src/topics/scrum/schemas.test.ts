@@ -24,6 +24,7 @@ import {
   SCRUM_MIGRATION_V6_SQL,
   SCRUM_MIGRATION_V7_SQL,
   SCRUM_MIGRATION_V8_SQL,
+  SCRUM_MIGRATION_V9_SQL,
   ensureScrumSchemaRegistered,
 } from './schemas';
 
@@ -142,6 +143,9 @@ describe('scrum domain registration', () => {
         // v7 terminal provenance appends after v6, NULL default.
         'terminal_reason:TEXT:0',
         'terminal_detail:TEXT:0',
+        // v9 last-touch provenance appends after v7, NULL default.
+        'last_modified_by:TEXT:0',
+        'last_modified_at:TEXT:0',
       ]);
     } finally {
       raw.close();
@@ -296,6 +300,9 @@ describe('scrum domain registration', () => {
         // v7 appends terminal provenance, NULL default.
         'terminal_reason:TEXT:0',
         'terminal_detail:TEXT:0',
+        // v9 appends last-touch provenance, NULL default.
+        'last_modified_by:TEXT:0',
+        'last_modified_at:TEXT:0',
       ]);
     } finally {
       raw.close();
@@ -366,6 +373,28 @@ describe('scrum domain registration', () => {
     }
   });
 
+  test('SCRUM_MIGRATION_V9_SQL adds scrum_tasks last-touch provenance columns', () => {
+    expect(SCRUM_MIGRATION_V9_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN last_modified_by');
+    expect(SCRUM_MIGRATION_V9_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN last_modified_at');
+  });
+
+  test('v9 ADD COLUMN defaults last_modified_by/last_modified_at to NULL on existing rows', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      raw.exec(
+        "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ last_modified_by: string | null; last_modified_at: string | null }>(
+        'SELECT last_modified_by, last_modified_at FROM scrum_tasks WHERE id = ?',
+        ['t1'],
+      );
+      expect(row).toEqual([{ last_modified_by: null, last_modified_at: null }]);
+    } finally {
+      raw.close();
+    }
+  });
+
   test('v5 ADD COLUMN defaults acceptance_json to NULL on existing rows', () => {
     const raw = openStore({ path: ':memory:' });
     try {
@@ -383,12 +412,12 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('full migration chain from v0 applies v1..v8 in order', () => {
+  test('full migration chain from v0 applies v1..v9 in order', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       const result = runMigrations(raw);
       expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8,
+        1, 2, 3, 4, 5, 6, 7, 8, 9,
       ]);
     } finally {
       raw.close();
@@ -400,7 +429,7 @@ describe('scrum domain registration', () => {
     try {
       const first = runMigrations(raw);
       expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8,
+        1, 2, 3, 4, 5, 6, 7, 8, 9,
       ]);
 
       const second = runMigrations(raw);
@@ -419,6 +448,7 @@ describe('scrum domain registration', () => {
         { version: 6 },
         { version: 7 },
         { version: 8 },
+        { version: 9 },
       ]);
     } finally {
       raw.close();
@@ -449,10 +479,10 @@ describe('scrum domain registration', () => {
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(log).toHaveLength(8);
-      const [v1, v2, v3, v4, v5, v6, v7, v8] = log;
-      if (!v1 || !v2 || !v3 || !v4 || !v5 || !v6 || !v7 || !v8)
-        throw new Error('expected eight log entries');
+      expect(log).toHaveLength(9);
+      const [v1, v2, v3, v4, v5, v6, v7, v8, v9] = log;
+      if (!v1 || !v2 || !v3 || !v4 || !v5 || !v6 || !v7 || !v8 || !v9)
+        throw new Error('expected nine log entries');
       expect(v1.domain).toBe('scrum');
       expect(v1.version).toBe(1);
       expect(v1.description).toContain('scrum_tasks');
@@ -477,6 +507,9 @@ describe('scrum domain registration', () => {
       expect(v8.domain).toBe('scrum');
       expect(v8.version).toBe(8);
       expect(v8.description).toContain('kind');
+      expect(v9.domain).toBe('scrum');
+      expect(v9.version).toBe(9);
+      expect(v9.description).toContain('last_modified_by');
     } finally {
       raw.close();
     }

@@ -188,7 +188,7 @@ const ALLOWED_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
  * fields at the public boundary.
  */
 const TASK_COLUMNS =
-  'id, title, description, status, milestone_id, parent_id, layer, acceptance_json, bounds_json, terminal_reason, terminal_detail, created_by_agent, created_at, last_event_at, deleted_at';
+  'id, title, description, status, milestone_id, parent_id, layer, acceptance_json, bounds_json, terminal_reason, terminal_detail, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, deleted_at';
 
 /**
  * Raw `scrum_tasks` SELECT shape — identical to `ScrumTask` except the v5
@@ -310,12 +310,16 @@ export class ScrumStore {
       created_by_agent: input.createdByAgent ?? null,
       created_at: createdAt,
       last_event_at: createdAt,
+      // Seed last-touch provenance (v9) to the creation event so a fresh task
+      // already reads coherently before its first mutation.
+      last_modified_by: input.createdByAgent ?? null,
+      last_modified_at: createdAt,
       deleted_at: null,
     };
 
     const tx = this.db.transaction(() => {
       this.prep(
-        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, parent_id, layer, acceptance_json, bounds_json, created_by_agent, created_at, last_event_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
+        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, parent_id, layer, acceptance_json, bounds_json, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
       ).run(
         row.id,
         row.title,
@@ -329,6 +333,8 @@ export class ScrumStore {
         row.created_by_agent,
         row.created_at,
         row.last_event_at,
+        row.last_modified_by,
+        row.last_modified_at,
       );
 
       if (input.tags && input.tags.length > 0) {
@@ -439,11 +445,9 @@ export class ScrumStore {
 
     const ts = isoNow();
     const tx = this.db.transaction(() => {
-      this.prep('UPDATE scrum_tasks SET status = ?, last_event_at = ? WHERE id = ?').run(
-        next,
-        ts,
-        id,
-      );
+      this.prep(
+        'UPDATE scrum_tasks SET status = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ? WHERE id = ?',
+      ).run(next, ts, agent ?? null, ts, id);
       this.prep(
         'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
       ).run(
@@ -492,11 +496,9 @@ export class ScrumStore {
 
     const ts = isoNow();
     const tx = this.db.transaction(() => {
-      this.prep('UPDATE scrum_tasks SET milestone_id = ?, last_event_at = ? WHERE id = ?').run(
-        nextMilestoneId,
-        ts,
-        id,
-      );
+      this.prep(
+        'UPDATE scrum_tasks SET milestone_id = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ? WHERE id = ?',
+      ).run(nextMilestoneId, ts, agent ?? null, ts, id);
       this.prep(
         'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
       ).run(
@@ -528,7 +530,9 @@ export class ScrumStore {
 
     const ts = isoNow();
     const tx = this.db.transaction(() => {
-      this.prep('UPDATE scrum_tasks SET deleted_at = ? WHERE id = ?').run(ts, id);
+      this.prep(
+        'UPDATE scrum_tasks SET deleted_at = ?, last_modified_by = NULL, last_modified_at = ? WHERE id = ?',
+      ).run(ts, ts, id);
       this.prep(
         'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
       ).run(id, ts, 'task_deleted', null, JSON.stringify({ status: task.status }));
@@ -622,8 +626,8 @@ export class ScrumStore {
 
     const ts = isoNow();
     this.prep(
-      'UPDATE scrum_tasks SET status = ?, terminal_reason = ?, terminal_detail = ?, last_event_at = ? WHERE id = ?',
-    ).run('cancelled', reason, detail, ts, id);
+      'UPDATE scrum_tasks SET status = ?, terminal_reason = ?, terminal_detail = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ? WHERE id = ?',
+    ).run('cancelled', reason, detail, ts, agent, ts, id);
     this.prep(
       'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
     ).run(
@@ -885,12 +889,16 @@ export class ScrumStore {
       }));
   }
 
-  /** Persist an acceptance object (or NULL) to `scrum_tasks.acceptance_json`. */
+  /**
+   * Persist an acceptance object (or NULL) to `scrum_tasks.acceptance_json`.
+   * Bumps last-touch provenance (v9): `last_modified_at = now()`,
+   * `last_modified_by = NULL` — these editors carry no agent, so the pair
+   * honestly records an unattributed most-recent write.
+   */
   private writeAcceptance(taskId: string, acceptance: Acceptance | null): void {
-    this.prep('UPDATE scrum_tasks SET acceptance_json = ? WHERE id = ?').run(
-      acceptance === null ? null : JSON.stringify(acceptance),
-      taskId,
-    );
+    this.prep(
+      'UPDATE scrum_tasks SET acceptance_json = ?, last_modified_by = NULL, last_modified_at = ? WHERE id = ?',
+    ).run(acceptance === null ? null : JSON.stringify(acceptance), isoNow(), taskId);
   }
 
   /** Re-fetch a task that must exist after a same-method write. */
@@ -918,10 +926,10 @@ export class ScrumStore {
     const task = this.getTask(taskId);
     if (!task) throw new Error(`setBounds: unknown task '${taskId}'`);
     if (bounds !== null) validateBounds(bounds);
-    this.prep('UPDATE scrum_tasks SET bounds_json = ? WHERE id = ?').run(
-      bounds === null ? null : JSON.stringify(bounds),
-      taskId,
-    );
+    // Bump last-touch provenance (v9); no agent flows here, so by = NULL.
+    this.prep(
+      'UPDATE scrum_tasks SET bounds_json = ?, last_modified_by = NULL, last_modified_at = ? WHERE id = ?',
+    ).run(bounds === null ? null : JSON.stringify(bounds), isoNow(), taskId);
     return this.requireTask(taskId, 'setBounds');
   }
 
@@ -1030,7 +1038,7 @@ export class ScrumStore {
   listTasksForTag(tag: string): ScrumTask[] {
     return (
       this.prep(
-        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.parent_id, t.layer, t.acceptance_json, t.bounds_json, t.terminal_reason, t.terminal_detail, t.created_by_agent, t.created_at, t.last_event_at, t.deleted_at
+        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.parent_id, t.layer, t.acceptance_json, t.bounds_json, t.terminal_reason, t.terminal_detail, t.created_by_agent, t.created_at, t.last_event_at, t.last_modified_by, t.last_modified_at, t.deleted_at
        FROM scrum_tasks t
        INNER JOIN scrum_tags g ON g.task_id = t.id
        WHERE g.tag = ? AND t.deleted_at IS NULL

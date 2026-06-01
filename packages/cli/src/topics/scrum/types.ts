@@ -263,6 +263,18 @@ export interface ScrumTask {
   created_by_agent: string | null;
   created_at: string;
   last_event_at: string | null;
+  /**
+   * Provenance of the most recent row mutation (v9). `last_modified_at` is
+   * stamped on every task-row write (status / milestone / acceptance / bounds /
+   * cancel / soft-delete); `last_modified_by` carries the mutating agent where
+   * the store method receives one (status / milestone / cancel), else NULL.
+   * Seeded to (`created_by_agent`, `created_at`) at creation. Distinct from
+   * `last_event_at` (bumped on any event append) and `created_by_agent` (the
+   * creator, never overwritten). The executing run/worker id stays in
+   * `scrum_run_links` — this pair is the lightweight last-touch attribution.
+   */
+  last_modified_by: string | null;
+  last_modified_at: string | null;
   deleted_at: string | null;
 }
 

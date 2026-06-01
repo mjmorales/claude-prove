@@ -1483,3 +1483,89 @@ describe('ScrumStore — escalation typing', () => {
     expect(store.listOpenEscalations().some((e) => e.task_id === 'gone')).toBe(false);
   });
 });
+
+// ===========================================================================
+// Last-touch provenance (v9)
+// ===========================================================================
+
+describe('ScrumStore — last-touch provenance (v9)', () => {
+  const PAST = '2026-01-01T00:00:00Z';
+
+  test('createTask seeds last_modified_at=created_at and last_modified_by=created_by_agent', () => {
+    const withAgent = seedTask('t1', { createdByAgent: 'alice', createdAt: PAST });
+    expect(withAgent.last_modified_by).toBe('alice');
+    expect(withAgent.last_modified_at).toBe(PAST);
+    // Round-trips through SELECT, not just the in-memory return value.
+    expect(store.getTask('t1')?.last_modified_by).toBe('alice');
+    expect(store.getTask('t1')?.last_modified_at).toBe(PAST);
+
+    const noAgent = seedTask('t2', { createdAt: PAST });
+    expect(noAgent.last_modified_by).toBeNull();
+    expect(noAgent.last_modified_at).toBe(PAST);
+  });
+
+  test('updateTaskStatus stamps last_modified_by=agent and advances last_modified_at', () => {
+    seedTask('t1', { createdByAgent: 'alice', createdAt: PAST });
+    const updated = store.updateTaskStatus('t1', 'ready', 'bob');
+    expect(updated.last_modified_by).toBe('bob');
+    if (updated.last_modified_at === null) throw new Error('expected last_modified_at');
+    expect(updated.last_modified_at > PAST).toBe(true);
+  });
+
+  test('updateTaskMilestone stamps last_modified_by=agent', () => {
+    seedMilestone('m1');
+    seedMilestone('m2');
+    seedTask('t1', { milestoneId: 'm1', createdByAgent: 'alice', createdAt: PAST });
+    const moved = store.updateTaskMilestone('t1', 'm2', 'carol');
+    expect(moved.last_modified_by).toBe('carol');
+    if (moved.last_modified_at === null) throw new Error('expected last_modified_at');
+    expect(moved.last_modified_at > PAST).toBe(true);
+  });
+
+  test('cancelTask stamps last_modified_by=agent; cascade stamps descendants', () => {
+    seedTask('epic', { layer: 'epic', createdByAgent: 'alice', createdAt: PAST });
+    seedTask('child', {
+      parentId: 'epic',
+      layer: 'task',
+      createdByAgent: 'alice',
+      createdAt: PAST,
+    });
+    store.cancelTaskCascade('epic', { agent: 'dave' });
+    expect(store.getTask('epic')?.last_modified_by).toBe('dave');
+    expect(store.getTask('child')?.last_modified_by).toBe('dave');
+  });
+
+  test('acceptance edits bump last_modified_at and null out the (unattributed) by', () => {
+    seedTask('t1', { createdByAgent: 'alice', createdAt: PAST });
+    const criterion: AcceptanceCriterion = {
+      id: 'c1',
+      text: 'builds',
+      verifies_by: 'bash',
+      check: 'true',
+      status: 'active',
+      idempotent: true,
+    };
+    const updated = store.addCriterion('t1', criterion);
+    // No agent flows through acceptance edits, so the last touch is unattributed.
+    expect(updated.last_modified_by).toBeNull();
+    if (updated.last_modified_at === null) throw new Error('expected last_modified_at');
+    expect(updated.last_modified_at > PAST).toBe(true);
+  });
+
+  test('setBounds bumps last_modified_at and nulls the by', () => {
+    seedTask('t1', { createdByAgent: 'alice', createdAt: PAST });
+    const bounds: TaskBounds = { tools: { allow: ['Bash(go test *)'] } };
+    const updated = store.setBounds('t1', bounds);
+    expect(updated.last_modified_by).toBeNull();
+    if (updated.last_modified_at === null) throw new Error('expected last_modified_at');
+    expect(updated.last_modified_at > PAST).toBe(true);
+  });
+
+  test('listTasksForTag surfaces the provenance columns', () => {
+    seedTask('t1', { createdByAgent: 'alice', createdAt: PAST, tags: ['p0'] });
+    const [row] = store.listTasksForTag('p0');
+    if (!row) throw new Error('expected one tagged task');
+    expect(row.last_modified_by).toBe('alice');
+    expect(row.last_modified_at).toBe(PAST);
+  });
+});

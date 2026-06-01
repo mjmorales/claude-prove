@@ -310,10 +310,38 @@ export const SCRUM_MIGRATION_V8_SQL = `
 ALTER TABLE scrum_decisions ADD COLUMN kind TEXT;
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v9 — last-touch provenance on scrum_tasks (onleash provenance)
+// ---------------------------------------------------------------------------
+
+/**
+ * v9: record WHO/WHEN last modified a task. Two nullable TEXT columns, no new
+ * table:
+ *
+ *   last_modified_by — the agent of the most recent row mutation, where the
+ *                      store method receives one (status/milestone/cancel).
+ *                      NULL when the mutation carried no agent (acceptance/
+ *                      bounds/soft-delete edits) or on every pre-v9 row.
+ *   last_modified_at — ISO-8601 timestamp stamped on every task-row write.
+ *                      Distinct from `last_event_at` (bumped on any event
+ *                      append); a future mutation that does not append an
+ *                      event still moves `last_modified_at`.
+ *
+ * `ADD COLUMN` with a NULL default is safe on a populated table (no existing
+ * row needs provenance). No CHECK — the columns stay forward-compatible TEXT,
+ * matching the v2–v8 convention. `createTask` seeds the pair to
+ * (`created_by_agent`, `created_at`) so a freshly-created task already carries
+ * coherent last-touch provenance.
+ */
+export const SCRUM_MIGRATION_V9_SQL = `
+ALTER TABLE scrum_tasks ADD COLUMN last_modified_by TEXT;
+ALTER TABLE scrum_tasks ADD COLUMN last_modified_at TEXT;
+`;
+
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that previously hit `clearRegistry()` — both
- * paths land a single scrum/{v1..v8} entry set. Matches
+ * paths land a single scrum/{v1..v9} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -384,6 +412,14 @@ export function ensureScrumSchemaRegistered(): void {
         description: 'add scrum_decisions.kind (nullable) for the Codex subtype taxonomy',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V8_SQL);
+        },
+      },
+      {
+        version: 9,
+        description:
+          'add scrum_tasks.last_modified_by + scrum_tasks.last_modified_at for last-touch provenance',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V9_SQL);
         },
       },
     ],
