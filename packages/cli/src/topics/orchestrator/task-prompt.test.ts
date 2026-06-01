@@ -147,6 +147,29 @@ describe('orchestrator task-prompt', () => {
     expect(stdoutBuf).toContain('token budget and subagent timeout remain the hard backstop');
   });
 
+  test('relative run dir → cancel-flag + handoff paths absolutized under projectRoot', () => {
+    // Production passes a relative --run-dir (".prove/runs/<branch>/<slug>").
+    // The worker cd's into its task worktree first, where `.prove/` is
+    // gitignored and absent — so a relative flag path would resolve there and
+    // never see the driver's flag. The renderer absolutizes it against
+    // projectRoot (the main worktree root).
+    writePlan(BASE_PLAN);
+    writePrd(BASE_PRD);
+    const prevCwd = process.cwd();
+    process.chdir(root);
+    try {
+      const code = runTaskPrompt({ runDir: 'run', taskId: '1', projectRoot: root });
+      expect(code).toBe(0);
+      const absRunDir = join(root, 'run');
+      expect(stdoutBuf).toContain(`test -f "${join(absRunDir, 'CANCEL')}"`);
+      expect(stdoutBuf).toContain(`claude-prove acb log append --run-dir "${absRunDir}"`);
+      // No bare relative flag path leaks into the emitted worker prompt.
+      expect(stdoutBuf).not.toContain('test -f "run/CANCEL"');
+    } finally {
+      process.chdir(prevCwd);
+    }
+  });
+
   test('no worktree flag → omits the cd block', () => {
     writePlan(BASE_PLAN);
     writePrd(BASE_PRD);

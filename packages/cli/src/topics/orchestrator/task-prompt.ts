@@ -14,7 +14,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 export interface TaskPromptOpts {
   runDir: string;
@@ -247,7 +247,7 @@ function renderTaskPrompt(input: RenderInput): string {
     ].join('\n'),
   );
   sections.push('');
-  sections.push(renderCheckpointInterrupt(opts.runDir));
+  sections.push(renderCheckpointInterrupt(opts.runDir, opts.projectRoot));
   sections.push('');
   sections.push('## When Done');
   sections.push('');
@@ -285,11 +285,14 @@ function renderTaskPrompt(input: RenderInput): string {
  * or stuck worker will not stop here — the token budget / subagent timeout
  * (Layer 1) remains the hard backstop.
  *
- * The flag path is resolved against the run dir so the worker reads the flag in
- * the main worktree's `.prove/runs/...` tree, not its own task worktree.
+ * A relative run dir is absolutized against `projectRoot` (the main worktree
+ * root), so the embedded flag path and handoff-append command target the main
+ * worktree's `.prove/runs/...` tree — never the worker's own task worktree,
+ * where `.prove/` is gitignored and absent.
  */
-function renderCheckpointInterrupt(runDir: string): string {
-  const cancelFlag = join(runDir, 'CANCEL');
+function renderCheckpointInterrupt(runDir: string, projectRoot: string): string {
+  const resolvedRunDir = isAbsolute(runDir) ? runDir : join(projectRoot, runDir);
+  const cancelFlag = join(resolvedRunDir, 'CANCEL');
   return [
     '## Cooperative checkpoint-interrupt (Layer 2)',
     '',
@@ -301,11 +304,11 @@ function renderCheckpointInterrupt(runDir: string): string {
     '',
     'When the cancel-flag is present, perform a graceful handoff so a re-dispatch RESUMES instead of restarting:',
     '',
-    `1. Write a \`synthesis\` reasoning-log entry capturing progress so far and the concrete next steps. Compose the entry JSON with the Write tool, then append it: \`claude-prove acb log append --run-dir "${runDir}" --file <entry.json>\`.`,
+    `1. Write a \`synthesis\` reasoning-log entry capturing progress so far and the concrete next steps. Compose the entry JSON with the Write tool, then append it: \`claude-prove acb log append --run-dir "${resolvedRunDir}" --file <entry.json>\`.`,
     '2. Commit your work-in-progress (`feat({scope}): WIP — graceful handoff at checkpoint`).',
-    '3. Self-exit. Do NOT continue past the checkpoint.',
+    '3. Self-exit; do not continue past the checkpoint.',
     '',
-    'This cooperative path is best-effort and layers ON TOP of the Layer-1 cancel-and-redispatch floor — it never replaces it. If you are not at a checkpoint or cannot stop cleanly, the token budget and subagent timeout remain the hard backstop.',
+    'This path is best-effort and layers ON TOP of the Layer-1 cancel-and-redispatch floor — it never replaces it. When you are mid-step or cannot stop cleanly, keep working: the token budget and subagent timeout remain the hard backstop.',
   ].join('\n');
 }
 
