@@ -284,6 +284,13 @@ export interface ScrumMilestone {
   description: string | null;
   target_state: string | null;
   status: MilestoneStatus;
+  /**
+   * Optional initiative grouping (v10): a free-text label tying several
+   * milestones to one outcome bet — the tier above milestone. NULL = the
+   * milestone belongs to no initiative (the flat default). TEXT column with no
+   * CHECK; `milestone list --initiative <x>` filters case-insensitively.
+   */
+  initiative: string | null;
   created_at: string;
   closed_at: string | null;
 }

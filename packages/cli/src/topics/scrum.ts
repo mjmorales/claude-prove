@@ -23,8 +23,8 @@
  *   claude-prove scrum task bounds set <id>      --bounds JSON   (pass --bounds '' to clear)
  *   claude-prove scrum task bounds show <id>
  *   claude-prove scrum alerts                    [--human] [--stalled-after-days N]
- *   claude-prove scrum milestone create          --title X [--description Y] [--target-state S] [--id I]
- *   claude-prove scrum milestone list            [--status S]
+ *   claude-prove scrum milestone create          --title X [--description Y] [--target-state S] [--id I] [--initiative N]
+ *   claude-prove scrum milestone list            [--status S] [--initiative N]
  *   claude-prove scrum milestone show <id>
  *   claude-prove scrum milestone activate <id>
  *   claude-prove scrum milestone reopen <id>
@@ -106,6 +106,7 @@ interface ScrumFlags {
   parent?: string;
   layer?: string;
   targetState?: string;
+  initiative?: string;
   branch?: string;
   slug?: string;
   unassign?: boolean;
@@ -148,6 +149,10 @@ export function register(cli: CAC): void {
     .option('--task <id>', 'Task filter for `tag list`')
     .option('--topic <t>', 'Topic filter for `decision list`')
     .option('--target-state <s>', 'Milestone target state (milestone create)')
+    .option(
+      '--initiative <i>',
+      'Initiative grouping (milestone create sets it; milestone list filters by it)',
+    )
     .option('--branch <b>', 'Branch name for link-run')
     .option('--slug <g>', 'Run slug for link-run')
     .option('--unassign', 'Clear milestone_id (scrum task move)')
@@ -285,6 +290,7 @@ function dispatch(
         targetState: flags.targetState,
         id: flags.id,
         status: flags.status,
+        initiative: flags.initiative,
         workspaceRoot: flags.workspaceRoot,
       });
 

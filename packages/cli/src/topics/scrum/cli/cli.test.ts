@@ -292,6 +292,56 @@ describe('runMilestoneCmd close → curation trigger', () => {
 });
 
 // ---------------------------------------------------------------------------
+// milestone-cmd — initiative grouping (the tier above milestone)
+// ---------------------------------------------------------------------------
+
+describe('runMilestoneCmd initiative grouping', () => {
+  test('create --initiative persists the grouping label', () => {
+    const res = withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], {
+        title: 'M',
+        id: 'm1',
+        initiative: 'q3-growth',
+      }),
+    );
+    expect(res.exit).toBe(0);
+    expect((JSON.parse(res.stdout.trim()) as { initiative: string | null }).initiative).toBe(
+      'q3-growth',
+    );
+  });
+
+  test('list --initiative filters to the matching initiative', () => {
+    withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], {
+        title: 'A',
+        id: 'ma',
+        initiative: 'bet1',
+      }),
+    );
+    withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], {
+        title: 'B',
+        id: 'mb',
+        initiative: 'bet1',
+      }),
+    );
+    withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], {
+        title: 'C',
+        id: 'mc',
+        initiative: 'bet2',
+      }),
+    );
+
+    const res = withCapture(() =>
+      runMilestoneCmd('list', [undefined, undefined], { initiative: 'bet1' }),
+    );
+    const ids = (JSON.parse(res.stdout.trim()) as Array<{ id: string }>).map((m) => m.id).sort();
+    expect(ids).toEqual(['ma', 'mb']);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // next-ready-cmd
 // ---------------------------------------------------------------------------
 
