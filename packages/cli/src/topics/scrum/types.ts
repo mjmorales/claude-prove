@@ -345,6 +345,12 @@ export interface DecisionRow {
   superseded_by: string | null;
   /** Rationale recorded at supersession time. NULL until superseded. */
   reason: string | null;
+  /**
+   * Codex subtype (v8, onleash §8.10). Canonical closed vocabulary
+   * `adr | glossary | pattern`; NULL = untyped/legacy. TEXT column — not pinned
+   * by a CHECK, matching the forward-compatible convention on `status`.
+   */
+  kind: string | null;
 }
 
 // ---------------------------------------------------------------------------

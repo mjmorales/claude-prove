@@ -95,6 +95,8 @@ describe('ScrumStore — decisions: schema materialization', () => {
       // v4 columns are appended (ADD COLUMN lands them at the end), NULL default.
       'superseded_by:TEXT:0',
       'reason:TEXT:0',
+      // v8 appends the Codex subtype, NULL default.
+      'kind:TEXT:0',
     ]);
   });
 });
@@ -239,6 +241,25 @@ describe('ScrumStore — decisions: record + get', () => {
     // v4: a freshly recorded decision is current, not superseded.
     expect(row.superseded_by).toBeNull();
     expect(row.reason).toBeNull();
+    // v8: kind defaults to null (untyped).
+    expect(row.kind).toBeNull();
+  });
+
+  test('recordDecision persists kind and re-record upsert preserves it', () => {
+    store.recordDecision({ id: 'k1', title: 'K', content: 'body', kind: 'adr' });
+    expect(store.getDecision('k1')?.kind).toBe('adr');
+    // Re-record with a new kind overwrites on the upsert path.
+    store.recordDecision({ id: 'k1', title: 'K', content: 'body2', kind: 'pattern' });
+    expect(store.getDecision('k1')?.kind).toBe('pattern');
+  });
+
+  test('listDecisions filters by kind case-insensitively', () => {
+    store.recordDecision({ id: 'a', title: 'A', content: 'b', kind: 'adr' });
+    store.recordDecision({ id: 'g', title: 'G', content: 'b', kind: 'glossary' });
+    store.recordDecision({ id: 'u', title: 'U', content: 'b' });
+    expect(store.listDecisions({ kind: 'ADR' }).map((d) => d.id)).toEqual(['a']);
+    expect(store.listDecisions({ kind: 'glossary' }).map((d) => d.id)).toEqual(['g']);
+    expect(store.listDecisions().length).toBe(3);
   });
 });
 
