@@ -23,6 +23,7 @@ function validEntries(): Record<string, Record<string, unknown>> {
       selected_rationale: 'B is simpler',
     },
     discovery: envelope('discovery', 'disc1', '2026-05-31T10:01:00Z'),
+    context: envelope('context', 'ctx1', '2026-05-31T10:01:30Z'),
     bailout: {
       ...envelope('bailout', 'bo1', '2026-05-31T10:02:00Z'),
       attempted: 'tried X',
@@ -145,6 +146,13 @@ describe('deriveEpisodes', () => {
     const eps = deriveEpisodes(asList('discovery', 'decision', 'risk'));
     expect(eps).toHaveLength(1);
     expect(eps[0]?.entries.map((e) => e.type)).toEqual(['risk']);
+  });
+
+  test('context is a non-decision entry that attaches to the open episode', () => {
+    const eps = deriveEpisodes(asList('decision', 'context', 'synthesis'));
+    expect(eps).toHaveLength(1);
+    expect(eps[0]?.entries.map((e) => e.type)).toEqual(['context', 'synthesis']);
+    expect(eps[0]?.closed_by?.type).toBe('synthesis');
   });
 
   test('decision opens, synthesis closes', () => {

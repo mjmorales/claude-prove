@@ -26,7 +26,8 @@
 // ---------------------------------------------------------------------------
 
 /**
- * The 10 closed entry types. `decision`..`synthesis` are agent-authored;
+ * The 10 closed entry types. `decision`..`synthesis` are agent-authored
+ * (`context` records context the agent proactively loaded before acting);
  * `review_feedback` and `verification` are engine-written (validators /
  * principal-architect / verification dispatch). Extending this set is
  * extension-gated — add the literal here AND the per-type field spec below.
@@ -34,6 +35,7 @@
 export const ENTRY_TYPES = [
   'decision',
   'discovery',
+  'context',
   'bailout',
   'hack',
   'risk',
@@ -76,6 +78,10 @@ export interface DecisionEntry extends EntryEnvelope {
 
 export interface DiscoveryEntry extends EntryEnvelope {
   type: 'discovery';
+}
+
+export interface ContextEntry extends EntryEnvelope {
+  type: 'context';
 }
 
 export interface BailoutEntry extends EntryEnvelope {
@@ -126,6 +132,7 @@ export interface VerificationEntry extends EntryEnvelope {
 export type LogEntry =
   | DecisionEntry
   | DiscoveryEntry
+  | ContextEntry
   | BailoutEntry
   | HackEntry
   | RiskEntry
@@ -155,12 +162,13 @@ const isRiskSeverity = (v: unknown): boolean =>
 
 /**
  * Per-type required fields beyond the envelope. A type with no extra fields
- * (discovery, review_feedback, verification) maps to an empty spec — the
- * envelope alone is its full shape.
+ * (discovery, context, review_feedback, verification) maps to an empty spec —
+ * the envelope alone is its full shape.
  */
 const TYPE_SPECS: Record<EntryType, FieldSpec> = {
   decision: { fields: { alternatives: isStrArray, selected_rationale: isStr } },
   discovery: { fields: {} },
+  context: { fields: {} },
   bailout: { fields: { attempted: isStr, reason_abandoned: isStr } },
   hack: { fields: { file_refs: isStrArray, cleanup_condition: isStr } },
   risk: { fields: { severity: isRiskSeverity, mitigation: isStr } },
