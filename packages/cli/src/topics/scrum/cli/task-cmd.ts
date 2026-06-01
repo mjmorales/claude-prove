@@ -8,6 +8,7 @@
  *   tag <id> <tag>
  *   link-decision <id> <decision-path>
  *   status <id> <new-status>
+ *   cancel <id>    [--cascade] [--reason R] [--detail D]
  *   move <id>      (--milestone M | --unassign | --milestone="")
  *   delete <id>
  *   add-dep <from> <to>     [--kind blocks|blocked_by]   (default: blocks)
@@ -68,6 +69,9 @@ export interface TaskCmdFlags {
   by?: string;
   // Declared bounds (v6) — JSON blob for `task create` + `task bounds set`.
   bounds?: string;
+  // `cancel` flags (v7) — cascade walk + terminal provenance.
+  cascade?: boolean;
+  detail?: string;
 }
 
 export type TaskAction =
@@ -77,6 +81,7 @@ export type TaskAction =
   | 'tag'
   | 'link-decision'
   | 'status'
+  | 'cancel'
   | 'move'
   | 'delete'
   | 'add-dep'
@@ -91,6 +96,7 @@ const TASK_ACTIONS: TaskAction[] = [
   'tag',
   'link-decision',
   'status',
+  'cancel',
   'move',
   'delete',
   'add-dep',
@@ -146,6 +152,8 @@ export function runTaskCmd(
         return doLinkDecision(store, positional[0], positional[1]);
       case 'status':
         return doStatus(store, positional[0], positional[1]);
+      case 'cancel':
+        return doCancel(store, positional[0], flags);
       case 'move':
         return doMove(store, positional[0], flags);
       case 'delete':
@@ -309,6 +317,40 @@ function doStatus(store: ScrumStore, id: string | undefined, next: string | unde
   const task = store.updateTaskStatus(id, next as TaskStatus);
   process.stdout.write(`${JSON.stringify(task)}\n`);
   process.stderr.write(`scrum task status: ${id} -> ${next}\n`);
+  return 0;
+}
+
+/**
+ * Cancel a task, recording terminal provenance (v7, onleash §14.4–14.6).
+ *   --cascade : recursively cancel every non-terminal descendant in the
+ *               `parent_id` subtree (root → 'cancelled', descendants →
+ *               'parent_cancelled'). Prints `{ cancelled: [ids] }`.
+ *   (default) : cancel only this task. Prints the updated task row.
+ * `--reason`/`--detail` annotate the root's terminal provenance. Store-level
+ * rejections (unknown id, already-terminal) surface as exit 1.
+ */
+function doCancel(store: ScrumStore, id: string | undefined, flags: TaskCmdFlags): number {
+  if (id === undefined || id.length === 0) {
+    process.stderr.write('scrum task cancel: <id> positional argument required\n');
+    return 1;
+  }
+  const opts = {
+    reason: flags.reason && flags.reason.length > 0 ? flags.reason : undefined,
+    detail: flags.detail && flags.detail.length > 0 ? flags.detail : null,
+  };
+
+  if (flags.cascade === true) {
+    const result = store.cancelTaskCascade(id, opts);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    process.stderr.write(
+      `scrum task cancel: ${result.cancelled.length} task(s) cancelled (root ${id})\n`,
+    );
+    return 0;
+  }
+
+  const task = store.cancelTask(id, opts);
+  process.stdout.write(`${JSON.stringify(task)}\n`);
+  process.stderr.write(`scrum task cancel: ${id} -> cancelled (${task.terminal_reason})\n`);
   return 0;
 }
 

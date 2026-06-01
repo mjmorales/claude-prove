@@ -8,6 +8,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { appendEntry } from '../acb/reasoning-log-store';
 import { type ScrumStore, openScrumStore } from './store';
 import type { Acceptance, AcceptanceCriterion, TaskBounds } from './types';
 
@@ -1151,5 +1155,197 @@ describe('ScrumStore — declared bounds', () => {
     seedTask('parent', { bounds: fullBounds });
     const child = store.createTask({ id: 'child', title: 'Child', parentId: 'parent' });
     expect(child.bounds).toBeNull();
+  });
+});
+
+// ===========================================================================
+// Cancellation + terminal provenance (v7, onleash §14.4–14.6)
+// ===========================================================================
+
+describe('ScrumStore — cancelTask + cancelTaskCascade', () => {
+  test('cancelTask sets status cancelled with default terminal_reason and an event', () => {
+    seedTask('t1');
+    const task = store.cancelTask('t1');
+    expect(task.status).toBe('cancelled');
+    expect(task.terminal_reason).toBe('cancelled');
+    expect(task.terminal_detail).toBeNull();
+    const [event] = store.listEventsForTask('t1');
+    expect(event?.kind).toBe('status_changed');
+    expect((event?.payload as { terminal_reason?: string }).terminal_reason).toBe('cancelled');
+  });
+
+  test('cancelTask records a custom reason + detail', () => {
+    seedTask('t1');
+    const task = store.cancelTask('t1', { reason: 'descoped', detail: 'cut from v1' });
+    expect(task.terminal_reason).toBe('descoped');
+    expect(task.terminal_detail).toBe('cut from v1');
+  });
+
+  test('cancelTask rejects an unknown id and an already-terminal task', () => {
+    expect(() => store.cancelTask('missing')).toThrow(/unknown task 'missing'/);
+    seedTask('t1', { status: 'done' });
+    expect(() => store.cancelTask('t1')).toThrow(/already terminal \('done'\)/);
+  });
+
+  test('cancelTaskCascade cancels the whole non-terminal subtree with provenance', () => {
+    seedTask('epic', { layer: 'epic' });
+    seedTask('story', { parentId: 'epic', layer: 'story' });
+    seedTask('leaf-a', { parentId: 'story', layer: 'task' });
+    seedTask('leaf-b', { parentId: 'story', layer: 'task' });
+
+    const result = store.cancelTaskCascade('epic', { reason: 'pivot' });
+    expect(result.cancelled.sort()).toEqual(['epic', 'leaf-a', 'leaf-b', 'story']);
+
+    expect(store.getTask('epic')?.terminal_reason).toBe('pivot');
+    const story = store.getTask('story');
+    expect(story?.status).toBe('cancelled');
+    expect(story?.terminal_reason).toBe('parent_cancelled');
+    expect(story?.terminal_detail).toContain("parent 'epic' cancelled");
+    expect(store.getTask('leaf-a')?.terminal_reason).toBe('parent_cancelled');
+  });
+
+  test('cascade leaves already-terminal nodes untouched but still sweeps their children', () => {
+    seedTask('epic', { layer: 'epic' });
+    seedTask('done-story', { parentId: 'epic', layer: 'story', status: 'done' });
+    seedTask('grandchild', { parentId: 'done-story', layer: 'task' });
+
+    const result = store.cancelTaskCascade('epic');
+    // The done story is skipped; root + its unfinished grandchild are cancelled.
+    expect(result.cancelled.sort()).toEqual(['epic', 'grandchild']);
+    expect(store.getTask('done-story')?.status).toBe('done');
+    expect(store.getTask('grandchild')?.status).toBe('cancelled');
+  });
+
+  test('cancelTaskCascade rejects an unknown root', () => {
+    expect(() => store.cancelTaskCascade('missing')).toThrow(/unknown task 'missing'/);
+  });
+});
+
+// ===========================================================================
+// Acceptance freeze guard (v7, onleash §14.13)
+// ===========================================================================
+
+describe('ScrumStore — acceptance freeze guard', () => {
+  test('addCriterion rejects while the task is in_progress', () => {
+    seedTask('t1', { status: 'in_progress' });
+    expect(() => store.addCriterion('t1', ac('c1'))).toThrow(
+      /frozen while task 't1' is in_progress/,
+    );
+  });
+
+  test('supersedeCriterion rejects while the task is in_progress', () => {
+    seedTask('t1', { acceptance: { criteria: [ac('c1')] }, status: 'in_progress' });
+    expect(() => store.supersedeCriterion('t1', 'c1', 'r')).toThrow(/frozen while task 't1'/);
+  });
+
+  test('criteria are amendable in non-in_progress statuses', () => {
+    seedTask('t1', { status: 'ready' });
+    expect(() => store.addCriterion('t1', ac('c1'))).not.toThrow();
+    store.updateTaskStatus('t1', 'blocked');
+    expect(() => store.addCriterion('t1', ac('c2'))).not.toThrow();
+  });
+});
+
+// ===========================================================================
+// Story-layer transition floors (v7, onleash §9.1 + §10.4/§3.3)
+// ===========================================================================
+
+describe('ScrumStore — story acceptance floor (≥1 active criterion)', () => {
+  test('story with no criteria cannot transition to ready / in_progress / done', () => {
+    seedTask('s', { layer: 'story' });
+    expect(() => store.updateTaskStatus('s', 'ready')).toThrow(/no active acceptance criteria/);
+    expect(() => store.updateTaskStatus('s', 'in_progress')).toThrow(
+      /no active acceptance criteria/,
+    );
+  });
+
+  test('story with all-superseded criteria is still blocked (only active count)', () => {
+    seedTask('s', { layer: 'story', acceptance: { criteria: [ac('c1')] } });
+    store.supersedeCriterion('s', 'c1', 'retired');
+    expect(() => store.updateTaskStatus('s', 'ready')).toThrow(/no active acceptance criteria/);
+  });
+
+  test('story with ≥1 active criterion passes the floor', () => {
+    seedTask('s', { layer: 'story', acceptance: { criteria: [ac('c1')] } });
+    expect(() => store.updateTaskStatus('s', 'ready')).not.toThrow();
+    expect(store.getTask('s')?.status).toBe('ready');
+  });
+
+  test('story may be cancelled / blocked without criteria (floor only gates forward edges)', () => {
+    seedTask('s', { layer: 'story' });
+    expect(() => store.updateTaskStatus('s', 'cancelled')).not.toThrow();
+  });
+
+  test('non-story layers are exempt from the acceptance floor', () => {
+    seedTask('t', { layer: 'task' });
+    seedTask('flat'); // layer null
+    expect(() => store.updateTaskStatus('t', 'in_progress')).not.toThrow();
+    expect(() => store.updateTaskStatus('flat', 'in_progress')).not.toThrow();
+  });
+});
+
+describe('ScrumStore — story synthesis floor', () => {
+  let runDir: string;
+
+  beforeEach(() => {
+    runDir = mkdtempSync(join(tmpdir(), 'scrum-synth-'));
+  });
+  afterEach(() => {
+    rmSync(runDir, { recursive: true, force: true });
+  });
+
+  function seedStartedStory(id: string) {
+    // Story with an active criterion (clears the acceptance floor) already
+    // in_progress so the only remaining gate for `done` is the synthesis floor.
+    seedTask(id, {
+      layer: 'story',
+      status: 'in_progress',
+      acceptance: { criteria: [ac('c1')] },
+    });
+  }
+
+  function writeSynthesis(dir: string, agent = 'worker') {
+    appendEntry(dir, {
+      id: `synth-${agent}`,
+      ts: '2026-06-01T00:00:00Z',
+      type: 'synthesis',
+      agent,
+      run_path: dir,
+      body: 'episode wrapped',
+      outcome: 'shipped',
+    });
+  }
+
+  test('story with no linked run is exempt (no worker engaged)', () => {
+    seedStartedStory('s');
+    expect(() => store.updateTaskStatus('s', 'done')).not.toThrow();
+  });
+
+  test('story with a linked run but no synthesis entry is blocked', () => {
+    seedStartedStory('s');
+    store.linkRun({ taskId: 's', runPath: runDir });
+    expect(() => store.updateTaskStatus('s', 'done')).toThrow(/no synthesis reasoning-log entry/);
+  });
+
+  test('story passes once its most-recent run carries a synthesis entry', () => {
+    seedStartedStory('s');
+    writeSynthesis(runDir);
+    store.linkRun({ taskId: 's', runPath: runDir });
+    expect(() => store.updateTaskStatus('s', 'done')).not.toThrow();
+    expect(store.getTask('s')?.status).toBe('done');
+  });
+
+  test('only the most-recent linked run is consulted', () => {
+    const olderRun = mkdtempSync(join(tmpdir(), 'scrum-synth-old-'));
+    try {
+      seedStartedStory('s');
+      writeSynthesis(olderRun); // synthesis on the OLD run only
+      store.linkRun({ taskId: 's', runPath: olderRun, linkedAt: '2026-01-01T00:00:00Z' });
+      store.linkRun({ taskId: 's', runPath: runDir, linkedAt: '2026-02-01T00:00:00Z' });
+      // The newest run (runDir) has no synthesis → blocked.
+      expect(() => store.updateTaskStatus('s', 'done')).toThrow(/no synthesis/);
+    } finally {
+      rmSync(olderRun, { recursive: true, force: true });
+    }
   });
 });

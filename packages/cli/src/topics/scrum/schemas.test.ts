@@ -22,6 +22,7 @@ import {
   SCRUM_MIGRATION_V4_SQL,
   SCRUM_MIGRATION_V5_SQL,
   SCRUM_MIGRATION_V6_SQL,
+  SCRUM_MIGRATION_V7_SQL,
   ensureScrumSchemaRegistered,
 } from './schemas';
 
@@ -137,6 +138,9 @@ describe('scrum domain registration', () => {
         'acceptance_json:TEXT:0',
         // v6 bounds_json appends after v5, NULL default.
         'bounds_json:TEXT:0',
+        // v7 terminal provenance appends after v6, NULL default.
+        'terminal_reason:TEXT:0',
+        'terminal_detail:TEXT:0',
       ]);
     } finally {
       raw.close();
@@ -260,7 +264,7 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V5_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN acceptance_json');
   });
 
-  test('scrum_tasks column shape gains v5 acceptance_json + v6 bounds_json', () => {
+  test('scrum_tasks column shape gains v5 acceptance_json + v6 bounds_json + v7 terminal provenance', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -286,6 +290,9 @@ describe('scrum domain registration', () => {
         'acceptance_json:TEXT:0',
         // v6 appends after v5, NULL default.
         'bounds_json:TEXT:0',
+        // v7 appends terminal provenance, NULL default.
+        'terminal_reason:TEXT:0',
+        'terminal_detail:TEXT:0',
       ]);
     } finally {
       raw.close();
@@ -313,6 +320,28 @@ describe('scrum domain registration', () => {
     }
   });
 
+  test('SCRUM_MIGRATION_V7_SQL adds scrum_tasks terminal provenance columns', () => {
+    expect(SCRUM_MIGRATION_V7_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN terminal_reason');
+    expect(SCRUM_MIGRATION_V7_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN terminal_detail');
+  });
+
+  test('v7 ADD COLUMN defaults terminal_reason/terminal_detail to NULL on existing rows', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      raw.exec(
+        "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ terminal_reason: string | null; terminal_detail: string | null }>(
+        'SELECT terminal_reason, terminal_detail FROM scrum_tasks WHERE id = ?',
+        ['t1'],
+      );
+      expect(row).toEqual([{ terminal_reason: null, terminal_detail: null }]);
+    } finally {
+      raw.close();
+    }
+  });
+
   test('v5 ADD COLUMN defaults acceptance_json to NULL on existing rows', () => {
     const raw = openStore({ path: ':memory:' });
     try {
@@ -330,12 +359,12 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('full migration chain from v0 applies v1..v6 in order', () => {
+  test('full migration chain from v0 applies v1..v7 in order', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       const result = runMigrations(raw);
       expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6,
+        1, 2, 3, 4, 5, 6, 7,
       ]);
     } finally {
       raw.close();
@@ -347,7 +376,7 @@ describe('scrum domain registration', () => {
     try {
       const first = runMigrations(raw);
       expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6,
+        1, 2, 3, 4, 5, 6, 7,
       ]);
 
       const second = runMigrations(raw);
@@ -364,6 +393,7 @@ describe('scrum domain registration', () => {
         { version: 4 },
         { version: 5 },
         { version: 6 },
+        { version: 7 },
       ]);
     } finally {
       raw.close();
@@ -394,9 +424,10 @@ describe('scrum domain registration', () => {
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(log).toHaveLength(6);
-      const [v1, v2, v3, v4, v5, v6] = log;
-      if (!v1 || !v2 || !v3 || !v4 || !v5 || !v6) throw new Error('expected six log entries');
+      expect(log).toHaveLength(7);
+      const [v1, v2, v3, v4, v5, v6, v7] = log;
+      if (!v1 || !v2 || !v3 || !v4 || !v5 || !v6 || !v7)
+        throw new Error('expected seven log entries');
       expect(v1.domain).toBe('scrum');
       expect(v1.version).toBe(1);
       expect(v1.description).toContain('scrum_tasks');
@@ -415,6 +446,9 @@ describe('scrum domain registration', () => {
       expect(v6.domain).toBe('scrum');
       expect(v6.version).toBe(6);
       expect(v6.description).toContain('bounds_json');
+      expect(v7.domain).toBe('scrum');
+      expect(v7.version).toBe(7);
+      expect(v7.description).toContain('terminal_reason');
     } finally {
       raw.close();
     }

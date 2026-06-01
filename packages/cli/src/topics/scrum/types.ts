@@ -212,6 +212,15 @@ export interface ScrumTask {
    * that `compile-plan` forwards into the plan's `tasks[].bounds`.
    */
   bounds: TaskBounds | null;
+  /**
+   * Coarse cause a task reached a terminal status (v7, onleash §14.4–14.6).
+   * Closed vocabulary: `'cancelled'` (direct `task cancel`) | `'parent_cancelled'`
+   * (swept by a `--cascade` walk). NULL on live tasks and on `done` (success
+   * carries no reason). TEXT column — forward-compatible, not pinned by CHECK.
+   */
+  terminal_reason: string | null;
+  /** Free-text elaboration recorded at cancel time. NULL when none given. */
+  terminal_detail: string | null;
   created_by_agent: string | null;
   created_at: string;
   last_event_at: string | null;

@@ -13,6 +13,7 @@
  *   claude-prove scrum task tag <id> <tag>
  *   claude-prove scrum task link-decision <id> <decision-path>
  *   claude-prove scrum task status <id> <new-status>
+ *   claude-prove scrum task cancel <id>            [--cascade] [--reason R] [--detail D]
  *   claude-prove scrum task delete <id>
  *   claude-prove scrum task add-dep <from> <to>    [--kind blocks|blocked_by]
  *   claude-prove scrum task remove-dep <from> <to> [--kind blocks|blocked_by]
@@ -34,6 +35,7 @@
  *   claude-prove scrum decision record <path>
  *   claude-prove scrum decision get <id>
  *   claude-prove scrum decision list             [--topic T] [--status S] [--human]
+ *   claude-prove scrum decision review-stale     [--days N] [--human]
  *   claude-prove scrum decision recover          --from-git
  *   claude-prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
  *   claude-prove scrum hook <event>              (event: session-start | subagent-stop | stop)
@@ -123,6 +125,11 @@ interface ScrumFlags {
   criterion?: string;
   // `task create` + `task bounds set` declared-bounds JSON blob (v6).
   bounds?: string;
+  // `task cancel` cascade + terminal provenance (v7).
+  cascade?: boolean;
+  detail?: string;
+  // `decision review-stale` threshold in days (v7).
+  days?: number | string;
 }
 
 export function register(cli: CAC): void {
@@ -163,6 +170,12 @@ export function register(cli: CAC): void {
       '--bounds <json>',
       "task create / task bounds set: declared bounds JSON ({ read?, write?, tools?, budgets? }); pass '' to clear",
     )
+    .option(
+      '--cascade',
+      'task cancel: recursively cancel every descendant in the parent_id subtree',
+    )
+    .option('--detail <text>', 'task cancel: free-text elaboration recorded as terminal_detail')
+    .option('--days <n>', 'decision review-stale: staleness threshold in days (default: 90)')
     .option(
       '--workspace-root <w>',
       'Main worktree root; pins store to <root>/.prove/prove.db (default: git common-dir)',
@@ -230,7 +243,7 @@ function dispatch(
     case 'task':
       if (arg1 === undefined) {
         console.error(
-          'error: scrum task: sub-action required (one of: create | show | list | tag | link-decision | status | move | delete | add-dep | remove-dep | acceptance | bounds)',
+          'error: scrum task: sub-action required (one of: create | show | list | tag | link-decision | status | cancel | move | delete | add-dep | remove-dep | acceptance | bounds)',
         );
         return 1;
       }
@@ -254,6 +267,8 @@ function dispatch(
         reason: flags.reason,
         by: flags.by,
         bounds: flags.bounds,
+        cascade: flags.cascade,
+        detail: flags.detail,
         workspaceRoot: flags.workspaceRoot,
       });
 
@@ -287,7 +302,7 @@ function dispatch(
     case 'decision':
       if (arg1 === undefined) {
         console.error(
-          'error: scrum decision: sub-action required (one of: record | get | list | recover | supersede)',
+          'error: scrum decision: sub-action required (one of: record | get | list | recover | supersede | review-stale)',
         );
         return 1;
       }
@@ -298,6 +313,7 @@ function dispatch(
         fromGit: flags.fromGit,
         by: flags.by,
         reason: flags.reason,
+        days: flags.days,
         workspaceRoot: flags.workspaceRoot,
       });
 

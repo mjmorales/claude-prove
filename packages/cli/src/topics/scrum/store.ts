@@ -15,7 +15,9 @@
 
 import type { Database, Statement } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
+import { dirname, isAbsolute, join } from 'node:path';
 import { type Store, type StoreOptions, openStore, runMigrations } from '@claude-prove/store';
+import { listEntries } from '../acb/reasoning-log-store';
 import { ensureScrumSchemaRegistered } from './schemas';
 import type {
   Acceptance,
@@ -179,7 +181,7 @@ const ALLOWED_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
  * fields at the public boundary.
  */
 const TASK_COLUMNS =
-  'id, title, description, status, milestone_id, parent_id, layer, acceptance_json, bounds_json, created_by_agent, created_at, last_event_at, deleted_at';
+  'id, title, description, status, milestone_id, parent_id, layer, acceptance_json, bounds_json, terminal_reason, terminal_detail, created_by_agent, created_at, last_event_at, deleted_at';
 
 /**
  * Raw `scrum_tasks` SELECT shape — identical to `ScrumTask` except the v5
@@ -296,6 +298,8 @@ export class ScrumStore {
       layer: input.layer ?? null,
       acceptance,
       bounds,
+      terminal_reason: null,
+      terminal_detail: null,
       created_by_agent: input.createdByAgent ?? null,
       created_at: createdAt,
       last_event_at: createdAt,
@@ -418,6 +422,14 @@ export class ScrumStore {
       );
     }
 
+    // Story-layer transition floors (onleash §9.1, §10.4/§3.3). Both are
+    // mechanical engine-owned gates: a `layer=story` task carries obligations
+    // a flat `layer=task` does not. Non-story layers pass straight through.
+    if (task.layer === 'story') {
+      this.assertStoryAcceptanceFloor(task, next);
+      if (next === 'done') this.assertStorySynthesisFloor(task);
+    }
+
     const ts = isoNow();
     const tx = this.db.transaction(() => {
       this.prep('UPDATE scrum_tasks SET status = ?, last_event_at = ? WHERE id = ?').run(
@@ -518,6 +530,185 @@ export class ScrumStore {
   }
 
   // ==========================================================================
+  // Cancellation + terminal provenance (v7, onleash §14.4–14.6)
+  // ==========================================================================
+
+  /**
+   * Cancel a single task, recording terminal provenance. Throws on an unknown
+   * id or an already-terminal task (`done`/`cancelled`) — the same closed-edge
+   * discipline `updateTaskStatus` enforces. `reason` defaults to `'cancelled'`;
+   * `detail` is free-text elaboration (NULL when omitted). Emits a
+   * `status_changed` event whose payload carries the terminal fields.
+   */
+  cancelTask(
+    id: string,
+    opts: { reason?: string; detail?: string | null; agent?: string | null } = {},
+  ): ScrumTask {
+    const task = this.getTask(id);
+    if (!task) throw new Error(`cancelTask: unknown task '${id}'`);
+    if (task.status === 'done' || task.status === 'cancelled') {
+      throw new Error(`cancelTask: task '${id}' is already terminal ('${task.status}')`);
+    }
+    this.transaction(() => {
+      this.cancelOne(id, opts.reason ?? 'cancelled', opts.detail ?? null, opts.agent ?? null);
+    });
+    return this.requireTask(id, 'cancelTask');
+  }
+
+  /**
+   * Cancel a task and recursively cancel every non-terminal descendant in its
+   * `parent_id` subtree, in one transaction (onleash §14.4–14.6). The root
+   * carries `terminal_reason = reason ?? 'cancelled'`; descendants carry
+   * `terminal_reason = 'parent_cancelled'` with a detail naming the root.
+   *
+   * Already-terminal nodes (`done`/`cancelled`) are left untouched but their
+   * children are still visited — a completed mid-tree task does not shield its
+   * unfinished descendants from the sweep. A malformed `parent_id` cycle is
+   * guarded by a `visited` set. Returns the ids actually transitioned.
+   */
+  cancelTaskCascade(
+    rootId: string,
+    opts: { reason?: string; detail?: string | null; agent?: string | null } = {},
+  ): { cancelled: string[] } {
+    const root = this.getTask(rootId);
+    if (!root) throw new Error(`cancelTaskCascade: unknown task '${rootId}'`);
+
+    const cancelled: string[] = [];
+    const agent = opts.agent ?? null;
+    const childDetail = `parent '${rootId}' cancelled`;
+
+    this.transaction(() => {
+      if (this.cancelOne(rootId, opts.reason ?? 'cancelled', opts.detail ?? null, agent)) {
+        cancelled.push(rootId);
+      }
+      const visited = new Set<string>([rootId]);
+      const stack = this.getChildren(rootId).map((c) => c.id);
+      while (stack.length > 0) {
+        const id = stack.pop();
+        if (id === undefined || visited.has(id)) continue;
+        visited.add(id);
+        if (this.cancelOne(id, 'parent_cancelled', childDetail, agent)) {
+          cancelled.push(id);
+        }
+        for (const child of this.getChildren(id)) stack.push(child.id);
+      }
+    });
+
+    return { cancelled };
+  }
+
+  /**
+   * Cancel one task in place if it is non-terminal, writing terminal
+   * provenance and a `status_changed` event. Returns true when it transitioned,
+   * false when the task was missing or already terminal. Must run inside a
+   * caller-owned transaction (see `cancelTask`/`cancelTaskCascade`).
+   */
+  private cancelOne(
+    id: string,
+    reason: string,
+    detail: string | null,
+    agent: string | null,
+  ): boolean {
+    const task = this.getTask(id);
+    if (!task) return false;
+    if (task.status === 'done' || task.status === 'cancelled') return false;
+
+    const ts = isoNow();
+    this.prep(
+      'UPDATE scrum_tasks SET status = ?, terminal_reason = ?, terminal_detail = ?, last_event_at = ? WHERE id = ?',
+    ).run('cancelled', reason, detail, ts, id);
+    this.prep(
+      'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
+    ).run(
+      id,
+      ts,
+      'status_changed',
+      agent,
+      JSON.stringify({
+        from: task.status,
+        to: 'cancelled',
+        terminal_reason: reason,
+        terminal_detail: detail,
+      }),
+    );
+    return true;
+  }
+
+  // ==========================================================================
+  // Story-layer transition floors (v7, onleash §9.1 + §10.4/§3.3)
+  // ==========================================================================
+
+  /**
+   * Reject a `layer=story` transition INTO `ready`/`in_progress`/`done` when
+   * the story has zero ACTIVE acceptance criteria (onleash §9.1). A story with
+   * no goalposts cannot be started or closed; superseded criteria do not count.
+   * Other target statuses (`blocked`, `review`, `cancelled`, `backlog`) pass —
+   * a story may be parked or abandoned without criteria. Invariant: only
+   * called for `task.layer === 'story'`.
+   */
+  private assertStoryAcceptanceFloor(task: ScrumTask, next: TaskStatus): void {
+    if (next !== 'ready' && next !== 'in_progress' && next !== 'done') return;
+    const active = task.acceptance?.criteria.filter((c) => c.status === 'active') ?? [];
+    if (active.length === 0) {
+      throw new Error(
+        `updateTaskStatus: story '${task.id}' has no active acceptance criteria; add at least one (\`scrum task acceptance add ${task.id} ...\`) before '${next}'`,
+      );
+    }
+  }
+
+  /**
+   * Reject a `layer=story` -> `done` transition when the story's most-recent
+   * linked run carries no `synthesis` reasoning-log entry (onleash §10.4/§3.3).
+   * The synthesis entry is the worker's hand-off-of-record; closing a story
+   * without it loses the episode's outcome.
+   *
+   * Boundary: the floor applies only once a worker has run — a story with NO
+   * linked runs has no episode to synthesize and passes. The orchestrator
+   * always links a run before dispatch, so the only way to reach `done` with
+   * no run is a manually-driven story, which the floor intentionally does not
+   * gate. Invariant: only called for `task.layer === 'story'`.
+   */
+  private assertStorySynthesisFloor(task: ScrumTask): void {
+    const runs = this.listRunsForTask(task.id);
+    if (runs.length === 0) return;
+
+    // listRunsForTask is ordered by linked_at ASC — the last entry is the
+    // most-recent worker.
+    const latest = runs[runs.length - 1];
+    if (!latest) return;
+    const runDir = this.resolveRunDir(latest.run_path);
+
+    let hasSynthesis = false;
+    try {
+      hasSynthesis = listEntries(runDir).some((e) => e.type === 'synthesis');
+    } catch {
+      // A malformed entry file makes the synthesis status unknowable; treat as
+      // absent so the floor fails closed rather than waving the story through.
+      hasSynthesis = false;
+    }
+
+    if (!hasSynthesis) {
+      throw new Error(
+        `updateTaskStatus: story '${task.id}' cannot close — its most-recent run (${latest.run_path}) has no synthesis reasoning-log entry. The worker must write one before the story reaches 'done'.`,
+      );
+    }
+  }
+
+  /**
+   * Resolve a stored `run_path` to an absolute run directory for reasoning-log
+   * reads. Absolute paths pass through; relative paths resolve against the
+   * workspace root derived from the store's db path
+   * (`<root>/.prove/prove.db`). A `:memory:` store has no root, so relative
+   * paths resolve against cwd — tests linking real run dirs use absolute paths.
+   */
+  private resolveRunDir(runPath: string): string {
+    if (isAbsolute(runPath)) return runPath;
+    const dbPath = this.store.path;
+    const root = dbPath === ':memory:' ? process.cwd() : dirname(dirname(dbPath));
+    return join(root, runPath);
+  }
+
+  // ==========================================================================
   // Containment tree (v3) — parent_id hierarchy + derived status rollup
   // ==========================================================================
 
@@ -610,6 +801,7 @@ export class ScrumStore {
   addCriterion(taskId: string, criterion: AcceptanceCriterion): ScrumTask {
     const task = this.getTask(taskId);
     if (!task) throw new Error(`addCriterion: unknown task '${taskId}'`);
+    assertAcceptanceUnfrozen(task, 'addCriterion');
     const current = task.acceptance;
     const criteria = current ? [...current.criteria] : [];
     if (criteria.some((c) => c.id === criterion.id)) {
@@ -638,6 +830,7 @@ export class ScrumStore {
   ): ScrumTask {
     const task = this.getTask(taskId);
     if (!task) throw new Error(`supersedeCriterion: unknown task '${taskId}'`);
+    assertAcceptanceUnfrozen(task, 'supersedeCriterion');
     if (!task.acceptance) {
       throw new Error(`supersedeCriterion: task '${taskId}' has no acceptance criteria`);
     }
@@ -830,7 +1023,7 @@ export class ScrumStore {
   listTasksForTag(tag: string): ScrumTask[] {
     return (
       this.prep(
-        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.parent_id, t.layer, t.acceptance_json, t.bounds_json, t.created_by_agent, t.created_at, t.last_event_at, t.deleted_at
+        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.parent_id, t.layer, t.acceptance_json, t.bounds_json, t.terminal_reason, t.terminal_detail, t.created_by_agent, t.created_at, t.last_event_at, t.deleted_at
        FROM scrum_tasks t
        INNER JOIN scrum_tags g ON g.task_id = t.id
        WHERE g.tag = ? AND t.deleted_at IS NULL
@@ -1431,6 +1624,22 @@ function safeParseJson<T>(raw: string | null, taskId: string, field: string): T 
   } catch {
     process.stderr.write(`scrum: task '${taskId}' has corrupt ${field}; treating as null\n`);
     return null;
+  }
+}
+
+/**
+ * Acceptance freeze guard (onleash §14.13). While a worker is in-flight on a
+ * task (`status === 'in_progress'`), its acceptance criteria are frozen —
+ * `addCriterion`/`supersedeCriterion` reject so the goalposts cannot move under
+ * a running worker. Every other status is amendable; interrupt the worker
+ * (transition off `in_progress`) before editing criteria. Applies to all
+ * layers, not just stories — any in-flight task's criteria are load-bearing.
+ */
+function assertAcceptanceUnfrozen(task: ScrumTask, method: string): void {
+  if (task.status === 'in_progress') {
+    throw new Error(
+      `${method}: acceptance criteria are frozen while task '${task.id}' is in_progress; interrupt the worker (move it off in_progress) before amending criteria`,
+    );
   }
 }
 

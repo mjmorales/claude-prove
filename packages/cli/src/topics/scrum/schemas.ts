@@ -258,10 +258,40 @@ export const SCRUM_MIGRATION_V6_SQL = `
 ALTER TABLE scrum_tasks ADD COLUMN bounds_json TEXT;
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v7 — terminal provenance on scrum_tasks (onleash §14.4–14.6)
+// ---------------------------------------------------------------------------
+
+/**
+ * v7: record WHY a task reached a terminal status (onleash terminal:{reason,
+ * detail}). Two nullable TEXT columns, no new table:
+ *
+ *   terminal_reason — coarse cause, written when a task is cancelled. The
+ *                     canonical closed vocabulary is `cancelled` (a direct
+ *                     `task cancel`) and `parent_cancelled` (swept by a
+ *                     `--cascade` walk from an ancestor). NULL on every live
+ *                     task and on `done` tasks (success carries no reason).
+ *   terminal_detail — free-text elaboration recorded at cancel time (e.g.
+ *                     "parent 'epic-1' cancelled"). NULL when no detail given.
+ *
+ * `ADD COLUMN` with a NULL default is safe on a populated table (no existing
+ * row needs provenance). No CHECK constraint — the column stays
+ * forward-compatible TEXT, matching the v2–v6 convention; the closed
+ * `terminal_reason` vocabulary is documented on `ScrumTask` in `types.ts`.
+ *
+ * Scope note (Phase-0): the cancel cascade + this provenance land now;
+ * supersede→re-decompose (lift-vs-cancel-per-child judgment) is a later-phase
+ * follow-up and writes no new column here.
+ */
+export const SCRUM_MIGRATION_V7_SQL = `
+ALTER TABLE scrum_tasks ADD COLUMN terminal_reason TEXT;
+ALTER TABLE scrum_tasks ADD COLUMN terminal_detail TEXT;
+`;
+
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that previously hit `clearRegistry()` — both
- * paths land a single scrum/{v1,v2,v3,v4,v5,v6} entry set. Matches
+ * paths land a single scrum/{v1..v7} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -317,6 +347,14 @@ export function ensureScrumSchemaRegistered(): void {
           'add scrum_tasks.bounds_json (nullable JSON) for milestone-authored declared bounds',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V6_SQL);
+        },
+      },
+      {
+        version: 7,
+        description:
+          'add scrum_tasks.terminal_reason + scrum_tasks.terminal_detail for cancel provenance',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V7_SQL);
         },
       },
     ],
