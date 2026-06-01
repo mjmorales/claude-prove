@@ -25,8 +25,8 @@ import {
 } from './schemas';
 
 describe('CURRENT_SCHEMA_VERSION', () => {
-  test("is the current run-state artifact version ('2')", () => {
-    expect(CURRENT_SCHEMA_VERSION).toBe('2');
+  test("is the current run-state artifact version ('3')", () => {
+    expect(CURRENT_SCHEMA_VERSION).toBe('3');
   });
 
   test('each schema echoes the current version', () => {

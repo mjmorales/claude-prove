@@ -45,6 +45,27 @@ All sub-fields are optional; **absent `bounds` = current behavior** (unbounded).
 
 **Auto-adoption**: the edited `prep-permissions` skill is picked up on plugin load after update; the new plan field is available to anyone authoring `plan.json` by hand or via `/prove:plan`. No config edit required. Run `/prove:update` to sync.
 
+### Structured plan acceptance criteria: `plan.json tasks[]/steps[].acceptance_criteria` + compile-plan forwards the full criterion
+
+`compile-plan` could previously forward only a criterion's **text** into the plan, dropping the structured shape (`verifies_by`/`check`/`idempotent`/`status`) the scrum store carries — so the orchestrator saw acceptance as opaque strings and could not dispatch a criterion by its verification kind. This lands the structured criterion end-to-end.
+
+**Changed plan field — `plan.json tasks[].acceptance_criteria` and `tasks[].steps[].acceptance_criteria`** (run-state schema): list items changed from bare strings to a structured criterion dict mirroring scrum's `AcceptanceCriterion`:
+
+```jsonc
+"acceptance_criteria": [
+  { "id": "c1", "text": "builds clean", "verifies_by": "bash", "check": "bun run build", "status": "active", "idempotent": true },
+  { "text": "criteria authored by hand only need text" }
+]
+```
+
+Only `text` is required; everything else is optional, so a bare `{ "text": "..." }` is valid and hand-authored/text-only plans keep working. `verifies_by` is the closed set `bash|assert|gate|agent`; `status` is `active|superseded`. **PRD `acceptance_criteria` are unchanged** — they remain a flat `string[]`; this only restructures the plan-task/step lists.
+
+**Behavior — `scrum compile-plan` now forwards the full criterion**: it emits `id/text/verifies_by/check/status/idempotent` per active criterion (scrum bookkeeping fields `superseded_by`/`reason`/`inherited_from` and the task-level `policy` are not forwarded). Superseded criteria are skipped. The orchestrator task/review prompt renderers now render `text` annotated as `text (verifies_by: check)` when a verification kind is present, and tolerate a legacy v2 string (an unmigrated `plan.json`) by rendering it as its own text.
+
+**Migration — run-state schema v2 → v3**: `CURRENT_SCHEMA_VERSION` bumped `'2'` → `'3'`. The hop (`packages/cli/src/topics/run-state/schema-migrate.ts`, `_migrate_v2_to_v3`) rewrites each plan-task/step `acceptance_criteria` **string** into `{ "text": <string> }` — no data loss, no injected fields; already-structured items pass through (idempotent on v3 data). For `prd`/`state`/`report` artifacts (no plan-task acceptance) it is a pure version bump. A v2 plan with string criteria migrates cleanly to v3, and the run-state validator does not enforce `schema_version` equality, so unmigrated v2 plans keep validating. Run `claude-prove run-state migrate` to advance on-disk artifacts.
+
+**Auto-adoption**: the schema, migrator, and `compile-plan` change ship in the CLI; the edited orchestrator prompt renderers are picked up on plugin load. No config edit required. Run `/prove:update` to sync.
+
 ---
 
 ## v2.8.0 — New `/prove:workflow` command: run a whole milestone (or plan.json) as a parallel fan-out

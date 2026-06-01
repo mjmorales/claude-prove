@@ -24,11 +24,25 @@ export interface ReviewPromptOpts {
   baseBranch: string;
 }
 
+/**
+ * Acceptance criterion on a plan task. The v3 shape is structured (`text` +
+ * optional `verifies_by`/`check`, forwarded from scrum); a legacy v2 string (an
+ * unmigrated plan.json) is tolerated and renders as its own text. PRD
+ * acceptance_criteria stay bare strings.
+ */
+type PlanCriterion =
+  | string
+  | {
+      text?: string;
+      verifies_by?: string;
+      check?: string;
+    };
+
 interface PlanTask {
   id: string;
   title?: string;
   description?: string;
-  acceptance_criteria?: string[];
+  acceptance_criteria?: PlanCriterion[];
 }
 
 interface PlanShape {
@@ -153,7 +167,7 @@ function renderReviewPrompt(
   if (ac.length > 0) {
     sections.push('### Task Acceptance Criteria');
     sections.push('');
-    sections.push(ac.map((c) => `- ${c}`).join('\n'));
+    sections.push(ac.map((c) => `- ${formatCriterion(c)}`).join('\n'));
     sections.push('');
   }
   sections.push('## PRD Acceptance Criteria');
@@ -203,6 +217,19 @@ function renderReviewPrompt(
   sections.push('- Do NOT suggest nice-to-haves as required changes — only flag real issues.');
 
   return `${sections.join('\n')}\n`;
+}
+
+/**
+ * Render one structured plan-task criterion to a markdown line body: the
+ * `text`, annotated with `(verifies_by: check)` when a verification kind is
+ * present so the reviewer sees how each criterion is meant to be checked.
+ */
+function formatCriterion(c: PlanCriterion): string {
+  if (typeof c === 'string') return c;
+  const text = c.text ?? '';
+  if (!c.verifies_by) return text;
+  const check = c.check ? `: ${c.check}` : '';
+  return `${text} (${c.verifies_by}${check})`;
 }
 
 function readJson<T>(path: string): T | null {

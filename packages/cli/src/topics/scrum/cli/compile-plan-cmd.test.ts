@@ -43,6 +43,15 @@ function withCapture(fn: () => number): Captured {
   }
 }
 
+interface PlanCriterion {
+  id: string;
+  text: string;
+  verifies_by: string;
+  check: string;
+  status: string;
+  idempotent: boolean;
+}
+
 interface PlanShape {
   schema_version: string;
   kind: string;
@@ -53,8 +62,8 @@ interface PlanShape {
     title: string;
     wave: number;
     deps: string[];
-    acceptance_criteria: string[];
-    steps: Array<{ acceptance_criteria: string[] }>;
+    acceptance_criteria: PlanCriterion[];
+    steps: Array<{ acceptance_criteria: PlanCriterion[] }>;
   }>;
 }
 
@@ -148,7 +157,7 @@ describe('runCompilePlanCmd — compilation', () => {
     const { plan, scrum_map } = parsePlan(res.stdout);
 
     expect(plan.kind).toBe('plan');
-    expect(plan.schema_version).toBe('1');
+    expect(plan.schema_version).toBe('3');
     expect(plan.mode).toBe('simple'); // 3 tasks < 4
     expect(plan.task_id).toBe('m1');
     expect(plan.tasks.map((t) => [t.id, t.wave])).toEqual([
@@ -246,7 +255,7 @@ describe('runCompilePlanCmd — compilation', () => {
     expect(map_path).toBe(mapPath);
   });
 
-  test('forwards a task acceptance criteria texts (active only) into plan + step', () => {
+  test('forwards full structured acceptance criteria (active only) into plan + step', () => {
     store.createMilestone({ id: 'm1', title: 'M1' });
     store.createTask({
       id: 'a',
@@ -286,9 +295,19 @@ describe('runCompilePlanCmd — compilation', () => {
     const { plan } = parsePlan(res.stdout);
     const task = plan.tasks[0];
     if (!task) throw new Error('expected one plan task');
-    // Superseded criterion is excluded; only the active text forwards.
-    expect(task.acceptance_criteria).toEqual(['builds clean']);
-    expect(task.steps[0]?.acceptance_criteria).toEqual(['builds clean']);
+    // Superseded criterion is excluded; the active criterion forwards in full
+    // (id/text/verifies_by/check/status/idempotent) — not just text. The scrum
+    // supersession bookkeeping (superseded_by/reason/inherited_from) is dropped.
+    const forwarded = {
+      id: 'c1',
+      text: 'builds clean',
+      verifies_by: 'bash',
+      check: 'bun run build',
+      status: 'active',
+      idempotent: true,
+    };
+    expect(task.acceptance_criteria).toEqual([forwarded]);
+    expect(task.steps[0]?.acceptance_criteria).toEqual([forwarded]);
   });
 
   test('task with no acceptance forwards an empty criteria list', () => {

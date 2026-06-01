@@ -40,14 +40,32 @@ export interface CompilePlanCmdFlags {
   workspaceRoot?: string;
 }
 
-const PLAN_SCHEMA_VERSION = '1';
+// run-state plan.json schema version this command emits. Bumped to '3' when
+// plan-task acceptance_criteria became structured criterion dicts (was '1').
+const PLAN_SCHEMA_VERSION = '3';
 const FULL_MODE_THRESHOLD = 4;
+
+/**
+ * Structured acceptance criterion forwarded into a plan task/step. Mirrors the
+ * run-state v3 `ACCEPTANCE_CRITERION_SPEC` (text required; the rest optional)
+ * and is sourced from the scrum task's `AcceptanceCriterion`. `verifies_by`/
+ * `check`/`idempotent` let the orchestrator dispatch the criterion by kind
+ * instead of seeing only its text.
+ */
+interface PlanCriterion {
+  id: string;
+  text: string;
+  verifies_by: string;
+  check: string;
+  status: string;
+  idempotent: boolean;
+}
 
 interface PlanStep {
   id: string;
   title: string;
   description: string;
-  acceptance_criteria: string[];
+  acceptance_criteria: PlanCriterion[];
 }
 
 interface PlanTask {
@@ -56,7 +74,7 @@ interface PlanTask {
   wave: number;
   deps: string[];
   description: string;
-  acceptance_criteria: string[];
+  acceptance_criteria: PlanCriterion[];
   worktree: { path: string; branch: string };
   steps: PlanStep[];
 }
@@ -167,15 +185,20 @@ function compile(
     const planId = scrumToPlan.get(task.id) as string;
     const wave = (level.get(task.id) ?? 0) + 1;
     const description = task.description ?? '';
-    // Forward each active acceptance criterion's `text` into the plan task.
-    // TODO(plan-ac-shape): run-state TASK_PLAN_SPEC.acceptance_criteria is a
-    // list<str>, so only the criterion text survives — the structured shape
-    // (verifies_by/check/idempotent/policy) is dropped here. Carrying it
-    // requires a run-state schema bump (a second cross-domain migration, out
-    // of scope for this task). Superseded criteria are excluded.
-    const acceptanceCriteria = (task.acceptance?.criteria ?? [])
-      .filter((c) => c.status === 'active')
-      .map((c) => c.text);
+    // Forward the FULL structured criterion (run-state v3 shape) so the
+    // orchestrator can dispatch acceptance by kind. Superseded criteria are
+    // excluded; the policy (eval_order/rerun_policy) is task-level scrum state
+    // with no plan-task home and is intentionally not forwarded.
+    const acceptanceCriteria: PlanCriterion[] = (task.acceptance?.criteria ?? [])
+      .filter((c) => c.status !== 'superseded')
+      .map((c) => ({
+        id: c.id,
+        text: c.text,
+        verifies_by: c.verifies_by,
+        check: c.check,
+        status: c.status,
+        idempotent: c.idempotent,
+      }));
     return {
       id: planId,
       title: task.title,
