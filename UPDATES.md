@@ -6,6 +6,24 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.2.0 — Skill validators in `.claude/.prove.json` (config schema v7)
+
+Validators can now invoke an installed **skill** as a gate, alongside the existing `command` and `prompt` kinds.
+
+**New validator field — `skill`**: a validator entry may carry `skill` (e.g. `"claude-skills:comment-audit"`) instead of `command`/`prompt`. The driver session (orchestrator / workflow) invokes the named skill via the Skill tool, scoped to the step diff, and treats its findings as the PASS/FAIL signal — one retry then halt, same as every other validator. A skill that normally edits behind a human gate runs in audit-only mode inside the validation gate (findings only, no auto-apply). The skill must be resolvable by the Skill tool (built-in, `plugin:skill`, or user skill). See `references/validation-config.md` → "Skill Validators".
+
+```jsonc
+"validators": [
+  { "name": "comment-audit", "skill": "claude-skills:comment-audit", "phase": "llm" }
+]
+```
+
+**Migration — config schema v6 → v7**: the `skill` field is additive and optional, so the v6→v7 hop is a pure version stamp — no existing validator is rewritten. Run `/prove:update` (or `claude-prove schema migrate --file .claude/.prove.json`) to bump the stamp; configs without a skill validator are unaffected.
+
+**Auto-adoption**: the field ships in the config schema; `/prove:update` migrates the version stamp. No behavior change unless you add a `skill` validator.
+
+---
+
 ## v3.1.0 — Phase-0 mechanical trust floors on the scrum store
 
 Six engine-owned guards that make the already-shipped v3 data model (reasoning log, acceptance criteria, `parent_id` tree, decisions) *trustworthy*. All mechanical — no new skills or subsystems. Decision record: `.prove/decisions/2026-06-01-phase0-trust-floors-store-layer.md`.
