@@ -1,7 +1,7 @@
 ---
 name: decompose
 description: >
-  Drive onleash's two structured-agent methodologies on prove primitives:
+  Drive two structured-agent methodologies on prove primitives:
   the top-down decompose ladder (charter/VISION/milestone → epic → story →
   task) and AC-gated story-close. Triggers on "decompose", "decompose the
   milestone", "break this epic into stories", "ladder down", "decompose ladder",
@@ -20,12 +20,12 @@ description: >
 You are the **driver**. prove never spawns Claude — you do. prove emits artifacts
 (the scrum tree, acceptance criteria, the reasoning log) and the `claude-prove` CLI
 those subagents run; the **Agent tool** (or native `/workflows` fan-out) does every
-spawn. This skill encodes two onleash methodologies on prove machinery:
+spawn. This skill encodes two methodologies on prove machinery:
 
-- **B1 — the decompose ladder** (audit §2.2a): top-down `charter/VISION → epic →
+- **B1 — the decompose ladder**: top-down `charter/VISION → epic →
   story → task`, one planning subagent per layer, layered scrum tasks as children,
   an accept gate per layer, forced bubble-up on discovery.
-- **B2 — AC-gated story-close** (audit §2.2b): dispatch a story's acceptance criteria
+- **B2 — AC-gated story-close**: dispatch a story's acceptance criteria
   by kind, log a `verification` entry per criterion, synthesize a Review Brief, then
   hand the worktree/validation/review/merge to **orchestrator full-mode** — do not
   reimplement it.
@@ -67,7 +67,7 @@ with a structured-output schema, (2) write each returned child as a layered scru
 
 Each planning subagent gets a **layer-appropriate persona** so it decomposes at the right
 altitude — a PM thinking in capabilities produces different epics than a generic planner.
-The persona is keyed by the **child layer being produced** (onleash's role ladder).
+The persona is keyed by the **child layer being produced**.
 
 **Three personas are active for this ladder** — exactly the `epic → story → task` tiers it
 produces. Spawn only these:
@@ -82,7 +82,7 @@ produces. Spawn only these:
 
 | Persona | Why it is excluded |
 |---------|--------------------|
-| **strategy@initiative** | Reserved. The initiative tier above `milestone` is deferred ([[2026-06-01-initiative-tier-above-milestone]]); the milestone/VISION is the ladder's root, not a layer this ladder produces. Activate only if that tier lands. |
+| **strategy@initiative** | Reserved. The initiative tier above `milestone` is not currently modeled; the milestone/VISION is the ladder's root, not a layer this ladder produces. Activate only if that tier lands. |
 | **implementer@task** | The leaf executor, not a planner. A `task` is the leaf — it is never decomposed further; the implementer executes it under story-close / orchestrator full-mode. |
 
 ### Phase L1: Resolve the root input
@@ -97,8 +97,9 @@ Record the resolved root, target milestone, and starting layer before spawning a
 ### Phase L2: Plan one layer (a planning subagent + structured output)
 
 Spawn **one** planning subagent per parent via the Agent tool, requesting the **native
-structured-output schema** below — this replaces onleash's `*_list.json`. The schema is
-the contract; the subagent returns children, never prose you have to parse.
+structured-output schema** below — the schema is the typed child-list contract that
+replaces free-form prose. The schema is the contract; the subagent returns children,
+never prose you have to parse.
 
 ```jsonc
 // children schema — the native structured-output `schema` passed to agent()
@@ -134,8 +135,8 @@ target child `layer`, and any relevant decisions (`claude-prove scrum decision l
 
 ### Phase L3: Write children + accept gate
 
-For each returned child, create a layered scrum task (status defaults to `backlog` ≈
-onleash `proposed`):
+For each returned child, create a layered scrum task (status defaults to `backlog`, the
+proposed-but-not-yet-accepted state):
 
 ```bash
 claude-prove scrum task create \
@@ -147,7 +148,7 @@ Capture each new id. After all children of a parent exist, record sibling orderi
 `claude-prove scrum task add-dep <child> <blocked-child> --kind blocked_by` for every
 `blocked_by` edge the schema returned.
 
-**Accept gate** (onleash `proposed→accepted`):
+**Accept gate** (`proposed→accepted`):
 
 - If `--auto-accept-through <layer>` covers this tier → auto-promote each child
   `backlog→ready` (`claude-prove scrum task status <id> ready`) and log the decision.
@@ -164,7 +165,7 @@ For each accepted child whose tier is above `task`, recurse into Phase L2 with t
 as the new parent and the next tier down. `epic → story → task` then stops; `task` is the
 leaf.
 
-**Forced bubble-up** (audit §2.3) — two paths, both mandatory, never opt-in:
+**Forced bubble-up** — two paths, both mandatory, never opt-in:
 
 1. **In-run** (a discovery surfaces *during* this driver session): a planning or
    implementation subagent returns a `discovery` finding (the schema field above, or a
@@ -176,7 +177,8 @@ leaf.
    run log. The scrum reconciler hook (`scrum hook subagent-stop|stop`) records it and
    `claude-prove scrum next-ready` surfaces the re-decompose work to the next driver.
    prove has no resident process, so unattended progression does not happen here by
-   design — that is the deliberate §2.3 cost.
+   design — that is the deliberate cost of trading autonomous between-session firing for
+   zero operational surface.
 
 ---
 
@@ -236,7 +238,7 @@ A `verification` entry's shape (envelope only — no extra required fields):
 ```jsonc
 {
   "id":       "<uuid>",
-  "ts":       "2026-05-31T12:00:00Z",
+  "ts":       "<iso-8601-utc>",
   "type":     "verification",
   "agent":    "driver",
   "run_path": "<run-dir>",
@@ -262,10 +264,10 @@ Read the episode structure back with `claude-prove acb log episodes --run-dir <r
 (or `acb log list` for the flat entry stream) and synthesize a risk-forward brief.
 
 > `TODO(reasoning-brief):` the multipass episode-chunk → fragment → merge **synthesizer
-> is a future task** — it is Claude-owned per audit §5.1, not yet a CLI command. For now,
-> synthesize the brief inline from the episodes, surfacing every `hack`/`risk`/open
-> `assumption`/`bailout` first (the preservation rule), and assemble the PR body via the
-> existing `acb` path:
+> is a future task** — it is Claude-owned (the synthesis is model judgment), not yet a CLI
+> command. For now, synthesize the brief inline from the episodes, surfacing every
+> `hack`/`risk`/open `assumption`/`bailout` first (the preservation rule), and assemble the
+> PR body via the existing `acb` path:
 
 ```bash
 claude-prove acb assemble --branch <branch> --base main
@@ -275,7 +277,8 @@ claude-prove acb assemble --branch <branch> --base main
 
 Story-close is ~80% the orchestrator's existing full-mode pipeline. **Do not reimplement**
 worktrees, validation, the review loop, or merge — drive
-`skills/orchestrator/SKILL.md` "Full Mode" (§2c–2e):
+`skills/orchestrator/SKILL.md` "Full Mode" (the validation-gate, architect-review, and
+merge-back steps):
 
 1. Run validators (the command/LLM gates from `references/validation-config.md`) — these
    are the mechanical analog of `bash`/`assert`/`agent` criteria.
@@ -350,7 +353,7 @@ async function decompose(parent, tierIndex, { milestone, autoAcceptThrough, maxF
     return decompose(parent, tierIndex, { milestone, autoAcceptThrough, maxFanout });
   }
 
-  // L3: write each child as a layered scrum task (backlog ≈ proposed).
+  // L3: write each child as a layered scrum task (backlog = proposed, not yet accepted).
   const created = [];
   for (const c of children) {
     const out = await sh(
@@ -367,7 +370,7 @@ async function decompose(parent, tierIndex, { milestone, autoAcceptThrough, maxF
     }
   }
 
-  // Accept gate (onleash proposed→accepted): auto or AskUserQuestion.
+  // Accept gate (proposed→accepted): auto or AskUserQuestion.
   const tierAutoAccepted =
     autoAcceptThrough && TIERS.indexOf(autoAcceptThrough) <= tierIndex;
   let accepted = created;
@@ -468,7 +471,7 @@ await sh(`claude-prove acb assemble --branch ${branch} --base ${base}`);
 
 // C5: review + PR — delegate to orchestrator full-mode (do NOT reimplement).
 //   Not a CLI call and not defined here — an intentional delegation seam: drive
-//   skills/orchestrator/SKILL.md "Full Mode" §2c-2e —
+//   skills/orchestrator/SKILL.md "Full Mode" (validation gate → architect review → merge-back) —
 //   validators → prove:principal-architect review loop → merge → gh pr create. See prose C5.
 
 // Mirror status back to scrum.
@@ -495,8 +498,7 @@ await sh(`claude-prove scrum link-run ${storyId} ${runDir} --branch ${branch} --
 
 | File | Purpose |
 |------|---------|
-| `docs/onleash-port-audit.md` (§2.2, §2.3, §3) | The methodology these scripts encode + the one passive-trigger seam |
-| `references/onleash-design-principles.md` | Engine boundary, native primitives, forced bubble-up, append-only |
+| `references/design-principles.md` | Design principles — the engine boundary (mechanical CLI vs model judgment), native primitives, forced bubble-up, append-only |
 | `skills/orchestrator/SKILL.md` ("Full Mode") | The worktree/validation/review/merge pipeline story-close delegates to |
 | `references/interaction-patterns.md` | AskUserQuestion accept/verify gates |
 | `references/validation-config.md` | Validator phases the close gate runs |

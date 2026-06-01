@@ -140,7 +140,7 @@ Resolve scope, classify subjects, run agent docs first (define contracts), then 
 
 | Input | Resolution |
 |-------|------------|
-| No argument | Session context: files created/modified/discussed this session |
+| No argument | Session context: files created, modified, or discussed in the current session |
 | Topic name | Grep/Glob for matching files/packages/modules |
 | Directory path | All exported/public code in that directory |
 | File path(s) | Those specific files |

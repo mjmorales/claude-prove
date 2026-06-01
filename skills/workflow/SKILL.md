@@ -166,6 +166,10 @@ counts and the blocked subtree, if any.
   independent branches, and for a milestone target mark the task blocked via Phase 4. The
   rebound count is tracked per task, reset each run.
 - **Plan-only target.** Skip Phases 1 and 4 entirely; just init + execute.
+- **Stopping a wave → the Layer-1 interrupt floor.** To abort in-flight tasks, do not
+  wait on cooperation: `scrum task cancel <id> --cascade` → `run-state init --overwrite`
+  → re-dispatch, with the `/workflows` token budget + subagent timeout as the hard stop.
+  See `skills/orchestrator/SKILL.md` → "Interrupting a run — the Layer-1 floor".
 
 ---
 

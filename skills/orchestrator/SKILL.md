@@ -366,6 +366,25 @@ Triggered by `--full` without an existing plan. Gathers PRD + plan via a require
 | state.json write rejected by hook | Use `scripts/prove-run`; never `Write`/`Edit` state.json directly |
 | No slug resolved | Ensure you are inside a worktree with `.prove-wt-slug.txt` (created by `claude-prove worktree create`) |
 
+## Interrupting a run — the Layer-1 floor
+
+To stop in-flight work, **cancel → discard → re-dispatch fresh**:
+
+1. **Cancel the task subtree** — `claude-prove scrum task cancel <id> --cascade --reason <r> [--detail <d>]`. Cascades down `parent_id`, stamping `cancelled` on the root and `parent_cancelled` on descendants so the abandonment is auditable.
+2. **Discard the run** — `claude-prove run-state init --overwrite --branch <b> --slug <g> ...`. Resets `state.json` so a re-dispatch starts clean instead of resuming the abandoned run.
+3. **Re-dispatch** — start a fresh run from the corrected plan.
+
+This is the deterministic guarantee. Native subagents are not externally signalable
+mid-run, so the only hard stop is the `/workflows` **token budget** + the **subagent
+timeout** — they bound and terminate the run without cooperation.
+
+**Tradeoff:** cancel-and-redispatch discards in-flight work unless a `synthesis`
+reasoning-log entry was already written. The graceful **Layer 2** path — cooperative
+checkpoint-interrupt (subagents poll a cancel flag, write a handoff, self-exit so a
+re-dispatch *resumes* rather than restarts) — is best-effort and layers on top of this
+floor; it never replaces it, because a non-polling or stuck agent only stops at the
+budget/timeout. Layer 1 is always the backstop.
+
 ## Rules
 
 - All state mutations through `scripts/prove-run` — never direct-edit `state.json`, never inline `python3 -c`, `jq`, or `sed` for run state

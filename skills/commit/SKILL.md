@@ -12,7 +12,7 @@ description: >
 
 - Never force push or amend existing commits. Instead, create new commits.
 - Never hardcode scopes. Instead, derive from `.claude/.prove.json` or directory structure.
-- Never ask about a scope the user previously declined. Instead, silently use directory-derived scope.
+- Never ask about a scope the user has declined (recorded in a `declined_scope_<name>.md` memory file). Instead, silently use directory-derived scope.
 - Delegate all user decisions through `AskUserQuestion` per `references/interaction-patterns.md`.
 
 ## 1. Gather Context
@@ -51,7 +51,7 @@ If changed files fall outside ALL configured scope prefixes AND do not match a b
 
 1. Determine an appropriate scope name and path prefix for the unmatched files
 2. Check `~/.claude/projects/*/memory/` for `declined_scope_<name>.md` for this project
-3. **Previously declined**: use directory-derived scope silently, proceed to step 4
+3. **Decline on record**: use directory-derived scope silently, proceed to step 4
 4. **Not declined**: use `AskUserQuestion`:
 
 ```
@@ -60,7 +60,7 @@ AskUserQuestion:
   header: "New Scope"
   options:
     - label: "Add Scope"
-      description: "Register in .claude/.prove.json and use it now"
+      description: "Register in .claude/.prove.json and use it for this commit"
     - label: "Skip"
       description: "Use directory-derived scope; never ask about this scope again"
 ```

@@ -1,6 +1,6 @@
 ---
 name: brief-judge
-description: Stage-2 prose-quality judge for the reasoning-log Review Brief (audit §5.1). Judges whether a synthesized brief's narrative is accurate, risk-forward, and coherent against the run's reasoning log. Read-only, advisory, non-blocking — preservation is proven mechanically by `acb brief validate` (Stage-1), so this judges prose only. Invoked by the `reasoning-brief` skill.
+description: Stage-2 prose-quality judge for the reasoning-log Review Brief. Judges whether a synthesized brief's narrative is accurate, risk-forward, and coherent against the run's reasoning log. Read-only, advisory, non-blocking — preservation is proven mechanically by `acb brief validate` (Stage-1), so this judges prose only. Invoked by the `reasoning-brief` skill.
 tools: Read, Glob, Grep
 model: haiku
 ---
@@ -16,8 +16,8 @@ Judge prose only. Preservation is Stage-1's job (`acb brief validate` already pr
 
 ## Judge exactly these three, nothing else
 
-1. **Accuracy** — do §1 Summary and §4 Changes match the log? Flag any claim the log does not support and any outcome the prose overstates.
-2. **Risk-forward** — does the brief surface concerns honestly? Flag prose that buries, softens, or contradicts a §2 attention item (hack / risk / open-assumption).
+1. **Accuracy** — do the Summary and Changes sections match the log? Flag any claim the log does not support and any outcome the prose overstates.
+2. **Risk-forward** — does the brief surface concerns honestly? Flag prose that buries, softens, or contradicts a Needs-your-attention item (hack / risk / open-assumption).
 3. **Coherence** — is the narrative self-consistent? Flag contradictions between sections.
 
 ## Verdict — pick the lowest that applies
@@ -35,7 +35,7 @@ Use this exact structure. Each finding cites the section and the log entry id it
 **Verdict**: STRONG | ADEQUATE | WEAK
 
 ### Findings
-- {§N -- issue, citing log entry id}
+- {section -- issue, citing log entry id}
 - None (when STRONG)
 
 ### Summary
