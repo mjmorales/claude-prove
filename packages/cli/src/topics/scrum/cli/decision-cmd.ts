@@ -11,6 +11,10 @@
  *                              Append-only retire: flips <id> to status
  *                              'superseded', points it at <new-id>, records
  *                              <text>. Never hard-deletes (audit §5.3).
+ *   review-stale [--days N] [--human]
+ *                              Report decisions whose `recorded_at` is older
+ *                              than N days (default 90). Report-only — never
+ *                              prunes or mutates (onleash §8.8).
  *
  * Stdout contract: JSON result per action on stdout; one-line human
  * summary on stderr. `list` returns a JSON array (or a table with `--human`).
@@ -42,14 +46,26 @@ export interface DecisionCmdFlags {
   by?: string;
   /** `supersede`: rationale recorded on the retired decision (`--reason`). */
   reason?: string;
+  /** `review-stale`: staleness threshold in days (default 90). */
+  days?: number | string;
 }
 
-export type DecisionAction = 'record' | 'get' | 'list' | 'recover' | 'supersede';
+export type DecisionAction = 'record' | 'get' | 'list' | 'recover' | 'supersede' | 'review-stale';
 
-const DECISION_ACTIONS: DecisionAction[] = ['record', 'get', 'list', 'recover', 'supersede'];
+const DECISION_ACTIONS: DecisionAction[] = [
+  'record',
+  'get',
+  'list',
+  'recover',
+  'supersede',
+  'review-stale',
+];
 
 /** ADR default per `.prove/decisions/` convention. */
 const DEFAULT_DECISION_STATUS = 'accepted';
+
+/** Default staleness threshold for `review-stale` (onleash §8.8). */
+const DEFAULT_STALE_DAYS = 90;
 
 export function runDecisionCmd(
   action: string,
@@ -80,6 +96,8 @@ export function runDecisionCmd(
         return doRecover(store, workspaceRoot, flags);
       case 'supersede':
         return doSupersede(store, positional[0], flags);
+      case 'review-stale':
+        return doReviewStale(store, flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -199,6 +217,90 @@ function doSupersede(store: ScrumStore, id: string | undefined, flags: DecisionC
   process.stdout.write(`${JSON.stringify(row)}\n`);
   process.stderr.write(`scrum decision supersede: ${row.id} -> ${flags.by}\n`);
   return 0;
+}
+
+// ---------------------------------------------------------------------------
+// review-stale — report decisions past a staleness threshold (onleash §8.8)
+// ---------------------------------------------------------------------------
+
+/** One stale-decision report row: the decision plus its computed age in days. */
+interface StaleDecision {
+  id: string;
+  title: string;
+  status: string;
+  recorded_at: string;
+  age_days: number;
+}
+
+/**
+ * Report decisions whose `recorded_at` is older than `--days` (default 90).
+ * REPORT-ONLY (onleash §8.8): surfaces hygiene candidates for human review and
+ * mutates nothing — no prune, no status flip. Already-superseded decisions are
+ * excluded (they are retired, not stale-but-live). Sorted oldest-first so the
+ * most overdue review floats to the top. JSON array on stdout, or a table with
+ * `--human`. An unparseable `recorded_at` is treated as not-stale (skipped)
+ * rather than crashing the report.
+ *
+ * Default threshold is hard-coded to 90 here; the `memory.stale_threshold_days`
+ * config knob that overrides it lands in the phase-1 config-consolidation task.
+ */
+function doReviewStale(store: ScrumStore, flags: DecisionCmdFlags): number {
+  const days = resolveStaleDays(flags.days);
+  if (days === null) return 1;
+
+  const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
+  const stale: StaleDecision[] = [];
+  for (const row of store.listDecisions()) {
+    if (row.status === 'superseded') continue;
+    const recordedMs = Date.parse(row.recorded_at);
+    if (Number.isNaN(recordedMs) || recordedMs >= cutoffMs) continue;
+    stale.push({
+      id: row.id,
+      title: row.title,
+      status: row.status,
+      recorded_at: row.recorded_at,
+      age_days: Math.floor((Date.now() - recordedMs) / (24 * 60 * 60 * 1000)),
+    });
+  }
+  stale.sort((a, b) => b.age_days - a.age_days);
+
+  if (flags.human === true) {
+    process.stdout.write(renderStaleTable(stale, days));
+  } else {
+    process.stdout.write(`${JSON.stringify(stale)}\n`);
+  }
+  process.stderr.write(
+    `scrum decision review-stale: ${stale.length} decision(s) older than ${days}d\n`,
+  );
+  return 0;
+}
+
+/**
+ * Parse the `--days` flag into a positive integer, defaulting to 90 when
+ * absent. Writes a usage error and returns null on a non-numeric or
+ * non-positive value so the caller exits 1.
+ */
+function resolveStaleDays(raw: number | string | undefined): number | null {
+  if (raw === undefined) return DEFAULT_STALE_DAYS;
+  const n = typeof raw === 'number' ? raw : Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) {
+    process.stderr.write('scrum decision review-stale: --days must be a positive integer\n');
+    return null;
+  }
+  return Math.floor(n);
+}
+
+function renderStaleTable(rows: StaleDecision[], days: number): string {
+  if (rows.length === 0) return `No decisions older than ${days} days.\n`;
+  const header = ['ID', 'TITLE', 'STATUS', 'AGE(d)', 'RECORDED_AT'];
+  const body = rows.map((r) => [r.id, r.title, r.status, String(r.age_days), r.recorded_at]);
+  const widths = header.map((h, i) =>
+    Math.max(h.length, ...body.map((row) => row[i]?.length ?? 0)),
+  );
+  const format = (cells: string[]): string =>
+    cells.map((c, i) => c.padEnd(widths[i] ?? c.length)).join('  ');
+  const lines = [format(header), ...body.map(format)];
+  return `${lines.join('\n')}\n`;
 }
 
 // ---------------------------------------------------------------------------

@@ -180,6 +180,42 @@ describe('runStatusCmd', () => {
     expect(payload.milestones).toHaveLength(1);
     expect(res.stderr).toContain('1/2 active milestones');
   });
+
+  test('task_tree nests children under parents with a rolled-up derived_status', () => {
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'Epic', id: 'epic', layer: 'epic' }),
+    );
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], {
+        title: 'Leaf',
+        id: 'leaf',
+        parent: 'epic',
+        layer: 'task',
+      }),
+    );
+    withCapture(() => runTaskCmd('status', ['leaf', 'ready'], {}));
+    withCapture(() => runTaskCmd('status', ['leaf', 'in_progress'], {}));
+
+    const res = withCapture(() => runStatusCmd({}));
+    const payload = JSON.parse(res.stdout.trim()) as {
+      task_tree: Array<{ id: string; derived_status: string; children: Array<{ id: string }> }>;
+    };
+    const epic = payload.task_tree.find((n) => n.id === 'epic');
+    expect(epic?.children.map((c) => c.id)).toEqual(['leaf']);
+    // Epic is authored backlog but rolls up to in_progress from its leaf.
+    expect(epic?.derived_status).toBe('in_progress');
+    // A flat task is not duplicated as a child anywhere.
+    expect(payload.task_tree.some((n) => n.id === 'leaf')).toBe(false);
+  });
+
+  test('--human renders the Task tree section', () => {
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'Epic', id: 'epic', layer: 'epic' }),
+    );
+    const res = withCapture(() => runStatusCmd({ human: true }));
+    expect(res.stdout).toContain('Task tree');
+    expect(res.stdout).toContain('epic: epic');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -350,6 +386,58 @@ describe('runTaskCmd', () => {
     const res = withCapture(() => runTaskCmd('delete', [undefined, undefined], {}));
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('<id> positional argument required');
+  });
+
+  // -------------------------------------------------------------------------
+  // cancel action (v7)
+  // -------------------------------------------------------------------------
+
+  test('cancel: single task records terminal provenance', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'C', id: 'c' }));
+    const res = withCapture(() =>
+      runTaskCmd('cancel', ['c', undefined], { reason: 'descoped', detail: 'cut from v1' }),
+    );
+    expect(res.exit).toBe(0);
+    const task = JSON.parse(res.stdout.trim()) as {
+      status: string;
+      terminal_reason: string;
+      terminal_detail: string;
+    };
+    expect(task.status).toBe('cancelled');
+    expect(task.terminal_reason).toBe('descoped');
+    expect(task.terminal_detail).toBe('cut from v1');
+  });
+
+  test('cancel --cascade cancels the subtree and reports the ids', () => {
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'E', id: 'e', layer: 'epic' }),
+    );
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], {
+        title: 'S',
+        id: 's',
+        parent: 'e',
+        layer: 'story',
+      }),
+    );
+    const res = withCapture(() => runTaskCmd('cancel', ['e', undefined], { cascade: true }));
+    expect(res.exit).toBe(0);
+    const out = JSON.parse(res.stdout.trim()) as { cancelled: string[] };
+    expect(out.cancelled.sort()).toEqual(['e', 's']);
+  });
+
+  test('cancel: missing <id> exits 1 with a usage hint', () => {
+    const res = withCapture(() => runTaskCmd('cancel', [undefined, undefined], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('<id> positional argument required');
+  });
+
+  test('cancel: already-terminal task surfaces the store error as exit 1', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'C2', id: 'c2' }));
+    withCapture(() => runTaskCmd('cancel', ['c2', undefined], {}));
+    const res = withCapture(() => runTaskCmd('cancel', ['c2', undefined], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('already terminal');
   });
 
   // -------------------------------------------------------------------------
@@ -1294,6 +1382,77 @@ describe('runDecisionCmd', () => {
     const res = withCapture(() => runDecisionCmd('bogus', [undefined, undefined], {}));
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain("unknown decision action 'bogus'");
+  });
+
+  // -------------------------------------------------------------------------
+  // review-stale (v7, onleash §8.8)
+  // -------------------------------------------------------------------------
+
+  /** Record a decision then backdate its `recorded_at` to `daysAgo` days old. */
+  function recordStale(id: string, daysAgo: number): void {
+    const rel = writeDecision(`.prove/decisions/${id}.md`, `# ${id}\n`);
+    withCapture(() => runDecisionCmd('record', [rel, undefined], {}));
+    // biome-ignore lint/suspicious/noExplicitAny: test-only store reach-in to backdate.
+    const { openScrumStore } = require('../store') as any;
+    const s = openScrumStore({ override: join(workspace, '.prove', 'prove.db') });
+    try {
+      const old = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString();
+      s.getStore()
+        .getDb()
+        .prepare('UPDATE scrum_decisions SET recorded_at = ? WHERE id = ?')
+        .run(old, id);
+    } finally {
+      s.close();
+    }
+  }
+
+  test('review-stale flags decisions older than the threshold, oldest-first', () => {
+    recordStale('old-1', 200);
+    recordStale('old-2', 120);
+    recordStale('fresh', 5);
+
+    const res = withCapture(() => runDecisionCmd('review-stale', [undefined, undefined], {}));
+    expect(res.exit).toBe(0);
+    const rows = JSON.parse(res.stdout.trim()) as Array<{ id: string; age_days: number }>;
+    expect(rows.map((r) => r.id)).toEqual(['old-1', 'old-2']);
+    expect(rows[0]?.age_days).toBeGreaterThanOrEqual(rows[1]?.age_days ?? 0);
+  });
+
+  test('review-stale honors a custom --days threshold and mutates nothing', () => {
+    recordStale('d', 30);
+    const flagged = withCapture(() =>
+      runDecisionCmd('review-stale', [undefined, undefined], { days: 20 }),
+    );
+    expect((JSON.parse(flagged.stdout.trim()) as unknown[]).length).toBe(1);
+
+    const none = withCapture(() =>
+      runDecisionCmd('review-stale', [undefined, undefined], { days: 60 }),
+    );
+    expect((JSON.parse(none.stdout.trim()) as unknown[]).length).toBe(0);
+
+    // Report-only: the decision is untouched (still listed, still accepted).
+    const list = withCapture(() => runDecisionCmd('list', [undefined, undefined], {}));
+    const rows = JSON.parse(list.stdout.trim()) as Array<{ id: string; status: string }>;
+    expect(rows.find((r) => r.id === 'd')?.status).toBe('accepted');
+  });
+
+  test('review-stale excludes superseded decisions', () => {
+    recordStale('keep', 200);
+    recordStale('gone', 200);
+    withCapture(() =>
+      runDecisionCmd('supersede', ['gone', undefined], { by: 'keep', reason: 'merged' }),
+    );
+    const res = withCapture(() => runDecisionCmd('review-stale', [undefined, undefined], {}));
+    const rows = JSON.parse(res.stdout.trim()) as Array<{ id: string }>;
+    expect(rows.map((r) => r.id)).toEqual(['keep']);
+  });
+
+  test('review-stale rejects a non-positive --days with exit 1', () => {
+    const res = withCapture(() =>
+      runDecisionCmd('review-stale', [undefined, undefined], { days: 0 }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--days must be a positive integer');
   });
 });
 
