@@ -281,6 +281,23 @@ function migrateV5ToV6(config: ProveConfig): [ProveConfig, MigrationChange[]] {
   return [result, changes];
 }
 
+/**
+ * v6 -> v7: bump schema_version only. v7 adds the optional `skill` field to
+ * validator entries (a validator may now reference a skill to invoke as the
+ * gate, alongside the existing `command`/`prompt` kinds). The field is
+ * additive and optional, so no existing validator needs rewriting — this hop
+ * is a pure version stamp.
+ *
+ * Hardcodes target version '7'. Do NOT reference CURRENT_SCHEMA_VERSION —
+ * migrations are frozen-in-time; later version bumps must not retroactively
+ * change what this migration does.
+ */
+function migrateV6ToV7(config: ProveConfig): [ProveConfig, MigrationChange[]] {
+  const result: ProveConfig = { ...config };
+  result.schema_version = '7';
+  return [result, [new MigrationChange('change', 'schema_version', '"6" -> "7"')]];
+}
+
 export const MIGRATIONS: Record<string, MigrationFn> = {
   '0_to_1': migrateV0ToV1,
   '1_to_2': migrateV1ToV2,
@@ -288,6 +305,7 @@ export const MIGRATIONS: Record<string, MigrationFn> = {
   '3_to_4': migrateV3ToV4,
   '4_to_5': migrateV4ToV5,
   '5_to_6': migrateV5ToV6,
+  '6_to_7': migrateV6ToV7,
 };
 
 /**

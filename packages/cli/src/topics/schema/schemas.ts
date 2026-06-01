@@ -40,7 +40,7 @@ export interface Schema {
   fields: Record<string, FieldSpec>;
 }
 
-export const CURRENT_SCHEMA_VERSION = '6';
+export const CURRENT_SCHEMA_VERSION = '7';
 
 /**
  * Shape of `tools.scrum` introduced in schema v5. The v4 -> v5 migration
@@ -124,6 +124,12 @@ export const PROVE_SCHEMA: Schema = {
             type: 'str',
             required: false,
             description: 'Path to LLM validation prompt file',
+          },
+          skill: {
+            type: 'str',
+            required: false,
+            description:
+              'Skill to invoke as the gate (e.g. "claude-skills:comment-audit"); the driver runs it via the Skill tool. Mutually exclusive with command/prompt',
           },
           phase: {
             type: 'str',

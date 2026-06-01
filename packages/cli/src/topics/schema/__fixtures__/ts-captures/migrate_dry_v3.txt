@@ -1,4 +1,4 @@
-Migration plan for <FIXTURE_PATH> (v3 -> v6):
+Migration plan for <FIXTURE_PATH> (v3 -> v7):
   ~ schema_version: "3" -> "4"
   - scopes.tools: tools registry lives under top-level tools.* since v3
   - tools.schema: schema CLI is built-in — no toggleable tool entry
@@ -6,3 +6,4 @@ Migration plan for <FIXTURE_PATH> (v3 -> v6):
   + tools.scrum: added (scrum task management — enabled, scope 'user', empty config)
   ~ schema_version: "5" -> "6"
   + dev_mode: added (false — installed-binary mode; flip to true when running from a plugin git checkout)
+  ~ schema_version: "6" -> "7"

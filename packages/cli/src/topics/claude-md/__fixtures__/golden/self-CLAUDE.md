@@ -1,8 +1,8 @@
 <!-- prove:managed:start -->
 # claude-prove
 
-<!-- prove:plugin-version:__PLUGIN_VERSION__ -->
-**Prove plugin v__PLUGIN_VERSION__** — if `bun run __PLUGIN_DIR__/packages/cli/bin/run.ts --version` does not match v__PLUGIN_VERSION__, run `/prove:update` to sync.
+<!-- prove:plugin-version:2.9.1 -->
+**Prove plugin v2.9.1** — if `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts --version` does not match v2.9.1, run `/prove:update` to sync.
 
 JavaScript/TypeScript (npm)
 
@@ -19,15 +19,21 @@ JavaScript/TypeScript (npm)
 - File naming: kebab-case
 - Test files: *.test.ext (dot)
 
+## Validation
+
+Run before committing:
+
+- **llm**: `skill claude-skills:comment-audit`
+
 ## References
 
 ### claude-prove CLI Reference
 
-@__PLUGIN_DIR__/references/claude-prove-reference.md
+@/Users/manuelmorales/dev/claude-prove/references/claude-prove-reference.md
 
 ### Onleash Design Principles
 
-@__PLUGIN_DIR__/references/onleash-design-principles.md
+@/Users/manuelmorales/dev/claude-prove/references/onleash-design-principles.md
 
 ### LLM-Optimized Coding Standards
 
