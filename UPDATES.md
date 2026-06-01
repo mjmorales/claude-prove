@@ -6,7 +6,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## v2.10.0 — Methodology parity: reasoning Brief, milestone-close curation, escalation typing, initiative tier
+## v3.3.0 — Methodology parity: reasoning Brief, milestone-close curation, escalation typing, initiative tier
 
 A feature batch raising the structured-agent methodology on prove machinery to parity: a trustworthy reasoning **Review Brief** with a mechanical preservation gate, a milestone-close **curation** pass that lifts findings into durable memory, typed escalations that auto-rank into the ready queue, a milestone-grouping **initiative** tier, and a set of integrity floors on the story-close lifecycle. Two distinct schema versions advance — they migrate by **separate** paths, so do not conflate them:
 
