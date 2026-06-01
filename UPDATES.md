@@ -6,9 +6,11 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## v2.10.0 — onleash methodology on prove machinery: the `decompose` skill + layered task creation
+## v3.0.0 — onleash methodology on prove machinery: the `decompose` skill + layered task creation
 
 Lands onleash's two structured-agent methodologies (audit §2.2a/b) as a driver skill on top of the foundation shipped over the prior tasks (scrum hierarchy `parent_id`/`layer`, decision supersession, first-class acceptance criteria + the four verification kinds, and the `acb` reasoning log). You are the driver Claude session — prove emits the scrum tree, the criteria, and the reasoning log, and the Agent tool / native `/workflows` does the fan-out; prove never spawns Claude.
+
+**Breaking change.** Major release consolidating the onleash methodology. The bundled schema versions advance: run-state `schema_version` `1`→`3`, prove config `schema_version` →`6`, and scrum store migrations v3–v5 (hierarchy, decision supersession, acceptance criteria). On upgrade, run `/prove:update` to migrate `.claude/.prove.json` and apply `claude-prove store migrate` to the `.prove/prove.db` store.
 
 **New skill — `decompose`** (`skills/decompose/SKILL.md`): two methodologies on prove primitives.
 - **Decompose ladder** (B1): top-down `charter/VISION → epic → story → task`. Per layer, a planning subagent emits a child list via a native structured-output schema (replacing onleash's `*_list.json`), each child is written as a layered scrum task (`backlog` ≈ `proposed`), an `AskUserQuestion` accept gate (or `--auto-accept-through <layer>`) promotes `backlog→ready`, and the ladder recurses. Forced bubble-up on a `discovery` finding is documented for both the in-run (branch to re-plan) and across-session (`scrum task status blocked` + reconciler + `next-ready`) paths.
