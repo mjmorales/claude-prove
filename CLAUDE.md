@@ -1,8 +1,8 @@
 <!-- prove:managed:start -->
 # claude-prove
 
-<!-- prove:plugin-version:2.6.0 -->
-**Prove plugin v2.6.0** — if `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts --version` does not match v2.6.0, run `/prove:update` to sync.
+<!-- prove:plugin-version:2.9.1 -->
+**Prove plugin v2.9.1** — if `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts --version` does not match v2.9.1, run `/prove:update` to sync.
 
 JavaScript/TypeScript (npm)
 
@@ -24,6 +24,10 @@ JavaScript/TypeScript (npm)
 ### claude-prove CLI Reference
 
 @/Users/manuelmorales/dev/claude-prove/references/claude-prove-reference.md
+
+### Onleash Design Principles
+
+@/Users/manuelmorales/dev/claude-prove/references/onleash-design-principles.md
 
 ### LLM-Optimized Coding Standards
 
@@ -54,6 +58,7 @@ JavaScript/TypeScript (npm)
 - `/prove:plan` — Plan a task or a specific step from the active plan.json
 - `/prove:review-ui` — Docker-based review UI for inspecting prove runs, ACB intent groups, and verdicts
 - `/prove:scrum` — Operate the scrum store backed by `.prove/prove.db` (tasks, milestones, tags, run-links)
+- `/prove:workflow` — Run a milestone/task tree as parallel waves via orchestrator full-mode, mirroring status to scrum
 
 <!-- prove:managed:end -->
 
