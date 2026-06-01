@@ -26,13 +26,20 @@ import {
   SCRUM_MIGRATION_V8_SQL,
   SCRUM_MIGRATION_V9_SQL,
   SCRUM_MIGRATION_V10_SQL,
+  SCRUM_MIGRATION_V11_SQL,
+  SCRUM_SCHEMA_VERSION,
   ensureScrumSchemaRegistered,
 } from './schemas';
 
 describe('scrum domain registration', () => {
   beforeEach(() => {
-    // Registry is process-wide; re-register defensively in case a prior
-    // test file called `clearRegistry()`.
+    // Registry is process-wide and shared across every test file in the run. A
+    // sibling file can leave `'scrum'` registered with a PARTIAL migration
+    // ladder (the migration-fixture tests register v1-only / v1+v2 defs), in
+    // which case a bare `ensureScrumSchemaRegistered()` no-ops and the stale
+    // def leaks here — dropping the upper migrations. Clear first, then
+    // re-register the canonical full ladder, mirroring `decision.test.ts`.
+    clearRegistry();
     ensureScrumSchemaRegistered();
   });
 
@@ -147,6 +154,9 @@ describe('scrum domain registration', () => {
         // v9 last-touch provenance appends after v7, NULL default.
         'last_modified_by:TEXT:0',
         'last_modified_at:TEXT:0',
+        // v11 executing-worker/run attribution appends after v9, NULL default.
+        'worker_id:TEXT:0',
+        'run_id:TEXT:0',
       ]);
     } finally {
       raw.close();
@@ -304,6 +314,9 @@ describe('scrum domain registration', () => {
         // v9 appends last-touch provenance, NULL default.
         'last_modified_by:TEXT:0',
         'last_modified_at:TEXT:0',
+        // v11 appends executing-worker/run attribution, NULL default.
+        'worker_id:TEXT:0',
+        'run_id:TEXT:0',
       ]);
     } finally {
       raw.close();
@@ -413,12 +426,12 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('full migration chain from v0 applies v1..v10 in order', () => {
+  test('full migration chain from v0 applies v1..v11 in order', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       const result = runMigrations(raw);
       expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
       ]);
     } finally {
       raw.close();
@@ -430,7 +443,7 @@ describe('scrum domain registration', () => {
     try {
       const first = runMigrations(raw);
       expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
       ]);
 
       const second = runMigrations(raw);
@@ -451,6 +464,7 @@ describe('scrum domain registration', () => {
         { version: 8 },
         { version: 9 },
         { version: 10 },
+        { version: 11 },
       ]);
     } finally {
       raw.close();
@@ -481,10 +495,10 @@ describe('scrum domain registration', () => {
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(log).toHaveLength(10);
-      const [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10] = log;
-      if (!v1 || !v2 || !v3 || !v4 || !v5 || !v6 || !v7 || !v8 || !v9 || !v10)
-        throw new Error('expected ten log entries');
+      expect(log).toHaveLength(11);
+      const [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11] = log;
+      if (!v1 || !v2 || !v3 || !v4 || !v5 || !v6 || !v7 || !v8 || !v9 || !v10 || !v11)
+        throw new Error('expected eleven log entries');
       expect(v1.domain).toBe('scrum');
       expect(v1.version).toBe(1);
       expect(v1.description).toContain('scrum_tasks');
@@ -515,6 +529,9 @@ describe('scrum domain registration', () => {
       expect(v10.domain).toBe('scrum');
       expect(v10.version).toBe(10);
       expect(v10.description).toContain('initiative');
+      expect(v11.domain).toBe('scrum');
+      expect(v11.version).toBe(11);
+      expect(v11.description).toContain('worker_id');
     } finally {
       raw.close();
     }
@@ -536,6 +553,34 @@ describe('scrum domain registration', () => {
         ['m1'],
       );
       expect(row).toEqual([{ initiative: null }]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('SCRUM_MIGRATION_V11_SQL adds scrum_tasks worker_id + run_id', () => {
+    expect(SCRUM_MIGRATION_V11_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN worker_id');
+    expect(SCRUM_MIGRATION_V11_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN run_id');
+  });
+
+  test('SCRUM_SCHEMA_VERSION tracks the top migration version (11)', () => {
+    expect(SCRUM_SCHEMA_VERSION).toBe(11);
+  });
+
+  test('v11 ADD COLUMN defaults worker_id/run_id to NULL on existing rows', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      // Row inserted without the v11 columns — simulates a pre-v11 row carried
+      // through the upgrade. The new columns must read NULL.
+      raw.exec(
+        "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ worker_id: string | null; run_id: string | null }>(
+        'SELECT worker_id, run_id FROM scrum_tasks WHERE id = ?',
+        ['t1'],
+      );
+      expect(row).toEqual([{ worker_id: null, run_id: null }]);
     } finally {
       raw.close();
     }
