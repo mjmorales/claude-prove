@@ -74,18 +74,18 @@ Each task MAY declare `bounds`. All sub-fields are optional; absent = unbounded 
 |--------------------|-------------|
 | `tools.allow[]` | Append each pattern verbatim to `permissions.allow` |
 | `tools.deny[]` | Append each pattern verbatim to `permissions.deny` |
-| `write[]` (path globs) | The task may write ONLY inside these globs. Add `permissions.deny` rules that block `Edit`/`Write` outside them — e.g. `Edit(!src/auth/**)`, `Write(!src/auth/**)` using the negation form Claude Code supports. The git worktree is still the primary write wall; these deny rules are a second layer. |
+| `write[]` (path globs) | ADVISORY. Permission deny rules block what they *match* — there is no "deny everything outside X" form — so write scope cannot be a permission rule. The git **worktree is the write wall**; render the allowed write paths into the task-prompt guidance (Phase 3). Emit NO permission rule. (A hard native per-path wall would need a `PreToolUse` hook — out of scope.) |
 | `read[]` (path globs) | ADVISORY. There is no native read-deny surface — render the allowed read paths into the task-prompt guidance (Phase 3), do not emit a permission rule. |
 | `budgets.{tokens,tool_calls,wall_clock_s}` | ADVISORY ONLY. No daemon enforces these. Render them into the task-prompt guidance as soft ceilings; the native subagent timeout is the only hard floor. Emit NO permission rule. |
 
 Example — task with `bounds: { write: ["src/auth/**"], tools: { allow: ["Bash(go test *)"], deny: ["Bash(git push *)"] }, budgets: { tokens: 200000 } }`:
 - `permissions.allow` gains `Bash(go test *)`
-- `permissions.deny` gains `Bash(git push *)`, `Edit(!src/auth/**)`, `Write(!src/auth/**)`
-- Prompt guidance gains: "read scope advisory; soft budget: ~200k tokens"
+- `permissions.deny` gains `Bash(git push *)`
+- Prompt guidance gains: "write scope (worktree wall): src/auth/**; read scope advisory; soft budget: ~200k tokens"
 
 ### Union model (known limitation)
 
-There is ONE workspace `settings.local.json` — the UNION of every task's rules. With parallel tasks, task A inherits task B's allowed tools and write globs; the rules are not per-task isolated. This is accepted for now. Per-worktree isolation (a scoped `settings.local.json` written into each task worktree) is a deferred option, taken only if cross-task tool bleed proves to matter and only after confirming Claude Code honors a worktree-local settings file from the subagent's CWD.
+There is ONE workspace `settings.local.json` — the UNION of every task's rules — so with parallel tasks, task A inherits task B's allowed tools (not per-task isolated). Accepted for now; per-worktree isolation (a scoped `settings.local.json` per task worktree) is deferred until cross-task tool bleed matters and Claude Code is confirmed to honor a worktree-local settings file from the subagent's CWD.
 
 ### Require user approval (do not add to allow)
 
@@ -98,12 +98,12 @@ A task-declared `tools.deny` rule for any of these is honored as-is; never move 
 
 ## Phase 3: Confirm with User
 
-Present rules grouped by category (git, build/test, file ops, orchestrator, task-bound deny, still-requires-approval), plus the advisory `read`/`budgets` guidance derived from bounds. Use AskUserQuestion with header "Permissions": "Approve" / "Modify".
+Present rules grouped by category (git, build/test, file ops, orchestrator, task-bound deny, still-requires-approval), plus the advisory `write`/`read`/`budgets` guidance derived from bounds. Use AskUserQuestion with header "Permissions": "Approve" / "Modify".
 
 ## Phase 4: Write Configuration
 
 1. Read existing `.claude/settings.local.json` if present
 2. Merge new `permissions.allow` with existing rules (deduplicate)
-3. Merge `permissions.deny` (toolchain + task-bound write/deny rules), preserving existing `permissions.deny`/`permissions.ask` entries
+3. Merge `permissions.deny` (toolchain + task-bound `tools.deny` rules), preserving existing `permissions.deny`/`permissions.ask` entries
 4. Write the file (create `.claude/` if needed). Only modify `settings.local.json`, not the shared `settings.json`.
 5. Remind the user to restart Claude Code and confirm `.claude/settings.local.json` is in `.gitignore`

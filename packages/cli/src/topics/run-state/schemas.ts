@@ -222,7 +222,7 @@ const TASK_PLAN_SPEC: FieldSpec = {
           items: { type: 'str' },
           required: false,
           description:
-            'Path globs this task may write. prep-permissions emits Edit/Write deny rules for paths OUTSIDE these globs; the git worktree wall is the primary write boundary',
+            'Path globs this task may write (advisory — the git worktree is the write wall; rendered into the task prompt by prep-permissions). Native permission deny rules match a set, not its complement, so no Edit/Write rule can express "writable only inside X"; a hard native wall would need a PreToolUse hook',
           default: [],
         },
         tools: {
@@ -274,7 +274,7 @@ const TASK_PLAN_SPEC: FieldSpec = {
         },
       },
       description:
-        'Declared per-task execution bounds, consumed by prep-permissions. All sub-fields optional; absent = unbounded (current behavior). tools/write map to native settings.local.json permission rules; read/budgets are advisory prompt-only. See .prove/decisions/2026-05-31-declared-bounds-home.md',
+        'Declared per-task execution bounds, consumed by prep-permissions. All sub-fields optional; absent = unbounded (current behavior). tools map to native settings.local.json permission rules; write/read/budgets are advisory prompt-only (the worktree is the write wall). See .prove/decisions/2026-05-31-declared-bounds-home.md',
     },
     steps: {
       type: 'list',
