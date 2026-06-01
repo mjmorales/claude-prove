@@ -119,6 +119,7 @@ Check for plugin capabilities not yet configured in `.claude/.prove.json`:
 
    - **`reasoning-brief`** skill + **`brief-judge`** agent — synthesize the 7-section risk-forward Review Brief from a run's reasoning log, gated by `acb brief render|validate` (mechanical preservation check) and a non-blocking prose judge.
    - **`curate`** skill — milestone-close pass that lifts durable reasoning-log findings into `scrum_decisions`.
+   - **`run-migrate`** skill + **`run-state migrate-runs`** — on-demand, operator-invoked migration for CONTENT reshaping of stored run artifacts beyond column moves: the CLI mechanically detects which artifacts are behind the current schema and emits a plan (target artifacts + per-hop instruction file), and the skill applies the model-driven reshaping behind an operator gate. Composes with the deterministic `run-state migrate`/`schema migrate` (structure first, content second); never a background loop.
    - **`acb milestone-brief render|validate --milestone <id>`** — stakeholder rollup aggregating a milestone's per-story briefs.
    - **`scrum decision record --kind <adr|glossary|pattern>`** and **`scrum decision list --kind <k>`** — the decision subtype taxonomy.
    - **`scrum decision review-stale [--days N]`**, **`scrum task cancel [--cascade]`**, **`scrum milestone create|list --initiative <label>`**, tree-aware `scrum status`, and typed-escalation ranking in `scrum next-ready` / `scrum alerts`.

@@ -63,6 +63,19 @@ function withCapture(fn: () => number): Captured {
   }
 }
 
+/**
+ * Restore an env var to a saved value, deleting it when it was previously
+ * unset. Wraps the `delete` operator so it stays out of test bodies (biome
+ * `noDelete`).
+ */
+function restoreEnv(key: string, saved: string | undefined): void {
+  if (saved === undefined) {
+    if (key in process.env) delete process.env[key];
+  } else {
+    process.env[key] = saved;
+  }
+}
+
 let workspace: string;
 let originalCwd: string;
 
@@ -419,6 +432,31 @@ describe('runTaskCmd', () => {
     expect(s.exit).toBe(0);
     const shown = JSON.parse(s.stdout.trim());
     expect(shown.task.id).toBe('hi');
+  });
+
+  test('show surfaces v11 worker_id/run_id + the reusable provenance block', () => {
+    const savedWorker = process.env.PROVE_WORKER_ID;
+    const savedSlug = process.env.PROVE_RUN_SLUG;
+    process.env.PROVE_WORKER_ID = 'worker-42';
+    process.env.PROVE_RUN_SLUG = 'feat-prov';
+    try {
+      const c = withCapture(() =>
+        runTaskCmd('create', [undefined, undefined], { title: 'Prov', id: 'prov' }),
+      );
+      expect(c.exit).toBe(0);
+
+      const s = withCapture(() => runTaskCmd('show', ['prov', undefined], {}));
+      expect(s.exit).toBe(0);
+      const shown = JSON.parse(s.stdout.trim());
+      expect(shown.task.worker_id).toBe('worker-42');
+      expect(shown.task.run_id).toBe('feat-prov');
+      expect(shown.task.provenance.worker_id).toBe('worker-42');
+      expect(shown.task.provenance.run_id).toBe('feat-prov');
+      expect(shown.task.provenance.schema_version).toBe(11);
+    } finally {
+      restoreEnv('PROVE_WORKER_ID', savedWorker);
+      restoreEnv('PROVE_RUN_SLUG', savedSlug);
+    }
   });
 
   test('create --parent --layer: persists the containment tree', () => {

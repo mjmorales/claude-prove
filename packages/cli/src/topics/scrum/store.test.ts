@@ -39,6 +39,14 @@ function seedMilestone(
   return store.createMilestone({ id, title: `Milestone ${id}`, ...overrides });
 }
 
+/**
+ * Delete an env var if present. Wraps the `delete` operator so it stays out of
+ * test bodies (biome `noDelete`).
+ */
+function unsetEnv(key: string): void {
+  if (key in process.env) delete process.env[key];
+}
+
 // ===========================================================================
 // Tasks
 // ===========================================================================
@@ -1588,5 +1596,121 @@ describe('ScrumStore — last-touch provenance (v9)', () => {
     if (!row) throw new Error('expected one tagged task');
     expect(row.last_modified_by).toBe('alice');
     expect(row.last_modified_at).toBe(PAST);
+  });
+});
+
+// ===========================================================================
+// Executing-worker/run attribution + reusable provenance block (v11)
+// ===========================================================================
+
+describe('ScrumStore — executing-worker/run attribution (v11)', () => {
+  const PAST = '2026-01-01T00:00:00Z';
+
+  // The store sources worker_id/run_id from the run env the orchestrator
+  // exports at dispatch. Snapshot + restore so a test's env mutation cannot
+  // leak into a sibling.
+  const ENV_KEYS = ['PROVE_WORKER_ID', 'PROVE_RUN_SLUG'] as const;
+  let savedEnv: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    savedEnv = {};
+    for (const k of ENV_KEYS) {
+      savedEnv[k] = process.env[k];
+      unsetEnv(k);
+    }
+  });
+  afterEach(() => {
+    for (const k of ENV_KEYS) {
+      const saved = savedEnv[k];
+      if (saved === undefined) unsetEnv(k);
+      else process.env[k] = saved;
+    }
+  });
+
+  test('createTask defaults worker_id/run_id to NULL when no run env is set', () => {
+    const task = seedTask('t1', { createdAt: PAST });
+    expect(task.worker_id).toBeNull();
+    expect(task.run_id).toBeNull();
+    // Round-trips through SELECT, not just the in-memory return value.
+    expect(store.getTask('t1')?.worker_id).toBeNull();
+    expect(store.getTask('t1')?.run_id).toBeNull();
+  });
+
+  test('createTask stamps worker_id/run_id from the run env', () => {
+    process.env.PROVE_WORKER_ID = 'worker-7';
+    process.env.PROVE_RUN_SLUG = 'add-login';
+    const task = seedTask('t1', { createdAt: PAST });
+    expect(task.worker_id).toBe('worker-7');
+    expect(task.run_id).toBe('add-login');
+    expect(store.getTask('t1')?.worker_id).toBe('worker-7');
+    expect(store.getTask('t1')?.run_id).toBe('add-login');
+  });
+
+  test('explicit workerId/runId input wins over the run env', () => {
+    process.env.PROVE_WORKER_ID = 'env-worker';
+    process.env.PROVE_RUN_SLUG = 'env-run';
+    const task = seedTask('t1', { workerId: 'explicit-worker', runId: 'explicit-run' });
+    expect(task.worker_id).toBe('explicit-worker');
+    expect(task.run_id).toBe('explicit-run');
+  });
+
+  test('updateTaskStatus re-stamps worker_id/run_id from the run env', () => {
+    seedTask('t1', { createdAt: PAST });
+    process.env.PROVE_WORKER_ID = 'worker-9';
+    process.env.PROVE_RUN_SLUG = 'feat-x';
+    const updated = store.updateTaskStatus('t1', 'ready', 'bob');
+    expect(updated.worker_id).toBe('worker-9');
+    expect(updated.run_id).toBe('feat-x');
+  });
+
+  test('cancelTaskCascade stamps worker_id/run_id on root and descendants', () => {
+    seedTask('epic', { layer: 'epic', createdAt: PAST });
+    seedTask('child', { parentId: 'epic', layer: 'task', createdAt: PAST });
+    process.env.PROVE_WORKER_ID = 'sweeper';
+    process.env.PROVE_RUN_SLUG = 'cleanup';
+    store.cancelTaskCascade('epic', { agent: 'dave' });
+    expect(store.getTask('epic')?.worker_id).toBe('sweeper');
+    expect(store.getTask('epic')?.run_id).toBe('cleanup');
+    expect(store.getTask('child')?.worker_id).toBe('sweeper');
+    expect(store.getTask('child')?.run_id).toBe('cleanup');
+  });
+
+  test('setBounds stamps worker_id/run_id even though the agent is NULL', () => {
+    seedTask('t1', { createdAt: PAST });
+    process.env.PROVE_WORKER_ID = 'worker-b';
+    process.env.PROVE_RUN_SLUG = 'bounds-run';
+    const updated = store.setBounds('t1', { tools: { allow: ['Bash(go test *)'] } });
+    expect(updated.last_modified_by).toBeNull();
+    expect(updated.worker_id).toBe('worker-b');
+    expect(updated.run_id).toBe('bounds-run');
+  });
+
+  test('decodeTask assembles the reusable provenance block from the row + schema version', () => {
+    process.env.PROVE_WORKER_ID = 'worker-1';
+    process.env.PROVE_RUN_SLUG = 'run-1';
+    seedTask('t1', { createdByAgent: 'alice', createdAt: PAST });
+    const task = store.getTask('t1');
+    if (!task) throw new Error('expected task');
+    expect(task.provenance).toEqual({
+      created_by: 'alice',
+      created_at: PAST,
+      last_modified_by: 'alice',
+      last_modified_at: PAST,
+      worker_id: 'worker-1',
+      run_id: 'run-1',
+      schema_version: 11,
+    });
+  });
+
+  test('provenance block tracks the most-recent write', () => {
+    seedTask('t1', { createdByAgent: 'alice', createdAt: PAST });
+    process.env.PROVE_WORKER_ID = 'worker-2';
+    process.env.PROVE_RUN_SLUG = 'run-2';
+    const updated = store.updateTaskStatus('t1', 'ready', 'bob');
+    expect(updated.provenance.created_by).toBe('alice');
+    expect(updated.provenance.last_modified_by).toBe('bob');
+    expect(updated.provenance.worker_id).toBe('worker-2');
+    expect(updated.provenance.run_id).toBe('run-2');
+    expect(updated.provenance.schema_version).toBe(11);
   });
 });

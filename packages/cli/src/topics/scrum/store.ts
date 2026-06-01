@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join } from 'node:path';
 import { type Store, type StoreOptions, openStore, runMigrations } from '@claude-prove/store';
 import { listEntries } from '../acb/reasoning-log-store';
-import { ensureScrumSchemaRegistered } from './schemas';
+import { SCRUM_SCHEMA_VERSION, ensureScrumSchemaRegistered } from './schemas';
 import type {
   Acceptance,
   AcceptanceCriterion,
@@ -29,6 +29,7 @@ import type {
   EventKind,
   MilestoneStatus,
   NextReadyRow,
+  Provenance,
   ScrumContextBundle,
   ScrumDep,
   ScrumEvent,
@@ -86,6 +87,17 @@ export interface CreateTaskInput {
    */
   bounds?: TaskBounds | null;
   createdByAgent?: string | null;
+  /**
+   * Executing-worker id of the creating write (v11). When omitted, the store
+   * sources it from the run env (`PROVE_WORKER_ID`), defaulting NULL.
+   */
+  workerId?: string | null;
+  /**
+   * Orchestrator run slug the creating write happened under (v11). When
+   * omitted, the store sources it from the run env (`PROVE_RUN_SLUG`),
+   * defaulting NULL.
+   */
+  runId?: string | null;
   /** ISO-8601 timestamp; defaults to now(). */
   createdAt?: string;
   /** Initial tags to bind under the same transaction as the task row. */
@@ -183,13 +195,14 @@ const ALLOWED_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
 /**
  * Canonical `scrum_tasks` column list, in declaration order. Every SELECT
  * routes through this so the v3 `parent_id`/`layer`, v5 `acceptance_json`,
- * and v6 `bounds_json` columns stay in lockstep with the `ScrumTaskRow`
- * shape. Raw rows carry `acceptance_json`/`bounds_json: string | null`;
- * `decodeTask` turns them into the decoded `ScrumTask.acceptance`/`.bounds`
- * fields at the public boundary.
+ * v6 `bounds_json`, and v11 `worker_id`/`run_id` columns stay in lockstep with
+ * the `ScrumTaskRow` shape. Raw rows carry `acceptance_json`/`bounds_json:
+ * string | null`; `decodeTask` turns them into the decoded
+ * `ScrumTask.acceptance`/`.bounds` fields and assembles the `provenance` block
+ * at the public boundary.
  */
 const TASK_COLUMNS =
-  'id, title, description, status, milestone_id, parent_id, layer, acceptance_json, bounds_json, terminal_reason, terminal_detail, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, deleted_at';
+  'id, title, description, status, milestone_id, parent_id, layer, acceptance_json, bounds_json, terminal_reason, terminal_detail, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, deleted_at';
 
 /** Canonical `scrum_milestones` SELECT column list; includes the v10 `initiative` grouping. */
 const MILESTONE_COLUMNS =
@@ -197,10 +210,11 @@ const MILESTONE_COLUMNS =
 
 /**
  * Raw `scrum_tasks` SELECT shape — identical to `ScrumTask` except the v5
- * acceptance and v6 bounds columns arrive as their on-disk JSON strings.
+ * acceptance and v6 bounds columns arrive as their on-disk JSON strings and the
+ * derived `provenance` block is absent (assembled by `decodeTask`).
  * `decodeTask` is the sole bridge from this to the public `ScrumTask`.
  */
-type ScrumTaskRow = Omit<ScrumTask, 'acceptance' | 'bounds'> & {
+type ScrumTaskRow = Omit<ScrumTask, 'acceptance' | 'bounds' | 'provenance'> & {
   acceptance_json: string | null;
   bounds_json: string | null;
 };
@@ -300,6 +314,13 @@ export class ScrumStore {
     const bounds = input.bounds ?? null;
     if (bounds !== null) validateBounds(bounds);
 
+    // Executing-worker/run attribution (v11): explicit input wins, else the run
+    // env the orchestrator exports at dispatch, else NULL.
+    const { workerId, runId } = resolveRunContext({
+      workerId: input.workerId,
+      runId: input.runId,
+    });
+
     const row: ScrumTask = {
       id: input.id,
       title: input.title,
@@ -319,12 +340,23 @@ export class ScrumStore {
       // already reads coherently before its first mutation.
       last_modified_by: input.createdByAgent ?? null,
       last_modified_at: createdAt,
+      worker_id: workerId,
+      run_id: runId,
       deleted_at: null,
+      provenance: {
+        created_by: input.createdByAgent ?? null,
+        created_at: createdAt,
+        last_modified_by: input.createdByAgent ?? null,
+        last_modified_at: createdAt,
+        worker_id: workerId,
+        run_id: runId,
+        schema_version: SCRUM_SCHEMA_VERSION,
+      },
     };
 
     const tx = this.db.transaction(() => {
       this.prep(
-        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, parent_id, layer, acceptance_json, bounds_json, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
+        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, parent_id, layer, acceptance_json, bounds_json, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
       ).run(
         row.id,
         row.title,
@@ -340,6 +372,8 @@ export class ScrumStore {
         row.last_event_at,
         row.last_modified_by,
         row.last_modified_at,
+        row.worker_id,
+        row.run_id,
       );
 
       if (input.tags && input.tags.length > 0) {
@@ -449,10 +483,11 @@ export class ScrumStore {
     }
 
     const ts = isoNow();
+    const { workerId, runId } = resolveRunContext();
     const tx = this.db.transaction(() => {
       this.prep(
-        'UPDATE scrum_tasks SET status = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ? WHERE id = ?',
-      ).run(next, ts, agent ?? null, ts, id);
+        'UPDATE scrum_tasks SET status = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+      ).run(next, ts, agent ?? null, ts, workerId, runId, id);
       this.prep(
         'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
       ).run(
@@ -500,10 +535,11 @@ export class ScrumStore {
     }
 
     const ts = isoNow();
+    const { workerId, runId } = resolveRunContext();
     const tx = this.db.transaction(() => {
       this.prep(
-        'UPDATE scrum_tasks SET milestone_id = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ? WHERE id = ?',
-      ).run(nextMilestoneId, ts, agent ?? null, ts, id);
+        'UPDATE scrum_tasks SET milestone_id = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+      ).run(nextMilestoneId, ts, agent ?? null, ts, workerId, runId, id);
       this.prep(
         'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
       ).run(
@@ -534,10 +570,11 @@ export class ScrumStore {
     if (!task) throw new Error(`softDeleteTask: unknown task '${id}'`);
 
     const ts = isoNow();
+    const { workerId, runId } = resolveRunContext();
     const tx = this.db.transaction(() => {
       this.prep(
-        'UPDATE scrum_tasks SET deleted_at = ?, last_modified_by = NULL, last_modified_at = ? WHERE id = ?',
-      ).run(ts, ts, id);
+        'UPDATE scrum_tasks SET deleted_at = ?, last_modified_by = NULL, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+      ).run(ts, ts, workerId, runId, id);
       this.prep(
         'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
       ).run(id, ts, 'task_deleted', null, JSON.stringify({ status: task.status }));
@@ -630,9 +667,10 @@ export class ScrumStore {
     if (task.status === 'done' || task.status === 'cancelled') return false;
 
     const ts = isoNow();
+    const { workerId, runId } = resolveRunContext();
     this.prep(
-      'UPDATE scrum_tasks SET status = ?, terminal_reason = ?, terminal_detail = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ? WHERE id = ?',
-    ).run('cancelled', reason, detail, ts, agent, ts, id);
+      'UPDATE scrum_tasks SET status = ?, terminal_reason = ?, terminal_detail = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+    ).run('cancelled', reason, detail, ts, agent, ts, workerId, runId, id);
     this.prep(
       'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
     ).run(
@@ -898,12 +936,21 @@ export class ScrumStore {
    * Persist an acceptance object (or NULL) to `scrum_tasks.acceptance_json`.
    * Bumps last-touch provenance (v9): `last_modified_at = now()`,
    * `last_modified_by = NULL` — these editors carry no agent, so the pair
-   * honestly records an unattributed most-recent write.
+   * honestly records an unattributed most-recent write. Still stamps the
+   * executing-worker/run attribution (v11) from the run env so the write's
+   * unit and run are recorded even when the agent is not.
    */
   private writeAcceptance(taskId: string, acceptance: Acceptance | null): void {
+    const { workerId, runId } = resolveRunContext();
     this.prep(
-      'UPDATE scrum_tasks SET acceptance_json = ?, last_modified_by = NULL, last_modified_at = ? WHERE id = ?',
-    ).run(acceptance === null ? null : JSON.stringify(acceptance), isoNow(), taskId);
+      'UPDATE scrum_tasks SET acceptance_json = ?, last_modified_by = NULL, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+    ).run(
+      acceptance === null ? null : JSON.stringify(acceptance),
+      isoNow(),
+      workerId,
+      runId,
+      taskId,
+    );
   }
 
   /** Re-fetch a task that must exist after a same-method write. */
@@ -931,10 +978,12 @@ export class ScrumStore {
     const task = this.getTask(taskId);
     if (!task) throw new Error(`setBounds: unknown task '${taskId}'`);
     if (bounds !== null) validateBounds(bounds);
-    // Bump last-touch provenance (v9); no agent flows here, so by = NULL.
+    // Bump last-touch provenance (v9); no agent flows here, so by = NULL. Still
+    // stamps the executing-worker/run attribution (v11) from the run env.
+    const { workerId, runId } = resolveRunContext();
     this.prep(
-      'UPDATE scrum_tasks SET bounds_json = ?, last_modified_by = NULL, last_modified_at = ? WHERE id = ?',
-    ).run(bounds === null ? null : JSON.stringify(bounds), isoNow(), taskId);
+      'UPDATE scrum_tasks SET bounds_json = ?, last_modified_by = NULL, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+    ).run(bounds === null ? null : JSON.stringify(bounds), isoNow(), workerId, runId, taskId);
     return this.requireTask(taskId, 'setBounds');
   }
 
@@ -1058,7 +1107,7 @@ export class ScrumStore {
   listTasksForTag(tag: string): ScrumTask[] {
     return (
       this.prep(
-        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.parent_id, t.layer, t.acceptance_json, t.bounds_json, t.terminal_reason, t.terminal_detail, t.created_by_agent, t.created_at, t.last_event_at, t.last_modified_by, t.last_modified_at, t.deleted_at
+        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.parent_id, t.layer, t.acceptance_json, t.bounds_json, t.terminal_reason, t.terminal_detail, t.created_by_agent, t.created_at, t.last_event_at, t.last_modified_by, t.last_modified_at, t.worker_id, t.run_id, t.deleted_at
        FROM scrum_tasks t
        INNER JOIN scrum_tags g ON g.task_id = t.id
        WHERE g.tag = ? AND t.deleted_at IS NULL
@@ -1712,6 +1761,45 @@ function isoNow(): string {
 }
 
 /**
+ * The executing-worker/run context for a row write (v11). The orchestrator
+ * exports these in the dispatch env so a leaf worker's writes carry attribution
+ * without threading the ids through every call site; a bare CLI edit outside a
+ * run leaves both NULL. An explicit per-write override (e.g. a test, or a
+ * caller that already knows the ids) wins over the env.
+ */
+function resolveRunContext(override?: {
+  workerId?: string | null;
+  runId?: string | null;
+}): { workerId: string | null; runId: string | null } {
+  const workerId =
+    override?.workerId !== undefined ? override.workerId : (process.env.PROVE_WORKER_ID ?? null);
+  const runId =
+    override?.runId !== undefined ? override.runId : (process.env.PROVE_RUN_SLUG ?? null);
+  return {
+    workerId: workerId && workerId.length > 0 ? workerId : null,
+    runId: runId && runId.length > 0 ? runId : null,
+  };
+}
+
+/**
+ * Assemble the reusable per-artifact provenance block from a decoded task's
+ * stored columns plus the domain schema version. Single source of the
+ * `Provenance` shape so consumers read one view instead of re-collecting the
+ * five fields ad hoc.
+ */
+function taskProvenance(row: ScrumTaskRow): Provenance {
+  return {
+    created_by: row.created_by_agent,
+    created_at: row.created_at,
+    last_modified_by: row.last_modified_by,
+    last_modified_at: row.last_modified_at,
+    worker_id: row.worker_id,
+    run_id: row.run_id,
+    schema_version: SCRUM_SCHEMA_VERSION,
+  };
+}
+
+/**
  * Decode a raw `scrum_tasks` SELECT row into the public `ScrumTask`. The two
  * transforms are `acceptance_json` (TEXT|NULL) → `acceptance` and `bounds_json`
  * (TEXT|NULL) → `bounds`; every other column passes through unchanged. NULL
@@ -1730,6 +1818,7 @@ function decodeTask(row: ScrumTaskRow): ScrumTask {
     ...rest,
     acceptance: safeParseJson<Acceptance>(acceptance_json, row.id, 'acceptance_json'),
     bounds: safeParseJson<TaskBounds>(bounds_json, row.id, 'bounds_json'),
+    provenance: taskProvenance(row),
   };
 }
 
