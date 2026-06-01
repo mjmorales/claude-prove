@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { listDomains, openStore, runMigrations } from '@claude-prove/store';
 import type { AcbStore } from './store';
-import { ensureAcbSchemaRegistered, openAcbStore } from './store';
+import { coerceLegacyVerdict, ensureAcbSchemaRegistered, openAcbStore } from './store';
 
 function makeManifest(sha: string): Record<string, unknown> {
   return {
@@ -346,6 +346,24 @@ describe('AcbStore: group verdicts', () => {
     const rowsA = store.listGroupVerdicts('slug-a');
     expect(rowsA).toHaveLength(1);
     expect(rowsA[0].verdict).toBe('accepted');
+  });
+});
+
+describe('coerceLegacyVerdict', () => {
+  test('remaps legacy aliases to canonical values', () => {
+    expect(coerceLegacyVerdict('approved')).toBe('accepted');
+    expect(coerceLegacyVerdict('discuss')).toBe('needs_discussion');
+  });
+
+  test('passes canonical values through unchanged', () => {
+    for (const v of ['accepted', 'rejected', 'needs_discussion', 'pending', 'rework'] as const) {
+      expect(coerceLegacyVerdict(v)).toBe(v);
+    }
+  });
+
+  test('coerces unknown/corrupt values to the pending fallback, not through', () => {
+    expect(coerceLegacyVerdict('totally-bogus')).toBe('pending');
+    expect(coerceLegacyVerdict('')).toBe('pending');
   });
 });
 

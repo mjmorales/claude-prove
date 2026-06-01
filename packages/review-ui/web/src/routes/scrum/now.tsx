@@ -55,7 +55,7 @@ export function ScrumNowView() {
         {recent.isSuccess && inFlightRuns.length === 0 && (
           <EmptyState>No runs currently in flight.</EmptyState>
         )}
-        {inFlightRuns.length > 0 && (
+        {recent.isSuccess && inFlightRuns.length > 0 && (
           <ul className="space-y-1.5">
             {inFlightRuns.map((e) => (
               <RunRow key={e.id} event={e} />
@@ -71,7 +71,7 @@ export function ScrumNowView() {
         {recent.isSuccess && recent.data.events.length === 0 && (
           <EmptyState>No recent events.</EmptyState>
         )}
-        {recent.data && recent.data.events.length > 0 && (
+        {recent.isSuccess && recent.data.events.length > 0 && (
           <ul className="divide-y divide-bg-line border border-bg-line rounded-md bg-bg-panel">
             {recent.data.events.slice(0, 50).map((e) => (
               <EventRow key={e.id} event={e} />

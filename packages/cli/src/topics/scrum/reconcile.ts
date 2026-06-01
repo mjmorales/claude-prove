@@ -330,8 +330,22 @@ function emitOrphanEvent(
   });
 }
 
+/**
+ * Guarantee the orphan sentinel exists and is live. Three cases:
+ *   - live row     → nothing to do.
+ *   - soft-deleted → revive it (clear `deleted_at`). A plain `createTask`
+ *     here would hit `UNIQUE constraint failed: scrum_tasks.id` because the
+ *     row physically exists, escaping the reconciler and failing every orphan
+ *     run thereafter — so we restore the sentinel's always-present invariant
+ *     instead of re-inserting.
+ *   - absent       → create it.
+ */
 function ensureOrphanTask(store: ScrumStore): void {
   if (store.getTask(ORPHAN_TASK_ID)) return;
+  if (store.getTaskIncludingDeleted(ORPHAN_TASK_ID)) {
+    store.undeleteTask(ORPHAN_TASK_ID);
+    return;
+  }
   store.createTask({
     id: ORPHAN_TASK_ID,
     title: ORPHAN_TASK_TITLE,
@@ -350,9 +364,8 @@ function collectFilesTouched(runs: ReturnType<ScrumStore['listRunsForTask']>): s
     const statePath = resolveRunStatePath(run.run_path);
     const state = readJsonOrNull<StateJsonLite>(statePath);
     if (!state || !Array.isArray(state.tasks)) continue;
-    // state.json doesn't carry per-file diffs in v1 — collect any `files`
-    // array if a future version adds it. For now, fall back to commit shas
-    // so the bundle still records *something* provenance-worthy.
+    // state.json v1 carries no per-file diffs; fall back to commit shas so
+    // the bundle still records provenance.
     for (const task of state.tasks) {
       if (!Array.isArray(task.steps)) continue;
       for (const step of task.steps) {

@@ -182,15 +182,17 @@ function gitLsFiles(root: string): string[] | null {
 function gitCheckIgnore(root: string, paths: string[]): Set<string> {
   if (paths.length === 0) return new Set();
 
-  const proc = runGit(['check-ignore', '--stdin'], root, paths.join('\n'));
+  // NUL framing on both stdin and stdout (-z) so paths containing a literal
+  // newline (legal on POSIX) survive intact — '\n'-splitting would corrupt
+  // them and silently fail to mark such a file as ignored.
+  const proc = runGit(['check-ignore', '--stdin', '-z'], root, paths.join('\0'));
   if (proc === null) return new Set();
   // git check-ignore: exit 0 = some ignored, exit 1 = none, other = error.
   if (proc.exitCode !== 0 && proc.exitCode !== 1) return new Set();
 
   const ignored = new Set<string>();
-  for (const line of proc.stdout.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed.length > 0) ignored.add(trimmed);
+  for (const entry of proc.stdout.split('\0')) {
+    if (entry.length > 0) ignored.add(entry);
   }
   return ignored;
 }

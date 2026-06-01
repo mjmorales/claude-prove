@@ -73,9 +73,23 @@ export const useSelection = create<Selection & Actions>((set) => ({
       pendingMode: false,
       commitSha: null,
       structureTab: "branches",
+      // Review-session state is per-run: drop out of review mode and clear the
+      // prior run's active intent so it can't leak into the freshly-selected run.
+      reviewMode: false,
+      activeIntentId: null,
     }),
   selectBranch: (branch, base) =>
-    set({ branch, base, head: branch, filePath: null, pendingMode: false, commitSha: null }),
+    set({
+      branch,
+      base,
+      head: branch,
+      filePath: null,
+      pendingMode: false,
+      commitSha: null,
+      // activeIntentId is per-run; a branch switch is within-run so reviewMode
+      // stays, but the active intent must not carry across branches.
+      activeIntentId: null,
+    }),
   selectFile: (filePath) => set({ filePath }),
   selectFileFromGroup: (filePath, group) =>
     set({

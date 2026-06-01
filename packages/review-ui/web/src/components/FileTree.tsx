@@ -137,7 +137,10 @@ function TreeItem({
     if (node.dir && selectedPath && selectedPath.startsWith(node.path + "/")) {
       setOpen(true);
     }
-  }, [selectedPath, node]);
+    // Depend on the primitive fields the body reads, not the whole node:
+    // buildTree allocates fresh node objects on every files refresh, so a
+    // `node` dep would refire this and clobber the user's manual collapse.
+  }, [selectedPath, node.path, node.dir]);
 
   const indent = { paddingLeft: `${12 + depth * 14}px` };
 

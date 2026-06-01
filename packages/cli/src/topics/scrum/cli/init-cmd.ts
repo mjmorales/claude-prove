@@ -55,7 +55,12 @@ export function runInitCmd(flags: InitCmdFlags): number {
       return 0;
     }
 
-    const summary = importPlanning(store, planningDir);
+    // Seed atomically: any createTask/createMilestone throw mid-import (e.g. a
+    // duplicate id) rolls back the entire seed, leaving hasExistingTasks false
+    // so the import stays retryable instead of permanently half-seeded.
+    // cleanupLegacyFiles stays OUTSIDE the transaction — it runs only after a
+    // successful commit, so a rolled-back seed never deletes planning/ files.
+    const summary = store.transaction(() => importPlanning(store, planningDir));
     cleanupLegacyFiles(workspaceRoot, summary);
 
     process.stdout.write(

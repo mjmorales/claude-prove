@@ -40,6 +40,7 @@ export type TaskLayer = 'epic' | 'story' | 'task';
 export type EventKind =
   | 'task_created'
   | 'status_changed'
+  | 'task_deleted'
   | 'milestone_changed'
   | 'run_started'
   | 'run_completed'
@@ -61,8 +62,8 @@ export type DepKind = 'blocks' | 'blocked_by';
 
 /**
  * How a single acceptance criterion is verified (audit §5.2). The four kinds
- * map onto existing prove machinery at story-close time (NOT this task — see
- * the `// TODO(story-close):` seam in store.ts):
+ * map onto existing prove machinery at story-close time (not evaluated in
+ * this module — only authored here):
  *
  *   bash   — `check` is a shell command; pass = exit 0 (→ a `validator`)
  *   assert — `check` is a boolean expression evaluated against run context

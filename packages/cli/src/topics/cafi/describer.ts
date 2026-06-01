@@ -1,8 +1,8 @@
 /**
  * Description generator for CAFI using the Claude CLI.
  *
- * Ported from `tools/cafi/describer.py`. Generates routing-hint descriptions
- * for files by shelling out to `claude -p -` with a structured prompt.
+ * Generates routing-hint descriptions for files by shelling out to
+ * `claude -p -` with a structured prompt.
  * Triage (deciding what to index) uses deterministic glob heuristics so we
  * never burn tokens on obvious exclusions.
  */
@@ -340,7 +340,7 @@ function stringifyError(err: unknown): string {
 
 /**
  * Read one file, prompt Claude for a routing description, return the result.
- * Returns an empty string on any I/O or CLI failure (matches Python parity).
+ * Returns an empty string on any I/O or CLI failure.
  */
 export async function describeFile(filePath: string, projectRoot: string): Promise<string> {
   const fullPath = `${projectRoot}/${filePath}`;
@@ -402,7 +402,12 @@ async function describeBatch(
     const parsed = JSON.parse(stripped) as unknown;
 
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      logger.warn('Batch response was not a JSON object, falling back');
+      // Failure class: non-object response. Name the affected files so an
+      // operator can tell this whole-batch parse miss apart from genuine
+      // per-file model omissions (both zero out as empty descriptions).
+      logger.warn(
+        `Batch describe failed [non-object-response]; ${entries.length} file(s) get empty descriptions: ${entries.map(([fp]) => fp).join(', ')}`,
+      );
       for (const [fp] of entries) {
         if (!(fp in results)) results[fp] = '';
       }
@@ -415,8 +420,11 @@ async function describeBatch(
       results[fp] = typeof desc === 'string' ? desc : '';
     }
   } catch (err) {
+    // Failure class: CLI timeout/error or unparseable JSON. Name the affected
+    // files so a retryable infra failure is distinguishable from genuine
+    // per-file empties downstream (both surface only as empty descriptions).
     logger.warn(
-      `Batch CLI call failed (${stringifyError(err)}), all ${entries.length} files get empty descriptions`,
+      `Batch describe failed [cli-error] (${stringifyError(err)}); ${entries.length} file(s) get empty descriptions: ${entries.map(([fp]) => fp).join(', ')}`,
     );
     for (const [fp] of entries) {
       if (!(fp in results)) results[fp] = '';

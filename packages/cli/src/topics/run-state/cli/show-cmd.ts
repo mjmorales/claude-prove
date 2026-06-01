@@ -1,9 +1,7 @@
 /**
  * `run-state show` / `show-report` / `summary` / `current` — read-only views.
  *
- * Mirrors the Python `cmd_show`, `cmd_current`, and the `summary` CLI path:
- * JSON format emits the raw artifact; md format delegates to `render.ts`
- * (byte-equal to Python for every view).
+ * JSON format emits the raw artifact; md format delegates to `render.ts`.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -14,6 +12,29 @@ import { loadState } from '../state';
 import type { PlanData, PrdData, ReportData, StateData } from '../state';
 import { sortedChildren } from './fs-helpers';
 import { ResolveError, type RunSelection, defaultRunsRoot, resolvePaths } from './resolve';
+
+/**
+ * A malformed artifact must not crash the CLI with a raw SyntaxError. Read
+ * + parse and surface failures as a `LoadError` carrying a clean message so
+ * each command can map it to the documented exit code (1, the I/O code).
+ */
+class LoadError extends Error {}
+
+function readJsonOrThrow<T>(path: string): T {
+  let raw: string;
+  try {
+    raw = readFileSync(path, 'utf8');
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new LoadError(`cannot read ${path}: ${msg}`);
+  }
+  try {
+    return JSON.parse(raw) as T;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new LoadError(`invalid JSON in ${path}: ${msg}`);
+  }
+}
 
 export interface ShowFlags extends RunSelection {
   kind?: 'state' | 'plan' | 'prd' | 'report';
@@ -46,27 +67,35 @@ export function runShow(flags: ShowFlags): number {
     console.error(`error: artifact missing: ${target}`);
     return 1;
   }
-  const data = JSON.parse(readFileSync(target, 'utf8'));
-  const format = flags.format ?? 'md';
-  if (format === 'json') {
-    console.log(JSON.stringify(data, null, 2));
+  try {
+    const data = readJsonOrThrow<unknown>(target);
+    const format = flags.format ?? 'md';
+    if (format === 'json') {
+      console.log(JSON.stringify(data, null, 2));
+      return 0;
+    }
+    if (kind === 'prd') {
+      process.stdout.write(renderPrd(data as PrdData));
+      return 0;
+    }
+    if (kind === 'plan') {
+      process.stdout.write(renderPlan(data as PlanData));
+      return 0;
+    }
+    // state — load plan if present so step/task titles render.
+    let plan: PlanData | null = null;
+    if (existsSync(resolved.paths.plan)) {
+      plan = readJsonOrThrow<PlanData>(resolved.paths.plan);
+    }
+    process.stdout.write(renderState(data as StateData, { plan }));
     return 0;
+  } catch (err) {
+    if (err instanceof LoadError) {
+      console.error(`error: ${err.message}`);
+      return 1;
+    }
+    throw err;
   }
-  if (kind === 'prd') {
-    process.stdout.write(renderPrd(data as PrdData));
-    return 0;
-  }
-  if (kind === 'plan') {
-    process.stdout.write(renderPlan(data as PlanData));
-    return 0;
-  }
-  // state — load plan if present so step/task titles render.
-  let plan: PlanData | null = null;
-  if (existsSync(resolved.paths.plan)) {
-    plan = JSON.parse(readFileSync(resolved.paths.plan, 'utf8')) as PlanData;
-  }
-  process.stdout.write(renderState(data as StateData, { plan }));
-  return 0;
 }
 
 export interface ShowReportFlags extends RunSelection {
@@ -94,7 +123,16 @@ export function runShowReport(stepId: string, flags: ShowReportFlags): number {
     console.error(`error: no report for step ${stepId}`);
     return 1;
   }
-  const data = JSON.parse(readFileSync(target, 'utf8')) as ReportData;
+  let data: ReportData;
+  try {
+    data = readJsonOrThrow<ReportData>(target);
+  } catch (err) {
+    if (err instanceof LoadError) {
+      console.error(`error: ${err.message}`);
+      return 1;
+    }
+    throw err;
+  }
   if ((flags.format ?? 'md') === 'json') {
     console.log(JSON.stringify(data, null, 2));
     return 0;
@@ -122,18 +160,32 @@ export function runCurrent(flags: CurrentFlags): number {
     console.error(`error: no state.json at ${resolved.paths.state}`);
     return 1;
   }
-  const state = loadState(resolved.paths);
-  const format = flags.format ?? 'text';
-  if (format === 'json') {
-    console.log(JSON.stringify(state, null, 2));
+  try {
+    // loadState parses state.json internally; a malformed file throws a raw
+    // SyntaxError here. Guard it so the CLI exits 1 with a clean message.
+    const state = loadState(resolved.paths);
+    const format = flags.format ?? 'text';
+    if (format === 'json') {
+      console.log(JSON.stringify(state, null, 2));
+      return 0;
+    }
+    let plan: PlanData | null = null;
+    if (existsSync(resolved.paths.plan)) {
+      plan = readJsonOrThrow<PlanData>(resolved.paths.plan);
+    }
+    process.stdout.write(renderSummary(state, { plan }));
     return 0;
+  } catch (err) {
+    if (err instanceof LoadError) {
+      console.error(`error: ${err.message}`);
+      return 1;
+    }
+    if (err instanceof SyntaxError) {
+      console.error(`error: invalid JSON in ${resolved.paths.state}: ${err.message}`);
+      return 1;
+    }
+    throw err;
   }
-  let plan: PlanData | null = null;
-  if (existsSync(resolved.paths.plan)) {
-    plan = JSON.parse(readFileSync(resolved.paths.plan, 'utf8')) as PlanData;
-  }
-  process.stdout.write(renderSummary(state, { plan }));
-  return 0;
 }
 
 export interface SummaryFlags {
@@ -156,12 +208,18 @@ export function runSummary(flags: SummaryFlags): number {
       // touched consistently with every other state.json reader in this module.
       const paths = RunPaths.forRun(runsRoot, branch, slug);
       if (!existsSync(paths.state)) continue;
-      const state = loadState(paths);
-      const plan = existsSync(paths.plan)
-        ? (JSON.parse(readFileSync(paths.plan, 'utf8')) as PlanData)
-        : null;
-      process.stdout.write(renderSummary(state, { plan }));
-      emitted += 1;
+      // Skip-and-continue: a single corrupt artifact must not abort the
+      // whole sweep and hide every later healthy run. Warn to stderr and
+      // move on so the summary still renders for the rest.
+      try {
+        const state = loadState(paths);
+        const plan = existsSync(paths.plan) ? readJsonOrThrow<PlanData>(paths.plan) : null;
+        process.stdout.write(renderSummary(state, { plan }));
+        emitted += 1;
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`warning: skipping ${branch}/${slug}: ${msg}`);
+      }
     }
   }
   if (emitted === 0) {

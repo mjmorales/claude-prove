@@ -34,6 +34,14 @@ export interface SettingsFile {
 
 export interface Options {
   force?: boolean;
+  /**
+   * Tool names (matching `ProveHookSpec.tool` / the `tools.<name>` keys in
+   * `.claude/.prove.json`) whose hook blocks should NOT be installed. A
+   * disabled tool's prove-owned block is omitted on a fresh write and removed
+   * if already present. When omitted, every tool is treated as enabled — so
+   * existing callers and the byte-shape parity test keep emitting all blocks.
+   */
+  disabledTools?: ReadonlySet<string>;
 }
 
 /** Thrown when `.claude/settings.json` exists but cannot be parsed as JSON. */
@@ -186,7 +194,12 @@ function readSettings(path: string): SettingsFile {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       return { hooks: {} };
     }
-    throw err;
+    // Non-ENOENT fs errors (EACCES, EISDIR, …) carry an OS-dependent message
+    // with no path context. Wrap with the path so the CLI dispatch surface
+    // reports an actionable error matching the SettingsParseError sibling.
+    throw new Error(`Failed to read settings file at ${path}: ${(err as Error).message}`, {
+      cause: err,
+    });
   }
   try {
     const parsed = JSON.parse(raw) as SettingsFile;
@@ -219,6 +232,7 @@ function findProveBlock(
  * - Existing prove block with stale command → rewrite command + timeout,
  *   preserve any extra keys on the block.
  * - Missing prove block → append.
+ * - Tool in `opts.disabledTools` → block omitted (and removed if present).
  * - Blocks without `_tool` are never touched.
  *
  * Writes atomically via `<path>.tmp` + rename. Validates the parsed source
@@ -242,6 +256,25 @@ export function writeSettingsHooks(
     const eventBlocks = hooks[spec.event] ?? [];
     const desiredCommand = buildCommand(prefix, spec.commandSuffix);
     const existing = findProveBlock(eventBlocks, spec.matcher, spec.tool);
+
+    // Disabled tool: never install its block, and remove a stale one if it was
+    // installed by a prior run when the tool was enabled.
+    if (opts.disabledTools?.has(spec.tool)) {
+      if (existing) {
+        const arr = hooks[spec.event];
+        if (arr) {
+          const idx = arr.indexOf(existing);
+          if (idx >= 0) {
+            arr.splice(idx, 1);
+            mutated = true;
+          }
+          // Drop the event key if removing our block left it empty, but keep
+          // it when user-authored blocks remain.
+          if (arr.length === 0) delete hooks[spec.event];
+        }
+      }
+      continue;
+    }
 
     if (existing) {
       const entry = existing.hooks[0];

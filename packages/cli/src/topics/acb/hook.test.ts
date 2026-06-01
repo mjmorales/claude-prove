@@ -1,7 +1,7 @@
 /**
  * Tests for acb.hook — Claude Code PostToolUse hook logic.
  *
- * Ported from `tools/acb/test_hook.py` (394 lines). Coverage matrix:
+ * Coverage matrix:
  *   - Tool filter (non-Bash, non-commit)
  *   - commitSucceeded shapes (is_error / isError / exit_code / exitCode)
  *   - parseEffectiveCwd matrix (quoted, unquoted, env-var skip, subshell,
@@ -11,7 +11,7 @@
  *   - orchestrator/* and task/* branches without slug emit guard block
  *   - Manifest present -> silent pass
  *   - Manifest missing -> block with MANIFEST_PROMPT
- *   - 4 golden-fixture byte-parity assertions against Python captures
+ *   - 4 golden-fixture byte-parity assertions against pinned captures
  *
  * Total assertions: >=25.
  */
@@ -338,6 +338,31 @@ describe('runHookPostCommit — integration with real repo', () => {
     expect(decision.reason).toContain('claude-prove acb save-manifest');
     expect(decision.reason).not.toContain('bun run');
     expect(decision.reason).not.toContain('PYTHONPATH=');
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test('tools.acb.enabled:false -> silent pass even when manifest missing', () => {
+    const root = makeTmp('disabled');
+    initRepo(root, 'feature/auth');
+    mkdirSync(join(root, '.prove'));
+    mkdirSync(join(root, '.claude'));
+    writeFileSync(
+      join(root, '.claude', '.prove.json'),
+      JSON.stringify({ tools: { acb: { enabled: false } } }),
+      'utf8',
+    );
+    // Same shape as the manifest-missing block case above; the only difference
+    // is the disabled toggle, so a non-silent result would prove the gate fired.
+    const result = runHookPostCommit({
+      workspaceRoot: root,
+      payload: {
+        tool_name: 'Bash',
+        tool_input: { command: 'git commit -m test' },
+        tool_response: { exit_code: 0 },
+        cwd: root,
+      },
+    });
+    expect(result.stdout).toBe('');
     rmSync(root, { recursive: true, force: true });
   });
 

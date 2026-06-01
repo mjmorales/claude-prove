@@ -1,18 +1,11 @@
 /**
  * Claude Code PostToolUse hook for ACB intent capture.
  *
- * Ported from `tools/acb/hook.py`. Fires AFTER every successful
- * `git commit` Bash call. Resolves the resulting commit SHA, checks
- * the main-worktree ACB store (unified `prove.db`, acb domain) for a
- * manifest keyed to that SHA, and — if none exists — blocks the agent
- * with a `decision: "block"` JSON response that prompts it to run
- * `claude-prove acb save-manifest` for the real SHA.
- *
- * Behavior mirrors Python's `tools/acb/hook.py` with two MANIFEST_PROMPT
- * edits: the save-manifest invocation swaps from
- * `PYTHONPATH=... python3 -m tools.acb save-manifest ...` to
- * `bun run <plugin>/packages/cli/bin/run.ts acb save-manifest ...`, and
- * the rules block drops the PYTHONPATH mention that no longer applies.
+ * Fires AFTER every successful `git commit` Bash call. Resolves the
+ * resulting commit SHA, checks the main-worktree ACB store (unified
+ * `prove.db`, acb domain) for a manifest keyed to that SHA, and — if none
+ * exists — blocks the agent with a `decision: "block"` JSON response that
+ * prompts it to run `claude-prove acb save-manifest` for the real SHA.
  *
  * Design notes:
  *
@@ -131,6 +124,12 @@ export function runHookPostCommit(opts: {
 
   if (!commitSucceeded(payload.tool_response)) return silent();
 
+  // Respect the `tools.acb.enabled` toggle in `.claude/.prove.json`. Defense in
+  // depth alongside the installer, which omits the acb hook block when the tool
+  // is disabled — a settings.json staged while acb was enabled would otherwise
+  // keep firing this hook.
+  if (!acbEnabled(workspaceRoot)) return silent();
+
   // Subagents run `cd <worktree> && git commit` because shell state doesn't
   // persist across Bash calls. Read HEAD from the cd target so the right
   // worktree is inspected.
@@ -239,10 +238,8 @@ export function commitSucceeded(toolResponse: unknown): boolean {
 }
 
 /**
- * Build the MANIFEST_PROMPT body. Derived from Python's `_MANIFEST_PROMPT`;
- * the save-manifest invocation line swaps from `PYTHONPATH=... python3 -m
- * tools.acb ...` to `bun run ...`, and the rules block no longer mentions
- * PYTHONPATH because the bun invocation carries no such flag.
+ * Build the MANIFEST_PROMPT body. The save-manifest invocation line branches
+ * on `dev_mode` (bare `claude-prove` vs `bun run …`); see the body comment.
  */
 export function generateManifestPrompt(params: ManifestPromptParams): string {
   const {
@@ -267,10 +264,9 @@ export function generateManifestPrompt(params: ManifestPromptParams): string {
     ? `bun run ${pluginDir}/packages/cli/bin/run.ts acb`
     : 'claude-prove acb';
 
-  // Exact template body from tools/acb/hook.py lines 167-205. Every
-  // character outside substitutions — including the em-dashes, the
-  // `∈` glyph, and the closing sentence — must stay byte-equal so
-  // golden-fixture parity holds.
+  // Template body is byte-frozen: every character outside substitutions —
+  // including the em-dashes, the `∈` glyph, and the closing sentence — must
+  // stay exact so golden-fixture parity holds.
   return `ACTION REQUIRED — commit ${shortSha} on \`${branch}\`${slugClause} has no intent manifest. Your next tool call MUST be this exact Bash invocation (no variations, no prefix commands):
 
 \`\`\`bash
@@ -362,7 +358,6 @@ function headDiffStat(sha: string, cwd: string): string {
 }
 
 function orchestratorSlugGuardReason(branch: string): string {
-  // Byte-equal to Python's f-string at hook.py lines 267-272.
   return `ACB: branch \`${branch}\` looks orchestrator-managed but no run slug resolved. Expected .prove-wt-slug.txt in this worktree or PROVE_RUN_SLUG env var. Run \`claude-prove worktree create <slug> <task-id>\` to create the worktree, or write the marker manually.`;
 }
 
@@ -391,6 +386,27 @@ export function readDevMode(workspaceRoot: string): boolean {
     return (parsed as Record<string, unknown>).dev_mode === true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Read `.claude/.prove.json::tools.acb.enabled` under `workspaceRoot`. Returns
+ * `true` (enabled) when the field is absent or the config is missing/malformed,
+ * so the hook keeps its fire-by-default behavior; only an explicit
+ * `enabled: false` disables it.
+ */
+export function acbEnabled(workspaceRoot: string): boolean {
+  const configPath = join(workspaceRoot, '.claude', '.prove.json');
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(configPath, 'utf8'));
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return true;
+    const tools = (parsed as Record<string, unknown>).tools;
+    if (typeof tools !== 'object' || tools === null) return true;
+    const acb = (tools as Record<string, unknown>).acb;
+    if (typeof acb !== 'object' || acb === null) return true;
+    return (acb as Record<string, unknown>).enabled !== false;
+  } catch {
+    return true;
   }
 }
 

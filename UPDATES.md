@@ -97,6 +97,18 @@ All top-level keys (`read | write | tools | budgets`) are optional; **NULL colum
 
 **Auto-adoption**: the column, CLI flags, and `compile-plan` forwarding ship in the CLI; the store self-migrates on next open. No config edit required. Run `/prove:update` to sync.
 
+### Tool toggles now gate hooks: `tools.<name>.enabled:false` omits the install block + the acb hook self-gates
+
+`tools.<name>.enabled` in `.claude/.prove.json` was **inert** for hooks — `writeSettingsHooks` emitted every canonical block regardless of the flag, and the `acb` post-commit hook fired regardless. The only way to disable a tool's hook was hand-editing `.claude/settings.json` out from under the emitter (which then drifts from the canonical shape). This wires the flag to the hook surface so a disabled tool means no hook. Surfaced by a steward audit (the flag looked like a switch but mapped to no mechanism).
+
+**Behavior — `install init` / `install init-hooks` honor `tools.<name>.enabled`**: `writeSettingsHooks` gained a `disabledTools` option (`packages/installer/src/write-settings-hooks.ts`). A tool with `enabled:false` has its prove-owned hook block omitted on a fresh write and **removed** if already present (the event key is dropped only when no user-authored block remains). `init`/`init-hooks` read the disabled set from `.claude/.prove.json` via `disabledToolsFromConfig` (`packages/cli/src/topics/install/disabled-tools.ts`); a missing or malformed config yields an empty set — every tool stays enabled, so a broken config never silently strips hooks. **Absent flag / `enabled:true` = unchanged** (block installed), so existing installs and the byte-shape parity fixture are unaffected.
+
+**Behavior — the `acb` post-commit hook self-gates**: `runHookPostCommit` returns silent when `tools.acb.enabled:false` (read after the commit-detection filters, so the config is touched only on real commits). Defense in depth — a `settings.json` staged while acb was enabled stops firing without a re-install. Default-on preserved: an absent or unreadable flag = enabled.
+
+**Migration**: none — no schema change. To drop a now-disabled tool's hook block from an existing `.claude/settings.json`, re-run `claude-prove install init-hooks` (or `/prove:update`); the acb runtime gate takes effect immediately, no re-install needed.
+
+**Auto-adoption**: the installer + hook changes ship in the CLI. After setting a tool `enabled:false`, re-run `claude-prove install init-hooks` to remove its block; the acb self-gate is automatic. Run `/prove:update` to sync.
+
 ---
 
 ## v2.8.0 — New `/prove:workflow` command: run a whole milestone (or plan.json) as a parallel fan-out

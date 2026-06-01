@@ -56,7 +56,7 @@ interface PlanShape {
   schema_version: string;
   kind: string;
   mode: string;
-  task_id: string;
+  task_id?: string;
   tasks: Array<{
     id: string;
     title: string;
@@ -160,7 +160,9 @@ describe('runCompilePlanCmd — compilation', () => {
     expect(plan.kind).toBe('plan');
     expect(plan.schema_version).toBe('3');
     expect(plan.mode).toBe('simple'); // 3 tasks < 4
-    expect(plan.task_id).toBe('m1');
+    // task_id is intentionally NOT set to the milestone id — run-state reserves
+    // it for a single scrum task id, and a milestone plan fans out to many.
+    expect(plan.task_id).toBeUndefined();
     expect(plan.tasks.map((t) => [t.id, t.wave])).toEqual([
       ['1.1', 1],
       ['2.1', 2],

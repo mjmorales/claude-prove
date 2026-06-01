@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { FastifyInstance } from "fastify";
 import {
   diffFiles,
@@ -12,12 +13,33 @@ import { parseRunKey } from "../parsers.js";
 type DiffQuery = { base?: string; head?: string; slug?: string; branch?: string; pending?: string };
 type FileQuery = DiffQuery & { path?: string };
 
+// Conservative git-ref allowlist. `base`/`head` are concatenated into a single
+// `base...head` argv token and handed to `git` via spawn (no shell), so the
+// risk is argument injection, not shell injection: a value beginning with `-`
+// is interpreted as a git flag (e.g. `--output=...`). Reject anything outside
+// the allowlist or with a leading dash before it reaches git.
+const GIT_REF = /^[A-Za-z0-9_./@^~-]+$/;
+
+function isBadRef(ref: string): boolean {
+  return !GIT_REF.test(ref) || ref.startsWith("-");
+}
+
+// Relative-path guard for the `path` query param. Reject absolute paths,
+// leading-dash flags, and anything normalizing outside the tree. Committed
+// diffs already terminate option parsing with `--` and bound traversal via git
+// pathspec; for working-dir reads `synthAddPatch` additionally relies on the
+// porcelain-equality gate (git.ts) as a second line of defense.
+function isBadPath(p: string): boolean {
+  return path.isAbsolute(p) || p.startsWith("-") || path.normalize(p).split(path.sep)[0] === "..";
+}
+
 export function registerDiffRoutes(app: FastifyInstance, repoRoot: string) {
   // Summary: files changed between base...head, optionally from a worktree cwd.
   app.get<{ Querystring: DiffQuery }>("/api/diff", async (req, reply) => {
     const base = req.query.base;
     const head = req.query.head;
     if (!base || !head) return reply.code(400).send({ error: "base and head required" });
+    if (isBadRef(base) || isBadRef(head)) return reply.code(400).send({ error: "bad ref" });
     const cwd = await resolveCwdForBranch(repoRoot, req.query.slug, head);
     try {
       const files = await diffFiles(repoRoot, base, head, cwd);
@@ -33,6 +55,8 @@ export function registerDiffRoutes(app: FastifyInstance, repoRoot: string) {
     if (!base || !head || !filePath) {
       return reply.code(400).send({ error: "base, head, path required" });
     }
+    if (isBadRef(base) || isBadRef(head)) return reply.code(400).send({ error: "bad ref" });
+    if (isBadPath(filePath)) return reply.code(400).send({ error: "bad path" });
     const cwd = await resolveCwdForBranch(repoRoot, req.query.slug, head);
     try {
       const patch = await diffUnified(repoRoot, base, head, filePath, cwd);
@@ -49,6 +73,7 @@ export function registerDiffRoutes(app: FastifyInstance, repoRoot: string) {
     async (req, reply) => {
       const { slug, path: filePath, branch } = req.query;
       if (!slug) return reply.code(400).send({ error: "slug required" });
+      if (filePath && isBadPath(filePath)) return reply.code(400).send({ error: "bad path" });
       const key = parseRunKey(slug);
       if (!key) return reply.code(400).send({ error: "bad slug" });
       const summary = await readRunSummary(repoRoot, key.branch, key.slug);

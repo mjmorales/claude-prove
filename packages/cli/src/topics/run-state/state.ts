@@ -5,14 +5,13 @@
  * mutations funnel through this module so invariants (status transitions,
  * monotonic timestamps, dispatch dedup) hold uniformly.
  *
- * Ported 1:1 from `tools/run_state/state.py`. On-disk JSON must stay
- * byte-equivalent with the Python source: object key order follows Python's
- * dict construction order, `JSON.stringify(..., null, 2)` matches Python's
- * `indent=2`, and files end with a trailing newline.
+ * On-disk JSON shape is stable: object key order follows construction order,
+ * `JSON.stringify(..., null, 2)` (two-space indent), and files end with a
+ * trailing newline.
  *
  * Atomic write: temp-file (`<path>.tmp`) + rename to target. The lock file
- * (`state.json.lock`) is a presence-flag sidecar (Python uses fcntl.flock
- * for advisory locking; TS keeps the sidecar for on-disk parity). Single-
+ * (`state.json.lock`) is a presence-flag sidecar (advisory; not an OS file
+ * lock). Single-
  * process orchestrator runs are typical — callers should funnel through
  * this module rather than writing state.json directly.
  */
@@ -199,11 +198,11 @@ export const _clock: { now: () => string } = {
 };
 
 function defaultUtcnowIso(): string {
-  // Parity seam for capture.sh harnesses: PROVE_STATE_FROZEN_NOW lets Python
-  // and TS sides emit identical timestamps. Not used in production.
+  // PROVE_STATE_FROZEN_NOW pins the timestamp for deterministic test capture.
+  // Not used in production.
   const frozen = process.env.PROVE_STATE_FROZEN_NOW;
   if (frozen) return frozen;
-  // Match Python: datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+  // ISO-8601 UTC, seconds precision with `Z` suffix (no milliseconds).
   return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
@@ -279,7 +278,7 @@ export function defaultsFromSchema(schema: Schema): Record<string, unknown> {
   return out;
 }
 
-/** Factory for a fresh prd.json shell — matches Python `new_prd`. */
+/** Factory for a fresh prd.json shell. */
 export function newPrd(title: string, extras: Record<string, unknown> = {}): PrdData {
   const prd = defaultsFromSchema(PRD_SCHEMA);
   prd.schema_version = CURRENT_SCHEMA_VERSION;
@@ -291,7 +290,7 @@ export function newPrd(title: string, extras: Record<string, unknown> = {}): Prd
   return prd as unknown as PrdData;
 }
 
-/** Factory for a fresh plan.json shell — matches Python `new_plan`. */
+/** Factory for a fresh plan.json shell. */
 export function newPlan(tasks: PlanTaskInput[], mode = 'simple'): PlanData {
   const plan = defaultsFromSchema(PLAN_SCHEMA);
   plan.schema_version = CURRENT_SCHEMA_VERSION;
@@ -420,8 +419,8 @@ export function saveState(paths: RunPaths, state: StateData): void {
 }
 
 /**
- * Read-modify-write helper. Mirrors Python's `mutate_state` context manager:
- * load, apply mutator, bump `updated_at`, persist atomically.
+ * Read-modify-write helper: load, apply mutator, bump `updated_at`, persist
+ * atomically.
  */
 function mutateState<T>(paths: RunPaths, mutator: (state: StateData) => T): T {
   touchLock(paths.state_lock);
@@ -609,9 +608,8 @@ function terminateStep(
 }
 
 /**
- * Record a validator outcome in the per-phase summary. Mirrors Python's
- * `set_validator` — the phase slot is overwritten in place (no list append),
- * matching the `validator_summary` dict semantics.
+ * Record a validator outcome in the per-phase summary. The phase slot is
+ * overwritten in place (no list append) in the `validator_summary` map.
  */
 export function validatorSet(
   paths: RunPaths,
@@ -763,8 +761,9 @@ function maybeFinalizeRun(state: StateData): void {
 
 /**
  * Persist a per-step report under `reports/<step_id>.json`. Dots in step
- * ids are normalized to underscores for clarity. Write-once semantics:
- * existing reports are NOT overwritten — callers must delete before rewrite.
+ * ids are normalized to underscores for clarity. Overwrites atomically
+ * (last-write-wins): an existing report for the same step is replaced via
+ * `writeJsonAtomic`'s truncate+rename, so a rerun supersedes the prior report.
  *
  * Returns the target path.
  */
