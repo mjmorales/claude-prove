@@ -11,6 +11,7 @@
  *   claude-prove acb migrate-legacy-db [--workspace-root W]
  *   claude-prove acb log <sub>         [--run-dir D] [--file F]  (sub: append|list|episodes)
  *   claude-prove acb brief <sub>       [--run-dir D] [--file F]  (sub: render|validate)
+ *   claude-prove acb milestone-brief <sub> --milestone M [--file F]  (sub: render|validate)
  *
  * `ensureLegacyImported(workspaceRoot)` runs at the top of every non-migrate
  * handler so the standalone `.prove/acb.db` gets absorbed into the unified
@@ -34,9 +35,17 @@ import { runBrief } from './acb/cli/brief-cmd';
 import { runHookCmd } from './acb/cli/hook-cmd';
 import { runLog } from './acb/cli/log-cmd';
 import { runMigrateLegacy } from './acb/cli/migrate-legacy-cmd';
+import { runMilestoneBrief } from './acb/cli/milestone-brief-cmd';
 import { runSaveManifest } from './acb/cli/save-manifest-cmd';
 
-type AcbAction = 'save-manifest' | 'assemble' | 'hook' | 'migrate-legacy-db' | 'log' | 'brief';
+type AcbAction =
+  | 'save-manifest'
+  | 'assemble'
+  | 'hook'
+  | 'migrate-legacy-db'
+  | 'log'
+  | 'brief'
+  | 'milestone-brief';
 
 const ACB_ACTIONS: AcbAction[] = [
   'save-manifest',
@@ -45,6 +54,7 @@ const ACB_ACTIONS: AcbAction[] = [
   'migrate-legacy-db',
   'log',
   'brief',
+  'milestone-brief',
 ];
 
 type HookEvent = 'post-commit';
@@ -60,6 +70,7 @@ interface AcbFlags {
   runDir?: string;
   file?: string;
   tokenBudget?: number;
+  milestone?: string;
 }
 
 export function register(cli: CAC): void {
@@ -79,6 +90,7 @@ export function register(cli: CAC): void {
     .option('--run-dir <d>', 'Run directory holding log/<agent>/<id>.json entries (log, brief)')
     .option('--file <f>', 'Entry JSON file path (log append) / brief markdown (brief validate)')
     .option('--token-budget <n>', 'Episode-chunk token budget (brief chunk; default: 6000)')
+    .option('--milestone <m>', 'Milestone id (milestone-brief)')
     .action((action: string, arg: string | undefined, flags: AcbFlags) => {
       if (!isAcbAction(action)) {
         console.error(
@@ -144,6 +156,13 @@ function dispatch(action: AcbAction, arg: string | undefined, flags: AcbFlags): 
         runDir: flags.runDir,
         file: flags.file,
         tokenBudget: flags.tokenBudget,
+      });
+
+    case 'milestone-brief':
+      return runMilestoneBrief(arg, {
+        milestone: flags.milestone,
+        file: flags.file,
+        workspaceRoot: flags.workspaceRoot,
       });
   }
 }

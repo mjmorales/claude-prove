@@ -24,6 +24,7 @@
 
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative } from 'node:path';
+import type { StoryBriefInput } from '../acb/milestone-brief';
 import type { LogEntry } from '../acb/reasoning-log';
 import { listEntries } from '../acb/reasoning-log-store';
 import type { ScrumStore } from './store';
@@ -329,6 +330,91 @@ export function reconcileMilestoneClosed(
   }
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// gatherMilestoneStories — assemble the milestone-brief rollup input
+// ---------------------------------------------------------------------------
+
+/**
+ * Reduce every task in a milestone to one `StoryBriefInput`, merging the
+ * reasoning-log entries across the task's linked runs. This is the mechanical
+ * input the milestone brief synthesizes from: each story carries its
+ * attention-bearing entries (so the recursive preservation rule can prove none
+ * was dropped), its decisions, its shipped outcome, and — for a story that did
+ * not ship — its recorded terminal reason. The judgment of what the rollup
+ * *says* is the synthesizer skill's; this only gathers.
+ *
+ * A story `shipped` when its status is `done`. `outcome` is the body of its
+ * latest `synthesis` entry (the worker's hand-off-of-record). A run whose log
+ * dir is malformed is skipped rather than aborting the whole gather — a corrupt
+ * log must not block a milestone brief from rendering. `projectDir` resolves
+ * repo-relative run paths (defaults to `process.cwd()`); the CLI passes the
+ * workspace root.
+ */
+export function gatherMilestoneStories(
+  milestoneId: string,
+  store: ScrumStore,
+  projectDir?: string,
+): StoryBriefInput[] {
+  const root = projectDir ?? process.cwd();
+  const stories: StoryBriefInput[] = [];
+
+  for (const task of store.listTasks({ milestoneId })) {
+    const entries = collectStoryEntries(store, task.id, root);
+    stories.push({
+      story_id: task.id,
+      title: task.title,
+      shipped: task.status === 'done',
+      entries,
+      outcome: latestSynthesisOutcome(entries),
+      terminal_reason: task.terminal_reason,
+      terminal_detail: task.terminal_detail,
+    });
+  }
+
+  return stories;
+}
+
+/**
+ * Merge every linked run's reasoning log for a task, deduped by entry id (the
+ * same entry can surface through more than one linked run-path form). Sorted by
+ * `ts` so attention/decision derivation reads in chronological order.
+ */
+function collectStoryEntries(store: ScrumStore, taskId: string, projectDir: string): LogEntry[] {
+  const merged: LogEntry[] = [];
+  const seen = new Set<string>();
+
+  for (const run of store.listRunsForTask(taskId)) {
+    const runDir = isAbsolute(run.run_path) ? run.run_path : join(projectDir, run.run_path);
+    let entries: LogEntry[];
+    try {
+      entries = listEntries(runDir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (seen.has(entry.id)) continue;
+      seen.add(entry.id);
+      merged.push(entry);
+    }
+  }
+
+  merged.sort((a, b) => (a.ts === b.ts ? cmpAsc(a.id, b.id) : cmpAsc(a.ts, b.ts)));
+  return merged;
+}
+
+/** The body of the latest `synthesis` entry, or empty when the story has none. */
+function latestSynthesisOutcome(entries: LogEntry[]): string {
+  let outcome = '';
+  for (const entry of entries) {
+    if (entry.type === 'synthesis') outcome = entry.outcome;
+  }
+  return outcome;
+}
+
+function cmpAsc(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /**
