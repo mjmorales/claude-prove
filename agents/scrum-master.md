@@ -35,6 +35,23 @@ Non-trivial transitions require AskUserQuestion confirmation:
 
 Use the binary-confirmation pattern from `references/interaction-patterns.md`.
 
+## Interrupt provenance — cancel-flag vs. hard cancel
+
+Two interrupt paths feed task state, and they record different provenance:
+
+- **Layer-1 hard interrupt** — `claude-prove scrum task cancel <id> --cascade` discards
+  in-flight work and stamps `cancelled`/`parent_cancelled`. Use it when work must stop
+  regardless of cooperation.
+- **Layer-2 cooperative checkpoint-interrupt (best-effort)** — the orchestration driver
+  raises a cancel-flag (`CANCEL` file under the run dir) instead of hard-cancelling. Task
+  subagents poll it at natural checkpoints; when set, each writes a `synthesis`
+  graceful-handoff entry, commits work-in-progress, and self-exits, so a re-dispatch
+  RESUMES rather than restarts. This layers ON TOP of the Layer-1 floor and never replaces
+  it — a non-polling or stuck task only stops at the token budget / subagent timeout. A
+  cooperatively-interrupted task stays resumable (e.g. `in_progress`/`blocked`), NOT
+  `cancelled`; reserve `cancelled` for the hard path. Surface the distinction in digests
+  rather than collapsing both into "cancelled".
+
 ## Milestone reassignment protocol
 
 Reassign via `claude-prove scrum task move <task-id> --milestone <milestone-id>` (or `--unassign` to clear). Each call emits a `milestone_changed` event with `{from, to}` payload — never shell out to `sqlite3 UPDATE`, which bypasses the event log.

@@ -128,6 +128,25 @@ describe('orchestrator task-prompt', () => {
     expect(stdoutBuf).toContain('- Tests: `bun test`');
   });
 
+  test('injects the cooperative checkpoint-interrupt protocol with the cancel-flag path', () => {
+    writePlan(BASE_PLAN);
+    writePrd(BASE_PRD);
+    const code = runTaskPrompt({ runDir, taskId: '1', projectRoot: project });
+    expect(code).toBe(0);
+    // Section header + the three terms the acceptance grep scans for.
+    expect(stdoutBuf).toContain('## Cooperative checkpoint-interrupt (Layer 2)');
+    expect(stdoutBuf).toContain('cancel-flag');
+    expect(stdoutBuf).toContain('graceful handoff');
+    // The cancel-flag read path resolves against the run dir.
+    expect(stdoutBuf).toContain(join(runDir, 'CANCEL'));
+    // The handoff is a synthesis reasoning-log entry appended via acb log.
+    expect(stdoutBuf).toContain('`synthesis` reasoning-log entry');
+    expect(stdoutBuf).toContain(`claude-prove acb log append --run-dir "${runDir}"`);
+    // Layering: best-effort on top of the Layer-1 floor, never replacing it.
+    expect(stdoutBuf).toContain('layers ON TOP of the Layer-1 cancel-and-redispatch floor');
+    expect(stdoutBuf).toContain('token budget and subagent timeout remain the hard backstop');
+  });
+
   test('no worktree flag → omits the cd block', () => {
     writePlan(BASE_PLAN);
     writePrd(BASE_PRD);
