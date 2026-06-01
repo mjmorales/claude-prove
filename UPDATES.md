@@ -66,6 +66,37 @@ Only `text` is required; everything else is optional, so a bare `{ "text": "..."
 
 **Auto-adoption**: the schema, migrator, and `compile-plan` change ship in the CLI; the edited orchestrator prompt renderers are picked up on plugin load. No config edit required. Run `/prove:update` to sync.
 
+### Scrum `bounds_json` authoring column: `task create --bounds` / `task bounds` + compile-plan forwarding
+
+The deferred scrum half of declared bounds (decision `.prove/decisions/2026-05-31-declared-bounds-home.md` §2). A scrum task can now carry **declared bounds** so a milestone-authored bound survives `compile-plan` into the plan's `tasks[].bounds` instead of being re-authored every run. Mirrors how acceptance criteria flow.
+
+**New scrum column — `scrum_tasks.bounds_json`** (nullable JSON, matches the `acceptance_json` precedent): decoded to `ScrumTask.bounds` at the row boundary. The shape mirrors the run-state v3 plan-side `tasks[].bounds`:
+
+```jsonc
+"bounds": {
+  "read":  ["src/auth/**"],
+  "write": ["src/auth/**"],
+  "tools": { "allow": ["Bash(go test *)"], "deny": ["Bash(git push *)"] },
+  "budgets": { "tokens": 200000, "tool_calls": 100, "wall_clock_s": 1800 }
+}
+```
+
+All top-level keys (`read | write | tools | budgets`) are optional; **NULL column = no authored bounds (absent = unbounded)**, the pre-migration behavior. Write-time validation rejects unknown top-level keys (a typo like `reads` fails loud); sub-field contents are not deeply type-checked (forward-compatible JSON; the run-state plan schema re-validates the forwarded shape). Enforcement is unchanged from the §2 decision: **`tools` is the only native surface** (allow/deny merge into `settings.local.json` permissions via `prep-permissions`); `read`/`write`/`budgets` are **advisory** — the git worktree is the write wall, and there is **no native deny-outside (`Edit(!glob)`) rule**. Bounds are never inherited from a parent task.
+
+**New CLI surface** (`claude-prove scrum task`):
+
+- `task create --title X --bounds '<json>'` — author bounds at create time.
+- `task bounds set <id> --bounds '<json>'` — set/replace bounds; pass `--bounds ''` to clear (→ unbounded).
+- `task bounds show <id>` — print the task's bounds object (or `null`).
+
+`--bounds` takes a single JSON blob (bounds is a nested dict — no per-field flag explosion). Malformed JSON or an unknown top-level key exits 1.
+
+**Behavior — `scrum compile-plan` now forwards `bounds`**: each scrum task's `bounds` is emitted verbatim into the corresponding `plan.tasks[].bounds` (the run-state v3 plan supports it). A task with no bounds emits **no `bounds` key** (absent = unbounded) — null-bounds tasks never crash compilation.
+
+**Migration — scrum store schema v5 → v6**: a new scrum domain migration appends `ALTER TABLE scrum_tasks ADD COLUMN bounds_json TEXT;`. Append-only — v1–v5 migrations are untouched; the column defaults NULL on every existing row, so no data is rewritten. The unified store migrates on next open (any `claude-prove scrum …` command, or `claude-prove store migrate`). No manual step.
+
+**Auto-adoption**: the column, CLI flags, and `compile-plan` forwarding ship in the CLI; the store self-migrates on next open. No config edit required. Run `/prove:update` to sync.
+
 ---
 
 ## v2.8.0 — New `/prove:workflow` command: run a whole milestone (or plan.json) as a parallel fan-out

@@ -63,6 +63,7 @@ interface PlanShape {
     wave: number;
     deps: string[];
     acceptance_criteria: PlanCriterion[];
+    bounds?: unknown;
     steps: Array<{ acceptance_criteria: PlanCriterion[] }>;
   }>;
 }
@@ -316,5 +317,38 @@ describe('runCompilePlanCmd — compilation', () => {
     const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
     const { plan } = parsePlan(res.stdout);
     expect(plan.tasks[0]?.acceptance_criteria).toEqual([]);
+  });
+
+  test('forwards declared bounds verbatim into the plan task', () => {
+    const bounds = {
+      read: ['src/auth/**'],
+      write: ['src/auth/**'],
+      tools: { allow: ['Bash(go test *)'], deny: ['Bash(git push *)'] },
+      budgets: { tokens: 200000, tool_calls: 100, wall_clock_s: 1800 },
+    };
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    store.createTask({
+      id: 'a',
+      title: 'Task a',
+      milestoneId: 'm1',
+      createdAt: '2026-01-01T00:00:01.000Z',
+      bounds,
+    });
+
+    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const { plan } = parsePlan(res.stdout);
+    expect(plan.tasks[0]?.bounds).toEqual(bounds);
+  });
+
+  test('task with no bounds emits no bounds key (absent = unbounded)', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    seedTask(store, 'a', 'm1', 1);
+    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const { plan } = parsePlan(res.stdout);
+    const task = plan.tasks[0];
+    if (!task) throw new Error('expected one plan task');
+    expect('bounds' in task).toBe(false);
   });
 });
