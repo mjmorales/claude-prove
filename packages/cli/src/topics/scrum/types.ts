@@ -57,6 +57,44 @@ export type EventKind =
 export type DepKind = 'blocks' | 'blocked_by';
 
 // ---------------------------------------------------------------------------
+// Structured escalation typing (onleash §11.2, audit §6.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Closed taxonomy for how a worker subagent escalates back to the driver
+ * (onleash §11.2). Rides inside a `blocker_raised` scrum event's payload —
+ * no new column, no migration (the event `kind`/`payload_json` are already
+ * free-form). claude-prove stays human-in-the-loop: the type enriches the
+ * agent→driver report so the driver routes it; there is NO agent-to-agent
+ * autonomy.
+ *
+ *   blocked         — a hard dependency the worker cannot satisfy itself
+ *   ambiguous       — the spec/criteria admit multiple defensible readings
+ *   conflict        — two requirements/constraints contradict
+ *   missing_context — needed information is absent and unreachable from the run
+ */
+export type EscalationType = 'blocked' | 'ambiguous' | 'conflict' | 'missing_context';
+
+/** Runtime-checkable list of the closed `EscalationType` set. */
+export const ESCALATION_TYPES: EscalationType[] = [
+  'blocked',
+  'ambiguous',
+  'conflict',
+  'missing_context',
+];
+
+/**
+ * Typed payload carried by a `blocker_raised` event. `summary` is the
+ * attention-bearing prose the driver reads; `blocking_task_id` optionally
+ * names the dependency that triggered a `blocked` escalation.
+ */
+export interface EscalationPayload {
+  escalation_type: EscalationType;
+  summary: string;
+  blocking_task_id?: string | null;
+}
+
+// ---------------------------------------------------------------------------
 // Acceptance criteria (v5, audit §5.2)
 // ---------------------------------------------------------------------------
 
@@ -329,5 +367,14 @@ export interface NextReadyRow {
     milestone_boost: number;
     context_hotness: number;
     tag_boost: number;
+    /**
+     * Staleness auto-bubble (audit §6.1): a task carrying an open
+     * `blocker_raised` escalation gets a positive boost that grows with the
+     * escalation's age, so unresolved escalations rank *up* over time. 0 when
+     * the task has no open escalation.
+     */
+    escalation_boost: number;
+    /** Type of the task's most-recent open escalation, or null if none. */
+    escalation_type: EscalationType | null;
   };
 }

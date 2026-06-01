@@ -243,6 +243,34 @@ describe('runNextReadyCmd', () => {
     const rows = JSON.parse(res.stdout.trim()) as unknown[];
     expect(rows.length).toBeLessThanOrEqual(2);
   });
+
+  test('rationale surfaces escalation_boost + escalation_type for an open escalation', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'E', id: 'e' }));
+    withCapture(() => runTaskCmd('status', ['e', 'ready'], {}));
+    // biome-ignore lint/suspicious/noExplicitAny: test-only store reach-in to seed an escalation event.
+    const { openScrumStore } = require('../store') as any;
+    const s = openScrumStore({ override: join(workspace, '.prove', 'prove.db') });
+    try {
+      s.appendEvent({
+        taskId: 'e',
+        kind: 'blocker_raised',
+        payload: { escalation_type: 'ambiguous', summary: 'spec unclear' },
+      });
+    } finally {
+      s.close();
+    }
+    const json = withCapture(() => runNextReadyCmd({ workspaceRoot: workspace }));
+    const rows = JSON.parse(json.stdout.trim()) as Array<{
+      task: { id: string };
+      rationale: { escalation_boost: number; escalation_type: string | null };
+    }>;
+    const row = rows.find((r) => r.task.id === 'e');
+    expect(row?.rationale.escalation_boost).toBeGreaterThan(0);
+    expect(row?.rationale.escalation_type).toBe('ambiguous');
+
+    const human = withCapture(() => runNextReadyCmd({ workspaceRoot: workspace, human: true }));
+    expect(human.stdout).toContain('escalation=');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1017,6 +1045,37 @@ describe('runAlertsCmd', () => {
       orphan_runs: Array<{ slug: string }>;
     };
     expect(payload.orphan_runs.some((r) => r.slug === 'tracked-run')).toBe(false);
+  });
+
+  test('open escalations surface with type + age in JSON and --human', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'B', id: 'b' }));
+    withCapture(() => runTaskCmd('status', ['b', 'ready'], {}));
+    const old = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
+    // biome-ignore lint/suspicious/noExplicitAny: test-only store reach-in to seed an escalation event.
+    const { openScrumStore } = require('../store') as any;
+    const s = openScrumStore({ override: join(workspace, '.prove', 'prove.db') });
+    try {
+      s.appendEvent({
+        taskId: 'b',
+        kind: 'blocker_raised',
+        payload: { escalation_type: 'conflict', summary: 'two reqs clash' },
+        ts: old,
+      });
+    } finally {
+      s.close();
+    }
+    const json = withCapture(() => runAlertsCmd({ workspaceRoot: workspace }));
+    const payload = JSON.parse(json.stdout.trim()) as {
+      stale_escalations: Array<{ id: string; escalation_type: string; escalated_days: number }>;
+    };
+    const e = payload.stale_escalations.find((x) => x.id === 'b');
+    expect(e?.escalation_type).toBe('conflict');
+    expect(e?.escalated_days).toBeGreaterThanOrEqual(4);
+    expect(json.stderr).toContain('open escalations');
+
+    const human = withCapture(() => runAlertsCmd({ workspaceRoot: workspace, human: true }));
+    expect(human.stdout).toContain('Open escalations');
+    expect(human.stdout).toContain('conflict');
   });
 
   test('--human table is produced when the flag is set', () => {

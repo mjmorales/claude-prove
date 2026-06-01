@@ -24,6 +24,8 @@ import type {
   AcceptanceCriterion,
   DecisionRow,
   DepKind,
+  EscalationPayload,
+  EscalationType,
   EventKind,
   MilestoneStatus,
   NextReadyRow,
@@ -38,6 +40,7 @@ import type {
   TaskLayer,
   TaskStatus,
 } from './types';
+import { ESCALATION_TYPES } from './types';
 
 // ---------------------------------------------------------------------------
 // Public openers
@@ -1094,6 +1097,13 @@ export class ScrumStore {
     if (!this.getTask(input.taskId)) {
       throw new Error(`appendEvent: unknown task '${input.taskId}'`);
     }
+    // A `blocker_raised` event carries a typed escalation payload (onleash
+    // §11.2). Validate it at the boundary so a malformed escalation surfaces a
+    // domain error here rather than a silently-untyped row that nextReady/alerts
+    // later fail to rank. Other event kinds carry free-form payloads.
+    if (input.kind === 'blocker_raised') {
+      validateEscalationPayload(input.payload);
+    }
     const ts = input.ts ?? isoNow();
     const payload = input.payload === undefined ? null : input.payload;
 
@@ -1267,6 +1277,11 @@ export class ScrumStore {
     // candidate count. Per-invocation only — tags mutate between calls.
     const tagBoostByTask = this.fetchTagBoosts(candidates.map((t) => t.id));
 
+    // Batch the per-candidate latest-escalation lookup (audit §6.1). A task
+    // with an open `blocker_raised` escalation auto-bubbles up, weighted by the
+    // escalation's age. Per-invocation only — escalations mutate between calls.
+    const escalationByTask = this.fetchLatestEscalations(candidates.map((t) => t.id));
+
     // Memoize unblock_depth within this invocation. The BFS from task `A`
     // and task `B` can both traverse a shared descendant `C`; caching
     // per-root collapses repeated DFS sweeps across the candidate set.
@@ -1284,7 +1299,10 @@ export class ScrumStore {
       );
       const contextHotness = computeContextHotness(task.last_event_at, nowMs);
       const tagBoost = tagBoostByTask.get(task.id) ?? 0;
-      const score = unblockDepth * 10 + milestoneBoost * 5 + contextHotness * 3 + tagBoost;
+      const escalation = escalationByTask.get(task.id) ?? null;
+      const escalationBoost = computeEscalationBoost(escalation?.ts ?? null, nowMs);
+      const score =
+        unblockDepth * 10 + milestoneBoost * 5 + contextHotness * 3 + tagBoost + escalationBoost;
       return {
         task,
         score,
@@ -1293,6 +1311,8 @@ export class ScrumStore {
           milestone_boost: milestoneBoost,
           context_hotness: contextHotness,
           tag_boost: tagBoost,
+          escalation_boost: escalationBoost,
+          escalation_type: escalation?.type ?? null,
         },
       };
     });
@@ -1569,6 +1589,66 @@ export class ScrumStore {
   }
 
   /**
+   * Latest `blocker_raised` escalation per task in `taskIds`, as a
+   * `taskId -> { type, ts }` map. Tasks with no escalation (or an untyped
+   * payload) are absent. One IN-query per distinct candidate count, reduced in
+   * JS by overwriting earlier rows with later ones (rows arrive `ts`-ascending,
+   * so the last write per task wins). Per-invocation only — escalations mutate
+   * between calls (mirrors `fetchTagBoosts`).
+   */
+  private fetchLatestEscalations(
+    taskIds: string[],
+  ): Map<string, { type: EscalationType; ts: string }> {
+    const out = new Map<string, { type: EscalationType; ts: string }>();
+    if (taskIds.length === 0) return out;
+    const placeholders = taskIds.map(() => '?').join(', ');
+    const rows = this.prep(
+      `SELECT task_id, ts, payload_json FROM scrum_events WHERE kind = 'blocker_raised' AND task_id IN (${placeholders}) ORDER BY ts ASC, id ASC`,
+    ).all(...taskIds) as Array<{ task_id: string; ts: string; payload_json: string }>;
+    for (const row of rows) {
+      const type = parseEscalationType(row.payload_json);
+      if (type !== null) out.set(row.task_id, { type, ts: row.ts });
+    }
+    return out;
+  }
+
+  /**
+   * Open escalations across all non-terminal, non-deleted tasks — the latest
+   * `blocker_raised` per task, newest-first. Backs the `alerts` stale-escalation
+   * surface (audit §6.1): a `done`/`cancelled` task's escalation is resolved and
+   * excluded. `age_days` is computed by the caller against its clock.
+   */
+  listOpenEscalations(): Array<{
+    task_id: string;
+    title: string;
+    escalation_type: EscalationType;
+    ts: string;
+  }> {
+    const rows = this.prep(
+      `SELECT e.task_id AS task_id, e.ts AS ts, e.payload_json AS payload_json, t.title AS title
+       FROM scrum_events e
+       INNER JOIN scrum_tasks t ON t.id = e.task_id
+       WHERE e.kind = 'blocker_raised' AND t.deleted_at IS NULL
+         AND t.status NOT IN ('done', 'cancelled')
+       ORDER BY e.ts ASC, e.id ASC`,
+    ).all() as Array<{ task_id: string; ts: string; payload_json: string; title: string }>;
+    // Reduce to the latest escalation per task (later rows overwrite earlier).
+    const latest = new Map<
+      string,
+      { task_id: string; title: string; type: EscalationType; ts: string }
+    >();
+    for (const row of rows) {
+      const type = parseEscalationType(row.payload_json);
+      if (type !== null) {
+        latest.set(row.task_id, { task_id: row.task_id, title: row.title, type, ts: row.ts });
+      }
+    }
+    return [...latest.values()]
+      .sort((a, b) => b.ts.localeCompare(a.ts))
+      .map((e) => ({ task_id: e.task_id, title: e.title, escalation_type: e.type, ts: e.ts }));
+  }
+
+  /**
    * Lazily-cached prepared statement. Caching by SQL text matches bun's own
    * internal prepared-statement cache semantics and avoids re-parsing on
    * every hot-path call (nextReady walks the graph N times).
@@ -1780,4 +1860,72 @@ function computeContextHotness(lastEventAt: string | null, nowMs: number): numbe
   if (Number.isNaN(eventMs)) return 0;
   const hours = Math.max(0, (nowMs - eventMs) / (1000 * 60 * 60));
   return Math.exp(-hours / 24);
+}
+
+// ---------------------------------------------------------------------------
+// Structured escalation typing (onleash §11.2, audit §6.1)
+// ---------------------------------------------------------------------------
+
+/** Boost cap (days) and per-day weight for the staleness auto-bubble. */
+const ESCALATION_BASE_BOOST = 5;
+const ESCALATION_AGE_CAP_DAYS = 30;
+const ESCALATION_PER_DAY = 0.5;
+
+/**
+ * Validate a `blocker_raised` event payload as a typed `EscalationPayload`
+ * (onleash §11.2). Requires `escalation_type` in the closed set and a string
+ * `summary`; `blocking_task_id`, when present, must be a string or null.
+ * Throws a domain error on any violation so a malformed escalation fails at
+ * `appendEvent` rather than persisting as an untyped row.
+ */
+function validateEscalationPayload(payload: unknown): asserts payload is EscalationPayload {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    throw new Error("appendEvent: 'blocker_raised' payload must be an EscalationPayload object");
+  }
+  const p = payload as Record<string, unknown>;
+  if (!(ESCALATION_TYPES as string[]).includes(p.escalation_type as string)) {
+    throw new Error(
+      `appendEvent: escalation_type must be one of: ${ESCALATION_TYPES.join(', ')} (got '${String(p.escalation_type)}')`,
+    );
+  }
+  if (typeof p.summary !== 'string' || p.summary.length === 0) {
+    throw new Error("appendEvent: escalation payload requires a non-empty 'summary' string");
+  }
+  if (
+    p.blocking_task_id !== undefined &&
+    p.blocking_task_id !== null &&
+    typeof p.blocking_task_id !== 'string'
+  ) {
+    throw new Error("appendEvent: escalation 'blocking_task_id' must be a string or null");
+  }
+}
+
+/**
+ * Extract the `escalation_type` from a stored `blocker_raised` payload JSON,
+ * or null when the JSON is malformed or untyped. Read-path counterpart to
+ * `validateEscalationPayload` — tolerant (never throws) so one bad row cannot
+ * brick `nextReady`/`alerts`.
+ */
+function parseEscalationType(payloadJson: string): EscalationType | null {
+  try {
+    const p = JSON.parse(payloadJson) as Record<string, unknown>;
+    const t = p?.escalation_type;
+    return (ESCALATION_TYPES as string[]).includes(t as string) ? (t as EscalationType) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Staleness auto-bubble boost for an open escalation (audit §6.1). Returns 0
+ * when there is no escalation; otherwise a base boost that grows linearly with
+ * the escalation's age, capped at `ESCALATION_AGE_CAP_DAYS`, so an unresolved
+ * escalation ranks progressively higher in `nextReady` the longer it sits.
+ */
+function computeEscalationBoost(escalatedAt: string | null, nowMs: number): number {
+  if (!escalatedAt) return 0;
+  const ms = Date.parse(escalatedAt);
+  if (Number.isNaN(ms)) return ESCALATION_BASE_BOOST;
+  const ageDays = Math.max(0, (nowMs - ms) / (24 * 60 * 60 * 1000));
+  return ESCALATION_BASE_BOOST + Math.min(ageDays, ESCALATION_AGE_CAP_DAYS) * ESCALATION_PER_DAY;
 }
