@@ -1030,10 +1030,28 @@ export class ScrumStore {
 
   /**
    * Upsert a decision row keyed on `id`. On duplicate id the row is
-   * replaced in-place: title/topic/status/content/source_path are
-   * overwritten, `content_sha` is recomputed from the new content, and
-   * `recorded_at` is bumped to now so list order reflects the latest
-   * write. Status defaults to `'accepted'`.
+   * replaced in-place: title/topic/content/source_path are overwritten,
+   * `content_sha` is recomputed from the new content, and `recorded_at` is
+   * bumped to now so list order reflects the latest write. Status defaults
+   * to `'accepted'`.
+   *
+   * Supersession is terminal and has no working-tree-file representation:
+   * `superseded_by`/`reason` are set only via `supersedeDecision`, and a
+   * decision file body never encodes `'superseded'`. So a re-record (a bare
+   * `recordDecision`, `decision record old.md`, or `recover --from-git`)
+   * always carries a current-ish status (`'accepted'` by default; never
+   * `'superseded'`). The conservative "asserts a status change" signal is
+   * therefore: the incoming status is itself `'superseded'`. When an existing
+   * row is `'superseded'` and the incoming record does NOT assert
+   * `'superseded'`, the pointer/reason/status are preserved rather than
+   * clobbered — re-recording the body never silently resurrects a retired
+   * decision. Clearing or re-pointing a supersession stays exclusively
+   * `supersedeDecision`'s job.
+   *
+   * Limitation: because the only signal is the incoming status value, a
+   * re-record can never DRIVE a transition INTO `'superseded'` (the parser
+   * never emits it; supersession carries a pointer the file cannot supply).
+   * `supersedeDecision` remains the sole entry point for retiring a decision.
    *
    * `content_sha` uses node:crypto sha256 — same std-lib primitive every
    * other prove domain uses; no new dependency.
@@ -1041,19 +1059,27 @@ export class ScrumStore {
   recordDecision(input: RecordDecisionInput): DecisionRow {
     const recordedAt = isoNow();
     const contentSha = createHash('sha256').update(input.content).digest('hex');
+    // A decision file body never encodes the terminal `'superseded'` status
+    // (it has no representation for the supersession pointer), so any re-record
+    // arrives with a current-ish status. Treat an incoming non-`'superseded'`
+    // status as "asserts no supersession change" — threaded into SQL as a 0/1
+    // flag so the ON CONFLICT branch preserves an existing terminal row.
+    const incomingStatus = input.status ?? 'accepted';
+    const assertsStatus = incomingStatus === 'superseded' ? 1 : 0;
     const row: DecisionRow = {
       id: input.id,
       title: input.title,
       topic: input.topic ?? null,
-      status: input.status ?? 'accepted',
+      status: incomingStatus,
       content: input.content,
       source_path: input.sourcePath ?? null,
       content_sha: contentSha,
       recorded_at: recordedAt,
       recorded_by_agent: input.recordedByAgent ?? null,
-      // Supersession is set only via `supersedeDecision`; a freshly recorded
-      // decision is always current. On upsert these are deliberately reset to
-      // null so re-recording a decision file does not preserve a stale pointer.
+      // A freshly inserted decision is always current; supersession is set
+      // only via `supersedeDecision`. On upsert these are preserved when the
+      // existing row is superseded and the incoming record asserts no status
+      // change (see ON CONFLICT below).
       superseded_by: null,
       reason: null,
     };
@@ -1064,14 +1090,30 @@ export class ScrumStore {
        ON CONFLICT(id) DO UPDATE SET
          title = excluded.title,
          topic = excluded.topic,
-         status = excluded.status,
          content = excluded.content,
          source_path = excluded.source_path,
          content_sha = excluded.content_sha,
          recorded_at = excluded.recorded_at,
          recorded_by_agent = excluded.recorded_by_agent,
-         superseded_by = excluded.superseded_by,
-         reason = excluded.reason`,
+         -- Preserve a terminal supersession across a bare re-record. When the
+         -- existing row is 'superseded' and the incoming record asserts no
+         -- status (?12 = 0), keep status/superseded_by/reason intact; never
+         -- auto-resurrect. Otherwise adopt the incoming values.
+         status = CASE
+           WHEN scrum_decisions.status = 'superseded' AND ?12 = 0
+             THEN scrum_decisions.status
+           ELSE excluded.status
+         END,
+         superseded_by = CASE
+           WHEN scrum_decisions.status = 'superseded' AND ?12 = 0
+             THEN scrum_decisions.superseded_by
+           ELSE excluded.superseded_by
+         END,
+         reason = CASE
+           WHEN scrum_decisions.status = 'superseded' AND ?12 = 0
+             THEN scrum_decisions.reason
+           ELSE excluded.reason
+         END`,
     ).run(
       row.id,
       row.title,
@@ -1084,9 +1126,15 @@ export class ScrumStore {
       row.recorded_by_agent,
       row.superseded_by,
       row.reason,
+      assertsStatus,
     );
 
-    return row;
+    // Re-fetch so the returned row reflects any preserved supersession rather
+    // than the in-memory `row` (whose status/superseded_by/reason may have
+    // been overridden by the CASE branches above).
+    const persisted = this.getDecision(row.id);
+    if (!persisted) throw new Error(`recordDecision: row '${row.id}' vanished mid-write`);
+    return persisted;
   }
 
   /**

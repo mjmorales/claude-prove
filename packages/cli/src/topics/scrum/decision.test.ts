@@ -313,6 +313,40 @@ describe('ScrumStore — decisions: supersedeDecision', () => {
     expect(superseded[0]?.superseded_by).toBe('new');
     expect(superseded[0]?.reason).toBe('retired');
   });
+
+  test('bare re-record of a superseded decision preserves the supersession pointer', () => {
+    // Retire 'old' via the only supported path.
+    store.supersedeDecision('old', 'new', 'new approach chosen');
+
+    // Simulate `decision record old.md` / recover-from-git: a bare re-record
+    // carries the body but asserts no status. It must NOT resurrect the row.
+    const reRecorded = store.recordDecision({
+      id: 'old',
+      title: 'Old decision (recovered)',
+      content: 'old body, recovered from git',
+    });
+
+    // Pointer/reason/status survive; only the file-backed fields advance.
+    expect(reRecorded.status).toBe('superseded');
+    expect(reRecorded.superseded_by).toBe('new');
+    expect(reRecorded.reason).toBe('new approach chosen');
+    expect(reRecorded.title).toBe('Old decision (recovered)');
+    expect(reRecorded.content).toBe('old body, recovered from git');
+    expect(reRecorded.content_sha).toBe(
+      createHash('sha256').update('old body, recovered from git').digest('hex'),
+    );
+
+    // Re-fetch confirms the persisted row, not just the return value.
+    const fetched = store.getDecision('old');
+    if (!fetched) throw new Error('re-recorded decision must remain in the store');
+    expect(fetched.status).toBe('superseded');
+    expect(fetched.superseded_by).toBe('new');
+    expect(fetched.reason).toBe('new approach chosen');
+
+    // supersedeDecision still refuses a second retire — terminal state intact.
+    store.recordDecision({ id: 'newer', title: 'Newer', content: 'newer body' });
+    expect(() => store.supersedeDecision('old', 'newer', 'second')).toThrow(/already superseded/);
+  });
 });
 
 // ===========================================================================
@@ -359,6 +393,20 @@ describe('ScrumStore — decisions: upsert semantics', () => {
       .getStore()
       .all<{ count: number }>('SELECT COUNT(*) AS count FROM scrum_decisions');
     expect(total).toEqual([{ count: 1 }]);
+  });
+
+  test('re-recording a non-superseded row leaves supersession NULL (regression guard)', () => {
+    // The supersession-preservation guard must only fire for terminal rows.
+    // A current decision re-recorded with no status stays current with null
+    // pointer/reason — unchanged from the original upsert semantics.
+    store.recordDecision({ id: 'current', title: 'Current', content: 'v1' });
+    const reRecorded = store.recordDecision({ id: 'current', title: 'Current v2', content: 'v2' });
+
+    expect(reRecorded.status).toBe('accepted');
+    expect(reRecorded.superseded_by).toBeNull();
+    expect(reRecorded.reason).toBeNull();
+    expect(reRecorded.title).toBe('Current v2');
+    expect(reRecorded.content).toBe('v2');
   });
 });
 
