@@ -1,19 +1,23 @@
 /**
- * `claude-prove acb brief <render|validate> [--run-dir D] [--file F]`
+ * `claude-prove acb brief <render|validate|chunk> [--run-dir D] [--file F] [--token-budget N]`
  *
- * The Review Brief surface (audit §5.1). Both sub-actions read the run's
+ * The Review Brief surface (audit §5.1). Every sub-action reads the run's
  * reasoning log from `<run-dir>/log/<agent>/<id>.json`.
  *
  *   acb brief render   --run-dir D            mechanical 7-section brief → stdout (markdown)
  *   acb brief validate --run-dir D [--file F] Stage-1 preservation check of brief F (or stdin)
+ *   acb brief chunk    --run-dir D [--token-budget N]  multipass episode partition → stdout (JSON)
  *
  * `render` emits the deterministic mechanical brief — the starting point the
  * synthesizer skill refines into prose. `validate` proves a brief (the skill's
- * output, via --file or stdin) dropped no attention-bearing item.
+ * output, via --file or stdin) dropped no attention-bearing item. `chunk`
+ * partitions episodes under a token budget so the skill can synthesize a
+ * fragment per chunk for a large log (episode-chunk → fragment → merge).
  *
  * Stdout/stderr contract (matches `log-cmd.ts`):
  *   - render:   stdout = markdown document; stderr = one-line summary
  *   - validate: stdout = JSON `{ ok, missing, required }`; stderr = summary
+ *   - chunk:    stdout = JSON `{ token_budget, chunks: string[][] }`; stderr = summary
  *
  * Exit codes:
  *   0  success (validate: brief preserves everything)
@@ -22,18 +26,22 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { buildBrief, renderBrief } from '../brief';
+import { buildBrief, chunkEpisodes, renderBrief } from '../brief';
 import { validatePreservation } from '../brief-validate';
 import { deriveEpisodes } from '../reasoning-log';
 import { listEntries } from '../reasoning-log-store';
 
-export type BriefSubAction = 'render' | 'validate';
+export type BriefSubAction = 'render' | 'validate' | 'chunk';
 
-const BRIEF_SUB_ACTIONS: readonly BriefSubAction[] = ['render', 'validate'];
+const BRIEF_SUB_ACTIONS: readonly BriefSubAction[] = ['render', 'validate', 'chunk'];
+
+/** Default multipass episode-chunk budget when `--token-budget` is omitted. */
+const DEFAULT_CHUNK_TOKEN_BUDGET = 6000;
 
 export interface BriefOpts {
   runDir?: string;
   file?: string;
+  tokenBudget?: number;
 }
 
 export function runBrief(sub: string | undefined, opts: BriefOpts): number {
@@ -55,6 +63,8 @@ export function runBrief(sub: string | undefined, opts: BriefOpts): number {
       return runRender(opts);
     case 'validate':
       return runValidate(opts);
+    case 'chunk':
+      return runChunk(opts);
   }
 }
 
@@ -115,6 +125,35 @@ function runValidate(opts: BriefOpts): number {
     `Brief DROPPED ${result.missing.length} required item(s): ${result.missing.join(', ')}\n`,
   );
   return 1;
+}
+
+function runChunk(opts: BriefOpts): number {
+  const runDir = opts.runDir;
+  if (!runDir || runDir.length === 0) {
+    process.stderr.write('Error: --run-dir is required\n');
+    return 1;
+  }
+
+  let entries: ReturnType<typeof listEntries>;
+  try {
+    entries = listEntries(runDir);
+  } catch (err) {
+    process.stderr.write(`Error: ${errMsg(err)}\n`);
+    return 1;
+  }
+
+  const budget =
+    opts.tokenBudget && opts.tokenBudget > 0 ? opts.tokenBudget : DEFAULT_CHUNK_TOKEN_BUDGET;
+  const episodes = deriveEpisodes(entries);
+  // Emit chunk membership as decision-id arrays — the driver re-reads full
+  // episodes via `acb log episodes` and synthesizes one fragment per chunk.
+  const chunks = chunkEpisodes(episodes, budget).map((chunk) => chunk.map((ep) => ep.decision.id));
+
+  process.stdout.write(`${JSON.stringify({ token_budget: budget, chunks })}\n`);
+  process.stderr.write(
+    `${episodes.length} episodes -> ${chunks.length} chunk(s) at <=${budget} tokens\n`,
+  );
+  return 0;
 }
 
 function isBriefSubAction(value: string): value is BriefSubAction {

@@ -127,3 +127,39 @@ describe('acb brief validate', () => {
     expect(res.stderr).toContain('unknown brief sub-action');
   });
 });
+
+describe('acb brief chunk', () => {
+  /** Seed `count` decisions (each opens its own episode) with padded bodies. */
+  function seedDecisions(count: number, bodyChars: number): void {
+    for (let i = 0; i < count; i++) {
+      appendEntry(runDir, {
+        id: `d${i}`,
+        ts: `2026-06-01T0${i}:00:00Z`,
+        type: 'decision',
+        agent: 'engineer',
+        run_path: runDir,
+        body: 'x'.repeat(bodyChars),
+        alternatives: ['a'],
+        selected_rationale: 'won',
+      });
+    }
+  }
+
+  test('partitions episodes under the budget; chunks cover every decision id, in order', () => {
+    seedDecisions(6, 40); // ~10 tokens each
+    const res = withCapture(() => runBrief('chunk', { runDir, tokenBudget: 25 }));
+    expect(res.exit).toBe(0);
+    const payload = JSON.parse(res.stdout.trim()) as { token_budget: number; chunks: string[][] };
+    expect(payload.token_budget).toBe(25);
+    expect(payload.chunks.flat()).toEqual(['d0', 'd1', 'd2', 'd3', 'd4', 'd5']);
+    expect(payload.chunks.length).toBeGreaterThan(1); // budget forces a split
+  });
+
+  test('defaults the budget to 6000 when --token-budget is omitted', () => {
+    seedDecisions(2, 40);
+    const res = withCapture(() => runBrief('chunk', { runDir }));
+    const payload = JSON.parse(res.stdout.trim()) as { token_budget: number; chunks: string[][] };
+    expect(payload.token_budget).toBe(6000);
+    expect(payload.chunks).toEqual([['d0', 'd1']]); // both fit one chunk
+  });
+});

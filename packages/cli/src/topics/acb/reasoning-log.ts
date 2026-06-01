@@ -268,12 +268,11 @@ export interface Episode {
 }
 
 /**
- * Derive episodes from a `ts`-sorted entry list. Pure: no IO. The synthesizer
- * (later task) consumes this alongside `listEntries`.
- *
- * TODO(reasoning-brief): the brief synthesizer skill consumes `listEntries`
- * + `deriveEpisodes` to produce the 7-section risk-forward Brief (audit §5.1)
- * via multipass episode-chunk -> fragment -> merge. Not built here.
+ * Derive episodes from a `ts`-sorted entry list. Pure: no IO. Consumed by the
+ * Review Brief (audit §5.1): `buildBrief`/`chunkEpisodes`/`renderBrief` in
+ * `./brief.ts` assemble the mechanical 7-section brief and partition episodes
+ * for multipass; the `acb brief` CLI exposes them; the `reasoning-brief` skill
+ * synthesizes the §1/§4 prose via episode-chunk -> fragment -> merge.
  */
 export function deriveEpisodes(entries: LogEntry[]): Episode[] {
   const episodes: Episode[] = [];
