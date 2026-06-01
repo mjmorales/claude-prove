@@ -282,7 +282,7 @@ Agent prompts define autonomous behavior with tool access.
 
 - **A/B testing**: Run the same inputs through two prompt variants, compare outputs
 - **Boundary testing**: Test edge cases and adversarial inputs
-- **Regression testing**: When modifying a prompt, verify it doesn't break previously working cases
+- **Regression testing**: When modifying a prompt, verify it doesn't break cases that already work
 - **Human evaluation**: For subjective quality, there's no substitute for human judgment on a sample
 
 ### Iteration Heuristics

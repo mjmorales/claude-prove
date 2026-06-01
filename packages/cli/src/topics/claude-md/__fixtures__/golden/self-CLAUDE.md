@@ -31,9 +31,9 @@ Run before committing:
 
 @/Users/manuelmorales/dev/claude-prove/references/claude-prove-reference.md
 
-### Onleash Design Principles
+### Design Principles
 
-@/Users/manuelmorales/dev/claude-prove/references/onleash-design-principles.md
+@/Users/manuelmorales/dev/claude-prove/references/design-principles.md
 
 ### LLM-Optimized Coding Standards
 

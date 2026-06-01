@@ -34,10 +34,9 @@ export const PLUGIN_DEFAULT_REFERENCES: ReadonlyArray<ReferenceEntry> = [
     label: 'claude-prove CLI Reference',
   },
   {
-    // Engine boundary, native primitives, forced bubble-up, append-only —
-    // onleash principles distilled for prove.
-    path: '$PLUGIN_DIR/references/onleash-design-principles.md',
-    label: 'Onleash Design Principles',
+    // Engine boundary, native primitives, forced bubble-up, append-only.
+    path: '$PLUGIN_DIR/references/design-principles.md',
+    label: 'Design Principles',
   },
 ];
 
