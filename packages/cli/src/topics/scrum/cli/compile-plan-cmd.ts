@@ -68,6 +68,19 @@ interface PlanStep {
   acceptance_criteria: PlanCriterion[];
 }
 
+/**
+ * Declared bounds forwarded into a plan task. Mirrors the run-state v3
+ * `TASK_PLAN_SPEC.bounds` shape and is sourced verbatim from the scrum task's
+ * `TaskBounds`. Forwarded only when the scrum task has authored bounds; absent
+ * = unbounded (current behavior). prep-permissions reads this downstream.
+ */
+interface PlanBounds {
+  read?: string[];
+  write?: string[];
+  tools?: { allow?: string[]; deny?: string[] };
+  budgets?: { tokens?: number; tool_calls?: number; wall_clock_s?: number };
+}
+
 interface PlanTask {
   id: string;
   title: string;
@@ -76,6 +89,8 @@ interface PlanTask {
   description: string;
   acceptance_criteria: PlanCriterion[];
   worktree: { path: string; branch: string };
+  /** Forwarded from the scrum task's `bounds`; omitted when null (unbounded). */
+  bounds?: PlanBounds;
   steps: PlanStep[];
 }
 
@@ -199,7 +214,7 @@ function compile(
         status: c.status,
         idempotent: c.idempotent,
       }));
-    return {
+    const planTask: PlanTask = {
       id: planId,
       title: task.title,
       wave,
@@ -216,6 +231,13 @@ function compile(
         },
       ],
     };
+    // Forward milestone-authored declared bounds verbatim into the plan task
+    // (run-state v3 supports tasks[].bounds). Absent scrum bounds emit no
+    // bounds key — absent = unbounded; never crash on a null-bounds task.
+    if (task.bounds !== null) {
+      planTask.bounds = task.bounds;
+    }
+    return planTask;
   });
 
   const scrumMap: Record<string, string> = {};

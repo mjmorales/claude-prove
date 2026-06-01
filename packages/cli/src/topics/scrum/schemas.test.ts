@@ -21,6 +21,7 @@ import {
   SCRUM_MIGRATION_V3_SQL,
   SCRUM_MIGRATION_V4_SQL,
   SCRUM_MIGRATION_V5_SQL,
+  SCRUM_MIGRATION_V6_SQL,
   ensureScrumSchemaRegistered,
 } from './schemas';
 
@@ -134,6 +135,8 @@ describe('scrum domain registration', () => {
         'layer:TEXT:0',
         // v5 acceptance_json appends after v3, NULL default.
         'acceptance_json:TEXT:0',
+        // v6 bounds_json appends after v5, NULL default.
+        'bounds_json:TEXT:0',
       ]);
     } finally {
       raw.close();
@@ -257,7 +260,7 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V5_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN acceptance_json');
   });
 
-  test('scrum_tasks column shape gains v5 acceptance_json', () => {
+  test('scrum_tasks column shape gains v5 acceptance_json + v6 bounds_json', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -281,7 +284,30 @@ describe('scrum domain registration', () => {
         'layer:TEXT:0',
         // v5 appends, NULL default.
         'acceptance_json:TEXT:0',
+        // v6 appends after v5, NULL default.
+        'bounds_json:TEXT:0',
       ]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('SCRUM_MIGRATION_V6_SQL adds scrum_tasks.bounds_json', () => {
+    expect(SCRUM_MIGRATION_V6_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN bounds_json');
+  });
+
+  test('v6 ADD COLUMN defaults bounds_json to NULL on existing rows', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      raw.exec(
+        "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ bounds_json: string | null }>(
+        'SELECT bounds_json FROM scrum_tasks WHERE id = ?',
+        ['t1'],
+      );
+      expect(row).toEqual([{ bounds_json: null }]);
     } finally {
       raw.close();
     }
@@ -304,12 +330,12 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('full migration chain from v0 applies v1..v5 in order', () => {
+  test('full migration chain from v0 applies v1..v6 in order', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       const result = runMigrations(raw);
       expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5,
+        1, 2, 3, 4, 5, 6,
       ]);
     } finally {
       raw.close();
@@ -321,7 +347,7 @@ describe('scrum domain registration', () => {
     try {
       const first = runMigrations(raw);
       expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5,
+        1, 2, 3, 4, 5, 6,
       ]);
 
       const second = runMigrations(raw);
@@ -337,6 +363,7 @@ describe('scrum domain registration', () => {
         { version: 3 },
         { version: 4 },
         { version: 5 },
+        { version: 6 },
       ]);
     } finally {
       raw.close();
@@ -367,9 +394,9 @@ describe('scrum domain registration', () => {
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(log).toHaveLength(5);
-      const [v1, v2, v3, v4, v5] = log;
-      if (!v1 || !v2 || !v3 || !v4 || !v5) throw new Error('expected five log entries');
+      expect(log).toHaveLength(6);
+      const [v1, v2, v3, v4, v5, v6] = log;
+      if (!v1 || !v2 || !v3 || !v4 || !v5 || !v6) throw new Error('expected six log entries');
       expect(v1.domain).toBe('scrum');
       expect(v1.version).toBe(1);
       expect(v1.description).toContain('scrum_tasks');
@@ -385,6 +412,9 @@ describe('scrum domain registration', () => {
       expect(v5.domain).toBe('scrum');
       expect(v5.version).toBe(5);
       expect(v5.description).toContain('acceptance_json');
+      expect(v6.domain).toBe('scrum');
+      expect(v6.version).toBe(6);
+      expect(v6.description).toContain('bounds_json');
     } finally {
       raw.close();
     }

@@ -133,6 +133,59 @@ export interface Acceptance {
 }
 
 // ---------------------------------------------------------------------------
+// Declared bounds (v6, declared-bounds decision §2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Tool allow/deny patterns inside `TaskBounds`. These map onto NATIVE
+ * `settings.local.json` permission rules — `allow[]` merges into
+ * `permissions.allow`, `deny[]` into `permissions.deny` — when
+ * `prep-permissions` reads the forwarded plan-task bounds. Patterns are the
+ * native form, e.g. `'Bash(go test *)'`.
+ */
+export interface TaskBoundsTools {
+  allow?: string[];
+  deny?: string[];
+}
+
+/**
+ * Soft resource ceilings inside `TaskBounds`. ADVISORY ONLY — claude-prove
+ * has no enforcement daemon; `prep-permissions` renders these into the task
+ * prompt as guidance and nothing blocks on them (the native subagent timeout
+ * is the only hard floor).
+ */
+export interface TaskBoundsBudgets {
+  tokens?: number;
+  tool_calls?: number;
+  wall_clock_s?: number;
+}
+
+/**
+ * Decoded `scrum_tasks.bounds_json` (v6). The OPTIONAL milestone-authored
+ * declared bounds for a task; absent column → `null` on `ScrumTask.bounds`.
+ * Mirrors the run-state v3 plan-side `TASK_PLAN_SPEC.bounds` shape so
+ * `compile-plan` can forward it verbatim into `plan.tasks[].bounds`.
+ *
+ * Enforcement split (per the decision's post-implementation correction):
+ *   read    — advisory; rendered into the task prompt (no native read-deny).
+ *   write   — advisory; the git worktree is the write wall. Native permission
+ *             deny rules match a set, not its complement, so there is NO
+ *             `Edit(!glob)`/`Write(!glob)` "writable only inside X" rule.
+ *   tools   — the only NATIVE surface; allow/deny merge into permissions.
+ *   budgets — ADVISORY ONLY; soft ceilings rendered into the prompt.
+ *
+ * All fields optional; absent = unbounded (the pre-v6 behavior). The closed
+ * top-level key set (`read | write | tools | budgets`) is enforced on write
+ * by `validateBounds` in `store.ts`.
+ */
+export interface TaskBounds {
+  read?: string[];
+  write?: string[];
+  tools?: TaskBoundsTools;
+  budgets?: TaskBoundsBudgets;
+}
+
+// ---------------------------------------------------------------------------
 // Row types — one per scrum_* table
 // ---------------------------------------------------------------------------
 
@@ -152,6 +205,12 @@ export interface ScrumTask {
    * never remove).
    */
   acceptance: Acceptance | null;
+  /**
+   * Decoded from `scrum_tasks.bounds_json` at the row boundary (v6). NULL =
+   * no authored bounds (unbounded). The optional milestone-authored source
+   * that `compile-plan` forwards into the plan's `tasks[].bounds`.
+   */
+  bounds: TaskBounds | null;
   created_by_agent: string | null;
   created_at: string;
   last_event_at: string | null;

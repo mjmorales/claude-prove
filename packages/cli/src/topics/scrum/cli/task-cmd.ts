@@ -2,7 +2,7 @@
  * `claude-prove scrum task <action> [args] [flags]`
  *
  * Action dispatch:
- *   create         --title X [--description Y] [--milestone M] [--id I]
+ *   create         --title X [--description Y] [--milestone M] [--id I] [--bounds JSON]
  *   show <id>
  *   list           [--status S] [--milestone M] [--tag T]
  *   tag <id> <tag>
@@ -16,6 +16,8 @@
  *                                                     [--timeout 30s] [--criterion ID]
  *   acceptance list <id>
  *   acceptance supersede <id> --criterion ID --reason R [--by NEW-ID]
+ *   bounds set <id>          --bounds JSON   (pass --bounds '' to clear)
+ *   bounds show <id>
  *
  * Stdout contract: JSON result per action on stdout; one-line human
  * summary on stderr. The `list` action returns a JSON array. The `show`
@@ -36,6 +38,7 @@ import type {
   AcceptanceCriterion,
   AcceptanceVerifiesBy,
   DepKind,
+  TaskBounds,
   TaskLayer,
   TaskStatus,
 } from '../types';
@@ -63,6 +66,8 @@ export interface TaskCmdFlags {
   criterion?: string;
   reason?: string;
   by?: string;
+  // Declared bounds (v6) — JSON blob for `task create` + `task bounds set`.
+  bounds?: string;
 }
 
 export type TaskAction =
@@ -76,7 +81,8 @@ export type TaskAction =
   | 'delete'
   | 'add-dep'
   | 'remove-dep'
-  | 'acceptance';
+  | 'acceptance'
+  | 'bounds';
 
 const TASK_ACTIONS: TaskAction[] = [
   'create',
@@ -90,6 +96,7 @@ const TASK_ACTIONS: TaskAction[] = [
   'add-dep',
   'remove-dep',
   'acceptance',
+  'bounds',
 ];
 
 const VALID_DEP_KINDS: DepKind[] = ['blocks', 'blocked_by'];
@@ -149,6 +156,8 @@ export function runTaskCmd(
         return doRemoveDep(store, positional[0], positional[1], flags);
       case 'acceptance':
         return doAcceptance(store, positional[0], positional[1], flags);
+      case 'bounds':
+        return doBounds(store, positional[0], positional[1], flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -188,6 +197,16 @@ function doCreate(store: ScrumStore, flags: TaskCmdFlags): number {
     layer = flags.layer as TaskLayer;
   }
 
+  // --bounds is a JSON blob (nested dict — no per-field flag explosion). Parse
+  // here so a malformed blob fails loud with a CLI-shaped error; the store
+  // re-validates the closed top-level key set before insert.
+  let bounds: TaskBounds | null = null;
+  if (flags.bounds !== undefined && flags.bounds.length > 0) {
+    const parsed = parseBounds(flags.bounds, 'create');
+    if (parsed === null) return 1;
+    bounds = parsed;
+  }
+
   const task = store.createTask({
     id,
     title: flags.title,
@@ -195,6 +214,7 @@ function doCreate(store: ScrumStore, flags: TaskCmdFlags): number {
     milestoneId,
     parentId,
     layer,
+    bounds,
   });
   process.stdout.write(`${JSON.stringify(task)}\n`);
   process.stderr.write(`scrum task create: ${task.id}\n`);
@@ -585,4 +605,106 @@ function doAcceptanceSupersede(store: ScrumStore, taskId: string, flags: TaskCmd
     `scrum task acceptance supersede: ${taskId} / ${flags.criterion} -> superseded\n`,
   );
   return 0;
+}
+
+// ---------------------------------------------------------------------------
+// bounds — author/show declared bounds (v6, declared-bounds decision §2)
+//
+//   task bounds set <task-id>  --bounds '<json>'   (pass --bounds '' to clear)
+//   task bounds show <task-id>
+//
+// Bounds is a nested dict ({ read?, write?, tools?, budgets? }), so the input
+// form is a single JSON blob — no per-field flag explosion. The optional
+// milestone-authored source `compile-plan` forwards into plan.tasks[].bounds.
+// ---------------------------------------------------------------------------
+
+type BoundsSubAction = 'set' | 'show';
+
+const BOUNDS_SUB_ACTIONS: BoundsSubAction[] = ['set', 'show'];
+
+function doBounds(
+  store: ScrumStore,
+  sub: string | undefined,
+  taskId: string | undefined,
+  flags: TaskCmdFlags,
+): number {
+  if (sub === undefined || !(BOUNDS_SUB_ACTIONS as string[]).includes(sub)) {
+    process.stderr.write(
+      `scrum task bounds: sub-action required (one of: ${BOUNDS_SUB_ACTIONS.join(' | ')})\n`,
+    );
+    return 1;
+  }
+  if (taskId === undefined || taskId.length === 0) {
+    process.stderr.write(`scrum task bounds ${sub}: <task-id> positional argument required\n`);
+    return 1;
+  }
+  switch (sub as BoundsSubAction) {
+    case 'set':
+      return doBoundsSet(store, taskId, flags);
+    case 'show':
+      return doBoundsShow(store, taskId);
+  }
+}
+
+/**
+ * Set (or clear) a task's declared bounds. `--bounds '<json>'` is required;
+ * pass `--bounds ''` to clear (→ unbounded). Store-side `validateBounds`
+ * rejects unknown top-level keys, surfaced here as exit-1 with the message.
+ */
+function doBoundsSet(store: ScrumStore, taskId: string, flags: TaskCmdFlags): number {
+  if (flags.bounds === undefined) {
+    process.stderr.write(
+      "scrum task bounds set: --bounds <json> is required (pass --bounds '' to clear)\n",
+    );
+    return 1;
+  }
+  // Empty string clears the bounds; any other value must parse as a JSON dict.
+  let bounds: TaskBounds | null = null;
+  if (flags.bounds.length > 0) {
+    const parsed = parseBounds(flags.bounds, 'bounds set');
+    if (parsed === null) return 1;
+    bounds = parsed;
+  }
+  const task = store.setBounds(taskId, bounds);
+  process.stdout.write(`${JSON.stringify(task)}\n`);
+  process.stderr.write(
+    `scrum task bounds set: ${taskId} -> ${bounds === null ? 'cleared' : 'set'}\n`,
+  );
+  return 0;
+}
+
+function doBoundsShow(store: ScrumStore, taskId: string): number {
+  const task = store.getTask(taskId);
+  if (task === null) {
+    process.stderr.write(`scrum task bounds show: task '${taskId}' not found\n`);
+    return 1;
+  }
+  // Emit the bounds object (or null) on stdout so consumers parse one shape.
+  process.stdout.write(`${JSON.stringify(task.bounds)}\n`);
+  process.stderr.write(
+    `scrum task bounds show: ${taskId} (${task.bounds === null ? 'unbounded' : 'bounded'})\n`,
+  );
+  return 0;
+}
+
+/**
+ * Parse a `--bounds` JSON blob into a `TaskBounds`. Returns null (after
+ * writing a usage error) when the blob is not valid JSON or not a plain
+ * object — shape validation (unknown keys) is the store's job. The
+ * `context` names the calling action for the error message.
+ */
+function parseBounds(raw: string, context: string): TaskBounds | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`scrum task ${context}: --bounds is not valid JSON (${msg})\n`);
+    return null;
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    process.stderr.write(`scrum task ${context}: --bounds must be a JSON object\n`);
+    return null;
+  }
+  return value as TaskBounds;
 }
