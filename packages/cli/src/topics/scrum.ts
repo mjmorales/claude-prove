@@ -7,18 +7,24 @@
  *   claude-prove scrum status                    [--human]
  *   claude-prove scrum next-ready                [--limit N] [--milestone M] [--human]
  *   claude-prove scrum compile-plan              --milestone M [--out plan.json]
- *   claude-prove scrum task create               --title X [--description Y] [--milestone M] [--id I]
+ *   claude-prove scrum task create               --title X [--description Y] [--milestone M] [--id I] [--parent P] [--layer epic|story|task] [--bounds JSON]
  *   claude-prove scrum task show <id>
  *   claude-prove scrum task list                 [--status S] [--milestone M] [--tag T]
  *   claude-prove scrum task tag <id> <tag>
  *   claude-prove scrum task link-decision <id> <decision-path>
  *   claude-prove scrum task status <id> <new-status>
+ *   claude-prove scrum task cancel <id>            [--cascade] [--reason R] [--detail D]
  *   claude-prove scrum task delete <id>
  *   claude-prove scrum task add-dep <from> <to>    [--kind blocks|blocked_by]
  *   claude-prove scrum task remove-dep <from> <to> [--kind blocks|blocked_by]
+ *   claude-prove scrum task acceptance add <id>    --text T --verifies-by K --check C [--idempotent] [--timeout 30s] [--criterion ID]
+ *   claude-prove scrum task acceptance list <id>
+ *   claude-prove scrum task acceptance supersede <id> --criterion ID --reason R [--by NEW-ID]
+ *   claude-prove scrum task bounds set <id>      --bounds JSON   (pass --bounds '' to clear)
+ *   claude-prove scrum task bounds show <id>
  *   claude-prove scrum alerts                    [--human] [--stalled-after-days N]
- *   claude-prove scrum milestone create          --title X [--description Y] [--target-state S] [--id I]
- *   claude-prove scrum milestone list            [--status S]
+ *   claude-prove scrum milestone create          --title X [--description Y] [--target-state S] [--id I] [--initiative N]
+ *   claude-prove scrum milestone list            [--status S] [--initiative N]
  *   claude-prove scrum milestone show <id>
  *   claude-prove scrum milestone activate <id>
  *   claude-prove scrum milestone reopen <id>
@@ -26,9 +32,10 @@
  *   claude-prove scrum tag add <task-id> <tag>
  *   claude-prove scrum tag remove <task-id> <tag>
  *   claude-prove scrum tag list                  [--task <id>] [--tag <tag>]
- *   claude-prove scrum decision record <path>
+ *   claude-prove scrum decision record <path>    [--kind adr|glossary|pattern]
  *   claude-prove scrum decision get <id>
- *   claude-prove scrum decision list             [--topic T] [--status S] [--human]
+ *   claude-prove scrum decision list             [--topic T] [--status S] [--kind K] [--human]
+ *   claude-prove scrum decision review-stale     [--days N] [--human]
  *   claude-prove scrum decision recover          --from-git
  *   claude-prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
  *   claude-prove scrum hook <event>              (event: session-start | subagent-stop | stop)
@@ -96,15 +103,34 @@ interface ScrumFlags {
   tag?: string;
   task?: string;
   topic?: string;
+  parent?: string;
+  layer?: string;
   targetState?: string;
+  initiative?: string;
   branch?: string;
   slug?: string;
   unassign?: boolean;
   kind?: string;
   stalledAfterDays?: number | string;
   fromGit?: boolean;
+  by?: string;
+  reason?: string;
   out?: string;
   workspaceRoot?: string;
+  // `task acceptance` authoring flags (v5).
+  text?: string;
+  verifiesBy?: string;
+  check?: string;
+  idempotent?: boolean;
+  timeout?: string;
+  criterion?: string;
+  // `task create` + `task bounds set` declared-bounds JSON blob (v6).
+  bounds?: string;
+  // `task cancel` cascade + terminal provenance (v7).
+  cascade?: boolean;
+  detail?: string;
+  // `decision review-stale` threshold in days (v7).
+  days?: number | string;
 }
 
 export function register(cli: CAC): void {
@@ -116,21 +142,45 @@ export function register(cli: CAC): void {
     .option('--title <t>', 'Task or milestone title (create actions)')
     .option('--description <d>', 'Task or milestone description')
     .option('--id <id>', 'Explicit id (create actions; default: generated from title)')
+    .option('--parent <id>', 'Parent task id for `task create` (the epic→story→task tree)')
+    .option('--layer <l>', 'Containment tier for `task create` (epic | story | task)')
     .option('--status <s>', 'Status filter (list / close / create)')
     .option('--tag <t>', 'Tag filter')
     .option('--task <id>', 'Task filter for `tag list`')
     .option('--topic <t>', 'Topic filter for `decision list`')
     .option('--target-state <s>', 'Milestone target state (milestone create)')
+    .option(
+      '--initiative <i>',
+      'Initiative grouping (milestone create sets it; milestone list filters by it)',
+    )
     .option('--branch <b>', 'Branch name for link-run')
     .option('--slug <g>', 'Run slug for link-run')
     .option('--unassign', 'Clear milestone_id (scrum task move)')
     .option(
       '--kind <k>',
-      'Dep-edge kind for scrum task add-dep/remove-dep (blocks | blocked_by; default: blocks)',
+      'Dep-edge kind for task add-dep/remove-dep (blocks | blocked_by); also decision record Codex subtype (adr | glossary | pattern)',
     )
     .option('--stalled-after-days <n>', 'Alerts: stalled WIP threshold in days (default: 7)')
     .option('--from-git', 'decision recover: scan git history for .prove/decisions/*.md blobs')
+    .option('--by <id>', 'decision supersede: id of the replacement decision')
+    .option('--reason <text>', 'decision supersede: rationale recorded on the retired decision')
     .option('--out <path>', 'compile-plan: write plan.json here + scrum-map.json sibling')
+    .option('--text <t>', 'task acceptance add: criterion text')
+    .option('--verifies-by <k>', 'task acceptance add: bash | assert | gate | agent')
+    .option('--check <c>', 'task acceptance add: kind-specific check payload (command/expr/prompt)')
+    .option('--idempotent', 'task acceptance add: mark the criterion safe to re-run')
+    .option('--timeout <t>', 'task acceptance add: optional wall-clock budget (e.g. 30s)')
+    .option('--criterion <id>', 'task acceptance: explicit criterion id (default: generated)')
+    .option(
+      '--bounds <json>',
+      "task create / task bounds set: declared bounds JSON ({ read?, write?, tools?, budgets? }); pass '' to clear",
+    )
+    .option(
+      '--cascade',
+      'task cancel: recursively cancel every descendant in the parent_id subtree',
+    )
+    .option('--detail <text>', 'task cancel: free-text elaboration recorded as terminal_detail')
+    .option('--days <n>', 'decision review-stale: staleness threshold in days (default: 90)')
     .option(
       '--workspace-root <w>',
       'Main worktree root; pins store to <root>/.prove/prove.db (default: git common-dir)',
@@ -198,7 +248,7 @@ function dispatch(
     case 'task':
       if (arg1 === undefined) {
         console.error(
-          'error: scrum task: sub-action required (one of: create | show | list | tag | link-decision | status | move | delete | add-dep | remove-dep)',
+          'error: scrum task: sub-action required (one of: create | show | list | tag | link-decision | status | cancel | move | delete | add-dep | remove-dep | acceptance | bounds)',
         );
         return 1;
       }
@@ -207,10 +257,23 @@ function dispatch(
         description: flags.description,
         milestone: flags.milestone,
         id: flags.id,
+        parent: flags.parent,
+        layer: flags.layer,
         status: flags.status,
         tag: flags.tag,
         unassign: flags.unassign,
         kind: flags.kind,
+        text: flags.text,
+        verifiesBy: flags.verifiesBy,
+        check: flags.check,
+        idempotent: flags.idempotent,
+        timeout: flags.timeout,
+        criterion: flags.criterion,
+        reason: flags.reason,
+        by: flags.by,
+        bounds: flags.bounds,
+        cascade: flags.cascade,
+        detail: flags.detail,
         workspaceRoot: flags.workspaceRoot,
       });
 
@@ -227,6 +290,7 @@ function dispatch(
         targetState: flags.targetState,
         id: flags.id,
         status: flags.status,
+        initiative: flags.initiative,
         workspaceRoot: flags.workspaceRoot,
       });
 
@@ -244,7 +308,7 @@ function dispatch(
     case 'decision':
       if (arg1 === undefined) {
         console.error(
-          'error: scrum decision: sub-action required (one of: record | get | list | recover)',
+          'error: scrum decision: sub-action required (one of: record | get | list | recover | supersede | review-stale)',
         );
         return 1;
       }
@@ -253,6 +317,10 @@ function dispatch(
         status: flags.status,
         human: flags.human,
         fromGit: flags.fromGit,
+        by: flags.by,
+        reason: flags.reason,
+        days: flags.days,
+        kind: flags.kind,
         workspaceRoot: flags.workspaceRoot,
       });
 

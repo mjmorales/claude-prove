@@ -1,4 +1,4 @@
-Migration plan for <FIXTURE_PATH> (v0 -> v6):
+Migration plan for <FIXTURE_PATH> (v0 -> v7):
   + schema_version: set to "1"
   ~ schema_version: "1" -> "2"
   + claude_md: added with empty references (configure via /prove:init or /prove:update)
@@ -9,3 +9,4 @@ Migration plan for <FIXTURE_PATH> (v0 -> v6):
   + tools.scrum: added (scrum task management — enabled, scope 'user', empty config)
   ~ schema_version: "5" -> "6"
   + dev_mode: added (false — installed-binary mode; flip to true when running from a plugin git checkout)
+  ~ schema_version: "6" -> "7"

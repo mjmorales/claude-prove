@@ -64,7 +64,7 @@ Generate a 3-5 sentence pickup note — the only LLM-generated part. Answer:
 
 1. **Next action** — immediate work for the new agent
 2. **Blockers/gotchas** — non-obvious issues that would trip up a fresh agent
-3. **Key decisions** — choices from this session not captured in artifacts
+3. **Key decisions** — choices made during the handed-off work that are not captured in artifacts
 
 Conditional additions:
 

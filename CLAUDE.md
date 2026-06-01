@@ -1,8 +1,8 @@
 <!-- prove:managed:start -->
 # claude-prove
 
-<!-- prove:plugin-version:2.6.0 -->
-**Prove plugin v2.6.0** — if `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts --version` does not match v2.6.0, run `/prove:update` to sync.
+<!-- prove:plugin-version:2.9.1 -->
+**Prove plugin v2.9.1** — if `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts --version` does not match v2.9.1, run `/prove:update` to sync.
 
 JavaScript/TypeScript (npm)
 
@@ -24,6 +24,10 @@ JavaScript/TypeScript (npm)
 ### claude-prove CLI Reference
 
 @/Users/manuelmorales/dev/claude-prove/references/claude-prove-reference.md
+
+### Design Principles
+
+@/Users/manuelmorales/dev/claude-prove/references/design-principles.md
 
 ### LLM-Optimized Coding Standards
 
@@ -54,6 +58,7 @@ JavaScript/TypeScript (npm)
 - `/prove:plan` — Plan a task or a specific step from the active plan.json
 - `/prove:review-ui` — Docker-based review UI for inspecting prove runs, ACB intent groups, and verdicts
 - `/prove:scrum` — Operate the scrum store backed by `.prove/prove.db` (tasks, milestones, tags, run-links)
+- `/prove:workflow` — Run a milestone/task tree as parallel waves via orchestrator full-mode, mirroring status to scrum
 
 <!-- prove:managed:end -->
 
@@ -98,3 +103,16 @@ When adding/removing/renaming `PROVE_SCHEMA` fields:
 - **Hand-written markdown** (agent defs, commands, skills, references, docs): always invoke as bare `claude-prove <topic> <args>`. Assume the CLI is on `PATH`. Never emit `bun run` prefixes or absolute paths; instead, emit the bare command.
 - **Codegen output** (composer.ts renderers, ACB hook template, etc.): route the invocation prefix through `.claude/.prove.json::dev_mode`. Installed-binary mode (`dev_mode: false`, the default) emits bare `claude-prove`; plugin-developer mode (`dev_mode: true`) emits `bun run ${pluginDir}/packages/cli/bin/run.ts`. Use a single `cliPrefix`/`devMode` argument threaded through renderers — not ad-hoc `pluginDir` string concatenation.
 - **Runtime agent prompts** (Claude Code hook `decision: block` payloads): read `dev_mode` at fire time (e.g., `readDevMode(workspaceRoot)` in `acb/hook.ts`) so the emitted command resolves correctly on the user's machine regardless of install shape.
+
+## Self-Contained Artifact Rule
+
+All user-facing code and markdown -- every `skills/*/SKILL.md`, `agents/*.md`, `commands/*.md`, `references/*.md`, and all code comments -- must be self-contained and durable. State each rule, rationale, or concept directly and timelessly, so the artifact stands alone with no external or time-bound dependency.
+
+Ban these four reference classes in those artifacts:
+
+- **Temporal anchors** -- dates, "now", "previously", "as of this change", "this session". Instead, state the rule or concept as a standing fact with no time reference.
+- **Decision-record links or mentions** -- wiki-links to a decision, "per decision X", decision filename citations. Instead, restate the decision's content and rationale inline.
+- **Spec/section links** -- "§8.3", "audit §5.1", "09 §10.5-10.6". Instead, reproduce the referenced rule or concept directly in the text.
+- **"onleash" mentions** -- the heritage framework name. Instead, describe the relevant concept on its own terms without naming its origin.
+
+**Exempt:** internal artifacts under `.prove/` (decision records) may use all four reference classes -- the ban applies only to user-facing code and markdown.

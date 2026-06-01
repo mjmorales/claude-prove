@@ -18,6 +18,14 @@ import {
 import {
   SCRUM_MIGRATION_V1_SQL,
   SCRUM_MIGRATION_V2_SQL,
+  SCRUM_MIGRATION_V3_SQL,
+  SCRUM_MIGRATION_V4_SQL,
+  SCRUM_MIGRATION_V5_SQL,
+  SCRUM_MIGRATION_V6_SQL,
+  SCRUM_MIGRATION_V7_SQL,
+  SCRUM_MIGRATION_V8_SQL,
+  SCRUM_MIGRATION_V9_SQL,
+  SCRUM_MIGRATION_V10_SQL,
   ensureScrumSchemaRegistered,
 } from './schemas';
 
@@ -46,7 +54,7 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V2_SQL).toContain('CREATE TABLE scrum_decisions');
     expect(SCRUM_MIGRATION_V2_SQL).toContain('CREATE INDEX idx_scrum_decisions_topic');
     expect(SCRUM_MIGRATION_V2_SQL).toContain('CREATE INDEX idx_scrum_decisions_status');
-    // Default status is 'accepted' per ADR convention.
+    // Default status is 'accepted'.
     expect(SCRUM_MIGRATION_V2_SQL).toContain("DEFAULT 'accepted'");
   });
 
@@ -74,7 +82,16 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('migration creates all 7 scrum indexes (v1 + v2)', () => {
+  test('SCRUM_MIGRATION_V3_SQL adds parent_id + layer + idx_scrum_tasks_parent', () => {
+    expect(SCRUM_MIGRATION_V3_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN parent_id');
+    expect(SCRUM_MIGRATION_V3_SQL).toContain('REFERENCES scrum_tasks(id)');
+    expect(SCRUM_MIGRATION_V3_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN layer');
+    expect(SCRUM_MIGRATION_V3_SQL).toContain(
+      'CREATE INDEX idx_scrum_tasks_parent ON scrum_tasks(parent_id)',
+    );
+  });
+
+  test('migration creates all 8 scrum indexes (v1 + v2 + v3)', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -90,6 +107,7 @@ describe('scrum domain registration', () => {
         'idx_scrum_events_task_ts',
         'idx_scrum_run_links_path',
         'idx_scrum_tags_tag',
+        'idx_scrum_tasks_parent',
         'idx_scrum_tasks_status_event',
       ]);
     } finally {
@@ -97,7 +115,7 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('scrum_tasks column shape matches spec', () => {
+  test('scrum_tasks column shape matches spec (v3 adds parent_id + layer)', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -116,7 +134,37 @@ describe('scrum domain registration', () => {
         'created_at:TEXT:1',
         'last_event_at:TEXT:0',
         'deleted_at:TEXT:0',
+        // v3 columns are appended (ADD COLUMN lands them at the end), NULL default.
+        'parent_id:TEXT:0',
+        'layer:TEXT:0',
+        // v5 acceptance_json appends after v3, NULL default.
+        'acceptance_json:TEXT:0',
+        // v6 bounds_json appends after v5, NULL default.
+        'bounds_json:TEXT:0',
+        // v7 terminal provenance appends after v6, NULL default.
+        'terminal_reason:TEXT:0',
+        'terminal_detail:TEXT:0',
+        // v9 last-touch provenance appends after v7, NULL default.
+        'last_modified_by:TEXT:0',
+        'last_modified_at:TEXT:0',
       ]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('v3 ADD COLUMN defaults parent_id + layer to NULL on existing rows', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      raw.exec(
+        "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ parent_id: string | null; layer: string | null }>(
+        'SELECT parent_id, layer FROM scrum_tasks WHERE id = ?',
+        ['t1'],
+      );
+      expect(row).toEqual([{ parent_id: null, layer: null }]);
     } finally {
       raw.close();
     }
@@ -165,12 +213,224 @@ describe('scrum domain registration', () => {
     }
   });
 
+  test('SCRUM_MIGRATION_V4_SQL adds superseded_by (self-FK) + reason', () => {
+    expect(SCRUM_MIGRATION_V4_SQL).toContain(
+      'ALTER TABLE scrum_decisions ADD COLUMN superseded_by',
+    );
+    expect(SCRUM_MIGRATION_V4_SQL).toContain('REFERENCES scrum_decisions(id)');
+    expect(SCRUM_MIGRATION_V4_SQL).toContain('ALTER TABLE scrum_decisions ADD COLUMN reason');
+  });
+
+  test('scrum_decisions column shape gains v4 superseded_by + reason + v8 kind', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      const cols = raw
+        .all<{ name: string; type: string; notnull: number }>(
+          "SELECT name, type, [notnull] FROM pragma_table_info('scrum_decisions') ORDER BY cid",
+        )
+        .map((c) => `${c.name}:${c.type}:${c.notnull}`);
+      expect(cols).toEqual([
+        'id:TEXT:0',
+        'title:TEXT:1',
+        'topic:TEXT:0',
+        'status:TEXT:1',
+        'content:TEXT:1',
+        'source_path:TEXT:0',
+        'content_sha:TEXT:1',
+        'recorded_at:TEXT:1',
+        'recorded_by_agent:TEXT:0',
+        // v4 appends, NULL default.
+        'superseded_by:TEXT:0',
+        'reason:TEXT:0',
+        // v8 appends the Codex subtype, NULL default.
+        'kind:TEXT:0',
+      ]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('v4 ADD COLUMN defaults superseded_by + reason to NULL on existing rows', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      raw.exec(
+        "INSERT INTO scrum_decisions (id, title, status, content, content_sha, recorded_at) VALUES ('d1', 'D1', 'accepted', 'body', 'deadbeef', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ superseded_by: string | null; reason: string | null }>(
+        'SELECT superseded_by, reason FROM scrum_decisions WHERE id = ?',
+        ['d1'],
+      );
+      expect(row).toEqual([{ superseded_by: null, reason: null }]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('SCRUM_MIGRATION_V5_SQL adds scrum_tasks.acceptance_json', () => {
+    expect(SCRUM_MIGRATION_V5_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN acceptance_json');
+  });
+
+  test('scrum_tasks column shape gains v5 acceptance_json + v6 bounds_json + v7 terminal provenance', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      const cols = raw
+        .all<{ name: string; type: string; notnull: number }>(
+          "SELECT name, type, [notnull] FROM pragma_table_info('scrum_tasks') ORDER BY cid",
+        )
+        .map((c) => `${c.name}:${c.type}:${c.notnull}`);
+      expect(cols).toEqual([
+        'id:TEXT:0',
+        'title:TEXT:1',
+        'description:TEXT:0',
+        'status:TEXT:1',
+        'milestone_id:TEXT:0',
+        'created_by_agent:TEXT:0',
+        'created_at:TEXT:1',
+        'last_event_at:TEXT:0',
+        'deleted_at:TEXT:0',
+        // v3 columns.
+        'parent_id:TEXT:0',
+        'layer:TEXT:0',
+        // v5 appends, NULL default.
+        'acceptance_json:TEXT:0',
+        // v6 appends after v5, NULL default.
+        'bounds_json:TEXT:0',
+        // v7 appends terminal provenance, NULL default.
+        'terminal_reason:TEXT:0',
+        'terminal_detail:TEXT:0',
+        // v9 appends last-touch provenance, NULL default.
+        'last_modified_by:TEXT:0',
+        'last_modified_at:TEXT:0',
+      ]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('SCRUM_MIGRATION_V6_SQL adds scrum_tasks.bounds_json', () => {
+    expect(SCRUM_MIGRATION_V6_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN bounds_json');
+  });
+
+  test('v6 ADD COLUMN defaults bounds_json to NULL on existing rows', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      raw.exec(
+        "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ bounds_json: string | null }>(
+        'SELECT bounds_json FROM scrum_tasks WHERE id = ?',
+        ['t1'],
+      );
+      expect(row).toEqual([{ bounds_json: null }]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('SCRUM_MIGRATION_V7_SQL adds scrum_tasks terminal provenance columns', () => {
+    expect(SCRUM_MIGRATION_V7_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN terminal_reason');
+    expect(SCRUM_MIGRATION_V7_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN terminal_detail');
+  });
+
+  test('v7 ADD COLUMN defaults terminal_reason/terminal_detail to NULL on existing rows', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      raw.exec(
+        "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ terminal_reason: string | null; terminal_detail: string | null }>(
+        'SELECT terminal_reason, terminal_detail FROM scrum_tasks WHERE id = ?',
+        ['t1'],
+      );
+      expect(row).toEqual([{ terminal_reason: null, terminal_detail: null }]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('SCRUM_MIGRATION_V8_SQL adds scrum_decisions.kind', () => {
+    expect(SCRUM_MIGRATION_V8_SQL).toContain('ALTER TABLE scrum_decisions ADD COLUMN kind');
+  });
+
+  test('v8 ADD COLUMN defaults kind to NULL on existing rows', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      raw.exec(
+        "INSERT INTO scrum_decisions (id, title, status, content, content_sha, recorded_at) VALUES ('d1', 'D1', 'accepted', 'body', 'deadbeef', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ kind: string | null }>(
+        'SELECT kind FROM scrum_decisions WHERE id = ?',
+        ['d1'],
+      );
+      expect(row).toEqual([{ kind: null }]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('SCRUM_MIGRATION_V9_SQL adds scrum_tasks last-touch provenance columns', () => {
+    expect(SCRUM_MIGRATION_V9_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN last_modified_by');
+    expect(SCRUM_MIGRATION_V9_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN last_modified_at');
+  });
+
+  test('v9 ADD COLUMN defaults last_modified_by/last_modified_at to NULL on existing rows', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      raw.exec(
+        "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ last_modified_by: string | null; last_modified_at: string | null }>(
+        'SELECT last_modified_by, last_modified_at FROM scrum_tasks WHERE id = ?',
+        ['t1'],
+      );
+      expect(row).toEqual([{ last_modified_by: null, last_modified_at: null }]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('v5 ADD COLUMN defaults acceptance_json to NULL on existing rows', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      raw.exec(
+        "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ acceptance_json: string | null }>(
+        'SELECT acceptance_json FROM scrum_tasks WHERE id = ?',
+        ['t1'],
+      );
+      expect(row).toEqual([{ acceptance_json: null }]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('full migration chain from v0 applies v1..v10 in order', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      const result = runMigrations(raw);
+      expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+      ]);
+    } finally {
+      raw.close();
+    }
+  });
+
   test('migration is idempotent — rerunning does not duplicate log rows', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       const first = runMigrations(raw);
       expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
       ]);
 
       const second = runMigrations(raw);
@@ -180,7 +440,18 @@ describe('scrum domain registration', () => {
         'SELECT version FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(versions).toEqual([{ version: 1 }, { version: 2 }]);
+      expect(versions).toEqual([
+        { version: 1 },
+        { version: 2 },
+        { version: 3 },
+        { version: 4 },
+        { version: 5 },
+        { version: 6 },
+        { version: 7 },
+        { version: 8 },
+        { version: 9 },
+        { version: 10 },
+      ]);
     } finally {
       raw.close();
     }
@@ -210,15 +481,61 @@ describe('scrum domain registration', () => {
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(log).toHaveLength(2);
-      const [v1, v2] = log;
-      if (!v1 || !v2) throw new Error('expected two log entries');
+      expect(log).toHaveLength(10);
+      const [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10] = log;
+      if (!v1 || !v2 || !v3 || !v4 || !v5 || !v6 || !v7 || !v8 || !v9 || !v10)
+        throw new Error('expected ten log entries');
       expect(v1.domain).toBe('scrum');
       expect(v1.version).toBe(1);
       expect(v1.description).toContain('scrum_tasks');
       expect(v2.domain).toBe('scrum');
       expect(v2.version).toBe(2);
       expect(v2.description).toContain('scrum_decisions');
+      expect(v3.domain).toBe('scrum');
+      expect(v3.version).toBe(3);
+      expect(v3.description).toContain('parent_id');
+      expect(v4.domain).toBe('scrum');
+      expect(v4.version).toBe(4);
+      expect(v4.description).toContain('superseded_by');
+      expect(v5.domain).toBe('scrum');
+      expect(v5.version).toBe(5);
+      expect(v5.description).toContain('acceptance_json');
+      expect(v6.domain).toBe('scrum');
+      expect(v6.version).toBe(6);
+      expect(v6.description).toContain('bounds_json');
+      expect(v7.domain).toBe('scrum');
+      expect(v7.version).toBe(7);
+      expect(v7.description).toContain('terminal_reason');
+      expect(v8.domain).toBe('scrum');
+      expect(v8.version).toBe(8);
+      expect(v8.description).toContain('kind');
+      expect(v9.domain).toBe('scrum');
+      expect(v9.version).toBe(9);
+      expect(v9.description).toContain('last_modified_by');
+      expect(v10.domain).toBe('scrum');
+      expect(v10.version).toBe(10);
+      expect(v10.description).toContain('initiative');
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('SCRUM_MIGRATION_V10_SQL adds scrum_milestones.initiative', () => {
+    expect(SCRUM_MIGRATION_V10_SQL).toContain('ALTER TABLE scrum_milestones ADD COLUMN initiative');
+  });
+
+  test('v10 ADD COLUMN defaults initiative to NULL on existing milestones', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      raw.exec(
+        "INSERT INTO scrum_milestones (id, title, status, created_at) VALUES ('m1', 'M1', 'planned', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ initiative: string | null }>(
+        'SELECT initiative FROM scrum_milestones WHERE id = ?',
+        ['m1'],
+      );
+      expect(row).toEqual([{ initiative: null }]);
     } finally {
       raw.close();
     }

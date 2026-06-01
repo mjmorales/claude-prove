@@ -23,7 +23,7 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
 import { type ScrumStore, openScrumStore } from '../store';
-import type { ScrumTask, TaskStatus } from '../types';
+import type { EscalationType, ScrumTask, TaskStatus } from '../types';
 
 export interface AlertsCmdFlags {
   human?: boolean;
@@ -48,9 +48,17 @@ interface OrphanRun {
   run_path: string;
 }
 
+interface StaleEscalation {
+  id: string;
+  title: string;
+  escalation_type: EscalationType;
+  escalated_days: number;
+}
+
 interface AlertsReport {
   stalled_after_days: number;
   stalled_wip: StalledEntry[];
+  stale_escalations: StaleEscalation[];
   orphan_runs: OrphanRun[];
 }
 
@@ -64,10 +72,12 @@ export function runAlertsCmd(flags: AlertsCmdFlags): number {
   const store = openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
   try {
     const stalled = findStalledWip(store, stalledAfterDays);
+    const escalations = findStaleEscalations(store);
     const orphans = findOrphanRuns(store, workspaceRoot);
     const report: AlertsReport = {
       stalled_after_days: stalledAfterDays,
       stalled_wip: stalled,
+      stale_escalations: escalations,
       orphan_runs: orphans,
     };
     if (flags.human === true) {
@@ -76,7 +86,7 @@ export function runAlertsCmd(flags: AlertsCmdFlags): number {
       process.stdout.write(`${JSON.stringify(report)}\n`);
     }
     process.stderr.write(
-      `scrum alerts: ${stalled.length} stalled WIP, ${orphans.length} orphan runs\n`,
+      `scrum alerts: ${stalled.length} stalled WIP, ${escalations.length} open escalations, ${orphans.length} orphan runs\n`,
     );
     return 0;
   } finally {
@@ -111,6 +121,27 @@ function findStalledWip(store: ScrumStore, stalledAfterDays: number): StalledEnt
   }
   stalled.sort((a, b) => b.stalled_days - a.stalled_days);
   return stalled;
+}
+
+/**
+ * Open escalations across non-terminal tasks, stalest-first. An
+ * open escalation is alert-worthy regardless of age — it is an unresolved
+ * blocker raised by a worker — so this surfaces every one, ranked by age so
+ * the most overdue float to the top (the same staleness signal `nextReady`
+ * auto-bubbles into its ranking).
+ */
+function findStaleEscalations(store: ScrumStore): StaleEscalation[] {
+  const now = Date.now();
+  return store.listOpenEscalations().map((e) => {
+    const ms = Date.parse(e.ts);
+    const escalated_days = Number.isNaN(ms) ? 0 : Math.floor((now - ms) / (24 * 60 * 60 * 1000));
+    return {
+      id: e.task_id,
+      title: e.title,
+      escalation_type: e.escalation_type,
+      escalated_days,
+    };
+  });
 }
 
 function pickLastEventTs(task: ScrumTask): Date | null {
@@ -157,6 +188,15 @@ function renderHumanTable(report: AlertsReport): string {
   } else {
     for (const entry of report.stalled_wip) {
       lines.push(`  [${entry.status}] ${entry.id}  ${entry.stalled_days}d  ${entry.title}`);
+    }
+  }
+  lines.push('');
+  lines.push(`Open escalations (${report.stale_escalations.length}):`);
+  if (report.stale_escalations.length === 0) {
+    lines.push('  (none)');
+  } else {
+    for (const e of report.stale_escalations) {
+      lines.push(`  [${e.escalation_type}] ${e.id}  ${e.escalated_days}d  ${e.title}`);
     }
   }
   lines.push('');

@@ -52,6 +52,53 @@ describe('writeSettingsHooks', () => {
     }
   });
 
+  test('omits a disabled tool block on a fresh write', () => {
+    const tmp = makeTmpDir('disabled-fresh');
+    try {
+      const path = join(tmp, 'settings.json');
+      writeSettingsHooks(path, PREFIX, { disabledTools: new Set(['acb']) });
+      const settings = readJson(path);
+
+      // No acb-tagged block anywhere.
+      const allBlocks = Object.values(settings.hooks ?? {}).flat();
+      expect(allBlocks.some((b) => b?._tool === 'acb')).toBe(false);
+      // Other tools' blocks are still present.
+      expect(allBlocks.some((b) => b?._tool === 'run_state')).toBe(true);
+      expect(allBlocks.some((b) => b?._tool === 'scrum')).toBe(true);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('removes an existing block when its tool becomes disabled', () => {
+    const tmp = makeTmpDir('disabled-remove');
+    try {
+      const path = join(tmp, 'settings.json');
+      // First install with acb enabled.
+      writeSettingsHooks(path, PREFIX);
+      expect(
+        Object.values(readJson(path).hooks ?? {})
+          .flat()
+          .some((b) => b?._tool === 'acb'),
+      ).toBe(true);
+
+      // Re-run with acb disabled → block removed, file rewritten.
+      const wrote = writeSettingsHooks(path, PREFIX, { disabledTools: new Set(['acb']) });
+      expect(wrote).toBe(true);
+      const after = readJson(path);
+      expect(
+        Object.values(after.hooks ?? {})
+          .flat()
+          .some((b) => b?._tool === 'acb'),
+      ).toBe(false);
+      // The PostToolUse event still holds the run_state Write|Edit block, so it
+      // is not dropped wholesale.
+      expect((after.hooks?.PostToolUse ?? []).some((b) => b?._tool === 'run_state')).toBe(true);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   test('idempotent no-op when all blocks already in sync', () => {
     const tmp = makeTmpDir('noop');
     try {
@@ -251,6 +298,18 @@ describe('writeSettingsHooks', () => {
       const acb = postToolUse.find((b) => b._tool === 'acb');
       expect(acb).toBeDefined();
       expect(acb?.hooks[0]?.command).toContain('acb hook post-commit');
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('non-ENOENT read failure surfaces a path-bearing error', () => {
+    const tmp = makeTmpDir('read-fail');
+    try {
+      // Point the settings path at a directory: readFileSync throws EISDIR,
+      // exercising the non-ENOENT branch of readSettings. The wrapped error
+      // must name the path (vs. the OS-dependent bare fs message).
+      expect(() => writeSettingsHooks(tmp, PREFIX)).toThrow(tmp);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

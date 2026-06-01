@@ -2,16 +2,23 @@
  * `claude-prove scrum task <action> [args] [flags]`
  *
  * Action dispatch:
- *   create         --title X [--description Y] [--milestone M] [--id I]
+ *   create         --title X [--description Y] [--milestone M] [--id I] [--bounds JSON]
  *   show <id>
  *   list           [--status S] [--milestone M] [--tag T]
  *   tag <id> <tag>
  *   link-decision <id> <decision-path>
  *   status <id> <new-status>
+ *   cancel <id>    [--cascade] [--reason R] [--detail D]
  *   move <id>      (--milestone M | --unassign | --milestone="")
  *   delete <id>
  *   add-dep <from> <to>     [--kind blocks|blocked_by]   (default: blocks)
  *   remove-dep <from> <to>  [--kind blocks|blocked_by]   (default: blocks)
+ *   acceptance add <id>     --text T --verifies-by K --check C [--idempotent]
+ *                                                     [--timeout 30s] [--criterion ID]
+ *   acceptance list <id>
+ *   acceptance supersede <id> --criterion ID --reason R [--by NEW-ID]
+ *   bounds set <id>          --bounds JSON   (pass --bounds '' to clear)
+ *   bounds show <id>
  *
  * Stdout contract: JSON result per action on stdout; one-line human
  * summary on stderr. The `list` action returns a JSON array. The `show`
@@ -28,7 +35,14 @@ import { isAbsolute, join, resolve } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
 import type { ListTasksOptions, ScrumStore } from '../store';
 import { openScrumStore } from '../store';
-import type { DepKind, TaskStatus } from '../types';
+import type {
+  AcceptanceCriterion,
+  AcceptanceVerifiesBy,
+  DepKind,
+  TaskBounds,
+  TaskLayer,
+  TaskStatus,
+} from '../types';
 import { parseDecisionFile } from './decision-cmd';
 import { generateId } from './scrum-utils';
 
@@ -37,11 +51,27 @@ export interface TaskCmdFlags {
   description?: string;
   milestone?: string;
   id?: string;
+  parent?: string;
+  layer?: string;
   status?: string;
   tag?: string;
   unassign?: boolean;
   kind?: string;
   workspaceRoot?: string;
+  // `acceptance` sub-action flags (v5).
+  text?: string;
+  verifiesBy?: string;
+  check?: string;
+  idempotent?: boolean;
+  timeout?: string;
+  criterion?: string;
+  reason?: string;
+  by?: string;
+  // Declared bounds (v6) — JSON blob for `task create` + `task bounds set`.
+  bounds?: string;
+  // `cancel` flags (v7) — cascade walk + terminal provenance.
+  cascade?: boolean;
+  detail?: string;
 }
 
 export type TaskAction =
@@ -51,10 +81,13 @@ export type TaskAction =
   | 'tag'
   | 'link-decision'
   | 'status'
+  | 'cancel'
   | 'move'
   | 'delete'
   | 'add-dep'
-  | 'remove-dep';
+  | 'remove-dep'
+  | 'acceptance'
+  | 'bounds';
 
 const TASK_ACTIONS: TaskAction[] = [
   'create',
@@ -63,13 +96,20 @@ const TASK_ACTIONS: TaskAction[] = [
   'tag',
   'link-decision',
   'status',
+  'cancel',
   'move',
   'delete',
   'add-dep',
   'remove-dep',
+  'acceptance',
+  'bounds',
 ];
 
 const VALID_DEP_KINDS: DepKind[] = ['blocks', 'blocked_by'];
+
+const VALID_VERIFIES_BY: AcceptanceVerifiesBy[] = ['bash', 'assert', 'gate', 'agent'];
+
+const VALID_LAYERS: TaskLayer[] = ['epic', 'story', 'task'];
 
 const VALID_STATUSES: TaskStatus[] = [
   'backlog',
@@ -112,6 +152,8 @@ export function runTaskCmd(
         return doLinkDecision(store, positional[0], positional[1]);
       case 'status':
         return doStatus(store, positional[0], positional[1]);
+      case 'cancel':
+        return doCancel(store, positional[0], flags);
       case 'move':
         return doMove(store, positional[0], flags);
       case 'delete':
@@ -120,6 +162,10 @@ export function runTaskCmd(
         return doAddDep(store, positional[0], positional[1], flags);
       case 'remove-dep':
         return doRemoveDep(store, positional[0], positional[1], flags);
+      case 'acceptance':
+        return doAcceptance(store, positional[0], positional[1], flags);
+      case 'bounds':
+        return doBounds(store, positional[0], positional[1], flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -143,11 +189,40 @@ function doCreate(store: ScrumStore, flags: TaskCmdFlags): number {
     flags.id !== undefined && flags.id.length > 0 ? flags.id : generateId(flags.title, 'task');
   const milestoneId =
     flags.milestone !== undefined && flags.milestone.length > 0 ? flags.milestone : null;
+  const parentId = flags.parent !== undefined && flags.parent.length > 0 ? flags.parent : null;
+
+  // --layer tags the containment tier (epic|story|task) for the decompose
+  // ladder; null = flat. Validated against the closed set before the store
+  // call so a typo fails loud rather than landing an off-vocabulary layer.
+  let layer: TaskLayer | null = null;
+  if (flags.layer !== undefined && flags.layer.length > 0) {
+    if (!VALID_LAYERS.includes(flags.layer as TaskLayer)) {
+      process.stderr.write(
+        `scrum task create: invalid --layer '${flags.layer}'. expected one of: ${VALID_LAYERS.join(', ')}\n`,
+      );
+      return 1;
+    }
+    layer = flags.layer as TaskLayer;
+  }
+
+  // --bounds is a JSON blob (nested dict — no per-field flag explosion). Parse
+  // here so a malformed blob fails loud with a CLI-shaped error; the store
+  // re-validates the closed top-level key set before insert.
+  let bounds: TaskBounds | null = null;
+  if (flags.bounds !== undefined && flags.bounds.length > 0) {
+    const parsed = parseBounds(flags.bounds, 'create');
+    if (parsed === null) return 1;
+    bounds = parsed;
+  }
+
   const task = store.createTask({
     id,
     title: flags.title,
     description: flags.description ?? null,
     milestoneId,
+    parentId,
+    layer,
+    bounds,
   });
   process.stdout.write(`${JSON.stringify(task)}\n`);
   process.stderr.write(`scrum task create: ${task.id}\n`);
@@ -242,6 +317,40 @@ function doStatus(store: ScrumStore, id: string | undefined, next: string | unde
   const task = store.updateTaskStatus(id, next as TaskStatus);
   process.stdout.write(`${JSON.stringify(task)}\n`);
   process.stderr.write(`scrum task status: ${id} -> ${next}\n`);
+  return 0;
+}
+
+/**
+ * Cancel a task, recording terminal provenance (v7).
+ *   --cascade : recursively cancel every non-terminal descendant in the
+ *               `parent_id` subtree (root → 'cancelled', descendants →
+ *               'parent_cancelled'). Prints `{ cancelled: [ids] }`.
+ *   (default) : cancel only this task. Prints the updated task row.
+ * `--reason`/`--detail` annotate the root's terminal provenance. Store-level
+ * rejections (unknown id, already-terminal) surface as exit 1.
+ */
+function doCancel(store: ScrumStore, id: string | undefined, flags: TaskCmdFlags): number {
+  if (id === undefined || id.length === 0) {
+    process.stderr.write('scrum task cancel: <id> positional argument required\n');
+    return 1;
+  }
+  const opts = {
+    reason: flags.reason && flags.reason.length > 0 ? flags.reason : undefined,
+    detail: flags.detail && flags.detail.length > 0 ? flags.detail : null,
+  };
+
+  if (flags.cascade === true) {
+    const result = store.cancelTaskCascade(id, opts);
+    process.stdout.write(`${JSON.stringify(result)}\n`);
+    process.stderr.write(
+      `scrum task cancel: ${result.cancelled.length} task(s) cancelled (root ${id})\n`,
+    );
+    return 0;
+  }
+
+  const task = store.cancelTask(id, opts);
+  process.stdout.write(`${JSON.stringify(task)}\n`);
+  process.stderr.write(`scrum task cancel: ${id} -> cancelled (${task.terminal_reason})\n`);
   return 0;
 }
 
@@ -422,4 +531,222 @@ function resolveDepKind(raw: string | undefined, action: 'add-dep' | 'remove-dep
     return null;
   }
   return raw as DepKind;
+}
+
+// ---------------------------------------------------------------------------
+// acceptance — author/list/supersede acceptance criteria (v5)
+//
+//   task acceptance add <task-id> --text T --verifies-by K --check C
+//                                 [--idempotent] [--timeout 30s] [--criterion ID]
+//   task acceptance list <task-id>
+//   task acceptance supersede <task-id> --criterion ID --reason R [--by NEW-ID]
+//
+// Append-only: `supersede` flips a criterion's status, never removing it.
+// ---------------------------------------------------------------------------
+
+type AcceptanceSubAction = 'add' | 'list' | 'supersede';
+
+const ACCEPTANCE_SUB_ACTIONS: AcceptanceSubAction[] = ['add', 'list', 'supersede'];
+
+function doAcceptance(
+  store: ScrumStore,
+  sub: string | undefined,
+  taskId: string | undefined,
+  flags: TaskCmdFlags,
+): number {
+  if (sub === undefined || !(ACCEPTANCE_SUB_ACTIONS as string[]).includes(sub)) {
+    process.stderr.write(
+      `scrum task acceptance: sub-action required (one of: ${ACCEPTANCE_SUB_ACTIONS.join(' | ')})\n`,
+    );
+    return 1;
+  }
+  if (taskId === undefined || taskId.length === 0) {
+    process.stderr.write(`scrum task acceptance ${sub}: <task-id> positional argument required\n`);
+    return 1;
+  }
+  switch (sub as AcceptanceSubAction) {
+    case 'add':
+      return doAcceptanceAdd(store, taskId, flags);
+    case 'list':
+      return doAcceptanceList(store, taskId);
+    case 'supersede':
+      return doAcceptanceSupersede(store, taskId, flags);
+  }
+}
+
+function doAcceptanceAdd(store: ScrumStore, taskId: string, flags: TaskCmdFlags): number {
+  if (flags.text === undefined || flags.text.length === 0) {
+    process.stderr.write('scrum task acceptance add: --text is required\n');
+    return 1;
+  }
+  if (flags.check === undefined || flags.check.length === 0) {
+    process.stderr.write('scrum task acceptance add: --check is required\n');
+    return 1;
+  }
+  if (
+    flags.verifiesBy === undefined ||
+    !VALID_VERIFIES_BY.includes(flags.verifiesBy as AcceptanceVerifiesBy)
+  ) {
+    process.stderr.write(
+      `scrum task acceptance add: --verifies-by must be one of: ${VALID_VERIFIES_BY.join(', ')}\n`,
+    );
+    return 1;
+  }
+
+  const criterion: AcceptanceCriterion = {
+    id:
+      flags.criterion && flags.criterion.length > 0
+        ? flags.criterion
+        : generateId(flags.text, 'ac'),
+    text: flags.text,
+    verifies_by: flags.verifiesBy as AcceptanceVerifiesBy,
+    check: flags.check,
+    status: 'active',
+    idempotent: flags.idempotent === true,
+    superseded_by: null,
+    reason: null,
+    inherited_from: null,
+  };
+  if (flags.timeout !== undefined && flags.timeout.length > 0) criterion.timeout = flags.timeout;
+
+  const task = store.addCriterion(taskId, criterion);
+  process.stdout.write(`${JSON.stringify(task)}\n`);
+  process.stderr.write(`scrum task acceptance add: ${taskId} += ${criterion.id}\n`);
+  return 0;
+}
+
+function doAcceptanceList(store: ScrumStore, taskId: string): number {
+  const task = store.getTask(taskId);
+  if (task === null) {
+    process.stderr.write(`scrum task acceptance list: task '${taskId}' not found\n`);
+    return 1;
+  }
+  const criteria = task.acceptance?.criteria ?? [];
+  process.stdout.write(`${JSON.stringify(criteria)}\n`);
+  process.stderr.write(`scrum task acceptance list: ${taskId} (${criteria.length} criteria)\n`);
+  return 0;
+}
+
+function doAcceptanceSupersede(store: ScrumStore, taskId: string, flags: TaskCmdFlags): number {
+  if (flags.criterion === undefined || flags.criterion.length === 0) {
+    process.stderr.write('scrum task acceptance supersede: --criterion <id> is required\n');
+    return 1;
+  }
+  if (flags.reason === undefined || flags.reason.length === 0) {
+    process.stderr.write('scrum task acceptance supersede: --reason <text> is required\n');
+    return 1;
+  }
+  const task = store.supersedeCriterion(
+    taskId,
+    flags.criterion,
+    flags.reason,
+    flags.by && flags.by.length > 0 ? flags.by : null,
+  );
+  process.stdout.write(`${JSON.stringify(task)}\n`);
+  process.stderr.write(
+    `scrum task acceptance supersede: ${taskId} / ${flags.criterion} -> superseded\n`,
+  );
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// bounds — author/show declared bounds (v6)
+//
+//   task bounds set <task-id>  --bounds '<json>'   (pass --bounds '' to clear)
+//   task bounds show <task-id>
+//
+// Bounds is a nested dict ({ read?, write?, tools?, budgets? }), so the input
+// form is a single JSON blob — no per-field flag explosion. The optional
+// milestone-authored source `compile-plan` forwards into plan.tasks[].bounds.
+// ---------------------------------------------------------------------------
+
+type BoundsSubAction = 'set' | 'show';
+
+const BOUNDS_SUB_ACTIONS: BoundsSubAction[] = ['set', 'show'];
+
+function doBounds(
+  store: ScrumStore,
+  sub: string | undefined,
+  taskId: string | undefined,
+  flags: TaskCmdFlags,
+): number {
+  if (sub === undefined || !(BOUNDS_SUB_ACTIONS as string[]).includes(sub)) {
+    process.stderr.write(
+      `scrum task bounds: sub-action required (one of: ${BOUNDS_SUB_ACTIONS.join(' | ')})\n`,
+    );
+    return 1;
+  }
+  if (taskId === undefined || taskId.length === 0) {
+    process.stderr.write(`scrum task bounds ${sub}: <task-id> positional argument required\n`);
+    return 1;
+  }
+  switch (sub as BoundsSubAction) {
+    case 'set':
+      return doBoundsSet(store, taskId, flags);
+    case 'show':
+      return doBoundsShow(store, taskId);
+  }
+}
+
+/**
+ * Set (or clear) a task's declared bounds. `--bounds '<json>'` is required;
+ * pass `--bounds ''` to clear (→ unbounded). Store-side `validateBounds`
+ * rejects unknown top-level keys, surfaced here as exit-1 with the message.
+ */
+function doBoundsSet(store: ScrumStore, taskId: string, flags: TaskCmdFlags): number {
+  if (flags.bounds === undefined) {
+    process.stderr.write(
+      "scrum task bounds set: --bounds <json> is required (pass --bounds '' to clear)\n",
+    );
+    return 1;
+  }
+  // Empty string clears the bounds; any other value must parse as a JSON dict.
+  let bounds: TaskBounds | null = null;
+  if (flags.bounds.length > 0) {
+    const parsed = parseBounds(flags.bounds, 'bounds set');
+    if (parsed === null) return 1;
+    bounds = parsed;
+  }
+  const task = store.setBounds(taskId, bounds);
+  process.stdout.write(`${JSON.stringify(task)}\n`);
+  process.stderr.write(
+    `scrum task bounds set: ${taskId} -> ${bounds === null ? 'cleared' : 'set'}\n`,
+  );
+  return 0;
+}
+
+function doBoundsShow(store: ScrumStore, taskId: string): number {
+  const task = store.getTask(taskId);
+  if (task === null) {
+    process.stderr.write(`scrum task bounds show: task '${taskId}' not found\n`);
+    return 1;
+  }
+  // Emit the bounds object (or null) on stdout so consumers parse one shape.
+  process.stdout.write(`${JSON.stringify(task.bounds)}\n`);
+  process.stderr.write(
+    `scrum task bounds show: ${taskId} (${task.bounds === null ? 'unbounded' : 'bounded'})\n`,
+  );
+  return 0;
+}
+
+/**
+ * Parse a `--bounds` JSON blob into a `TaskBounds`. Returns null (after
+ * writing a usage error) when the blob is not valid JSON or not a plain
+ * object — shape validation (unknown keys) is the store's job. The
+ * `context` names the calling action for the error message.
+ */
+function parseBounds(raw: string, context: string): TaskBounds | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`scrum task ${context}: --bounds is not valid JSON (${msg})\n`);
+    return null;
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    process.stderr.write(`scrum task ${context}: --bounds must be a JSON object\n`);
+    return null;
+  }
+  return value as TaskBounds;
 }

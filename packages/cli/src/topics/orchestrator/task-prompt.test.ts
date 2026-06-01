@@ -78,7 +78,10 @@ const BASE_PLAN = {
       id: '1',
       title: 'hello-world',
       description: 'Build the hello-world feature.',
-      acceptance_criteria: ['AC-1', 'AC-2'],
+      acceptance_criteria: [
+        { text: 'AC-1', verifies_by: 'bash', check: 'bun test' },
+        { text: 'AC-2' },
+      ],
       steps: [
         { id: '1.1', title: 'scaffold' },
         { id: '1.2', title: 'wire up' },
@@ -113,7 +116,9 @@ describe('orchestrator task-prompt', () => {
     expect(stdoutBuf).toContain('cd /tmp/worktree-1');
     expect(stdoutBuf).toContain('**Task 1: hello-world**');
     expect(stdoutBuf).toContain('Build the hello-world feature.');
-    expect(stdoutBuf).toContain('- AC-1');
+    // Structured criterion with verifies_by renders the kind+check annotation;
+    // a bare { text } renders just the text.
+    expect(stdoutBuf).toContain('- AC-1 (bash: bun test)');
     expect(stdoutBuf).toContain('- AC-2');
     expect(stdoutBuf).toContain('- `1.1` scaffold');
     expect(stdoutBuf).toContain('- `1.2` wire up');

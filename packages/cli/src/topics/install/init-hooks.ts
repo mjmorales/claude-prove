@@ -14,6 +14,7 @@ import {
   resolvePluginRoot,
   writeSettingsHooks,
 } from '@claude-prove/installer';
+import { disabledToolsFromConfig } from './disabled-tools';
 
 export interface InitHooksOptions {
   settings?: string;
@@ -32,7 +33,11 @@ export function runInitHooks(opts: InitHooksOptions): number {
   // Ensure the settings directory exists before writeSettingsHooks stages
   // its sibling `.tmp`.
   mkdirSync(dirname(settingsPath), { recursive: true });
-  const wrote = writeSettingsHooks(settingsPath, prefix, { force: opts.force });
+  // Project root is the parent of `.claude/` — read tool toggles from its
+  // `.claude/.prove.json` so disabled tools' hook blocks are not installed.
+  const projectRoot = dirname(dirname(settingsPath));
+  const disabledTools = disabledToolsFromConfig(projectRoot);
+  const wrote = writeSettingsHooks(settingsPath, prefix, { force: opts.force, disabledTools });
   console.log(
     `claude-prove install init-hooks: ${wrote ? 'wrote' : 'up-to-date'} ${settingsPath} (mode=${mode})`,
   );

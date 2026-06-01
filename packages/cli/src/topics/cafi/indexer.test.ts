@@ -117,6 +117,26 @@ describe('buildIndex', () => {
     expect(summary.unchanged).toBe(2);
   });
 
+  test('re-describing a stale file advances its last_indexed; unchanged stays fixed', async () => {
+    await buildIndex(root);
+    const before = JSON.parse(readFileSync(cachePath(root), 'utf8'));
+    const mainBefore = before.files['src/main.ts'].last_indexed as string;
+    const utilBefore = before.files['src/util.ts'].last_indexed as string;
+
+    // Ensure the wall clock advances so a refreshed timestamp differs.
+    await Bun.sleep(5);
+    writeProjectFile(root, 'src/main.ts', 'export const main = 99;\n');
+    stubRunner();
+    await buildIndex(root);
+
+    const after = JSON.parse(readFileSync(cachePath(root), 'utf8'));
+    // Re-described (stale) file: timestamp refreshed to the describe time.
+    expect(after.files['src/main.ts'].last_indexed).not.toBe(mainBefore);
+    expect(after.files['src/main.ts'].last_indexed >= mainBefore).toBe(true);
+    // Untouched file: timestamp preserved.
+    expect(after.files['src/util.ts'].last_indexed).toBe(utilBefore);
+  });
+
   test('force: every file is re-described even when hashes match', async () => {
     await buildIndex(root);
     let cliCalls = 0;

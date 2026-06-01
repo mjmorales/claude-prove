@@ -61,7 +61,7 @@ Write `.prove/steward/session-review.md`:
 [numbered, file:line -- address before merging]
 
 ## Should Fix
-[numbered -- quality worth doing now]
+[numbered -- quality worth addressing before merging]
 
 ## Nits
 [numbered -- minor polish]
@@ -201,7 +201,7 @@ No approval. Loop until clean or capped:
    - **>= 5 files**: [PCD Pipeline](#pcd-pipeline) scoped to modified files.
    - **< 5 files**: skip PCD, launch `code-steward` directly:
      > Re-audit ONLY these files modified last pass: [list].
-     > Check: (1) refactor-introduced issues, (2) previously masked quality issues, (3) caller/dep integration.
+     > Check: (1) refactor-introduced issues, (2) quality issues the prior pass masked, (3) caller/dep integration.
      > Produce findings. Do not fix yet.
 3. **Evaluate**: no findings -> converged, goto A3.
 4. **Fix**: write `.prove/steward/findings-pass-N.md`, auto-approve, launch fix subagents, validate, append Pass N block.

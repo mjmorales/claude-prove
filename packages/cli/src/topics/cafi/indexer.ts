@@ -1,11 +1,10 @@
 /**
  * Index manager — ties hasher and describer together.
  *
- * Ported from `tools/cafi/indexer.py`. Reads per-tool config from the v4
- * schema path `tools.cafi.config`, walks the project, hashes every file,
- * diffs against the cache, describes the delta via the Claude CLI, and
- * persists the merged result. All public return shapes preserve Python's
- * snake_case keys so JSON output remains byte-compatible.
+ * Reads per-tool config from the v4 schema path `tools.cafi.config`, walks
+ * the project, hashes every file, diffs against the cache, describes the
+ * delta via the Claude CLI, and persists the merged result. All public
+ * return shapes use snake_case keys so JSON output stays stable.
  */
 
 import { existsSync, rmSync, statSync } from 'node:fs';
@@ -143,12 +142,15 @@ export async function buildIndex(
     delete cachedFiles[fp];
   }
 
+  // `toDescribe` holds new + stale/forced files — every entry here was just
+  // re-hashed and re-described, so `last_indexed` records THIS describe time,
+  // not the original first-index time (which would be stale for the exact
+  // files that changed). The unchanged loop below preserves prior timestamps.
   for (const fp of toDescribe) {
-    const prior = cachedFiles[fp];
     cachedFiles[fp] = {
       hash: currentHashes[fp] as string,
       description: descriptions[fp] ?? '',
-      last_indexed: prior?.last_indexed ?? new Date().toISOString(),
+      last_indexed: new Date().toISOString(),
     };
   }
 
@@ -177,6 +179,13 @@ export async function buildIndex(
 /**
  * Quick status check without describing files. Mirrors `build_index`'s
  * walk + hash + diff phases so the caller sees exactly what a run would do.
+ *
+ * Cost: "quick" means it skips the (expensive) describe pass, NOT that it is
+ * cheap. `hashAllFiles` synchronously reads + SHA-256-hashes every walked
+ * file on the main thread, so this is O(total repo bytes) blocking I/O —
+ * effectively a full index walk minus describe. The only bound is the
+ * per-file `max_file_size` cap; there is no file-count cap. Expect latency
+ * proportional to repo size on large trees.
  */
 export function getStatus(projectRoot: string): IndexStatus {
   const config = loadCafiConfig(projectRoot);

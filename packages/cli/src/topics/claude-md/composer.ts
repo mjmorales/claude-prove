@@ -33,6 +33,11 @@ export const PLUGIN_DEFAULT_REFERENCES: ReadonlyArray<ReferenceEntry> = [
     path: '$PLUGIN_DIR/references/claude-prove-reference.md',
     label: 'claude-prove CLI Reference',
   },
+  {
+    // Engine boundary, native primitives, forced bubble-up, append-only.
+    path: '$PLUGIN_DIR/references/design-principles.md',
+    label: 'Design Principles',
+  },
 ];
 
 /**
@@ -133,7 +138,7 @@ export function composeSubagentContext(scan: ScanResult, pluginDir?: string): st
     parts.push('');
     parts.push('**Validation**: Run before committing:');
     for (const v of validators) {
-      parts.push(`- ${v.phase}: \`${v.command}\``);
+      parts.push(`- ${v.phase}: \`${describeValidator(v)}\``);
     }
   }
 
@@ -203,11 +208,24 @@ function renderValidation(scan: ScanResult): string {
   const lines: string[] = ['## Validation', '', 'Run before committing:', ''];
 
   for (const v of validators) {
-    lines.push(`- **${v.phase}**: \`${v.command}\``);
+    lines.push(`- **${v.phase}**: \`${describeValidator(v)}\``);
   }
 
   lines.push('');
   return lines.join('\n');
+}
+
+/**
+ * Code-span content describing what a validator runs: the shell command, a
+ * `prompt <path>` for an llm prompt validator, or a `skill <name>` for a
+ * skill-invoked gate. Falls back to the validator name so a malformed entry
+ * never renders an empty code span.
+ */
+function describeValidator(v: ValidatorSummary): string {
+  if (v.command) return v.command;
+  if (v.skill) return `skill ${v.skill}`;
+  if (v.prompt) return `prompt ${v.prompt}`;
+  return v.name;
 }
 
 function renderDiscovery(prefix: string): string {

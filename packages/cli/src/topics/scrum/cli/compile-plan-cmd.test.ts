@@ -43,12 +43,29 @@ function withCapture(fn: () => number): Captured {
   }
 }
 
+interface PlanCriterion {
+  id: string;
+  text: string;
+  verifies_by: string;
+  check: string;
+  status: string;
+  idempotent: boolean;
+}
+
 interface PlanShape {
   schema_version: string;
   kind: string;
   mode: string;
-  task_id: string;
-  tasks: Array<{ id: string; title: string; wave: number; deps: string[]; steps: unknown[] }>;
+  task_id?: string;
+  tasks: Array<{
+    id: string;
+    title: string;
+    wave: number;
+    deps: string[];
+    acceptance_criteria: PlanCriterion[];
+    bounds?: unknown;
+    steps: Array<{ acceptance_criteria: PlanCriterion[] }>;
+  }>;
 }
 
 function parsePlan(stdout: string): {
@@ -141,9 +158,11 @@ describe('runCompilePlanCmd — compilation', () => {
     const { plan, scrum_map } = parsePlan(res.stdout);
 
     expect(plan.kind).toBe('plan');
-    expect(plan.schema_version).toBe('1');
+    expect(plan.schema_version).toBe('3');
     expect(plan.mode).toBe('simple'); // 3 tasks < 4
-    expect(plan.task_id).toBe('m1');
+    // task_id is intentionally NOT set to the milestone id — run-state reserves
+    // it for a single scrum task id, and a milestone plan fans out to many.
+    expect(plan.task_id).toBeUndefined();
     expect(plan.tasks.map((t) => [t.id, t.wave])).toEqual([
       ['1.1', 1],
       ['2.1', 2],
@@ -237,5 +256,101 @@ describe('runCompilePlanCmd — compilation', () => {
     const { plan_path, map_path } = parsePlan(res.stdout);
     expect(plan_path).toBe(planPath);
     expect(map_path).toBe(mapPath);
+  });
+
+  test('forwards full structured acceptance criteria (active only) into plan + step', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    store.createTask({
+      id: 'a',
+      title: 'Task a',
+      milestoneId: 'm1',
+      createdAt: '2026-01-01T00:00:01.000Z',
+      acceptance: {
+        criteria: [
+          {
+            id: 'c1',
+            text: 'builds clean',
+            verifies_by: 'bash',
+            check: 'bun run build',
+            status: 'active',
+            idempotent: true,
+            superseded_by: null,
+            reason: null,
+            inherited_from: null,
+          },
+          {
+            id: 'c2',
+            text: 'dropped criterion',
+            verifies_by: 'bash',
+            check: 'true',
+            status: 'superseded',
+            idempotent: true,
+            superseded_by: null,
+            reason: 'obsolete',
+            inherited_from: null,
+          },
+        ],
+      },
+    });
+
+    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const { plan } = parsePlan(res.stdout);
+    const task = plan.tasks[0];
+    if (!task) throw new Error('expected one plan task');
+    // Superseded criterion is excluded; the active criterion forwards in full
+    // (id/text/verifies_by/check/status/idempotent) — not just text. The scrum
+    // supersession bookkeeping (superseded_by/reason/inherited_from) is dropped.
+    const forwarded = {
+      id: 'c1',
+      text: 'builds clean',
+      verifies_by: 'bash',
+      check: 'bun run build',
+      status: 'active',
+      idempotent: true,
+    };
+    expect(task.acceptance_criteria).toEqual([forwarded]);
+    expect(task.steps[0]?.acceptance_criteria).toEqual([forwarded]);
+  });
+
+  test('task with no acceptance forwards an empty criteria list', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    seedTask(store, 'a', 'm1', 1);
+    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    const { plan } = parsePlan(res.stdout);
+    expect(plan.tasks[0]?.acceptance_criteria).toEqual([]);
+  });
+
+  test('forwards declared bounds verbatim into the plan task', () => {
+    const bounds = {
+      read: ['src/auth/**'],
+      write: ['src/auth/**'],
+      tools: { allow: ['Bash(go test *)'], deny: ['Bash(git push *)'] },
+      budgets: { tokens: 200000, tool_calls: 100, wall_clock_s: 1800 },
+    };
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    store.createTask({
+      id: 'a',
+      title: 'Task a',
+      milestoneId: 'm1',
+      createdAt: '2026-01-01T00:00:01.000Z',
+      bounds,
+    });
+
+    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const { plan } = parsePlan(res.stdout);
+    expect(plan.tasks[0]?.bounds).toEqual(bounds);
+  });
+
+  test('task with no bounds emits no bounds key (absent = unbounded)', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    seedTask(store, 'a', 'm1', 1);
+    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const { plan } = parsePlan(res.stdout);
+    const task = plan.tasks[0];
+    if (!task) throw new Error('expected one plan task');
+    expect('bounds' in task).toBe(false);
   });
 });

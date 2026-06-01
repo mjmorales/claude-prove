@@ -2,11 +2,21 @@
  * `claude-prove scrum decision <action> [args] [flags]`
  *
  * Action dispatch:
- *   record <path>              Read, parse, upsert decision row; prints JSON row.
+ *   record <path> [--kind K]   Read, parse, upsert decision row; prints JSON row.
+ *                              `--kind` (adr|glossary|pattern) sets the Codex
+ *                              subtype (v8) and overrides any kind in the file.
  *   get <id>                   Prints the decision's stored `content` to stdout.
- *   list                       [--topic T] [--status S] [--human]
+ *   list                       [--topic T] [--status S] [--kind K] [--human]
  *   recover --from-git         Backfill scrum_decisions from every .prove/decisions/*.md
  *                              version ever committed. Idempotent (upsert semantics).
+ *   supersede <id> --by <new-id> --reason <text>
+ *                              Append-only retire: flips <id> to status
+ *                              'superseded', points it at <new-id>, records
+ *                              <text>. Never hard-deletes.
+ *   review-stale [--days N] [--human]
+ *                              Report decisions whose `recorded_at` is older
+ *                              than N days (default 90). Report-only — never
+ *                              prunes or mutates.
  *
  * Stdout contract: JSON result per action on stdout; one-line human
  * summary on stderr. `list` returns a JSON array (or a table with `--human`).
@@ -34,14 +44,39 @@ export interface DecisionCmdFlags {
   workspaceRoot?: string;
   /** Required by `recover`; absent triggers a usage error. */
   fromGit?: boolean;
+  /** `supersede`: id of the replacement decision (`--by`). */
+  by?: string;
+  /** `supersede`: rationale recorded on the retired decision (`--reason`). */
+  reason?: string;
+  /** `review-stale`: staleness threshold in days (default 90). */
+  days?: number | string;
+  /** `record`: Codex subtype (v8) — `adr | glossary | pattern`. */
+  kind?: string;
 }
 
-export type DecisionAction = 'record' | 'get' | 'list' | 'recover';
+export type DecisionAction = 'record' | 'get' | 'list' | 'recover' | 'supersede' | 'review-stale';
 
-const DECISION_ACTIONS: DecisionAction[] = ['record', 'get', 'list', 'recover'];
+const DECISION_ACTIONS: DecisionAction[] = [
+  'record',
+  'get',
+  'list',
+  'recover',
+  'supersede',
+  'review-stale',
+];
 
-/** ADR default per `.prove/decisions/` convention. */
+/** Default decision-record status. */
 const DEFAULT_DECISION_STATUS = 'accepted';
+
+/**
+ * Canonical closed Codex subtypes (v8). The CLI enforces this
+ * set on `--kind`; the column itself stays free TEXT so a future subtype lands
+ * via a schema-version bump, not a CHECK constraint.
+ */
+const CANONICAL_DECISION_KINDS = ['adr', 'glossary', 'pattern'] as const;
+
+/** Default staleness threshold for `review-stale`. */
+const DEFAULT_STALE_DAYS = 90;
 
 export function runDecisionCmd(
   action: string,
@@ -63,13 +98,17 @@ export function runDecisionCmd(
   try {
     switch (action) {
       case 'record':
-        return doRecord(store, positional[0]);
+        return doRecord(store, positional[0], flags);
       case 'get':
         return doGet(store, positional[0]);
       case 'list':
         return doList(store, flags);
       case 'recover':
         return doRecover(store, workspaceRoot, flags);
+      case 'supersede':
+        return doSupersede(store, positional[0], flags);
+      case 'review-stale':
+        return doReviewStale(store, flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -88,7 +127,7 @@ function isDecisionAction(value: string): value is DecisionAction {
 // record
 // ---------------------------------------------------------------------------
 
-function doRecord(store: ScrumStore, path: string | undefined): number {
+function doRecord(store: ScrumStore, path: string | undefined, flags: DecisionCmdFlags): number {
   if (path === undefined || path.length === 0) {
     process.stderr.write('scrum decision record: <path> positional argument required\n');
     return 1;
@@ -98,13 +137,41 @@ function doRecord(store: ScrumStore, path: string | undefined): number {
     process.stderr.write(`scrum decision record: file not found '${path}'\n`);
     return 1;
   }
+  // `--kind` (the curation skill's Journal→Codex promotion) overrides any kind
+  // parsed from the file. An unknown subtype is a usage error so a typo never
+  // silently persists an off-vocabulary kind.
+  const kind = normalizeKind(flags.kind);
+  if (kind === INVALID_KIND) return 1;
+
   const content = readFileSync(abs, 'utf8');
   const input = parseDecisionFile(content, path);
+  if (kind !== undefined) input.kind = kind;
   const row = store.recordDecision(input);
   const bytes = Buffer.byteLength(content, 'utf8');
   process.stdout.write(`${JSON.stringify(row)}\n`);
   process.stderr.write(`scrum decision record: ${row.id} (${bytes} bytes)\n`);
   return 0;
+}
+
+/** Sentinel distinguishing "invalid kind given" from "no kind given". */
+const INVALID_KIND = Symbol('invalid-kind');
+
+/**
+ * Validate `--kind` against the canonical Codex subtypes (case-insensitive,
+ * normalized to lowercase). Returns `undefined` when absent, the normalized
+ * value when valid, or the `INVALID_KIND` sentinel (after writing a usage
+ * error) when off-vocabulary.
+ */
+function normalizeKind(raw: string | undefined): string | undefined | typeof INVALID_KIND {
+  if (raw === undefined || raw.length === 0) return undefined;
+  const lower = raw.toLowerCase();
+  if (!(CANONICAL_DECISION_KINDS as readonly string[]).includes(lower)) {
+    process.stderr.write(
+      `scrum decision record: unknown --kind '${raw}'. expected one of: ${CANONICAL_DECISION_KINDS.join(', ')}\n`,
+    );
+    return INVALID_KIND;
+  }
+  return lower;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +201,7 @@ function doList(store: ScrumStore, flags: DecisionCmdFlags): number {
   const filter: ListDecisionsFilter = {};
   if (flags.topic !== undefined && flags.topic.length > 0) filter.topic = flags.topic;
   if (flags.status !== undefined && flags.status.length > 0) filter.status = flags.status;
+  if (flags.kind !== undefined && flags.kind.length > 0) filter.kind = flags.kind;
 
   const rows = store.listDecisions(filter);
   if (flags.human === true) {
@@ -161,6 +229,121 @@ function renderHumanTable(rows: DecisionRow[]): string {
 }
 
 // ---------------------------------------------------------------------------
+// supersede — append-only retire
+// ---------------------------------------------------------------------------
+
+/**
+ * `decision supersede <id> --by <new-id> --reason <text>`. Delegates to
+ * `store.supersedeDecision`, which flips <id> to status 'superseded',
+ * points it at <new-id>, and records <text> — never hard-deleting. Prints
+ * the updated old row as JSON. Store-level rejections (unknown id, missing
+ * replacement, already terminal) surface as exit 1 via the caller's catch.
+ */
+function doSupersede(store: ScrumStore, id: string | undefined, flags: DecisionCmdFlags): number {
+  if (id === undefined || id.length === 0) {
+    process.stderr.write('scrum decision supersede: <id> positional argument required\n');
+    return 1;
+  }
+  if (flags.by === undefined || flags.by.length === 0) {
+    process.stderr.write('scrum decision supersede: --by <new-id> is required\n');
+    return 1;
+  }
+  if (flags.reason === undefined || flags.reason.length === 0) {
+    process.stderr.write('scrum decision supersede: --reason <text> is required\n');
+    return 1;
+  }
+
+  const row = store.supersedeDecision(id, flags.by, flags.reason);
+  process.stdout.write(`${JSON.stringify(row)}\n`);
+  process.stderr.write(`scrum decision supersede: ${row.id} -> ${flags.by}\n`);
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// review-stale — report decisions past a staleness threshold
+// ---------------------------------------------------------------------------
+
+/** One stale-decision report row: the decision plus its computed age in days. */
+interface StaleDecision {
+  id: string;
+  title: string;
+  status: string;
+  recorded_at: string;
+  age_days: number;
+}
+
+/**
+ * Report decisions whose `recorded_at` is older than `--days` (default 90).
+ * REPORT-ONLY: surfaces hygiene candidates for human review and
+ * mutates nothing — no prune, no status flip. Already-superseded decisions are
+ * excluded (they are retired, not stale-but-live). Sorted oldest-first so the
+ * most overdue review floats to the top. JSON array on stdout, or a table with
+ * `--human`. An unparseable `recorded_at` is treated as not-stale (skipped)
+ * rather than crashing the report.
+ *
+ * Default threshold is hard-coded to 90 here; the `memory.stale_threshold_days`
+ * config knob that overrides it lands in the phase-1 config-consolidation task.
+ */
+function doReviewStale(store: ScrumStore, flags: DecisionCmdFlags): number {
+  const days = resolveStaleDays(flags.days);
+  if (days === null) return 1;
+
+  const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
+  const stale: StaleDecision[] = [];
+  for (const row of store.listDecisions()) {
+    if (row.status === 'superseded') continue;
+    const recordedMs = Date.parse(row.recorded_at);
+    if (Number.isNaN(recordedMs) || recordedMs >= cutoffMs) continue;
+    stale.push({
+      id: row.id,
+      title: row.title,
+      status: row.status,
+      recorded_at: row.recorded_at,
+      age_days: Math.floor((Date.now() - recordedMs) / (24 * 60 * 60 * 1000)),
+    });
+  }
+  stale.sort((a, b) => b.age_days - a.age_days);
+
+  if (flags.human === true) {
+    process.stdout.write(renderStaleTable(stale, days));
+  } else {
+    process.stdout.write(`${JSON.stringify(stale)}\n`);
+  }
+  process.stderr.write(
+    `scrum decision review-stale: ${stale.length} decision(s) older than ${days}d\n`,
+  );
+  return 0;
+}
+
+/**
+ * Parse the `--days` flag into a positive integer, defaulting to 90 when
+ * absent. Writes a usage error and returns null on a non-numeric or
+ * non-positive value so the caller exits 1.
+ */
+function resolveStaleDays(raw: number | string | undefined): number | null {
+  if (raw === undefined) return DEFAULT_STALE_DAYS;
+  const n = typeof raw === 'number' ? raw : Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n <= 0) {
+    process.stderr.write('scrum decision review-stale: --days must be a positive integer\n');
+    return null;
+  }
+  return Math.floor(n);
+}
+
+function renderStaleTable(rows: StaleDecision[], days: number): string {
+  if (rows.length === 0) return `No decisions older than ${days} days.\n`;
+  const header = ['ID', 'TITLE', 'STATUS', 'AGE(d)', 'RECORDED_AT'];
+  const body = rows.map((r) => [r.id, r.title, r.status, String(r.age_days), r.recorded_at]);
+  const widths = header.map((h, i) =>
+    Math.max(h.length, ...body.map((row) => row[i]?.length ?? 0)),
+  );
+  const format = (cells: string[]): string =>
+    cells.map((c, i) => c.padEnd(widths[i] ?? c.length)).join('  ');
+  const lines = [format(header), ...body.map(format)];
+  return `${lines.join('\n')}\n`;
+}
+
+// ---------------------------------------------------------------------------
 // recover — backfill from git history
 // ---------------------------------------------------------------------------
 
@@ -179,7 +362,7 @@ const DECISIONS_GLOB = '.prove/decisions/*.md';
  *   - All git calls use `spawnSync` with an explicit args array and no
  *     `shell: true` — paths never touch a shell.
  *   - Non-repo is a usage error (exit 1); empty history is a clean no-op.
- *   - Blobs that lack an H1 or are empty are skipped; they cannot be ADRs.
+ *   - Blobs that lack an H1 or are empty are skipped; they cannot be decision records.
  */
 function doRecover(store: ScrumStore, workspaceRoot: string, flags: DecisionCmdFlags): number {
   if (flags.fromGit !== true) {
@@ -301,8 +484,8 @@ function readBlobAtCommit(workspaceRoot: string, sha: string, path: string): str
 }
 
 /**
- * Gate blob content before parsing. An ADR must have at least one `# H1`
- * line; empty or plain-text blobs are skipped.
+ * Gate blob content before parsing. A decision record must have at least one
+ * `# H1` line; empty or plain-text blobs are skipped.
  */
 function isAdrBlob(content: string): boolean {
   if (content.length === 0) return false;
@@ -326,7 +509,7 @@ function isAdrBlob(content: string): boolean {
  *   - `topic`  = value of `**Topic**: X` or `Topic: X` line if present;
  *                otherwise `null`
  *   - `status` = value of `**Status**: X` if present; otherwise
- *                `'accepted'` (the ADR default)
+ *                `'accepted'` (the decision-record default)
  *   - `content`           = raw file content (not trimmed)
  *   - `sourcePath`        = the input `path` (as given, not resolved)
  *   - `recordedByAgent`   = `PROVE_AGENT` env var if set, else `null`

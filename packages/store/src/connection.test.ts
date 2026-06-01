@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { openStore } from './connection';
 
 describe('openStore', () => {
@@ -40,5 +43,26 @@ describe('openStore', () => {
     const store = openStore({ path: ':memory:' });
     store.close();
     expect(() => store.close()).not.toThrow();
+  });
+
+  test('opening a file-backed store readonly skips the WAL journal-mode write', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'store-ro-'));
+    const dbPath = join(dir, 'prove.db');
+    try {
+      // Create the file in write mode first (readonly cannot create).
+      const writer = openStore({ path: dbPath });
+      writer.run('CREATE TABLE widgets (id INTEGER PRIMARY KEY)');
+      writer.close();
+
+      // A readonly handle must not attempt `PRAGMA journal_mode = WAL`
+      // (a write that errors on a readonly database).
+      expect(() => {
+        const reader = openStore({ path: dbPath, readonly: true });
+        reader.all('SELECT id FROM widgets');
+        reader.close();
+      }).not.toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

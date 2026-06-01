@@ -1,5 +1,5 @@
 {
-  "schema_version": "6",
+  "schema_version": "7",
   "scopes": {
     "agents": "agents/",
     "cache": "cache/",
@@ -10,6 +10,13 @@
     "skills": "skills/",
     "scripts": "scripts/"
   },
+  "validators": [
+    {
+      "name": "comment-audit",
+      "skill": "claude-skills:comment-audit",
+      "phase": "llm"
+    }
+  ],
   "claude_md": {
     "references": [
       {
@@ -39,7 +46,7 @@
       "enabled": true
     },
     "acb": {
-      "enabled": true,
+      "enabled": false,
       "scope": "user",
       "config": {
         "base_branch": "main",

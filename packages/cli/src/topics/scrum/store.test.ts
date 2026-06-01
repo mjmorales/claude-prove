@@ -8,7 +8,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { appendEntry } from '../acb/reasoning-log-store';
 import { type ScrumStore, openScrumStore } from './store';
+import type { Acceptance, AcceptanceCriterion, TaskBounds } from './types';
 
 let store: ScrumStore;
 
@@ -64,6 +69,24 @@ describe('ScrumStore — tasks', () => {
     seedMilestone('m1');
     const task = seedTask('t2', { milestoneId: 'm1' });
     expect(task.milestone_id).toBe('m1');
+  });
+
+  test('createTask defaults parent_id and layer to null (flat task)', () => {
+    const task = seedTask('t1');
+    expect(task.parent_id).toBeNull();
+    expect(task.layer).toBeNull();
+    // Round-trips through SELECT, not just the in-memory return value.
+    expect(store.getTask('t1')?.parent_id).toBeNull();
+    expect(store.getTask('t1')?.layer).toBeNull();
+  });
+
+  test('createTask with parentId persists the edge and validates parent existence', () => {
+    expect(() => seedTask('child', { parentId: 'missing' })).toThrow(/unknown parent_id/);
+    seedTask('epic', { layer: 'epic' });
+    const child = seedTask('story', { parentId: 'epic', layer: 'story' });
+    expect(child.parent_id).toBe('epic');
+    expect(child.layer).toBe('story');
+    expect(store.getTask('story')?.parent_id).toBe('epic');
   });
 
   test('getTask returns null for missing and soft-deleted tasks', () => {
@@ -128,6 +151,181 @@ describe('ScrumStore — tasks', () => {
         .sort(),
     ).toEqual(['t1', 't2']);
   });
+
+  test('softDeleteTask appends a task_deleted event recording the prior status', () => {
+    seedTask('t1', { status: 'ready' });
+    store.softDeleteTask('t1');
+
+    // The task is gone from the live read path...
+    expect(store.getTask('t1')).toBeNull();
+    // ...but the deletion is on the append-only audit log.
+    const events = store.listEventsForTask('t1');
+    const deleted = events.find((e) => e.kind === 'task_deleted');
+    if (!deleted) throw new Error('expected a task_deleted event');
+    expect(deleted.payload).toEqual({ status: 'ready' });
+  });
+
+  test('getTaskIncludingDeleted returns a soft-deleted row that getTask hides', () => {
+    seedTask('t1');
+    store.softDeleteTask('t1');
+    expect(store.getTask('t1')).toBeNull();
+    expect(store.getTaskIncludingDeleted('t1')?.id).toBe('t1');
+    expect(store.getTaskIncludingDeleted('never')).toBeNull();
+  });
+
+  test('undeleteTask revives a soft-deleted task', () => {
+    seedTask('t1');
+    store.softDeleteTask('t1');
+    store.undeleteTask('t1');
+    expect(store.getTask('t1')?.id).toBe('t1');
+  });
+
+  test('decodeTask degrades a corrupt acceptance_json column to null instead of throwing', () => {
+    seedTask('t1');
+    // Simulate a poisoned column (manual DB edit / aborted migration) by
+    // writing invalid JSON through raw SQL, bypassing the store's write guards.
+    store
+      .getStore()
+      .getDb()
+      .prepare('UPDATE scrum_tasks SET acceptance_json = ? WHERE id = ?')
+      .run('{not json', 't1');
+
+    const task = store.getTask('t1');
+    expect(task?.id).toBe('t1');
+    expect(task?.acceptance).toBeNull();
+  });
+
+  test('transaction rolls back every write when the body throws', () => {
+    expect(() =>
+      store.transaction(() => {
+        seedTask('t1');
+        seedTask('t2');
+        throw new Error('boom mid-sequence');
+      }),
+    ).toThrow(/boom mid-sequence/);
+
+    // Both inserts rolled back — the store is untouched.
+    expect(store.listTasks()).toHaveLength(0);
+  });
+
+  test('transaction commits and returns the body value on success', () => {
+    const count = store.transaction(() => {
+      seedTask('t1');
+      seedTask('t2');
+      return store.listTasks().length;
+    });
+    expect(count).toBe(2);
+    expect(store.listTasks()).toHaveLength(2);
+  });
+});
+
+// ===========================================================================
+// Containment tree — getChildren + derivedStatus (v3)
+// ===========================================================================
+
+describe('ScrumStore — containment tree', () => {
+  test('getChildren returns direct children ordered by created_at, excluding deleted', () => {
+    seedTask('epic', { layer: 'epic' });
+    seedTask('s1', { parentId: 'epic', layer: 'story', createdAt: '2026-01-01T00:00:00Z' });
+    seedTask('s2', { parentId: 'epic', layer: 'story', createdAt: '2026-01-02T00:00:00Z' });
+    seedTask('s3', { parentId: 'epic', layer: 'story', createdAt: '2026-01-03T00:00:00Z' });
+    seedTask('grandchild', { parentId: 's1' }); // not a direct child of epic
+    store.softDeleteTask('s3');
+
+    expect(store.getChildren('epic').map((t) => t.id)).toEqual(['s1', 's2']);
+    expect(store.getChildren('s1').map((t) => t.id)).toEqual(['grandchild']);
+    expect(store.getChildren('grandchild')).toEqual([]);
+  });
+
+  test('derivedStatus of a childless task is its authored status (flat behavior unchanged)', () => {
+    seedTask('flat', { status: 'review' });
+    expect(store.derivedStatus('flat')).toBe('review');
+  });
+
+  test('derivedStatus throws on unknown task', () => {
+    expect(() => store.derivedStatus('missing')).toThrow(/unknown task/);
+  });
+
+  test('derivedStatus rolls up in_progress when any descendant is in_progress', () => {
+    // 3-layer epic -> story -> task. One leaf in_progress dominates everything.
+    seedTask('epic', { layer: 'epic' });
+    seedTask('story', { parentId: 'epic', layer: 'story' });
+    seedTask('task-a', { parentId: 'story', layer: 'task', status: 'in_progress' });
+    seedTask('task-b', { parentId: 'story', layer: 'task', status: 'done' });
+    seedTask('task-c', { parentId: 'story', layer: 'task', status: 'blocked' });
+
+    expect(store.derivedStatus('story')).toBe('in_progress');
+    expect(store.derivedStatus('epic')).toBe('in_progress');
+  });
+
+  test('derivedStatus rolls up blocked when any child blocked and none in_progress', () => {
+    seedTask('story', { layer: 'story' });
+    seedTask('t1', { parentId: 'story', status: 'blocked' });
+    seedTask('t2', { parentId: 'story', status: 'ready' });
+    expect(store.derivedStatus('story')).toBe('blocked');
+  });
+
+  test('derivedStatus rolls up done only when every non-cancelled child is done', () => {
+    seedTask('story', { layer: 'story' });
+    seedTask('t1', { parentId: 'story', status: 'done' });
+    seedTask('t2', { parentId: 'story', status: 'done' });
+    expect(store.derivedStatus('story')).toBe('done');
+
+    // One non-done child demotes the rollup below done.
+    seedTask('t3', { parentId: 'story', status: 'ready' });
+    expect(store.derivedStatus('story')).toBe('ready');
+  });
+
+  test('derivedStatus excludes cancelled children from the done quorum', () => {
+    seedTask('story', { layer: 'story' });
+    seedTask('t1', { parentId: 'story', status: 'done' });
+    seedTask('t2', { parentId: 'story', status: 'cancelled' });
+    // The only non-cancelled child is done -> rolls up done.
+    expect(store.derivedStatus('story')).toBe('done');
+
+    // An all-cancelled subtree has no quorum -> backlog, never done.
+    seedTask('empty', { layer: 'story' });
+    seedTask('c1', { parentId: 'empty', status: 'cancelled' });
+    expect(store.derivedStatus('empty')).toBe('backlog');
+  });
+
+  test('derivedStatus precedence: review over ready, ready over backlog', () => {
+    seedTask('review-story', { layer: 'story' });
+    seedTask('r1', { parentId: 'review-story', status: 'review' });
+    seedTask('r2', { parentId: 'review-story', status: 'ready' });
+    seedTask('r3', { parentId: 'review-story', status: 'backlog' });
+    expect(store.derivedStatus('review-story')).toBe('review');
+
+    seedTask('ready-story', { layer: 'story' });
+    seedTask('y1', { parentId: 'ready-story', status: 'ready' });
+    seedTask('y2', { parentId: 'ready-story', status: 'backlog' });
+    expect(store.derivedStatus('ready-story')).toBe('ready');
+  });
+
+  test('derivedStatus folds DERIVED (not authored) child statuses post-order', () => {
+    // epic's only child `story` authored backlog, but story's leaf is in_progress.
+    // The fold must use story's DERIVED status, not its stored backlog.
+    seedTask('epic', { layer: 'epic', status: 'backlog' });
+    seedTask('story', { parentId: 'epic', layer: 'story', status: 'backlog' });
+    seedTask('leaf', { parentId: 'story', layer: 'task', status: 'in_progress' });
+    expect(store.derivedStatus('story')).toBe('in_progress');
+    expect(store.derivedStatus('epic')).toBe('in_progress');
+  });
+
+  test('derivedStatus survives a malformed parent_id cycle via the visited guard', () => {
+    // Create two flat tasks, then force a cycle directly at the SQL layer
+    // (createTask validates parent existence so it cannot build a cycle).
+    seedTask('a', { status: 'review' });
+    seedTask('b', { status: 'ready' });
+    const db = store.getStore().getDb();
+    db.prepare('UPDATE scrum_tasks SET parent_id = ? WHERE id = ?').run('b', 'a');
+    db.prepare('UPDATE scrum_tasks SET parent_id = ? WHERE id = ?').run('a', 'b');
+
+    // a's child is b; b's child is a (re-entered -> short-circuits to authored).
+    // Must terminate rather than recurse forever; assertion is liveness.
+    expect(() => store.derivedStatus('a')).not.toThrow();
+    expect(typeof store.derivedStatus('a')).toBe('string');
+  });
 });
 
 // ===========================================================================
@@ -166,7 +364,7 @@ describe('ScrumStore — updateTaskMilestone', () => {
     expect(latest.payload).toEqual({ from: 'm1', to: null });
   });
 
-  test('records from: null when assigning to a previously unassigned task', () => {
+  test('records from: null when assigning to a task with no prior milestone', () => {
     seedMilestone('m1');
     seedTask('t1');
 
@@ -267,6 +465,27 @@ describe('ScrumStore — milestones', () => {
 
   test('getMilestone returns null for missing id', () => {
     expect(store.getMilestone('missing')).toBeNull();
+  });
+
+  test('createMilestone persists the initiative grouping; absent = null', () => {
+    seedMilestone('m1', { initiative: 'q3-growth' });
+    expect(store.getMilestone('m1')?.initiative).toBe('q3-growth');
+    seedMilestone('m2');
+    expect(store.getMilestone('m2')?.initiative).toBeNull();
+  });
+
+  test('listMilestones filters by initiative case-insensitively, combinable with status', () => {
+    seedMilestone('m1', { initiative: 'q3-growth', status: 'active' });
+    seedMilestone('m2', { initiative: 'q3-growth', status: 'planned' });
+    seedMilestone('m3', { initiative: 'infra', status: 'active' });
+
+    expect(
+      store
+        .listMilestones(undefined, 'Q3-GROWTH')
+        .map((m) => m.id)
+        .sort(),
+    ).toEqual(['m1', 'm2']);
+    expect(store.listMilestones('active', 'q3-growth').map((m) => m.id)).toEqual(['m1']);
   });
 
   test('closeMilestone flips status to closed and stamps closed_at', () => {
@@ -757,5 +976,617 @@ describe('ScrumStore — nextReady', () => {
     const first = store.nextReady({ nowMs }).map((r) => r.task.id);
     const second = store.nextReady({ nowMs }).map((r) => r.task.id);
     expect(first).toEqual(second);
+  });
+});
+
+// ===========================================================================
+// Acceptance criteria (v5)
+// ===========================================================================
+
+function ac(id: string, overrides: Partial<AcceptanceCriterion> = {}): AcceptanceCriterion {
+  return {
+    id,
+    text: `criterion ${id}`,
+    verifies_by: 'bash',
+    check: 'exit 0',
+    status: 'active',
+    idempotent: false,
+    superseded_by: null,
+    reason: null,
+    inherited_from: null,
+    ...overrides,
+  };
+}
+
+describe('ScrumStore — acceptance criteria', () => {
+  test('createTask without acceptance stores NULL acceptance', () => {
+    const task = seedTask('t1');
+    expect(task.acceptance).toBeNull();
+    expect(store.getTask('t1')?.acceptance).toBeNull();
+  });
+
+  test('createTask with acceptance round-trips through acceptance_json', () => {
+    const acceptance: Acceptance = { criteria: [ac('c1'), ac('c2')] };
+    seedTask('t1', { acceptance });
+    const reloaded = store.getTask('t1');
+    expect(reloaded?.acceptance).toEqual(acceptance);
+  });
+
+  test('setAcceptance replaces the whole acceptance object; null clears it', () => {
+    seedTask('t1', { acceptance: { criteria: [ac('c1')] } });
+    const updated = store.setAcceptance('t1', { criteria: [ac('c2'), ac('c3')] });
+    expect(updated.acceptance?.criteria.map((c) => c.id)).toEqual(['c2', 'c3']);
+    const cleared = store.setAcceptance('t1', null);
+    expect(cleared.acceptance).toBeNull();
+  });
+
+  test('addCriterion appends; creates the acceptance object on a bare task', () => {
+    seedTask('t1');
+    store.addCriterion('t1', ac('c1'));
+    const task = store.addCriterion('t1', ac('c2'));
+    expect(task.acceptance?.criteria.map((c) => c.id)).toEqual(['c1', 'c2']);
+  });
+
+  test('addCriterion rejects a duplicate criterion id', () => {
+    seedTask('t1', { acceptance: { criteria: [ac('c1')] } });
+    expect(() => store.addCriterion('t1', ac('c1'))).toThrow(/duplicate criterion id 'c1'/);
+  });
+
+  test('supersedeCriterion is append-only — flips status, retains the row', () => {
+    seedTask('t1', { acceptance: { criteria: [ac('c1'), ac('c2')] } });
+    const task = store.supersedeCriterion('t1', 'c1', 'no longer needed', 'c2');
+    expect(task.acceptance?.criteria).toHaveLength(2);
+    const c1 = task.acceptance?.criteria.find((c) => c.id === 'c1');
+    expect(c1?.status).toBe('superseded');
+    expect(c1?.reason).toBe('no longer needed');
+    expect(c1?.superseded_by).toBe('c2');
+    // The other criterion is untouched.
+    expect(task.acceptance?.criteria.find((c) => c.id === 'c2')?.status).toBe('active');
+  });
+
+  test('supersedeCriterion rejects unknown criterion and double-supersede', () => {
+    seedTask('t1', { acceptance: { criteria: [ac('c1')] } });
+    expect(() => store.supersedeCriterion('t1', 'nope', 'r')).toThrow(/unknown criterion 'nope'/);
+    store.supersedeCriterion('t1', 'c1', 'first');
+    expect(() => store.supersedeCriterion('t1', 'c1', 'again')).toThrow(/already superseded/);
+  });
+
+  test('shared_acceptance inheritance copies active parent criteria with inherited_from', () => {
+    seedTask('parent', {
+      acceptance: { criteria: [ac('c1'), ac('c2', { status: 'superseded' })] },
+    });
+    const child = store.createTask({ id: 'child', title: 'Child', parentId: 'parent' });
+    // Only the active criterion is inherited.
+    expect(child.acceptance?.criteria).toHaveLength(1);
+    const inherited = child.acceptance?.criteria[0];
+    expect(inherited?.id).toBe('c1');
+    expect(inherited?.inherited_from).toBe('parent');
+    expect(inherited?.status).toBe('active');
+  });
+
+  test('inherited copies are independent of later parent edits', () => {
+    seedTask('parent', { acceptance: { criteria: [ac('c1')] } });
+    store.createTask({ id: 'child', title: 'Child', parentId: 'parent' });
+    // Mutate the parent after the child inherited.
+    store.supersedeCriterion('parent', 'c1', 'parent moved on');
+    const childCriterion = store.getTask('child')?.acceptance?.criteria[0];
+    expect(childCriterion?.status).toBe('active');
+    expect(childCriterion?.reason).toBeNull();
+  });
+
+  test('explicit child acceptance wins over parent inheritance', () => {
+    seedTask('parent', { acceptance: { criteria: [ac('p1')] } });
+    const child = store.createTask({
+      id: 'child',
+      title: 'Child',
+      parentId: 'parent',
+      acceptance: { criteria: [ac('own')] },
+    });
+    expect(child.acceptance?.criteria.map((c) => c.id)).toEqual(['own']);
+  });
+
+  test('policy validation rejects parallel/failed_only with a non-idempotent criterion', () => {
+    const bad: Acceptance = {
+      criteria: [ac('c1', { idempotent: false })],
+      policy: { eval_order: 'parallel', rerun_policy: 'all' },
+    };
+    expect(() => store.createTask({ id: 't1', title: 'T1', acceptance: bad })).toThrow(
+      /requires every criterion to be idempotent/,
+    );
+    // Same invariant on the in-place setter.
+    seedTask('t2');
+    expect(() => store.setAcceptance('t2', bad)).toThrow(
+      /requires every criterion to be idempotent/,
+    );
+  });
+
+  test('policy validation accepts parallel/failed_only when every criterion is idempotent', () => {
+    const ok: Acceptance = {
+      criteria: [ac('c1', { idempotent: true }), ac('c2', { idempotent: true })],
+      policy: { eval_order: 'parallel', rerun_policy: 'failed_only' },
+    };
+    const task = store.createTask({ id: 't1', title: 'T1', acceptance: ok });
+    expect(task.acceptance?.policy?.eval_order).toBe('parallel');
+  });
+
+  test('fifo/all policy passes regardless of idempotence', () => {
+    const seq: Acceptance = {
+      criteria: [ac('c1', { idempotent: false })],
+      policy: { eval_order: 'fifo', rerun_policy: 'all' },
+    };
+    expect(() => store.createTask({ id: 't1', title: 'T1', acceptance: seq })).not.toThrow();
+  });
+});
+
+// ===========================================================================
+// Declared bounds (v6)
+// ===========================================================================
+
+describe('ScrumStore — declared bounds', () => {
+  const fullBounds: TaskBounds = {
+    read: ['src/auth/**'],
+    write: ['src/auth/**'],
+    tools: { allow: ['Bash(go test *)'], deny: ['Bash(git push *)'] },
+    budgets: { tokens: 200000, tool_calls: 100, wall_clock_s: 1800 },
+  };
+
+  test('createTask without bounds stores NULL bounds', () => {
+    const task = seedTask('t1');
+    expect(task.bounds).toBeNull();
+    expect(store.getTask('t1')?.bounds).toBeNull();
+  });
+
+  test('createTask with bounds round-trips through bounds_json', () => {
+    seedTask('t1', { bounds: fullBounds });
+    expect(store.getTask('t1')?.bounds).toEqual(fullBounds);
+  });
+
+  test('createTask accepts a partial bounds object (all sub-fields optional)', () => {
+    const partial: TaskBounds = { tools: { deny: ['Bash(rm *)'] } };
+    seedTask('t1', { bounds: partial });
+    expect(store.getTask('t1')?.bounds).toEqual(partial);
+  });
+
+  test('setBounds replaces the whole bounds object; null clears it', () => {
+    seedTask('t1', { bounds: { read: ['a/**'] } });
+    const updated = store.setBounds('t1', fullBounds);
+    expect(updated.bounds).toEqual(fullBounds);
+    const cleared = store.setBounds('t1', null);
+    expect(cleared.bounds).toBeNull();
+  });
+
+  test('setBounds rejects an unknown task id', () => {
+    expect(() => store.setBounds('nope', fullBounds)).toThrow(/unknown task 'nope'/);
+  });
+
+  test('createTask rejects bounds with an unknown top-level key', () => {
+    const bad = { reads: ['oops'] } as unknown as TaskBounds;
+    expect(() => store.createTask({ id: 't1', title: 'T1', bounds: bad })).toThrow(
+      /unknown top-level key/,
+    );
+  });
+
+  test('setBounds rejects bounds with an unknown top-level key', () => {
+    seedTask('t1');
+    const bad = { budget: { tokens: 1 } } as unknown as TaskBounds;
+    expect(() => store.setBounds('t1', bad)).toThrow(/unknown top-level key/);
+  });
+
+  test('bounds are never inherited from a parent (unlike acceptance)', () => {
+    seedTask('parent', { bounds: fullBounds });
+    const child = store.createTask({ id: 'child', title: 'Child', parentId: 'parent' });
+    expect(child.bounds).toBeNull();
+  });
+});
+
+// ===========================================================================
+// Cancellation + terminal provenance (v7)
+// ===========================================================================
+
+describe('ScrumStore — cancelTask + cancelTaskCascade', () => {
+  test('cancelTask sets status cancelled with default terminal_reason and an event', () => {
+    seedTask('t1');
+    const task = store.cancelTask('t1');
+    expect(task.status).toBe('cancelled');
+    expect(task.terminal_reason).toBe('cancelled');
+    expect(task.terminal_detail).toBeNull();
+    const [event] = store.listEventsForTask('t1');
+    expect(event?.kind).toBe('status_changed');
+    expect((event?.payload as { terminal_reason?: string }).terminal_reason).toBe('cancelled');
+  });
+
+  test('cancelTask records a custom reason + detail', () => {
+    seedTask('t1');
+    const task = store.cancelTask('t1', { reason: 'descoped', detail: 'cut from v1' });
+    expect(task.terminal_reason).toBe('descoped');
+    expect(task.terminal_detail).toBe('cut from v1');
+  });
+
+  test('cancelTask rejects an unknown id and an already-terminal task', () => {
+    expect(() => store.cancelTask('missing')).toThrow(/unknown task 'missing'/);
+    seedTask('t1', { status: 'done' });
+    expect(() => store.cancelTask('t1')).toThrow(/already terminal \('done'\)/);
+  });
+
+  test('cancelTaskCascade cancels the whole non-terminal subtree with provenance', () => {
+    seedTask('epic', { layer: 'epic' });
+    seedTask('story', { parentId: 'epic', layer: 'story' });
+    seedTask('leaf-a', { parentId: 'story', layer: 'task' });
+    seedTask('leaf-b', { parentId: 'story', layer: 'task' });
+
+    const result = store.cancelTaskCascade('epic', { reason: 'pivot' });
+    expect(result.cancelled.sort()).toEqual(['epic', 'leaf-a', 'leaf-b', 'story']);
+
+    expect(store.getTask('epic')?.terminal_reason).toBe('pivot');
+    const story = store.getTask('story');
+    expect(story?.status).toBe('cancelled');
+    expect(story?.terminal_reason).toBe('parent_cancelled');
+    expect(story?.terminal_detail).toContain("parent 'epic' cancelled");
+    expect(store.getTask('leaf-a')?.terminal_reason).toBe('parent_cancelled');
+  });
+
+  test('cascade leaves already-terminal nodes untouched but still sweeps their children', () => {
+    seedTask('epic', { layer: 'epic' });
+    seedTask('done-story', { parentId: 'epic', layer: 'story', status: 'done' });
+    seedTask('grandchild', { parentId: 'done-story', layer: 'task' });
+
+    const result = store.cancelTaskCascade('epic');
+    // The done story is skipped; root + its unfinished grandchild are cancelled.
+    expect(result.cancelled.sort()).toEqual(['epic', 'grandchild']);
+    expect(store.getTask('done-story')?.status).toBe('done');
+    expect(store.getTask('grandchild')?.status).toBe('cancelled');
+  });
+
+  test('cancelTaskCascade rejects an unknown root', () => {
+    expect(() => store.cancelTaskCascade('missing')).toThrow(/unknown task 'missing'/);
+  });
+});
+
+// ===========================================================================
+// Acceptance freeze guard (v7)
+// ===========================================================================
+
+describe('ScrumStore — acceptance freeze guard', () => {
+  test('addCriterion rejects while the task is in_progress', () => {
+    seedTask('t1', { status: 'in_progress' });
+    expect(() => store.addCriterion('t1', ac('c1'))).toThrow(
+      /frozen while task 't1' is in_progress/,
+    );
+  });
+
+  test('supersedeCriterion rejects while the task is in_progress', () => {
+    seedTask('t1', { acceptance: { criteria: [ac('c1')] }, status: 'in_progress' });
+    expect(() => store.supersedeCriterion('t1', 'c1', 'r')).toThrow(/frozen while task 't1'/);
+  });
+
+  test('criteria are amendable in non-in_progress statuses', () => {
+    seedTask('t1', { status: 'ready' });
+    expect(() => store.addCriterion('t1', ac('c1'))).not.toThrow();
+    store.updateTaskStatus('t1', 'blocked');
+    expect(() => store.addCriterion('t1', ac('c2'))).not.toThrow();
+  });
+});
+
+// ===========================================================================
+// Story-layer transition floors (v7)
+// ===========================================================================
+
+describe('ScrumStore — story acceptance floor (≥1 active criterion)', () => {
+  test('story with no criteria cannot transition to ready / in_progress / done', () => {
+    seedTask('s', { layer: 'story' });
+    expect(() => store.updateTaskStatus('s', 'ready')).toThrow(/no active acceptance criteria/);
+    expect(() => store.updateTaskStatus('s', 'in_progress')).toThrow(
+      /no active acceptance criteria/,
+    );
+  });
+
+  test('story with all-superseded criteria is still blocked (only active count)', () => {
+    seedTask('s', { layer: 'story', acceptance: { criteria: [ac('c1')] } });
+    store.supersedeCriterion('s', 'c1', 'retired');
+    expect(() => store.updateTaskStatus('s', 'ready')).toThrow(/no active acceptance criteria/);
+  });
+
+  test('story with ≥1 active criterion passes the floor', () => {
+    seedTask('s', { layer: 'story', acceptance: { criteria: [ac('c1')] } });
+    expect(() => store.updateTaskStatus('s', 'ready')).not.toThrow();
+    expect(store.getTask('s')?.status).toBe('ready');
+  });
+
+  test('story may be cancelled / blocked without criteria (floor only gates forward edges)', () => {
+    seedTask('s', { layer: 'story' });
+    expect(() => store.updateTaskStatus('s', 'cancelled')).not.toThrow();
+  });
+
+  test('non-story layers are exempt from the acceptance floor', () => {
+    seedTask('t', { layer: 'task' });
+    seedTask('flat'); // layer null
+    expect(() => store.updateTaskStatus('t', 'in_progress')).not.toThrow();
+    expect(() => store.updateTaskStatus('flat', 'in_progress')).not.toThrow();
+  });
+});
+
+describe('ScrumStore — story synthesis floor', () => {
+  let runDir: string;
+
+  beforeEach(() => {
+    runDir = mkdtempSync(join(tmpdir(), 'scrum-synth-'));
+  });
+  afterEach(() => {
+    rmSync(runDir, { recursive: true, force: true });
+  });
+
+  function seedStartedStory(id: string) {
+    // Story with an active criterion (clears the acceptance floor) already
+    // in_progress so the only remaining gate for `done` is the synthesis floor.
+    seedTask(id, {
+      layer: 'story',
+      status: 'in_progress',
+      acceptance: { criteria: [ac('c1')] },
+    });
+  }
+
+  function writeSynthesis(dir: string, agent = 'worker') {
+    appendEntry(dir, {
+      id: `synth-${agent}`,
+      ts: '2026-06-01T00:00:00Z',
+      type: 'synthesis',
+      agent,
+      run_path: dir,
+      body: 'episode wrapped',
+      outcome: 'shipped',
+    });
+  }
+
+  test('story with no linked run is exempt (no worker engaged)', () => {
+    seedStartedStory('s');
+    expect(() => store.updateTaskStatus('s', 'done')).not.toThrow();
+  });
+
+  test('story with a linked run but no synthesis entry is blocked', () => {
+    seedStartedStory('s');
+    store.linkRun({ taskId: 's', runPath: runDir });
+    expect(() => store.updateTaskStatus('s', 'done')).toThrow(/no synthesis reasoning-log entry/);
+  });
+
+  test('story passes once its most-recent run carries a synthesis entry', () => {
+    seedStartedStory('s');
+    writeSynthesis(runDir);
+    store.linkRun({ taskId: 's', runPath: runDir });
+    expect(() => store.updateTaskStatus('s', 'done')).not.toThrow();
+    expect(store.getTask('s')?.status).toBe('done');
+  });
+
+  test('only the most-recent linked run is consulted', () => {
+    const olderRun = mkdtempSync(join(tmpdir(), 'scrum-synth-old-'));
+    try {
+      seedStartedStory('s');
+      writeSynthesis(olderRun); // synthesis on the OLD run only
+      store.linkRun({ taskId: 's', runPath: olderRun, linkedAt: '2026-01-01T00:00:00Z' });
+      store.linkRun({ taskId: 's', runPath: runDir, linkedAt: '2026-02-01T00:00:00Z' });
+      // The newest run (runDir) has no synthesis → blocked.
+      expect(() => store.updateTaskStatus('s', 'done')).toThrow(/no synthesis/);
+    } finally {
+      rmSync(olderRun, { recursive: true, force: true });
+    }
+  });
+});
+
+// ===========================================================================
+// Structured escalation typing (v7)
+// ===========================================================================
+
+describe('ScrumStore — escalation typing', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  test('appendEvent validates blocker_raised payload: accepts the four types, rejects unknown', () => {
+    seedTask('t1');
+    for (const type of ['blocked', 'ambiguous', 'conflict', 'missing_context'] as const) {
+      expect(() =>
+        store.appendEvent({
+          taskId: 't1',
+          kind: 'blocker_raised',
+          payload: { escalation_type: type, summary: 's' },
+        }),
+      ).not.toThrow();
+    }
+    expect(() =>
+      store.appendEvent({
+        taskId: 't1',
+        kind: 'blocker_raised',
+        payload: { escalation_type: 'bogus', summary: 's' },
+      }),
+    ).toThrow(/escalation_type must be one of/);
+  });
+
+  test('appendEvent rejects a blocker_raised payload missing summary (domain error, not opaque)', () => {
+    seedTask('t1');
+    expect(() =>
+      store.appendEvent({
+        taskId: 't1',
+        kind: 'blocker_raised',
+        payload: { escalation_type: 'blocked' },
+      }),
+    ).toThrow(/requires a non-empty 'summary'/);
+  });
+
+  test('blocker_raised escalation round-trips through listEventsForTask', () => {
+    seedTask('t1');
+    store.appendEvent({
+      taskId: 't1',
+      kind: 'blocker_raised',
+      payload: { escalation_type: 'ambiguous', summary: 'spec unclear', blocking_task_id: null },
+    });
+    const event = store.listEventsForTask('t1').find((e) => e.kind === 'blocker_raised');
+    const payload = event?.payload as { escalation_type: string; summary: string };
+    expect(payload.escalation_type).toBe('ambiguous');
+    expect(payload.summary).toBe('spec unclear');
+  });
+
+  test('nextReady ranks an open escalation above an otherwise-equal task with none', () => {
+    const now = Date.parse('2026-06-01T00:00:00Z');
+    seedTask('esc', { status: 'ready', createdAt: '2026-01-01T00:00:00Z' });
+    seedTask('plain', { status: 'ready', createdAt: '2026-01-01T00:00:00Z' });
+    store.appendEvent({
+      taskId: 'esc',
+      kind: 'blocker_raised',
+      payload: { escalation_type: 'blocked', summary: 'waiting on X' },
+      ts: new Date(now - 3 * DAY).toISOString(),
+    });
+
+    const rows = store.nextReady({ nowMs: now });
+    const escRow = rows.find((r) => r.task.id === 'esc');
+    const plainRow = rows.find((r) => r.task.id === 'plain');
+    expect(escRow?.rationale.escalation_boost).toBeGreaterThan(0);
+    expect(escRow?.rationale.escalation_type).toBe('blocked');
+    expect(plainRow?.rationale.escalation_boost).toBe(0);
+    expect(escRow?.score ?? 0).toBeGreaterThan(plainRow?.score ?? 0);
+  });
+
+  test('escalation_boost grows with the escalation age (staleness auto-bubble)', () => {
+    const now = Date.parse('2026-06-01T00:00:00Z');
+    seedTask('fresh', { status: 'ready' });
+    seedTask('old', { status: 'ready' });
+    store.appendEvent({
+      taskId: 'fresh',
+      kind: 'blocker_raised',
+      payload: { escalation_type: 'conflict', summary: 'c' },
+      ts: new Date(now - 1 * DAY).toISOString(),
+    });
+    store.appendEvent({
+      taskId: 'old',
+      kind: 'blocker_raised',
+      payload: { escalation_type: 'conflict', summary: 'c' },
+      ts: new Date(now - 20 * DAY).toISOString(),
+    });
+    const rows = store.nextReady({ nowMs: now });
+    const fresh = rows.find((r) => r.task.id === 'fresh')?.rationale.escalation_boost ?? 0;
+    const old = rows.find((r) => r.task.id === 'old')?.rationale.escalation_boost ?? 0;
+    expect(old).toBeGreaterThan(fresh);
+  });
+
+  test('listOpenEscalations returns the latest escalation per non-terminal task, newest-first', () => {
+    seedTask('a', { status: 'ready' });
+    seedTask('b', { status: 'ready' });
+    seedTask('done-task', { status: 'in_progress' });
+    store.appendEvent({
+      taskId: 'a',
+      kind: 'blocker_raised',
+      payload: { escalation_type: 'blocked', summary: 's1' },
+      ts: '2026-01-01T00:00:00Z',
+    });
+    store.appendEvent({
+      taskId: 'a',
+      kind: 'blocker_raised',
+      payload: { escalation_type: 'missing_context', summary: 's2' },
+      ts: '2026-02-01T00:00:00Z',
+    });
+    store.appendEvent({
+      taskId: 'b',
+      kind: 'blocker_raised',
+      payload: { escalation_type: 'ambiguous', summary: 's3' },
+      ts: '2026-03-01T00:00:00Z',
+    });
+
+    const open = store.listOpenEscalations();
+    // 'a' collapses to its latest (missing_context); 'b' is newest → first.
+    expect(open.map((e) => e.task_id)).toEqual(['b', 'a']);
+    expect(open.find((e) => e.task_id === 'a')?.escalation_type).toBe('missing_context');
+  });
+
+  test('listOpenEscalations excludes escalations on done/cancelled tasks', () => {
+    seedTask('gone', { status: 'in_progress' });
+    store.appendEvent({
+      taskId: 'gone',
+      kind: 'blocker_raised',
+      payload: { escalation_type: 'blocked', summary: 's' },
+    });
+    store.updateTaskStatus('gone', 'done');
+    expect(store.listOpenEscalations().some((e) => e.task_id === 'gone')).toBe(false);
+  });
+});
+
+// ===========================================================================
+// Last-touch provenance (v9)
+// ===========================================================================
+
+describe('ScrumStore — last-touch provenance (v9)', () => {
+  const PAST = '2026-01-01T00:00:00Z';
+
+  test('createTask seeds last_modified_at=created_at and last_modified_by=created_by_agent', () => {
+    const withAgent = seedTask('t1', { createdByAgent: 'alice', createdAt: PAST });
+    expect(withAgent.last_modified_by).toBe('alice');
+    expect(withAgent.last_modified_at).toBe(PAST);
+    // Round-trips through SELECT, not just the in-memory return value.
+    expect(store.getTask('t1')?.last_modified_by).toBe('alice');
+    expect(store.getTask('t1')?.last_modified_at).toBe(PAST);
+
+    const noAgent = seedTask('t2', { createdAt: PAST });
+    expect(noAgent.last_modified_by).toBeNull();
+    expect(noAgent.last_modified_at).toBe(PAST);
+  });
+
+  test('updateTaskStatus stamps last_modified_by=agent and advances last_modified_at', () => {
+    seedTask('t1', { createdByAgent: 'alice', createdAt: PAST });
+    const updated = store.updateTaskStatus('t1', 'ready', 'bob');
+    expect(updated.last_modified_by).toBe('bob');
+    if (updated.last_modified_at === null) throw new Error('expected last_modified_at');
+    expect(updated.last_modified_at > PAST).toBe(true);
+  });
+
+  test('updateTaskMilestone stamps last_modified_by=agent', () => {
+    seedMilestone('m1');
+    seedMilestone('m2');
+    seedTask('t1', { milestoneId: 'm1', createdByAgent: 'alice', createdAt: PAST });
+    const moved = store.updateTaskMilestone('t1', 'm2', 'carol');
+    expect(moved.last_modified_by).toBe('carol');
+    if (moved.last_modified_at === null) throw new Error('expected last_modified_at');
+    expect(moved.last_modified_at > PAST).toBe(true);
+  });
+
+  test('cancelTask stamps last_modified_by=agent; cascade stamps descendants', () => {
+    seedTask('epic', { layer: 'epic', createdByAgent: 'alice', createdAt: PAST });
+    seedTask('child', {
+      parentId: 'epic',
+      layer: 'task',
+      createdByAgent: 'alice',
+      createdAt: PAST,
+    });
+    store.cancelTaskCascade('epic', { agent: 'dave' });
+    expect(store.getTask('epic')?.last_modified_by).toBe('dave');
+    expect(store.getTask('child')?.last_modified_by).toBe('dave');
+  });
+
+  test('acceptance edits bump last_modified_at and null out the (unattributed) by', () => {
+    seedTask('t1', { createdByAgent: 'alice', createdAt: PAST });
+    const criterion: AcceptanceCriterion = {
+      id: 'c1',
+      text: 'builds',
+      verifies_by: 'bash',
+      check: 'true',
+      status: 'active',
+      idempotent: true,
+    };
+    const updated = store.addCriterion('t1', criterion);
+    // No agent flows through acceptance edits, so the last touch is unattributed.
+    expect(updated.last_modified_by).toBeNull();
+    if (updated.last_modified_at === null) throw new Error('expected last_modified_at');
+    expect(updated.last_modified_at > PAST).toBe(true);
+  });
+
+  test('setBounds bumps last_modified_at and nulls the by', () => {
+    seedTask('t1', { createdByAgent: 'alice', createdAt: PAST });
+    const bounds: TaskBounds = { tools: { allow: ['Bash(go test *)'] } };
+    const updated = store.setBounds('t1', bounds);
+    expect(updated.last_modified_by).toBeNull();
+    if (updated.last_modified_at === null) throw new Error('expected last_modified_at');
+    expect(updated.last_modified_at > PAST).toBe(true);
+  });
+
+  test('listTasksForTag surfaces the provenance columns', () => {
+    seedTask('t1', { createdByAgent: 'alice', createdAt: PAST, tags: ['p0'] });
+    const [row] = store.listTasksForTag('p0');
+    if (!row) throw new Error('expected one tagged task');
+    expect(row.last_modified_by).toBe('alice');
+    expect(row.last_modified_at).toBe(PAST);
   });
 });

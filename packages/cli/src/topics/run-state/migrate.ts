@@ -29,11 +29,12 @@
  * port (Task 2). The factory helpers mirror Python construction order
  * exactly so JSON key order matches byte-for-byte.
  *
- * Note: the task brief described a schema-version migration chain. The
- * actual Python source is a markdown→JSON converter, not a chain — there
- * is one schema version (v1) and no `MIGRATIONS` registry. This port
- * preserves Python semantics faithfully; see `tools/run_state/migrate.py`
- * and `.prove/decisions/2026-04-17-prove-runs-json-first.md` for intent.
+ * Note: the Python source this was ported from is a markdown→JSON
+ * converter, not a schema-version chain; this module preserves that
+ * semantics. The artifact `schema_version` chain (v1→v2, …) is a separate
+ * concern handled by `schema-migrate.ts` (registry pattern); do not conflate
+ * the two. The JSON-first run-artifact cutover and the v2 `bounds` field
+ * (declared per-task execution bounds) motivated the version chain.
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';

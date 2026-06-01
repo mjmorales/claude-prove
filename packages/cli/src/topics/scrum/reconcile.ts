@@ -24,6 +24,8 @@
 
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative } from 'node:path';
+import type { LogEntry } from '../acb/reasoning-log';
+import { listEntries } from '../acb/reasoning-log-store';
 import type { ScrumStore } from './store';
 import type { ScrumEvent, ScrumTask } from './types';
 
@@ -74,6 +76,52 @@ export interface SweepResult {
   scanned: number;
   reconciled: number;
   errors: Error[];
+}
+
+/**
+ * The reasoning-log entry types curation surfaces as promotion candidates.
+ * These four carry durable, attention-bearing signal a
+ * milestone-close should lift toward `scrum_decisions`: `decision` (→ adr),
+ * `hack`/`risk` (→ pattern/tracked debt), `assumption` (→ glossary/decision).
+ * `bailout`/`discovery`/`context`/`synthesis`/`review_feedback`/`verification`
+ * stay in the run log — they are run-local narration, not durable memory.
+ */
+export const CURATION_ENTRY_TYPES = ['hack', 'risk', 'decision', 'assumption'] as const;
+export type CurationEntryType = (typeof CURATION_ENTRY_TYPES)[number];
+
+/**
+ * One promotion candidate inside a `curation_proposed` event. A flat ref — the
+ * curation skill reads the full entry file (alternatives, cleanup_condition,
+ * severity, …) from `run_path` when it needs more than the body to classify.
+ */
+export interface CurationCandidate {
+  /** Reasoning-log entry id (the entry filename stem). */
+  entry_id: string;
+  type: CurationEntryType;
+  /** Authoring agent (the `log/<agent>/` dir segment). */
+  agent: string;
+  /** Repo-relative run dir the entry was read from. */
+  run_path: string;
+  /** The entry's attention-bearing prose body. */
+  body: string;
+}
+
+/** Payload carried by a task-scoped `curation_proposed` event. */
+export interface CurationProposedPayload {
+  /** The milestone whose close triggered the proposal. */
+  milestone_id: string;
+  candidates: CurationCandidate[];
+}
+
+/** Outcome of {@link reconcileMilestoneClosed}, one summary per milestone. */
+export interface MilestoneCurationResult {
+  milestoneId: string;
+  /** Tasks that had findings and were not already curated for this milestone. */
+  emitted: Array<{ taskId: string; candidateCount: number }>;
+  /** Tasks skipped because they carried zero curation-relevant findings. */
+  skippedNoFindings: number;
+  /** Tasks skipped because a `curation_proposed` event already existed. */
+  skippedAlreadyEmitted: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -232,6 +280,125 @@ export function sweepUnreconciled(
 }
 
 // ---------------------------------------------------------------------------
+// reconcileMilestoneClosed — Forced Bubble-Up of curation candidates
+// ---------------------------------------------------------------------------
+
+/**
+ * On milestone close, walk every task in the milestone, gather the
+ * curation-relevant reasoning-log findings across its linked runs, and emit
+ * one task-scoped `curation_proposed` event per task that has any. The work
+ * surfaces structurally on the close transition rather than as opt-in
+ * hygiene. The reasoning log is write-only until this runs; the event is what
+ * the curation *skill* reads to propose Journal→Codex promotions.
+ *
+ * Engine side only: this surfaces candidates mechanically. The judgment —
+ * which findings become durable `scrum_decisions`, and as what `kind` — is the
+ * model-owned curation skill.
+ *
+ * Idempotent two ways: (1) a task already carrying a `curation_proposed`
+ * event for this milestone is skipped, so a re-close never double-emits;
+ * (2) a task with zero findings is a no-op. `projectDir` resolves repo-relative
+ * run paths (defaults to `process.cwd()`); the CLI passes the workspace root.
+ */
+export function reconcileMilestoneClosed(
+  milestoneId: string,
+  store: ScrumStore,
+  projectDir?: string,
+): MilestoneCurationResult {
+  const root = projectDir ?? process.cwd();
+  const result: MilestoneCurationResult = {
+    milestoneId,
+    emitted: [],
+    skippedNoFindings: 0,
+    skippedAlreadyEmitted: 0,
+  };
+
+  for (const task of store.listTasks({ milestoneId })) {
+    if (hasCurationEventForMilestone(store, task.id, milestoneId)) {
+      result.skippedAlreadyEmitted++;
+      continue;
+    }
+    const candidates = collectCurationCandidates(store, task.id, root);
+    if (candidates.length === 0) {
+      result.skippedNoFindings++;
+      continue;
+    }
+    const payload: CurationProposedPayload = { milestone_id: milestoneId, candidates };
+    store.appendEvent({ taskId: task.id, kind: 'curation_proposed', payload });
+    result.emitted.push({ taskId: task.id, candidateCount: candidates.length });
+  }
+
+  return result;
+}
+
+/**
+ * True when `taskId` already carries a `curation_proposed` event naming
+ * `milestoneId`. The dedup key is the milestone so the same task can be
+ * curated under more than one milestone over its life, but never twice for
+ * the same close.
+ */
+function hasCurationEventForMilestone(
+  store: ScrumStore,
+  taskId: string,
+  milestoneId: string,
+): boolean {
+  for (const event of store.listEventsForTask(taskId, 1000)) {
+    if (event.kind !== 'curation_proposed') continue;
+    const payload = event.payload;
+    if (isRecord(payload) && payload.milestone_id === milestoneId) return true;
+  }
+  return false;
+}
+
+/**
+ * Read every linked run's reasoning log, keep the curation-relevant entry
+ * types, and dedup by entry id (the same entry can surface through more than
+ * one linked run-path form). A run whose log dir is malformed is skipped
+ * rather than aborting the whole milestone curation — a corrupt log file must
+ * not block a milestone from closing.
+ */
+function collectCurationCandidates(
+  store: ScrumStore,
+  taskId: string,
+  projectDir: string,
+): CurationCandidate[] {
+  const candidates: CurationCandidate[] = [];
+  const seen = new Set<string>();
+
+  for (const run of store.listRunsForTask(taskId)) {
+    const runDir = isAbsolute(run.run_path) ? run.run_path : join(projectDir, run.run_path);
+    let entries: LogEntry[];
+    try {
+      entries = listEntries(runDir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!isCurationEntryType(entry.type)) continue;
+      if (seen.has(entry.id)) continue;
+      seen.add(entry.id);
+      candidates.push({
+        entry_id: entry.id,
+        type: entry.type,
+        agent: entry.agent,
+        run_path: run.run_path,
+        body: entry.body,
+      });
+    }
+  }
+
+  return candidates;
+}
+
+function isCurationEntryType(type: LogEntry['type']): type is CurationEntryType {
+  return (CURATION_ENTRY_TYPES as readonly string[]).includes(type);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+// ---------------------------------------------------------------------------
 // Internals — tracked-run helpers
 // ---------------------------------------------------------------------------
 
@@ -330,8 +497,22 @@ function emitOrphanEvent(
   });
 }
 
+/**
+ * Guarantee the orphan sentinel exists and is live. Three cases:
+ *   - live row     → nothing to do.
+ *   - soft-deleted → revive it (clear `deleted_at`). A plain `createTask`
+ *     here would hit `UNIQUE constraint failed: scrum_tasks.id` because the
+ *     row physically exists, escaping the reconciler and failing every orphan
+ *     run thereafter — so we restore the sentinel's always-present invariant
+ *     instead of re-inserting.
+ *   - absent       → create it.
+ */
 function ensureOrphanTask(store: ScrumStore): void {
   if (store.getTask(ORPHAN_TASK_ID)) return;
+  if (store.getTaskIncludingDeleted(ORPHAN_TASK_ID)) {
+    store.undeleteTask(ORPHAN_TASK_ID);
+    return;
+  }
   store.createTask({
     id: ORPHAN_TASK_ID,
     title: ORPHAN_TASK_TITLE,
@@ -350,9 +531,8 @@ function collectFilesTouched(runs: ReturnType<ScrumStore['listRunsForTask']>): s
     const statePath = resolveRunStatePath(run.run_path);
     const state = readJsonOrNull<StateJsonLite>(statePath);
     if (!state || !Array.isArray(state.tasks)) continue;
-    // state.json doesn't carry per-file diffs in v1 — collect any `files`
-    // array if a future version adds it. For now, fall back to commit shas
-    // so the bundle still records *something* provenance-worthy.
+    // state.json v1 carries no per-file diffs; fall back to commit shas so
+    // the bundle still records provenance.
     for (const task of state.tasks) {
       if (!Array.isArray(task.steps)) continue;
       for (const step of task.steps) {

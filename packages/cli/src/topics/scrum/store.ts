@@ -15,11 +15,17 @@
 
 import type { Database, Statement } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
+import { dirname, isAbsolute, join } from 'node:path';
 import { type Store, type StoreOptions, openStore, runMigrations } from '@claude-prove/store';
+import { listEntries } from '../acb/reasoning-log-store';
 import { ensureScrumSchemaRegistered } from './schemas';
 import type {
+  Acceptance,
+  AcceptanceCriterion,
   DecisionRow,
   DepKind,
+  EscalationPayload,
+  EscalationType,
   EventKind,
   MilestoneStatus,
   NextReadyRow,
@@ -30,8 +36,11 @@ import type {
   ScrumRunLink,
   ScrumTag,
   ScrumTask,
+  TaskBounds,
+  TaskLayer,
   TaskStatus,
 } from './types';
+import { ESCALATION_TYPES } from './types';
 
 // ---------------------------------------------------------------------------
 // Public openers
@@ -59,6 +68,23 @@ export interface CreateTaskInput {
   description?: string | null;
   status?: TaskStatus;
   milestoneId?: string | null;
+  /** Containing task id (the tree). Validated to exist, like `milestoneId`. */
+  parentId?: string | null;
+  /** Containment tier; NULL = flat. */
+  layer?: TaskLayer | null;
+  /**
+   * Acceptance criteria authored at create time (v5). Validated for the
+   * idempotent/policy invariant before insert. When omitted, the task's
+   * `acceptance_json` stays NULL unless `parentId` carries inheritable
+   * criteria (see `inheritAcceptance`).
+   */
+  acceptance?: Acceptance | null;
+  /**
+   * Declared bounds authored at create time (v6). Validated for the
+   * closed-top-level-key shape before insert. When omitted, the task's
+   * `bounds_json` stays NULL (absent = unbounded).
+   */
+  bounds?: TaskBounds | null;
   createdByAgent?: string | null;
   /** ISO-8601 timestamp; defaults to now(). */
   createdAt?: string;
@@ -72,6 +98,8 @@ export interface CreateMilestoneInput {
   description?: string | null;
   targetState?: string | null;
   status?: MilestoneStatus;
+  /** Initiative grouping label (v10); the tier above milestone. Omitted = NULL. */
+  initiative?: string | null;
   /** ISO-8601 timestamp; defaults to now(). */
   createdAt?: string;
 }
@@ -112,7 +140,7 @@ export interface NextReadyOptions {
  * Input to `recordDecision`. `id` is the filename slug; `content` is the
  * raw markdown body. `content_sha` is derived from `content` at write
  * time, so callers do not supply it. Status defaults to `'accepted'`
- * per ADR convention.
+ * per decision-record convention.
  */
 export interface RecordDecisionInput {
   id: string;
@@ -122,12 +150,16 @@ export interface RecordDecisionInput {
   content: string;
   sourcePath?: string | null;
   recordedByAgent?: string | null;
+  /** Codex subtype (v8): `adr | glossary | pattern`. Omitted = untyped (NULL). */
+  kind?: string | null;
 }
 
-/** Filter shape for `listDecisions`. Both fields are optional and AND-combined. */
+/** Filter shape for `listDecisions`. All fields are optional and AND-combined. */
 export interface ListDecisionsFilter {
   topic?: string;
   status?: string;
+  /** Codex subtype filter (v8); case-insensitive, like `topic`/`status`. */
+  kind?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -136,8 +168,7 @@ export interface ListDecisionsFilter {
 
 /**
  * Allowed forward transitions. Terminal statuses (`done`, `cancelled`)
- * reject every outgoing edge. Keep in sync with the task lifecycle doc in
- * `.prove/decisions/2026-04-21-scrum-architecture.md` § Lifecycle.
+ * reject every outgoing edge. Keep in sync with the task lifecycle contract.
  */
 const ALLOWED_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   backlog: ['ready', 'in_progress', 'cancelled'],
@@ -147,6 +178,31 @@ const ALLOWED_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   blocked: ['ready', 'in_progress', 'cancelled'],
   done: [],
   cancelled: [],
+};
+
+/**
+ * Canonical `scrum_tasks` column list, in declaration order. Every SELECT
+ * routes through this so the v3 `parent_id`/`layer`, v5 `acceptance_json`,
+ * and v6 `bounds_json` columns stay in lockstep with the `ScrumTaskRow`
+ * shape. Raw rows carry `acceptance_json`/`bounds_json: string | null`;
+ * `decodeTask` turns them into the decoded `ScrumTask.acceptance`/`.bounds`
+ * fields at the public boundary.
+ */
+const TASK_COLUMNS =
+  'id, title, description, status, milestone_id, parent_id, layer, acceptance_json, bounds_json, terminal_reason, terminal_detail, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, deleted_at';
+
+/** Canonical `scrum_milestones` SELECT column list; includes the v10 `initiative` grouping. */
+const MILESTONE_COLUMNS =
+  'id, title, description, target_state, status, initiative, created_at, closed_at';
+
+/**
+ * Raw `scrum_tasks` SELECT shape — identical to `ScrumTask` except the v5
+ * acceptance and v6 bounds columns arrive as their on-disk JSON strings.
+ * `decodeTask` is the sole bridge from this to the public `ScrumTask`.
+ */
+type ScrumTaskRow = Omit<ScrumTask, 'acceptance' | 'bounds'> & {
+  acceptance_json: string | null;
+  bounds_json: string | null;
 };
 
 // Tags that boost priority in nextReady ranking.
@@ -186,6 +242,17 @@ export class ScrumStore {
     return this.store;
   }
 
+  /**
+   * Run `fn` inside a single sqlite transaction, committing on return and
+   * rolling back every write if `fn` throws. Lets a caller make a multi-method
+   * sequence (e.g. the `scrum init` seed, many createTask/createMilestone
+   * calls) atomic: a mid-sequence failure leaves the store untouched rather
+   * than half-written. The inner per-method transactions nest as savepoints.
+   */
+  transaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
+  }
+
   // ==========================================================================
   // Tasks
   // ==========================================================================
@@ -201,6 +268,7 @@ export class ScrumStore {
     const createdAt = input.createdAt ?? isoNow();
     const status: TaskStatus = input.status ?? 'backlog';
     const milestoneId = input.milestoneId ?? null;
+    const parentId = input.parentId ?? null;
 
     if (milestoneId !== null) {
       const exists = this.getMilestone(milestoneId);
@@ -209,30 +277,69 @@ export class ScrumStore {
       }
     }
 
+    if (parentId !== null) {
+      const parent = this.getTask(parentId);
+      if (!parent) {
+        throw new Error(`createTask: unknown parent_id '${parentId}'`);
+      }
+    }
+
+    // Resolve acceptance: explicit input wins; otherwise inherit the parent's
+    // shared_acceptance criteria (independent copies tagged `inherited_from`).
+    // Validated for the idempotent/policy invariant before insert.
+    const authored = input.acceptance ?? null;
+    let acceptance: Acceptance | null = authored;
+    if (authored === null && parentId !== null) {
+      const inherited = this.inheritAcceptance(parentId);
+      acceptance = inherited.length > 0 ? { criteria: inherited } : null;
+    }
+    if (acceptance !== null) validateAcceptance(acceptance);
+
+    // Declared bounds (v6): explicit input only — never inherited. Validated
+    // for the closed-top-level-key shape before insert; null = unbounded.
+    const bounds = input.bounds ?? null;
+    if (bounds !== null) validateBounds(bounds);
+
     const row: ScrumTask = {
       id: input.id,
       title: input.title,
       description: input.description ?? null,
       status,
       milestone_id: milestoneId,
+      parent_id: parentId,
+      layer: input.layer ?? null,
+      acceptance,
+      bounds,
+      terminal_reason: null,
+      terminal_detail: null,
       created_by_agent: input.createdByAgent ?? null,
       created_at: createdAt,
       last_event_at: createdAt,
+      // Seed last-touch provenance (v9) to the creation event so a fresh task
+      // already reads coherently before its first mutation.
+      last_modified_by: input.createdByAgent ?? null,
+      last_modified_at: createdAt,
       deleted_at: null,
     };
 
     const tx = this.db.transaction(() => {
       this.prep(
-        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, created_by_agent, created_at, last_event_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)',
+        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, parent_id, layer, acceptance_json, bounds_json, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
       ).run(
         row.id,
         row.title,
         row.description,
         row.status,
         row.milestone_id,
+        row.parent_id,
+        row.layer,
+        acceptance === null ? null : JSON.stringify(acceptance),
+        bounds === null ? null : JSON.stringify(bounds),
         row.created_by_agent,
         row.created_at,
         row.last_event_at,
+        row.last_modified_by,
+        row.last_modified_at,
       );
 
       if (input.tags && input.tags.length > 0) {
@@ -260,9 +367,28 @@ export class ScrumStore {
   /** Fetch one task by id, or null if missing or soft-deleted. */
   getTask(id: string): ScrumTask | null {
     const row = this.prep(
-      'SELECT id, title, description, status, milestone_id, created_by_agent, created_at, last_event_at, deleted_at FROM scrum_tasks WHERE id = ? AND deleted_at IS NULL',
-    ).get(id) as ScrumTask | null;
-    return row ?? null;
+      `SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE id = ? AND deleted_at IS NULL`,
+    ).get(id) as ScrumTaskRow | null;
+    return row ? decodeTask(row) : null;
+  }
+
+  /**
+   * Fetch one task by id ignoring the soft-delete filter, or null if no row
+   * physically exists. Unlike `getTask`, a soft-deleted row is still returned.
+   * Used to distinguish "never existed" from "soft-deleted" so a unique
+   * sentinel (see `ensureOrphanTask`) can be revived rather than re-inserted
+   * into a PK conflict.
+   */
+  getTaskIncludingDeleted(id: string): ScrumTask | null {
+    const row = this.prep(`SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE id = ?`).get(
+      id,
+    ) as ScrumTaskRow | null;
+    return row ? decodeTask(row) : null;
+  }
+
+  /** Clear `deleted_at`, reviving a soft-deleted task. No-op on a live row. */
+  undeleteTask(id: string): void {
+    this.prep('UPDATE scrum_tasks SET deleted_at = NULL WHERE id = ?').run(id);
   }
 
   /**
@@ -294,8 +420,8 @@ export class ScrumStore {
     }
 
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-    const sql = `SELECT id, title, description, status, milestone_id, created_by_agent, created_at, last_event_at, deleted_at FROM scrum_tasks ${where} ORDER BY created_at ASC`;
-    return this.prep(sql).all(...params) as ScrumTask[];
+    const sql = `SELECT ${TASK_COLUMNS} FROM scrum_tasks ${where} ORDER BY created_at ASC`;
+    return (this.prep(sql).all(...params) as ScrumTaskRow[]).map(decodeTask);
   }
 
   /**
@@ -314,13 +440,19 @@ export class ScrumStore {
       );
     }
 
+    // Story-layer transition floors. Both are mechanical engine-owned gates:
+    // a `layer=story` task carries obligations a flat `layer=task` does not.
+    // Non-story layers pass straight through.
+    if (task.layer === 'story') {
+      this.assertStoryAcceptanceFloor(task, next);
+      if (next === 'done') this.assertStorySynthesisFloor(task);
+    }
+
     const ts = isoNow();
     const tx = this.db.transaction(() => {
-      this.prep('UPDATE scrum_tasks SET status = ?, last_event_at = ? WHERE id = ?').run(
-        next,
-        ts,
-        id,
-      );
+      this.prep(
+        'UPDATE scrum_tasks SET status = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ? WHERE id = ?',
+      ).run(next, ts, agent ?? null, ts, id);
       this.prep(
         'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
       ).run(
@@ -369,11 +501,9 @@ export class ScrumStore {
 
     const ts = isoNow();
     const tx = this.db.transaction(() => {
-      this.prep('UPDATE scrum_tasks SET milestone_id = ?, last_event_at = ? WHERE id = ?').run(
-        nextMilestoneId,
-        ts,
-        id,
-      );
+      this.prep(
+        'UPDATE scrum_tasks SET milestone_id = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ? WHERE id = ?',
+      ).run(nextMilestoneId, ts, agent ?? null, ts, id);
       this.prep(
         'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
       ).run(
@@ -391,11 +521,421 @@ export class ScrumStore {
     return updated;
   }
 
-  /** Soft-delete: stamp `deleted_at = now()`. Does not cascade to dependents. */
+  /**
+   * Soft-delete: stamp `deleted_at = now()`. Does not cascade to dependents.
+   * Appends a `task_deleted` event inside the same transaction so the
+   * append-only audit log records the retirement —
+   * matching createTask/updateTaskStatus/updateTaskMilestone, which all emit
+   * an event under their write. Without this the events table — the sole
+   * audit + reconcile signal — would have no trace of when a task was retired.
+   */
   softDeleteTask(id: string): void {
     const task = this.getTask(id);
     if (!task) throw new Error(`softDeleteTask: unknown task '${id}'`);
-    this.prep('UPDATE scrum_tasks SET deleted_at = ? WHERE id = ?').run(isoNow(), id);
+
+    const ts = isoNow();
+    const tx = this.db.transaction(() => {
+      this.prep(
+        'UPDATE scrum_tasks SET deleted_at = ?, last_modified_by = NULL, last_modified_at = ? WHERE id = ?',
+      ).run(ts, ts, id);
+      this.prep(
+        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
+      ).run(id, ts, 'task_deleted', null, JSON.stringify({ status: task.status }));
+    });
+    tx();
+  }
+
+  // ==========================================================================
+  // Cancellation + terminal provenance (v7)
+  // ==========================================================================
+
+  /**
+   * Cancel a single task, recording terminal provenance. Throws on an unknown
+   * id or an already-terminal task (`done`/`cancelled`) — the same closed-edge
+   * discipline `updateTaskStatus` enforces. `reason` defaults to `'cancelled'`;
+   * `detail` is free-text elaboration (NULL when omitted). Emits a
+   * `status_changed` event whose payload carries the terminal fields.
+   */
+  cancelTask(
+    id: string,
+    opts: { reason?: string; detail?: string | null; agent?: string | null } = {},
+  ): ScrumTask {
+    const task = this.getTask(id);
+    if (!task) throw new Error(`cancelTask: unknown task '${id}'`);
+    if (task.status === 'done' || task.status === 'cancelled') {
+      throw new Error(`cancelTask: task '${id}' is already terminal ('${task.status}')`);
+    }
+    this.transaction(() => {
+      this.cancelOne(id, opts.reason ?? 'cancelled', opts.detail ?? null, opts.agent ?? null);
+    });
+    return this.requireTask(id, 'cancelTask');
+  }
+
+  /**
+   * Cancel a task and recursively cancel every non-terminal descendant in its
+   * `parent_id` subtree, in one transaction. The root
+   * carries `terminal_reason = reason ?? 'cancelled'`; descendants carry
+   * `terminal_reason = 'parent_cancelled'` with a detail naming the root.
+   *
+   * Already-terminal nodes (`done`/`cancelled`) are left untouched but their
+   * children are still visited — a completed mid-tree task does not shield its
+   * unfinished descendants from the sweep. A malformed `parent_id` cycle is
+   * guarded by a `visited` set. Returns the ids actually transitioned.
+   */
+  cancelTaskCascade(
+    rootId: string,
+    opts: { reason?: string; detail?: string | null; agent?: string | null } = {},
+  ): { cancelled: string[] } {
+    const root = this.getTask(rootId);
+    if (!root) throw new Error(`cancelTaskCascade: unknown task '${rootId}'`);
+
+    const cancelled: string[] = [];
+    const agent = opts.agent ?? null;
+    const childDetail = `parent '${rootId}' cancelled`;
+
+    this.transaction(() => {
+      if (this.cancelOne(rootId, opts.reason ?? 'cancelled', opts.detail ?? null, agent)) {
+        cancelled.push(rootId);
+      }
+      const visited = new Set<string>([rootId]);
+      const stack = this.getChildren(rootId).map((c) => c.id);
+      while (stack.length > 0) {
+        const id = stack.pop();
+        if (id === undefined || visited.has(id)) continue;
+        visited.add(id);
+        if (this.cancelOne(id, 'parent_cancelled', childDetail, agent)) {
+          cancelled.push(id);
+        }
+        for (const child of this.getChildren(id)) stack.push(child.id);
+      }
+    });
+
+    return { cancelled };
+  }
+
+  /**
+   * Cancel one task in place if it is non-terminal, writing terminal
+   * provenance and a `status_changed` event. Returns true when it transitioned,
+   * false when the task was missing or already terminal. Must run inside a
+   * caller-owned transaction (see `cancelTask`/`cancelTaskCascade`).
+   */
+  private cancelOne(
+    id: string,
+    reason: string,
+    detail: string | null,
+    agent: string | null,
+  ): boolean {
+    const task = this.getTask(id);
+    if (!task) return false;
+    if (task.status === 'done' || task.status === 'cancelled') return false;
+
+    const ts = isoNow();
+    this.prep(
+      'UPDATE scrum_tasks SET status = ?, terminal_reason = ?, terminal_detail = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ? WHERE id = ?',
+    ).run('cancelled', reason, detail, ts, agent, ts, id);
+    this.prep(
+      'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
+    ).run(
+      id,
+      ts,
+      'status_changed',
+      agent,
+      JSON.stringify({
+        from: task.status,
+        to: 'cancelled',
+        terminal_reason: reason,
+        terminal_detail: detail,
+      }),
+    );
+    return true;
+  }
+
+  // ==========================================================================
+  // Story-layer transition floors (v7)
+  // ==========================================================================
+
+  /**
+   * Reject a `layer=story` transition INTO `ready`/`in_progress`/`done` when
+   * the story has zero ACTIVE acceptance criteria. A story with
+   * no goalposts cannot be started or closed; superseded criteria do not count.
+   * Other target statuses (`blocked`, `review`, `cancelled`, `backlog`) pass —
+   * a story may be parked or abandoned without criteria. Invariant: only
+   * called for `task.layer === 'story'`.
+   */
+  private assertStoryAcceptanceFloor(task: ScrumTask, next: TaskStatus): void {
+    if (next !== 'ready' && next !== 'in_progress' && next !== 'done') return;
+    const active = task.acceptance?.criteria.filter((c) => c.status === 'active') ?? [];
+    if (active.length === 0) {
+      throw new Error(
+        `updateTaskStatus: story '${task.id}' has no active acceptance criteria; add at least one (\`scrum task acceptance add ${task.id} ...\`) before '${next}'`,
+      );
+    }
+  }
+
+  /**
+   * Reject a `layer=story` -> `done` transition when the story's most-recent
+   * linked run carries no `synthesis` reasoning-log entry.
+   * The synthesis entry is the worker's hand-off-of-record; closing a story
+   * without it loses the episode's outcome.
+   *
+   * Boundary: the floor applies only once a worker has run — a story with NO
+   * linked runs has no episode to synthesize and passes. The orchestrator
+   * always links a run before dispatch, so the only way to reach `done` with
+   * no run is a manually-driven story, which the floor intentionally does not
+   * gate. Invariant: only called for `task.layer === 'story'`.
+   */
+  private assertStorySynthesisFloor(task: ScrumTask): void {
+    const runs = this.listRunsForTask(task.id);
+    if (runs.length === 0) return;
+
+    // listRunsForTask is ordered by linked_at ASC — the last entry is the
+    // most-recent worker.
+    const latest = runs[runs.length - 1];
+    if (!latest) return;
+    const runDir = this.resolveRunDir(latest.run_path);
+
+    let hasSynthesis = false;
+    try {
+      hasSynthesis = listEntries(runDir).some((e) => e.type === 'synthesis');
+    } catch {
+      // A malformed entry file makes the synthesis status unknowable; treat as
+      // absent so the floor fails closed rather than waving the story through.
+      hasSynthesis = false;
+    }
+
+    if (!hasSynthesis) {
+      throw new Error(
+        `updateTaskStatus: story '${task.id}' cannot close — its most-recent run (${latest.run_path}) has no synthesis reasoning-log entry. The worker must write one before the story reaches 'done'.`,
+      );
+    }
+  }
+
+  /**
+   * Resolve a stored `run_path` to an absolute run directory for reasoning-log
+   * reads. Absolute paths pass through; relative paths resolve against the
+   * workspace root derived from the store's db path
+   * (`<root>/.prove/prove.db`). A `:memory:` store has no root, so relative
+   * paths resolve against cwd — tests linking real run dirs use absolute paths.
+   */
+  private resolveRunDir(runPath: string): string {
+    if (isAbsolute(runPath)) return runPath;
+    const dbPath = this.store.path;
+    const root = dbPath === ':memory:' ? process.cwd() : dirname(dirname(dbPath));
+    return join(root, runPath);
+  }
+
+  // ==========================================================================
+  // Containment tree (v3) — parent_id hierarchy + derived status rollup
+  // ==========================================================================
+
+  /**
+   * Direct children of `taskId` via `parent_id`, ordered by `created_at` ASC.
+   * Excludes soft-deleted rows. Returns `[]` for a leaf or unknown id —
+   * callers treat both the same.
+   */
+  getChildren(taskId: string): ScrumTask[] {
+    return (
+      this.prep(
+        `SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE parent_id = ? AND deleted_at IS NULL ORDER BY created_at ASC`,
+      ).all(taskId) as ScrumTaskRow[]
+    ).map(decodeTask);
+  }
+
+  /**
+   * Status of `taskId` rolled up from its subtree. Computed,
+   * never stored. A leaf (no live children) returns its authored status, so
+   * flat tasks behave exactly as a single self-status read. A parent folds its children's
+   * DERIVED statuses post-order by precedence:
+   *
+   *   in_progress — any child derives in_progress
+   *   blocked     — any child blocked AND none in_progress
+   *   done        — ≥1 non-cancelled child AND every non-cancelled child done
+   *   review      — any child review
+   *   ready       — any child ready
+   *   backlog     — otherwise (incl. all-cancelled subtree)
+   *
+   * Cancelled children are excluded from the `done` quorum so a fully
+   * cancelled subtree never reads as done. Recursion is invocation-scoped;
+   * a `visited` set guards a malformed `parent_id` cycle (returns the
+   * authored status for the re-entered node rather than recursing forever).
+   */
+  derivedStatus(taskId: string): TaskStatus {
+    const task = this.getTask(taskId);
+    if (!task) throw new Error(`derivedStatus: unknown task '${taskId}'`);
+    return this.rollupStatus(task, new Set<string>());
+  }
+
+  /**
+   * Post-order fold backing `derivedStatus`. `visited` carries the ancestor
+   * chain on the current DFS path; re-entering a node (a parent_id cycle)
+   * short-circuits to its authored status instead of recursing.
+   */
+  private rollupStatus(task: ScrumTask, visited: Set<string>): TaskStatus {
+    if (visited.has(task.id)) return task.status;
+    visited.add(task.id);
+
+    const children = this.getChildren(task.id);
+    if (children.length === 0) {
+      visited.delete(task.id);
+      return task.status;
+    }
+
+    const childStatuses = children.map((child) => this.rollupStatus(child, visited));
+    visited.delete(task.id);
+    return foldChildStatuses(childStatuses);
+  }
+
+  // ==========================================================================
+  // Acceptance criteria (v5) — append-only, never hard-delete
+  //
+  // TODO(story-close): the story-close workflow consumes these criteria and
+  // dispatches by `verifies_by` (bash→validators, assert→expression,
+  // gate→AskUserQuestion, agent→validation-agent). This module lands the
+  // data model + authoring surface only; no evaluation happens here.
+  // ==========================================================================
+
+  /**
+   * Replace a task's entire acceptance object. Validates the
+   * idempotent/policy invariant: `parallel` eval_order or
+   * `failed_only` rerun_policy require every criterion to be
+   * `idempotent: true`. Throws on an unknown task id. Pass `null` to clear.
+   */
+  setAcceptance(taskId: string, acceptance: Acceptance | null): ScrumTask {
+    const task = this.getTask(taskId);
+    if (!task) throw new Error(`setAcceptance: unknown task '${taskId}'`);
+    if (acceptance !== null) validateAcceptance(acceptance);
+    this.writeAcceptance(taskId, acceptance);
+    return this.requireTask(taskId, 'setAcceptance');
+  }
+
+  /**
+   * Append one criterion to a task's acceptance list. Creates
+   * the acceptance object if the task had none. Rejects a duplicate criterion
+   * id and re-validates the idempotent/policy invariant against any existing
+   * policy. Append-only — existing criteria are never mutated or removed.
+   */
+  addCriterion(taskId: string, criterion: AcceptanceCriterion): ScrumTask {
+    const task = this.getTask(taskId);
+    if (!task) throw new Error(`addCriterion: unknown task '${taskId}'`);
+    assertAcceptanceUnfrozen(task, 'addCriterion');
+    const current = task.acceptance;
+    const criteria = current ? [...current.criteria] : [];
+    if (criteria.some((c) => c.id === criterion.id)) {
+      throw new Error(`addCriterion: duplicate criterion id '${criterion.id}' on task '${taskId}'`);
+    }
+    criteria.push(criterion);
+    const next: Acceptance = current?.policy ? { criteria, policy: current.policy } : { criteria };
+    validateAcceptance(next);
+    this.writeAcceptance(taskId, next);
+    return this.requireTask(taskId, 'addCriterion');
+  }
+
+  /**
+   * Supersede a criterion in place (append-only). Flips
+   * its `status` to `'superseded'`, records `reason`, and optionally points
+   * `superseded_by` at a replacement criterion id. Never removes the row —
+   * the retired criterion stays in the array for audit, mirroring
+   * `supersedeDecision`. Rejects unknown task/criterion ids and an
+   * already-superseded criterion.
+   */
+  supersedeCriterion(
+    taskId: string,
+    criterionId: string,
+    reason: string,
+    supersededBy?: string | null,
+  ): ScrumTask {
+    const task = this.getTask(taskId);
+    if (!task) throw new Error(`supersedeCriterion: unknown task '${taskId}'`);
+    assertAcceptanceUnfrozen(task, 'supersedeCriterion');
+    if (!task.acceptance) {
+      throw new Error(`supersedeCriterion: task '${taskId}' has no acceptance criteria`);
+    }
+    const target = task.acceptance.criteria.find((c) => c.id === criterionId);
+    if (!target) {
+      throw new Error(`supersedeCriterion: unknown criterion '${criterionId}' on task '${taskId}'`);
+    }
+    if (target.status === 'superseded') {
+      throw new Error(`supersedeCriterion: criterion '${criterionId}' is already superseded`);
+    }
+
+    const criteria = task.acceptance.criteria.map((c) =>
+      c.id === criterionId
+        ? { ...c, status: 'superseded' as const, reason, superseded_by: supersededBy ?? null }
+        : c,
+    );
+    const next: Acceptance = task.acceptance.policy
+      ? { criteria, policy: task.acceptance.policy }
+      : { criteria };
+    this.writeAcceptance(taskId, next);
+    return this.requireTask(taskId, 'supersedeCriterion');
+  }
+
+  /**
+   * The criteria a child should inherit from `parentId` via shared_acceptance.
+   * Returns independent deep copies of the parent's ACTIVE
+   * criteria, each tagged `inherited_from: parentId` and reset to
+   * `status: 'active'` with cleared supersession pointers. Returns `[]` when
+   * the parent is unknown or carries no active criteria.
+   *
+   * Copies are intentionally independent: a later edit to the parent's
+   * criterion does NOT retroactively change a child that already inherited it.
+   */
+  inheritAcceptance(parentId: string): AcceptanceCriterion[] {
+    const parent = this.getTask(parentId);
+    if (!parent?.acceptance) return [];
+    return parent.acceptance.criteria
+      .filter((c) => c.status === 'active')
+      .map((c) => ({
+        ...c,
+        status: 'active' as const,
+        superseded_by: null,
+        reason: null,
+        inherited_from: parentId,
+      }));
+  }
+
+  /**
+   * Persist an acceptance object (or NULL) to `scrum_tasks.acceptance_json`.
+   * Bumps last-touch provenance (v9): `last_modified_at = now()`,
+   * `last_modified_by = NULL` — these editors carry no agent, so the pair
+   * honestly records an unattributed most-recent write.
+   */
+  private writeAcceptance(taskId: string, acceptance: Acceptance | null): void {
+    this.prep(
+      'UPDATE scrum_tasks SET acceptance_json = ?, last_modified_by = NULL, last_modified_at = ? WHERE id = ?',
+    ).run(acceptance === null ? null : JSON.stringify(acceptance), isoNow(), taskId);
+  }
+
+  /** Re-fetch a task that must exist after a same-method write. */
+  private requireTask(taskId: string, method: string): ScrumTask {
+    const updated = this.getTask(taskId);
+    if (!updated) throw new Error(`${method}: task '${taskId}' vanished mid-update`);
+    return updated;
+  }
+
+  // ==========================================================================
+  // Declared bounds (v6)
+  //
+  // The optional milestone-authored authoring source for per-task bounds.
+  // `compile-plan` forwards this into the emitted plan's `tasks[].bounds`;
+  // enforcement (native permissions + worktree wall) happens downstream via
+  // prep-permissions reading the plan, NOT here.
+  // ==========================================================================
+
+  /**
+   * Replace a task's declared bounds. Validates the closed-top-level-key
+   * shape (rejects unknown keys; all sub-fields optional) before the write.
+   * Throws on an unknown task id. Pass `null` to clear (→ unbounded).
+   */
+  setBounds(taskId: string, bounds: TaskBounds | null): ScrumTask {
+    const task = this.getTask(taskId);
+    if (!task) throw new Error(`setBounds: unknown task '${taskId}'`);
+    if (bounds !== null) validateBounds(bounds);
+    // Bump last-touch provenance (v9); no agent flows here, so by = NULL.
+    this.prep(
+      'UPDATE scrum_tasks SET bounds_json = ?, last_modified_by = NULL, last_modified_at = ? WHERE id = ?',
+    ).run(bounds === null ? null : JSON.stringify(bounds), isoNow(), taskId);
+    return this.requireTask(taskId, 'setBounds');
   }
 
   // ==========================================================================
@@ -409,34 +949,49 @@ export class ScrumStore {
       description: input.description ?? null,
       target_state: input.targetState ?? null,
       status: input.status ?? 'planned',
+      initiative: input.initiative ?? null,
       created_at: input.createdAt ?? isoNow(),
       closed_at: null,
     };
     this.prep(
-      'INSERT INTO scrum_milestones (id, title, description, target_state, status, created_at, closed_at) VALUES (?, ?, ?, ?, ?, ?, NULL)',
-    ).run(row.id, row.title, row.description, row.target_state, row.status, row.created_at);
+      'INSERT INTO scrum_milestones (id, title, description, target_state, status, initiative, created_at, closed_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)',
+    ).run(
+      row.id,
+      row.title,
+      row.description,
+      row.target_state,
+      row.status,
+      row.initiative,
+      row.created_at,
+    );
     return row;
   }
 
-  listMilestones(status?: MilestoneStatus): ScrumMilestone[] {
-    if (status === undefined) {
-      return this.db
-        .prepare(
-          'SELECT id, title, description, target_state, status, created_at, closed_at FROM scrum_milestones ORDER BY created_at ASC',
-        )
-        .all() as ScrumMilestone[];
+  /**
+   * List milestones, optionally filtered by `status` and/or `initiative` (the
+   * tier above milestone). The initiative match is case-insensitive, matching
+   * the decision-kind filter style.
+   */
+  listMilestones(status?: MilestoneStatus, initiative?: string): ScrumMilestone[] {
+    const clauses: string[] = [];
+    const params: string[] = [];
+    if (status !== undefined) {
+      clauses.push('status = ?');
+      params.push(status);
     }
-    return this.db
-      .prepare(
-        'SELECT id, title, description, target_state, status, created_at, closed_at FROM scrum_milestones WHERE status = ? ORDER BY created_at ASC',
-      )
-      .all(status) as ScrumMilestone[];
+    if (initiative !== undefined && initiative.length > 0) {
+      clauses.push('lower(initiative) = lower(?)');
+      params.push(initiative);
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+    const sql = `SELECT ${MILESTONE_COLUMNS} FROM scrum_milestones ${where} ORDER BY created_at ASC`;
+    return this.prep(sql).all(...params) as ScrumMilestone[];
   }
 
   getMilestone(id: string): ScrumMilestone | null {
-    const row = this.prep(
-      'SELECT id, title, description, target_state, status, created_at, closed_at FROM scrum_milestones WHERE id = ?',
-    ).get(id) as ScrumMilestone | null;
+    const row = this.prep(`SELECT ${MILESTONE_COLUMNS} FROM scrum_milestones WHERE id = ?`).get(
+      id,
+    ) as ScrumMilestone | null;
     return row ?? null;
   }
 
@@ -501,13 +1056,15 @@ export class ScrumStore {
   }
 
   listTasksForTag(tag: string): ScrumTask[] {
-    return this.prep(
-      `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.created_by_agent, t.created_at, t.last_event_at, t.deleted_at
+    return (
+      this.prep(
+        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.parent_id, t.layer, t.acceptance_json, t.bounds_json, t.terminal_reason, t.terminal_detail, t.created_by_agent, t.created_at, t.last_event_at, t.last_modified_by, t.last_modified_at, t.deleted_at
        FROM scrum_tasks t
        INNER JOIN scrum_tags g ON g.task_id = t.id
        WHERE g.tag = ? AND t.deleted_at IS NULL
        ORDER BY t.created_at ASC`,
-    ).all(tag) as ScrumTask[];
+      ).all(tag) as ScrumTaskRow[]
+    ).map(decodeTask);
   }
 
   // ==========================================================================
@@ -571,6 +1128,13 @@ export class ScrumStore {
   appendEvent(input: AppendEventInput): number {
     if (!this.getTask(input.taskId)) {
       throw new Error(`appendEvent: unknown task '${input.taskId}'`);
+    }
+    // A `blocker_raised` event carries a typed escalation payload. Validate it
+    // at the boundary so a malformed escalation surfaces a domain error here
+    // rather than a silently-untyped row that nextReady/alerts later fail to
+    // rank. Other event kinds carry free-form payloads.
+    if (input.kind === 'blocker_raised') {
+      validateEscalationPayload(input.payload);
     }
     const ts = input.ts ?? isoNow();
     const payload = input.payload === undefined ? null : input.payload;
@@ -717,21 +1281,22 @@ export class ScrumStore {
 
     // Two SQL shapes (with/without milestone filter) — both routed through
     // the prep() cache so the plan is parsed once per process.
-    const candidates = (
+    const candidateRows = (
       options.milestoneId
         ? this.prep(
-            `SELECT id, title, description, status, milestone_id, created_by_agent, created_at, last_event_at, deleted_at
+            `SELECT ${TASK_COLUMNS}
              FROM scrum_tasks
              WHERE deleted_at IS NULL AND status IN ('ready', 'backlog') AND milestone_id = ?
              ORDER BY created_at ASC`,
           ).all(options.milestoneId)
         : this.prep(
-            `SELECT id, title, description, status, milestone_id, created_by_agent, created_at, last_event_at, deleted_at
+            `SELECT ${TASK_COLUMNS}
              FROM scrum_tasks
              WHERE deleted_at IS NULL AND status IN ('ready', 'backlog')
              ORDER BY created_at ASC`,
           ).all()
-    ) as ScrumTask[];
+    ) as ScrumTaskRow[];
+    const candidates = candidateRows.map(decodeTask);
 
     // Snapshot active and closed milestone ids in one pass each — both
     // sets feed `computeMilestoneBoost`. Per-invocation lookup keeps the
@@ -743,6 +1308,11 @@ export class ScrumStore {
     // binds parameters positionally, so we expand placeholders to match the
     // candidate count. Per-invocation only — tags mutate between calls.
     const tagBoostByTask = this.fetchTagBoosts(candidates.map((t) => t.id));
+
+    // Batch the per-candidate latest-escalation lookup. A task
+    // with an open `blocker_raised` escalation auto-bubbles up, weighted by the
+    // escalation's age. Per-invocation only — escalations mutate between calls.
+    const escalationByTask = this.fetchLatestEscalations(candidates.map((t) => t.id));
 
     // Memoize unblock_depth within this invocation. The BFS from task `A`
     // and task `B` can both traverse a shared descendant `C`; caching
@@ -761,7 +1331,10 @@ export class ScrumStore {
       );
       const contextHotness = computeContextHotness(task.last_event_at, nowMs);
       const tagBoost = tagBoostByTask.get(task.id) ?? 0;
-      const score = unblockDepth * 10 + milestoneBoost * 5 + contextHotness * 3 + tagBoost;
+      const escalation = escalationByTask.get(task.id) ?? null;
+      const escalationBoost = computeEscalationBoost(escalation?.ts ?? null, nowMs);
+      const score =
+        unblockDepth * 10 + milestoneBoost * 5 + contextHotness * 3 + tagBoost + escalationBoost;
       return {
         task,
         score,
@@ -770,6 +1343,8 @@ export class ScrumStore {
           milestone_boost: milestoneBoost,
           context_hotness: contextHotness,
           tag_boost: tagBoost,
+          escalation_boost: escalationBoost,
+          escalation_type: escalation?.type ?? null,
         },
       };
     });
@@ -788,10 +1363,28 @@ export class ScrumStore {
 
   /**
    * Upsert a decision row keyed on `id`. On duplicate id the row is
-   * replaced in-place: title/topic/status/content/source_path are
-   * overwritten, `content_sha` is recomputed from the new content, and
-   * `recorded_at` is bumped to now so list order reflects the latest
-   * write. Status defaults to `'accepted'`.
+   * replaced in-place: title/topic/content/source_path are overwritten,
+   * `content_sha` is recomputed from the new content, and `recorded_at` is
+   * bumped to now so list order reflects the latest write. Status defaults
+   * to `'accepted'`.
+   *
+   * Supersession is terminal and has no working-tree-file representation:
+   * `superseded_by`/`reason` are set only via `supersedeDecision`, and a
+   * decision file body never encodes `'superseded'`. So a re-record (a bare
+   * `recordDecision`, `decision record old.md`, or `recover --from-git`)
+   * always carries a current-ish status (`'accepted'` by default; never
+   * `'superseded'`). The conservative "asserts a status change" signal is
+   * therefore: the incoming status is itself `'superseded'`. When an existing
+   * row is `'superseded'` and the incoming record does NOT assert
+   * `'superseded'`, the pointer/reason/status are preserved rather than
+   * clobbered — re-recording the body never silently resurrects a retired
+   * decision. Clearing or re-pointing a supersession stays exclusively
+   * `supersedeDecision`'s job.
+   *
+   * Limitation: because the only signal is the incoming status value, a
+   * re-record can never DRIVE a transition INTO `'superseded'` (the parser
+   * never emits it; supersession carries a pointer the file cannot supply).
+   * `supersedeDecision` remains the sole entry point for retiring a decision.
    *
    * `content_sha` uses node:crypto sha256 — same std-lib primitive every
    * other prove domain uses; no new dependency.
@@ -799,49 +1392,126 @@ export class ScrumStore {
   recordDecision(input: RecordDecisionInput): DecisionRow {
     const recordedAt = isoNow();
     const contentSha = createHash('sha256').update(input.content).digest('hex');
+    // A decision file body never encodes the terminal `'superseded'` status
+    // (it has no representation for the supersession pointer), so any re-record
+    // arrives with a current-ish status. Treat an incoming non-`'superseded'`
+    // status as "asserts no supersession change" — threaded into SQL as a 0/1
+    // flag so the ON CONFLICT branch preserves an existing terminal row.
+    const incomingStatus = input.status ?? 'accepted';
+    const assertsStatus = incomingStatus === 'superseded' ? 1 : 0;
     const row: DecisionRow = {
       id: input.id,
       title: input.title,
       topic: input.topic ?? null,
-      status: input.status ?? 'accepted',
+      status: incomingStatus,
       content: input.content,
       source_path: input.sourcePath ?? null,
       content_sha: contentSha,
       recorded_at: recordedAt,
       recorded_by_agent: input.recordedByAgent ?? null,
+      // A freshly inserted decision is always current; supersession is set
+      // only via `supersedeDecision`. On upsert these are preserved when the
+      // existing row is superseded and the incoming record asserts no status
+      // change (see ON CONFLICT below).
+      superseded_by: null,
+      reason: null,
+      kind: input.kind ?? null,
     };
 
+    // All binds are named ($-prefixed) so the supersession-preserve flag
+    // ($assertsStatus) and every column value survive a future reorder of the
+    // INSERT column list — no positional `?N` to silently misalign.
     this.prep(
-      `INSERT INTO scrum_decisions (id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO scrum_decisions (id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason, kind)
+       VALUES ($id, $title, $topic, $status, $content, $source_path, $content_sha, $recorded_at, $recorded_by_agent, $superseded_by, $reason, $kind)
        ON CONFLICT(id) DO UPDATE SET
          title = excluded.title,
          topic = excluded.topic,
-         status = excluded.status,
          content = excluded.content,
          source_path = excluded.source_path,
          content_sha = excluded.content_sha,
          recorded_at = excluded.recorded_at,
-         recorded_by_agent = excluded.recorded_by_agent`,
-    ).run(
-      row.id,
-      row.title,
-      row.topic,
-      row.status,
-      row.content,
-      row.source_path,
-      row.content_sha,
-      row.recorded_at,
-      row.recorded_by_agent,
-    );
+         recorded_by_agent = excluded.recorded_by_agent,
+         kind = excluded.kind,
+         -- Preserve a terminal supersession across a bare re-record. When the
+         -- existing row is 'superseded' and the incoming record asserts no
+         -- status ($assertsStatus = 0), keep status/superseded_by/reason
+         -- intact; never auto-resurrect. Otherwise adopt the incoming values.
+         status = CASE
+           WHEN scrum_decisions.status = 'superseded' AND $assertsStatus = 0
+             THEN scrum_decisions.status
+           ELSE excluded.status
+         END,
+         superseded_by = CASE
+           WHEN scrum_decisions.status = 'superseded' AND $assertsStatus = 0
+             THEN scrum_decisions.superseded_by
+           ELSE excluded.superseded_by
+         END,
+         reason = CASE
+           WHEN scrum_decisions.status = 'superseded' AND $assertsStatus = 0
+             THEN scrum_decisions.reason
+           ELSE excluded.reason
+         END`,
+    ).run({
+      $id: row.id,
+      $title: row.title,
+      $topic: row.topic,
+      $status: row.status,
+      $content: row.content,
+      $source_path: row.source_path,
+      $content_sha: row.content_sha,
+      $recorded_at: row.recorded_at,
+      $recorded_by_agent: row.recorded_by_agent,
+      $superseded_by: row.superseded_by,
+      $reason: row.reason,
+      $kind: row.kind,
+      $assertsStatus: assertsStatus,
+    });
 
-    return row;
+    // Re-fetch so the returned row reflects any preserved supersession rather
+    // than the in-memory `row` (whose status/superseded_by/reason may have
+    // been overridden by the CASE branches above).
+    const persisted = this.getDecision(row.id);
+    if (!persisted) throw new Error(`recordDecision: row '${row.id}' vanished mid-write`);
+    return persisted;
+  }
+
+  /**
+   * Supersede a decision (append-only). Sets the OLD decision's
+   * `status` to `'superseded'`, points `superseded_by` at `supersededById`,
+   * and records `reason`. Never hard-deletes — the original row stays
+   * auditable, so `listDecisions`/`getDecision` keep returning it.
+   *
+   * Rejects when the decision is missing, the replacement is missing, the
+   * replacement is the decision itself, or the decision is already terminal
+   * (`status` already `'superseded'`). Returns the updated old row.
+   */
+  supersedeDecision(id: string, supersededById: string, reason: string): DecisionRow {
+    const existing = this.getDecision(id);
+    if (!existing) throw new Error(`supersedeDecision: unknown decision '${id}'`);
+    if (existing.status === 'superseded') {
+      throw new Error(`supersedeDecision: decision '${id}' is already superseded`);
+    }
+    if (id === supersededById) {
+      throw new Error(`supersedeDecision: decision '${id}' cannot supersede itself`);
+    }
+    if (!this.getDecision(supersededById)) {
+      throw new Error(`supersedeDecision: unknown replacement decision '${supersededById}'`);
+    }
+
+    this.prep(
+      "UPDATE scrum_decisions SET status = 'superseded', superseded_by = ?, reason = ? WHERE id = ?",
+    ).run(supersededById, reason, id);
+
+    const updated = this.getDecision(id);
+    if (!updated) throw new Error(`supersedeDecision: decision '${id}' vanished mid-update`);
+    return updated;
   }
 
   /** Fetch one decision by id, or null if missing. */
   getDecision(id: string): DecisionRow | null {
     const row = this.prep(
-      'SELECT id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent FROM scrum_decisions WHERE id = ?',
+      'SELECT id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason, kind FROM scrum_decisions WHERE id = ?',
     ).get(id) as DecisionRow | null;
     return row ?? null;
   }
@@ -862,15 +1532,21 @@ export class ScrumStore {
     }
     if (filter.status !== undefined) {
       // Status display casing is authored (e.g., `**Status**: Accepted` from the
-      // ADR body becomes stored as `Accepted`), but operator filters read
-      // naturally in lowercase. Comparison is case-insensitive on both sides
+      // decision-record body becomes stored as `Accepted`), but operator filters
+      // read naturally in lowercase. Comparison is case-insensitive on both sides
       // so `--status accepted` matches rows stored as `Accepted`, `ACCEPTED`,
       // or any other case variant without rewriting existing rows.
       clauses.push('lower(status) = lower(?)');
       params.push(filter.status);
     }
+    if (filter.kind !== undefined) {
+      // Case-insensitive on both sides, matching topic/status — the curation
+      // step may author `adr` in any letter case interchangeably.
+      clauses.push('lower(kind) = lower(?)');
+      params.push(filter.kind);
+    }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-    const sql = `SELECT id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent FROM scrum_decisions ${where} ORDER BY recorded_at DESC`;
+    const sql = `SELECT id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason, kind FROM scrum_decisions ${where} ORDER BY recorded_at DESC`;
     return this.prep(sql).all(...params) as DecisionRow[];
   }
 
@@ -954,6 +1630,66 @@ export class ScrumStore {
   }
 
   /**
+   * Latest `blocker_raised` escalation per task in `taskIds`, as a
+   * `taskId -> { type, ts }` map. Tasks with no escalation (or an untyped
+   * payload) are absent. One IN-query per distinct candidate count, reduced in
+   * JS by overwriting earlier rows with later ones (rows arrive `ts`-ascending,
+   * so the last write per task wins). Per-invocation only — escalations mutate
+   * between calls (mirrors `fetchTagBoosts`).
+   */
+  private fetchLatestEscalations(
+    taskIds: string[],
+  ): Map<string, { type: EscalationType; ts: string }> {
+    const out = new Map<string, { type: EscalationType; ts: string }>();
+    if (taskIds.length === 0) return out;
+    const placeholders = taskIds.map(() => '?').join(', ');
+    const rows = this.prep(
+      `SELECT task_id, ts, payload_json FROM scrum_events WHERE kind = 'blocker_raised' AND task_id IN (${placeholders}) ORDER BY ts ASC, id ASC`,
+    ).all(...taskIds) as Array<{ task_id: string; ts: string; payload_json: string }>;
+    for (const row of rows) {
+      const type = parseEscalationType(row.payload_json);
+      if (type !== null) out.set(row.task_id, { type, ts: row.ts });
+    }
+    return out;
+  }
+
+  /**
+   * Open escalations across all non-terminal, non-deleted tasks — the latest
+   * `blocker_raised` per task, newest-first. Backs the `alerts` stale-escalation
+   * surface: a `done`/`cancelled` task's escalation is resolved and
+   * excluded. `age_days` is computed by the caller against its clock.
+   */
+  listOpenEscalations(): Array<{
+    task_id: string;
+    title: string;
+    escalation_type: EscalationType;
+    ts: string;
+  }> {
+    const rows = this.prep(
+      `SELECT e.task_id AS task_id, e.ts AS ts, e.payload_json AS payload_json, t.title AS title
+       FROM scrum_events e
+       INNER JOIN scrum_tasks t ON t.id = e.task_id
+       WHERE e.kind = 'blocker_raised' AND t.deleted_at IS NULL
+         AND t.status NOT IN ('done', 'cancelled')
+       ORDER BY e.ts ASC, e.id ASC`,
+    ).all() as Array<{ task_id: string; ts: string; payload_json: string; title: string }>;
+    // Reduce to the latest escalation per task (later rows overwrite earlier).
+    const latest = new Map<
+      string,
+      { task_id: string; title: string; type: EscalationType; ts: string }
+    >();
+    for (const row of rows) {
+      const type = parseEscalationType(row.payload_json);
+      if (type !== null) {
+        latest.set(row.task_id, { task_id: row.task_id, title: row.title, type, ts: row.ts });
+      }
+    }
+    return [...latest.values()]
+      .sort((a, b) => b.ts.localeCompare(a.ts))
+      .map((e) => ({ task_id: e.task_id, title: e.title, escalation_type: e.type, ts: e.ts }));
+  }
+
+  /**
    * Lazily-cached prepared statement. Caching by SQL text matches bun's own
    * internal prepared-statement cache semantics and avoids re-parsing on
    * every hot-path call (nextReady walks the graph N times).
@@ -973,6 +1709,124 @@ export class ScrumStore {
 
 function isoNow(): string {
   return new Date().toISOString();
+}
+
+/**
+ * Decode a raw `scrum_tasks` SELECT row into the public `ScrumTask`. The two
+ * transforms are `acceptance_json` (TEXT|NULL) → `acceptance` and `bounds_json`
+ * (TEXT|NULL) → `bounds`; every other column passes through unchanged. NULL
+ * JSON → `null`.
+ *
+ * The JSON columns have no SQL-level guarantee of valid JSON (`validateBounds`/
+ * `validateAcceptance` only run on writes through the store API). `decodeTask`
+ * is on the hot read path of getTask/listTasks/getChildren/listTasksForTag/
+ * nextReady, so a single corrupt row must NOT throw and brick every task read.
+ * `safeParseJson` degrades a poisoned column to `null` (with a stderr warning)
+ * instead — the task still reads, just without its acceptance/bounds.
+ */
+function decodeTask(row: ScrumTaskRow): ScrumTask {
+  const { acceptance_json, bounds_json, ...rest } = row;
+  return {
+    ...rest,
+    acceptance: safeParseJson<Acceptance>(acceptance_json, row.id, 'acceptance_json'),
+    bounds: safeParseJson<TaskBounds>(bounds_json, row.id, 'bounds_json'),
+  };
+}
+
+/**
+ * Parse a nullable JSON column without throwing. NULL → `null`. On a parse
+ * failure, emit a one-line stderr warning naming the task and field, then
+ * return `null` so a single corrupt row cannot crash every task read.
+ */
+function safeParseJson<T>(raw: string | null, taskId: string, field: string): T | null {
+  if (raw === null) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    process.stderr.write(`scrum: task '${taskId}' has corrupt ${field}; treating as null\n`);
+    return null;
+  }
+}
+
+/**
+ * Acceptance freeze guard. While a worker is in-flight on a
+ * task (`status === 'in_progress'`), its acceptance criteria are frozen —
+ * `addCriterion`/`supersedeCriterion` reject so the goalposts cannot move under
+ * a running worker. Every other status is amendable; interrupt the worker
+ * (transition off `in_progress`) before editing criteria. Applies to all
+ * layers, not just stories — any in-flight task's criteria are load-bearing.
+ */
+function assertAcceptanceUnfrozen(task: ScrumTask, method: string): void {
+  if (task.status === 'in_progress') {
+    throw new Error(
+      `${method}: acceptance criteria are frozen while task '${task.id}' is in_progress; interrupt the worker (move it off in_progress) before amending criteria`,
+    );
+  }
+}
+
+/** Closed top-level key set for `TaskBounds`. */
+const BOUNDS_TOP_LEVEL_KEYS = new Set(['read', 'write', 'tools', 'budgets']);
+
+/**
+ * Validate a `TaskBounds` shape on write (createTask / setBounds). Rejects
+ * unknown top-level keys so a typo (`reads`, `tool`) fails loud rather than
+ * landing silently-ignored bounds; every recognized sub-field is optional, so
+ * `{}` and any subset of `{ read, write, tools, budgets }` pass. The contents
+ * of the sub-fields are NOT deeply type-checked — the column is
+ * forward-compatible JSON, and the plan-side run-state schema re-validates the
+ * forwarded shape on load. Mirrors `validateAcceptance`'s write-time guard.
+ */
+function validateBounds(bounds: TaskBounds): void {
+  if (typeof bounds !== 'object' || bounds === null || Array.isArray(bounds)) {
+    throw new Error('bounds must be a JSON object');
+  }
+  const unknown = Object.keys(bounds).filter((k) => !BOUNDS_TOP_LEVEL_KEYS.has(k));
+  if (unknown.length > 0) {
+    throw new Error(
+      `bounds: unknown top-level key(s) '${unknown.join(', ')}'; expected a subset of: read, write, tools, budgets`,
+    );
+  }
+}
+
+/**
+ * Enforce the policy invariant: a `parallel` eval_order or a
+ * `failed_only` rerun_policy is only valid when every criterion is
+ * `idempotent: true`. Non-idempotent criteria cannot be safely re-run or
+ * run concurrently, so the policy is rejected at write time. No policy (the
+ * default sequential / re-run-all behavior) always passes.
+ */
+function validateAcceptance(acceptance: Acceptance): void {
+  const policy = acceptance.policy;
+  if (!policy) return;
+  const needsIdempotent = policy.eval_order === 'parallel' || policy.rerun_policy === 'failed_only';
+  if (!needsIdempotent) return;
+  const offender = acceptance.criteria.find((c) => !c.idempotent);
+  if (offender) {
+    throw new Error(
+      `acceptance policy '${policy.eval_order}/${policy.rerun_policy}' requires every criterion to be idempotent; criterion '${offender.id}' is not`,
+    );
+  }
+}
+
+/**
+ * Fold a parent's children's DERIVED statuses into the parent's rolled-up
+ * status. Precedence (see `derivedStatus`): in_progress > blocked > done >
+ * review > ready > backlog. `done` requires a non-empty non-cancelled quorum
+ * where every non-cancelled child is done, so an all-cancelled subtree rolls
+ * up to backlog rather than done. Invariant: callers only invoke this for a
+ * parent with ≥1 live child.
+ */
+function foldChildStatuses(childStatuses: TaskStatus[]): TaskStatus {
+  const anyOf = (s: TaskStatus): boolean => childStatuses.includes(s);
+  if (anyOf('in_progress')) return 'in_progress';
+  if (anyOf('blocked')) return 'blocked';
+
+  const nonCancelled = childStatuses.filter((s) => s !== 'cancelled');
+  if (nonCancelled.length > 0 && nonCancelled.every((s) => s === 'done')) return 'done';
+
+  if (anyOf('review')) return 'review';
+  if (anyOf('ready')) return 'ready';
+  return 'backlog';
 }
 
 /**
@@ -1047,4 +1901,72 @@ function computeContextHotness(lastEventAt: string | null, nowMs: number): numbe
   if (Number.isNaN(eventMs)) return 0;
   const hours = Math.max(0, (nowMs - eventMs) / (1000 * 60 * 60));
   return Math.exp(-hours / 24);
+}
+
+// ---------------------------------------------------------------------------
+// Structured escalation typing
+// ---------------------------------------------------------------------------
+
+/** Boost cap (days) and per-day weight for the staleness auto-bubble. */
+const ESCALATION_BASE_BOOST = 5;
+const ESCALATION_AGE_CAP_DAYS = 30;
+const ESCALATION_PER_DAY = 0.5;
+
+/**
+ * Validate a `blocker_raised` event payload as a typed `EscalationPayload`.
+ * Requires `escalation_type` in the closed set and a string
+ * `summary`; `blocking_task_id`, when present, must be a string or null.
+ * Throws a domain error on any violation so a malformed escalation fails at
+ * `appendEvent` rather than persisting as an untyped row.
+ */
+function validateEscalationPayload(payload: unknown): asserts payload is EscalationPayload {
+  if (typeof payload !== 'object' || payload === null || Array.isArray(payload)) {
+    throw new Error("appendEvent: 'blocker_raised' payload must be an EscalationPayload object");
+  }
+  const p = payload as Record<string, unknown>;
+  if (!(ESCALATION_TYPES as string[]).includes(p.escalation_type as string)) {
+    throw new Error(
+      `appendEvent: escalation_type must be one of: ${ESCALATION_TYPES.join(', ')} (got '${String(p.escalation_type)}')`,
+    );
+  }
+  if (typeof p.summary !== 'string' || p.summary.length === 0) {
+    throw new Error("appendEvent: escalation payload requires a non-empty 'summary' string");
+  }
+  if (
+    p.blocking_task_id !== undefined &&
+    p.blocking_task_id !== null &&
+    typeof p.blocking_task_id !== 'string'
+  ) {
+    throw new Error("appendEvent: escalation 'blocking_task_id' must be a string or null");
+  }
+}
+
+/**
+ * Extract the `escalation_type` from a stored `blocker_raised` payload JSON,
+ * or null when the JSON is malformed or untyped. Read-path counterpart to
+ * `validateEscalationPayload` — tolerant (never throws) so one bad row cannot
+ * brick `nextReady`/`alerts`.
+ */
+function parseEscalationType(payloadJson: string): EscalationType | null {
+  try {
+    const p = JSON.parse(payloadJson) as Record<string, unknown>;
+    const t = p?.escalation_type;
+    return (ESCALATION_TYPES as string[]).includes(t as string) ? (t as EscalationType) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Staleness auto-bubble boost for an open escalation. Returns 0
+ * when there is no escalation; otherwise a base boost that grows linearly with
+ * the escalation's age, capped at `ESCALATION_AGE_CAP_DAYS`, so an unresolved
+ * escalation ranks progressively higher in `nextReady` the longer it sits.
+ */
+function computeEscalationBoost(escalatedAt: string | null, nowMs: number): number {
+  if (!escalatedAt) return 0;
+  const ms = Date.parse(escalatedAt);
+  if (Number.isNaN(ms)) return ESCALATION_BASE_BOOST;
+  const ageDays = Math.max(0, (nowMs - ms) / (24 * 60 * 60 * 1000));
+  return ESCALATION_BASE_BOOST + Math.min(ageDays, ESCALATION_AGE_CAP_DAYS) * ESCALATION_PER_DAY;
 }

@@ -6,6 +6,153 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.2.0 — Skill validators in `.claude/.prove.json` (config schema v7)
+
+Validators can now invoke an installed **skill** as a gate, alongside the existing `command` and `prompt` kinds.
+
+**New validator field — `skill`**: a validator entry may carry `skill` (e.g. `"claude-skills:comment-audit"`) instead of `command`/`prompt`. The driver session (orchestrator / workflow) invokes the named skill via the Skill tool, scoped to the step diff, and treats its findings as the PASS/FAIL signal — one retry then halt, same as every other validator. A skill that normally edits behind a human gate runs in audit-only mode inside the validation gate (findings only, no auto-apply). The skill must be resolvable by the Skill tool (built-in, `plugin:skill`, or user skill). See `references/validation-config.md` → "Skill Validators".
+
+```jsonc
+"validators": [
+  { "name": "comment-audit", "skill": "claude-skills:comment-audit", "phase": "llm" }
+]
+```
+
+**Migration — config schema v6 → v7**: the `skill` field is additive and optional, so the v6→v7 hop is a pure version stamp — no existing validator is rewritten. Run `/prove:update` (or `claude-prove schema migrate --file .claude/.prove.json`) to bump the stamp; configs without a skill validator are unaffected.
+
+**Auto-adoption**: the field ships in the config schema; `/prove:update` migrates the version stamp. No behavior change unless you add a `skill` validator.
+
+---
+
+## v3.1.0 — Phase-0 mechanical trust floors on the scrum store
+
+Six engine-owned guards that make the already-shipped v3 data model (reasoning log, acceptance criteria, `parent_id` tree, decisions) *trustworthy*. All mechanical — no new skills or subsystems. Decision record: `.prove/decisions/2026-06-01-phase0-trust-floors-store-layer.md`.
+
+**Story-layer transition floors** (`ScrumStore.updateTaskStatus`, store-enforced so the CLI and the reconciler both inherit them):
+- **≥1 acceptance criterion** (onleash §9.1): a `layer=story` task cannot transition to `ready`/`in_progress`/`done` with zero *active* criteria. Non-story layers are exempt.
+- **Synthesis floor** (onleash §10.4/§3.3): a `layer=story` task cannot reach `done` when its most-recent linked run carries no `synthesis` reasoning-log entry. Run-gated — a story with no linked run (manually driven, no worker) is exempt; the orchestrator always links a run.
+
+**AC mid-flight freeze** (onleash §14.13): `task acceptance add|supersede` is rejected while the task is `in_progress` — interrupt the worker (move it off `in_progress`) before amending criteria.
+
+**New CLI — `scrum task cancel <id> [--cascade] [--reason R] [--detail D]`**: cancels a task (or, with `--cascade`, every non-terminal descendant in its `parent_id` subtree) and records terminal provenance. The root carries `terminal_reason` (default `cancelled`); cascade descendants carry `parent_cancelled`. Already-terminal nodes are left untouched but their children are still swept.
+
+**New CLI — `scrum decision review-stale [--days N] [--human]`**: reports decisions whose `recorded_at` is older than `N` days (default 90), oldest-first, excluding superseded rows. **Report-only** (onleash §8.8) — never prunes or mutates.
+
+**Tree-aware `scrum status`**: the JSON payload gains a `task_tree` (the `parent_id` forest, each node carrying its rolled-up `derived_status`), and `--human` renders a nested Task tree section. Flat (parent-less) tasks render as single-node roots — pre-v3 stores are unaffected.
+
+**Migration — scrum store v6→v7** (`scrum_tasks.terminal_reason` + `scrum_tasks.terminal_detail`, both nullable): applied automatically on the next store open (`runMigrations`); no manual step. This is a scrum-store migration, separate from the `.claude/.prove.json` config schema — `CURRENT_SCHEMA_VERSION` is unchanged.
+
+**Auto-adoption**: the new `task cancel`/`decision review-stale` subcommands and the status tree ship in the CLI; the v7 columns migrate on first store open. No config edit required. Run `/prove:update` to sync.
+
+---
+
+## v3.0.0 — onleash methodology on prove machinery: the `decompose` skill + layered task creation
+
+Lands onleash's two structured-agent methodologies (audit §2.2a/b) as a driver skill on top of the foundation shipped over the prior tasks (scrum hierarchy `parent_id`/`layer`, decision supersession, first-class acceptance criteria + the four verification kinds, and the `acb` reasoning log). You are the driver Claude session — prove emits the scrum tree, the criteria, and the reasoning log, and the Agent tool / native `/workflows` does the fan-out; prove never spawns Claude.
+
+**Breaking change.** Major release consolidating the onleash methodology. The bundled schema versions advance: run-state `schema_version` `1`→`3`, prove config `schema_version` →`6`, and scrum store migrations v3–v5 (hierarchy, decision supersession, acceptance criteria). On upgrade, run `/prove:update` to migrate `.claude/.prove.json` and apply `claude-prove store migrate` to the `.prove/prove.db` store.
+
+**New skill — `decompose`** (`skills/decompose/SKILL.md`): two methodologies on prove primitives.
+- **Decompose ladder** (B1): top-down `charter/VISION → epic → story → task`. Per layer, a planning subagent emits a child list via a native structured-output schema (replacing onleash's `*_list.json`), each child is written as a layered scrum task (`backlog` ≈ `proposed`), an `AskUserQuestion` accept gate (or `--auto-accept-through <layer>`) promotes `backlog→ready`, and the ladder recurses. Forced bubble-up on a `discovery` finding is documented for both the in-run (branch to re-plan) and across-session (`scrum task status blocked` + reconciler + `next-ready`) paths.
+- **AC-gated story-close** (B2): reads a story's acceptance criteria from the scrum store (`scrum task acceptance list`, not the compiled plan), dispatches each by `verifies_by` (`bash`→exit 0, `assert`→expression, `gate`→`AskUserQuestion`, `agent`→`prove:validation-agent`), writes a `verification` reasoning-log entry per criterion plus a closing `synthesis` entry (native Write → `acb log append`, one JSON file per entry), assembles the Review Brief via the existing `acb` PR path (the multipass synthesizer is flagged as a `TODO(reasoning-brief):` future task), and then **delegates** worktree/validation/`principal-architect` review/merge to orchestrator full-mode rather than reimplementing it.
+
+The skill embeds the canonical native `/workflows` (Workflow tool) script for each methodology as runnable-shaped `phase()`/`agent({schema})`/`parallel()`/`AskUserQuestion` control flow, referencing only verified `claude-prove` commands.
+
+**New CLI flags — `scrum task create --parent <id> --layer <epic|story|task>`**: the `task create` action now writes layered children into the `parent_id` containment tree and tags the `layer` tier. `--layer` is validated against the closed `epic|story|task` set (exit 1 on a typo); an unknown `--parent` surfaces the store's `unknown parent_id` error as exit 1. These flags are what the decompose ladder uses to write children — the store layer already accepted `parentId`/`layer`; this wires the CLI surface.
+
+**Migration**: none for the schema — the scrum hierarchy/AC/supersession migrations (v3–v5) shipped in the prior tasks; this release is the additive skill + CLI flags on top of them. Ensure your `.prove/prove.db` is migrated (`claude-prove store migrate`) if you are coming from before v3.
+
+**Auto-adoption**: the `decompose` skill is discovered on plugin load after update; the `scrum task create --parent/--layer` flags ship in the CLI. No config edit required. Run `/prove:update` to sync.
+
+### Declared task bounds: `plan.json tasks[].bounds` + prep-permissions consumes it
+
+Lands onleash's per-task `bounds` (audit §6.2) as **declarations enforced by native permissions**, not a daemon wall. Decision record: `.prove/decisions/2026-05-31-declared-bounds-home.md`.
+
+**New plan field — `plan.json tasks[].bounds`** (run-state schema): an optional per-task block beside `worktree`:
+
+```jsonc
+"bounds": {
+  "read":  ["src/auth/**"],
+  "write": ["src/auth/**"],
+  "tools": { "allow": ["Bash(go test *)"], "deny": ["Bash(git push *)"] },
+  "budgets": { "tokens": 200000, "tool_calls": 100, "wall_clock_s": 1800 }  // ADVISORY ONLY
+}
+```
+
+All sub-fields are optional; **absent `bounds` = current behavior** (unbounded). `budgets.*` are **advisory only** — claude-prove has no enforcement daemon; nothing blocks on them.
+
+**Behavior — `prep-permissions` now consumes `tasks[].bounds`** (`skills/prep-permissions/SKILL.md`): `tools.allow`/`tools.deny` merge into native `permissions.allow`/`permissions.deny`; `write[]` is advisory — the git worktree is the write wall (native permission deny rules match a set, not its complement, so no "deny outside X" rule exists); `read[]` and `budgets` render into the task prompt as advisory guidance (no native surface). It emits ONE workspace `settings.local.json` — the **union** of all tasks' rules (known limitation: task A can use task B's tools; per-worktree isolation is deferred). `prep-permissions` is still **operator-invoked** — it is NOT auto-wired into orchestrator/workflow dispatch.
+
+**Migration — run-state schema v1 → v2**: `CURRENT_SCHEMA_VERSION` bumped `'1'` → `'2'`. The hop (`packages/cli/src/topics/run-state/schema-migrate.ts`, `_migrate_v1_to_v2`) is a pure version bump — `bounds` is added as optional, and absent bounds preserves v1 behavior, so no data is rewritten. Existing `plan.json` files keep working unchanged; newly created plans carry `schema_version: "2"`.
+
+**Auto-adoption**: the edited `prep-permissions` skill is picked up on plugin load after update; the new plan field is available to anyone authoring `plan.json` by hand or via `/prove:plan`. No config edit required. Run `/prove:update` to sync.
+
+### Structured plan acceptance criteria: `plan.json tasks[]/steps[].acceptance_criteria` + compile-plan forwards the full criterion
+
+`compile-plan` could previously forward only a criterion's **text** into the plan, dropping the structured shape (`verifies_by`/`check`/`idempotent`/`status`) the scrum store carries — so the orchestrator saw acceptance as opaque strings and could not dispatch a criterion by its verification kind. This lands the structured criterion end-to-end.
+
+**Changed plan field — `plan.json tasks[].acceptance_criteria` and `tasks[].steps[].acceptance_criteria`** (run-state schema): list items changed from bare strings to a structured criterion dict mirroring scrum's `AcceptanceCriterion`:
+
+```jsonc
+"acceptance_criteria": [
+  { "id": "c1", "text": "builds clean", "verifies_by": "bash", "check": "bun run build", "status": "active", "idempotent": true },
+  { "text": "criteria authored by hand only need text" }
+]
+```
+
+Only `text` is required; everything else is optional, so a bare `{ "text": "..." }` is valid and hand-authored/text-only plans keep working. `verifies_by` is the closed set `bash|assert|gate|agent`; `status` is `active|superseded`. **PRD `acceptance_criteria` are unchanged** — they remain a flat `string[]`; this only restructures the plan-task/step lists.
+
+**Behavior — `scrum compile-plan` now forwards the full criterion**: it emits `id/text/verifies_by/check/status/idempotent` per active criterion (scrum bookkeeping fields `superseded_by`/`reason`/`inherited_from` and the task-level `policy` are not forwarded). Superseded criteria are skipped. The orchestrator task/review prompt renderers now render `text` annotated as `text (verifies_by: check)` when a verification kind is present, and tolerate a legacy v2 string (an unmigrated `plan.json`) by rendering it as its own text.
+
+**Migration — run-state schema v2 → v3**: `CURRENT_SCHEMA_VERSION` bumped `'2'` → `'3'`. The hop (`packages/cli/src/topics/run-state/schema-migrate.ts`, `_migrate_v2_to_v3`) rewrites each plan-task/step `acceptance_criteria` **string** into `{ "text": <string> }` — no data loss, no injected fields; already-structured items pass through (idempotent on v3 data). For `prd`/`state`/`report` artifacts (no plan-task acceptance) it is a pure version bump. A v2 plan with string criteria migrates cleanly to v3, and the run-state validator does not enforce `schema_version` equality, so unmigrated v2 plans keep validating. Run `claude-prove run-state migrate` to advance on-disk artifacts.
+
+**Auto-adoption**: the schema, migrator, and `compile-plan` change ship in the CLI; the edited orchestrator prompt renderers are picked up on plugin load. No config edit required. Run `/prove:update` to sync.
+
+### Scrum `bounds_json` authoring column: `task create --bounds` / `task bounds` + compile-plan forwarding
+
+The deferred scrum half of declared bounds (decision `.prove/decisions/2026-05-31-declared-bounds-home.md` §2). A scrum task can now carry **declared bounds** so a milestone-authored bound survives `compile-plan` into the plan's `tasks[].bounds` instead of being re-authored every run. Mirrors how acceptance criteria flow.
+
+**New scrum column — `scrum_tasks.bounds_json`** (nullable JSON, matches the `acceptance_json` precedent): decoded to `ScrumTask.bounds` at the row boundary. The shape mirrors the run-state v3 plan-side `tasks[].bounds`:
+
+```jsonc
+"bounds": {
+  "read":  ["src/auth/**"],
+  "write": ["src/auth/**"],
+  "tools": { "allow": ["Bash(go test *)"], "deny": ["Bash(git push *)"] },
+  "budgets": { "tokens": 200000, "tool_calls": 100, "wall_clock_s": 1800 }
+}
+```
+
+All top-level keys (`read | write | tools | budgets`) are optional; **NULL column = no authored bounds (absent = unbounded)**, the pre-migration behavior. Write-time validation rejects unknown top-level keys (a typo like `reads` fails loud); sub-field contents are not deeply type-checked (forward-compatible JSON; the run-state plan schema re-validates the forwarded shape). Enforcement is unchanged from the §2 decision: **`tools` is the only native surface** (allow/deny merge into `settings.local.json` permissions via `prep-permissions`); `read`/`write`/`budgets` are **advisory** — the git worktree is the write wall, and there is **no native deny-outside (`Edit(!glob)`) rule**. Bounds are never inherited from a parent task.
+
+**New CLI surface** (`claude-prove scrum task`):
+
+- `task create --title X --bounds '<json>'` — author bounds at create time.
+- `task bounds set <id> --bounds '<json>'` — set/replace bounds; pass `--bounds ''` to clear (→ unbounded).
+- `task bounds show <id>` — print the task's bounds object (or `null`).
+
+`--bounds` takes a single JSON blob (bounds is a nested dict — no per-field flag explosion). Malformed JSON or an unknown top-level key exits 1.
+
+**Behavior — `scrum compile-plan` now forwards `bounds`**: each scrum task's `bounds` is emitted verbatim into the corresponding `plan.tasks[].bounds` (the run-state v3 plan supports it). A task with no bounds emits **no `bounds` key** (absent = unbounded) — null-bounds tasks never crash compilation.
+
+**Migration — scrum store schema v5 → v6**: a new scrum domain migration appends `ALTER TABLE scrum_tasks ADD COLUMN bounds_json TEXT;`. Append-only — v1–v5 migrations are untouched; the column defaults NULL on every existing row, so no data is rewritten. The unified store migrates on next open (any `claude-prove scrum …` command, or `claude-prove store migrate`). No manual step.
+
+**Auto-adoption**: the column, CLI flags, and `compile-plan` forwarding ship in the CLI; the store self-migrates on next open. No config edit required. Run `/prove:update` to sync.
+
+### Tool toggles now gate hooks: `tools.<name>.enabled:false` omits the install block + the acb hook self-gates
+
+`tools.<name>.enabled` in `.claude/.prove.json` was **inert** for hooks — `writeSettingsHooks` emitted every canonical block regardless of the flag, and the `acb` post-commit hook fired regardless. The only way to disable a tool's hook was hand-editing `.claude/settings.json` out from under the emitter (which then drifts from the canonical shape). This wires the flag to the hook surface so a disabled tool means no hook. Surfaced by a steward audit (the flag looked like a switch but mapped to no mechanism).
+
+**Behavior — `install init` / `install init-hooks` honor `tools.<name>.enabled`**: `writeSettingsHooks` gained a `disabledTools` option (`packages/installer/src/write-settings-hooks.ts`). A tool with `enabled:false` has its prove-owned hook block omitted on a fresh write and **removed** if already present (the event key is dropped only when no user-authored block remains). `init`/`init-hooks` read the disabled set from `.claude/.prove.json` via `disabledToolsFromConfig` (`packages/cli/src/topics/install/disabled-tools.ts`); a missing or malformed config yields an empty set — every tool stays enabled, so a broken config never silently strips hooks. **Absent flag / `enabled:true` = unchanged** (block installed), so existing installs and the byte-shape parity fixture are unaffected.
+
+**Behavior — the `acb` post-commit hook self-gates**: `runHookPostCommit` returns silent when `tools.acb.enabled:false` (read after the commit-detection filters, so the config is touched only on real commits). Defense in depth — a `settings.json` staged while acb was enabled stops firing without a re-install. Default-on preserved: an absent or unreadable flag = enabled.
+
+**Migration**: none — no schema change. To drop a now-disabled tool's hook block from an existing `.claude/settings.json`, re-run `claude-prove install init-hooks` (or `/prove:update`); the acb runtime gate takes effect immediately, no re-install needed.
+
+**Auto-adoption**: the installer + hook changes ship in the CLI. After setting a tool `enabled:false`, re-run `claude-prove install init-hooks` to remove its block; the acb self-gate is automatic. Run `/prove:update` to sync.
+
+---
+
 ## v2.8.0 — New `/prove:workflow` command: run a whole milestone (or plan.json) as a parallel fan-out
 
 Adds the `/prove:workflow` command + skill. Point it at a **scrum milestone id** or a **`plan.json`** and it runs the dependency graph as one fan-out execution: it compiles the milestone's tasks + `blocked_by` edges into a `plan.json`, runs the tasks in parallel waves through the orchestrator's existing full-mode machinery (worktrees, validators, `principal-architect` review, sequential merge), and mirrors each task's status back to the scrum store (`task status done|blocked` + `link-run`).

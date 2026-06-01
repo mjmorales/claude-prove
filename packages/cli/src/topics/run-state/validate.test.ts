@@ -22,7 +22,7 @@ describe('validateData', () => {
     const r = validateData({}, 'plan');
     expect(r.ok).toBe(false);
     expect(r.kind).toBe('plan');
-    expect(r.version).toBe('1');
+    expect(r.version).toBe('3');
     expect(r.errors).toEqual([
       '  ERROR: schema_version: required field is missing',
       '  ERROR: kind: required field is missing',
@@ -73,7 +73,7 @@ describe('validateData', () => {
       },
       'state',
     );
-    expect(r).toEqual({ ok: true, kind: 'state', version: '1', errors: [] });
+    expect(r).toEqual({ ok: true, kind: 'state', version: '3', errors: [] });
   });
 
   test('unknown kind returns structured error', () => {

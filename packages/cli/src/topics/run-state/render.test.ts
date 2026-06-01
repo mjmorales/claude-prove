@@ -94,6 +94,37 @@ describe('renderPlan', () => {
     expect(out).toBe('# Task Plan (simple mode)\n');
   });
 
+  test('markdown: renders v3 structured criteria + tolerates a legacy string', () => {
+    const plan = {
+      schema_version: '3',
+      kind: 'plan',
+      mode: 'simple',
+      tasks: [
+        {
+          id: '1.1',
+          title: 'Mixed',
+          wave: 1,
+          deps: [],
+          description: '',
+          acceptance_criteria: [
+            { text: 'builds clean', verifies_by: 'bash', check: 'bun run build' },
+            { text: 'no annotation when verifies_by absent' },
+            'legacy string criterion',
+          ],
+          worktree: { path: '', branch: '' },
+          steps: [],
+        },
+      ],
+    } as unknown as PlanData;
+    const out = renderPlan(plan);
+    // Structured criterion with a verification kind gets the (kind: check) annotation.
+    expect(out).toContain('- builds clean (bash: bun run build)');
+    // A bare { text } renders as just the text.
+    expect(out).toContain('- no annotation when verifies_by absent');
+    // A legacy v2 string (unmigrated plan.json) renders as its own text.
+    expect(out).toContain('- legacy string criterion');
+  });
+
   test('json: matches byte-for-byte pretty dump', () => {
     const plan = loadCase<PlanData>('plan_multi_wave.json');
     const out = renderPlan(plan, { format: 'json' });

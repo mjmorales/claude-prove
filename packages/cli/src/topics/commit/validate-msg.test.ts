@@ -1,9 +1,8 @@
 /**
- * Parity tests for the `claude-prove commit validate-msg` port.
+ * Tests for the `claude-prove commit validate-msg` topic.
  *
  * Each case writes a commit-message file into a temp dir that also carries
- * a synthetic `.claude/.prove.json`, then asserts the exit code matches the
- * Python source's behavior (scripts/validate_commit_msg.py).
+ * a synthetic `.claude/.prove.json`, then asserts the exit code.
  *
  * Scopes fixture mirrors the real repo (.claude/.prove.json `scopes`):
  *   agents, cache, commands, packages, references, skills, scripts
@@ -48,7 +47,7 @@ function writeMsg(body: string): string {
   return path;
 }
 
-describe('constants match Python source', () => {
+describe('canonical conventional-commits constants', () => {
   test('TYPES is the canonical conventional-commits 11-set', () => {
     expect([...TYPES].sort()).toEqual([
       'build',
@@ -183,5 +182,13 @@ describe('runValidateMsgCmd — invalid messages', () => {
   test('empty description: `feat: `', () => {
     // `(?<description>.+)` requires at least one char after `: `.
     expect(runValidateMsgCmd(writeMsg('feat: '), rootDir)).toBe(1);
+  });
+
+  test('missing/unreadable commit-msg file ⇒ exit 1, no throw', () => {
+    // Public CLI entrypoint: a mistyped path must return 1, not crash with an
+    // uncaught ENOENT (the docstring guarantees 0/1 exit codes).
+    const missing = join(rootDir, 'does-not-exist', 'MSG');
+    expect(() => runValidateMsgCmd(missing, rootDir)).not.toThrow();
+    expect(runValidateMsgCmd(missing, rootDir)).toBe(1);
   });
 });

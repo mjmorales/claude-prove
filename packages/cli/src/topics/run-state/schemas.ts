@@ -14,7 +14,24 @@ import type { FieldSpec, Schema } from './validator-engine';
 
 // --- constants (mirrors tools/run_state/__init__.py and schemas.py top) ---
 
-export const CURRENT_SCHEMA_VERSION = '1';
+// v1 -> v2: plan.json tasks[] gained an optional `bounds` field (declared
+// per-task execution bounds). Absent bounds = unbounded, so the migration is
+// a pure version bump.
+//
+// v2 -> v3: plan.json tasks[]/steps[] `acceptance_criteria` items changed from
+// bare strings to a structured criterion dict mirroring scrum's
+// AcceptanceCriterion (text required; verifies_by/check/idempotent/status/...
+// optional). A bare `{ text }` is valid, so text-only forwarding still works;
+// the migration rewrites each legacy string into `{ text: <string> }`.
+export const CURRENT_SCHEMA_VERSION = '3';
+
+// Verification mechanism for a structured acceptance criterion. Mirrors
+// `AcceptanceVerifiesBy` in topics/scrum/types.ts — keep the two in sync.
+export const ACCEPTANCE_VERIFIES_BY = ['bash', 'assert', 'gate', 'agent'] as const;
+
+// Lifecycle of a single criterion. Mirrors `AcceptanceCriterionStatus` in
+// topics/scrum/types.ts.
+export const ACCEPTANCE_CRITERION_STATUSES = ['active', 'superseded'] as const;
 
 export const STEP_STATUSES = [
   'pending',
@@ -116,6 +133,55 @@ export const PRD_SCHEMA: Schema = {
 
 // --- plan.json ---
 
+// One structured acceptance criterion on a plan task/step. Mirrors scrum's
+// `AcceptanceCriterion` (topics/scrum/types.ts), but only `text` is
+// required here: `compile-plan` forwards the full scrum shape, while a
+// hand-authored or migrated plan may carry a bare `{ text }`. The extra scrum
+// fields (verifies_by/check/idempotent/status/...) are optional so a v2 plan
+// migrated to v3 (string -> `{ text }`) validates without injection.
+const ACCEPTANCE_CRITERION_SPEC: FieldSpec = {
+  type: 'dict',
+  fields: {
+    id: {
+      type: 'str',
+      required: false,
+      description: 'Stable criterion id (from the source scrum criterion)',
+      default: '',
+    },
+    text: {
+      type: 'str',
+      required: true,
+      description: 'Human-readable statement of what must hold',
+    },
+    verifies_by: {
+      type: 'str',
+      required: false,
+      enum: ACCEPTANCE_VERIFIES_BY,
+      description:
+        'How the criterion is verified: bash (shell command), assert (boolean expr), gate (operator prompt), agent (validation-agent prompt)',
+    },
+    check: {
+      type: 'str',
+      required: false,
+      description: 'Kind-specific check payload (command / expression / prompt)',
+      default: '',
+    },
+    status: {
+      type: 'str',
+      required: false,
+      enum: ACCEPTANCE_CRITERION_STATUSES,
+      description: 'Criterion lifecycle; compile-plan drops superseded criteria',
+      default: 'active',
+    },
+    idempotent: {
+      type: 'bool',
+      required: false,
+      description: 'Safe to re-run without side effects (gates parallel/failed-only eval)',
+      default: false,
+    },
+  },
+};
+
 const STEP_PLAN_SPEC: FieldSpec = {
   type: 'dict',
   fields: {
@@ -137,9 +203,9 @@ const STEP_PLAN_SPEC: FieldSpec = {
     },
     acceptance_criteria: {
       type: 'list',
-      items: { type: 'str' },
+      items: ACCEPTANCE_CRITERION_SPEC,
       required: false,
-      description: 'Criteria this step must satisfy before completion',
+      description: 'Structured criteria this step must satisfy before completion',
       default: [],
     },
   },
@@ -178,9 +244,9 @@ const TASK_PLAN_SPEC: FieldSpec = {
     },
     acceptance_criteria: {
       type: 'list',
-      items: { type: 'str' },
+      items: ACCEPTANCE_CRITERION_SPEC,
       required: false,
-      description: 'Criteria the task must satisfy before review',
+      description: 'Structured criteria the task must satisfy before review',
       default: [],
     },
     worktree: {
@@ -201,6 +267,77 @@ const TASK_PLAN_SPEC: FieldSpec = {
         },
       },
       description: 'Worktree assignment (full-mode parallel orchestration)',
+    },
+    bounds: {
+      type: 'dict',
+      required: false,
+      fields: {
+        read: {
+          type: 'list',
+          items: { type: 'str' },
+          required: false,
+          description:
+            'Path globs this task may read (advisory — rendered into the task prompt by prep-permissions; no native read-deny surface exists)',
+          default: [],
+        },
+        write: {
+          type: 'list',
+          items: { type: 'str' },
+          required: false,
+          description:
+            'Path globs this task may write (advisory — the git worktree is the write wall; rendered into the task prompt by prep-permissions). Native permission deny rules match a set, not its complement, so no Edit/Write rule can express "writable only inside X"; a hard native wall would need a PreToolUse hook',
+          default: [],
+        },
+        tools: {
+          type: 'dict',
+          required: false,
+          fields: {
+            allow: {
+              type: 'list',
+              items: { type: 'str' },
+              required: false,
+              description:
+                'Native permission patterns (e.g., "Bash(go test *)") merged into permissions.allow by prep-permissions',
+              default: [],
+            },
+            deny: {
+              type: 'list',
+              items: { type: 'str' },
+              required: false,
+              description:
+                'Native permission patterns (e.g., "Bash(git push *)") merged into permissions.deny by prep-permissions',
+              default: [],
+            },
+          },
+          description: 'Tool allow/deny patterns merged into native permissions',
+        },
+        budgets: {
+          type: 'dict',
+          required: false,
+          fields: {
+            tokens: {
+              type: 'int',
+              required: false,
+              description: 'Soft token ceiling (ADVISORY ONLY — no daemon enforces it)',
+            },
+            tool_calls: {
+              type: 'int',
+              required: false,
+              description: 'Soft tool-call ceiling (ADVISORY ONLY — no daemon enforces it)',
+            },
+            wall_clock_s: {
+              type: 'int',
+              required: false,
+              description:
+                'Soft wall-clock ceiling in seconds (ADVISORY ONLY — the native subagent timeout is the only hard floor)',
+            },
+          },
+          description:
+            'Soft resource ceilings. ADVISORY ONLY — claude-prove has no enforcement daemon; prep-permissions renders these into the task prompt as guidance, nothing blocks on them',
+        },
+      },
+      description:
+        'Declared per-task execution bounds, consumed by prep-permissions. All sub-fields optional; absent = unbounded. tools map to native settings.local.json permission rules; write/read/budgets are advisory prompt-only (the worktree is the write wall).',
     },
     steps: {
       type: 'list',

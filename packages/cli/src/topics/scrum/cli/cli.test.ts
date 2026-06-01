@@ -15,10 +15,11 @@
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { appendEntry } from '../../acb/reasoning-log-store';
 import { runAlertsCmd } from './alerts-cmd';
 import { parseDecisionFile, runDecisionCmd } from './decision-cmd';
 import { runHookCmd } from './hook-cmd';
@@ -112,6 +113,32 @@ describe('runInitCmd', () => {
     expect(payload.seeded).toBe(false);
     expect(payload.reason).toBe('already-seeded');
   });
+
+  test('a mid-import id collision rolls back the seed and leaves planning/ intact', () => {
+    // Pre-create milestone `alpha` (matching the id the ROADMAP importer will
+    // derive from `## Milestone: Alpha`). hasExistingTasks checks tasks only, so
+    // the importer still runs, then its createMilestone({id:'alpha'}) throws a
+    // UNIQUE conflict mid-import.
+    withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], { title: 'Alpha', id: 'alpha' }),
+    );
+
+    mkdirSync(join(workspace, 'planning'), { recursive: true });
+    const roadmapPath = join(workspace, 'planning', 'ROADMAP.md');
+    writeFileSync(roadmapPath, ['## Milestone: Alpha', '- a real task', ''].join('\n'), 'utf8');
+
+    expect(() => runInitCmd({ workspaceRoot: workspace })).toThrow();
+
+    // The whole seed rolled back: no tasks landed, so the next invocation is
+    // not wedged on already-seeded — the import stays retryable.
+    const list = withCapture(() => runTaskCmd('list', [undefined, undefined], {}));
+    const rows = JSON.parse(list.stdout.trim()) as Array<{ id: string }>;
+    expect(rows).toHaveLength(0);
+
+    // cleanupLegacyFiles ran OUTSIDE the transaction (after a commit that never
+    // happened), so the planning file survives for the retry.
+    expect(existsSync(roadmapPath)).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -154,6 +181,164 @@ describe('runStatusCmd', () => {
     expect(payload.milestones).toHaveLength(1);
     expect(res.stderr).toContain('1/2 active milestones');
   });
+
+  test('task_tree nests children under parents with a rolled-up derived_status', () => {
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'Epic', id: 'epic', layer: 'epic' }),
+    );
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], {
+        title: 'Leaf',
+        id: 'leaf',
+        parent: 'epic',
+        layer: 'task',
+      }),
+    );
+    withCapture(() => runTaskCmd('status', ['leaf', 'ready'], {}));
+    withCapture(() => runTaskCmd('status', ['leaf', 'in_progress'], {}));
+
+    const res = withCapture(() => runStatusCmd({}));
+    const payload = JSON.parse(res.stdout.trim()) as {
+      task_tree: Array<{ id: string; derived_status: string; children: Array<{ id: string }> }>;
+    };
+    const epic = payload.task_tree.find((n) => n.id === 'epic');
+    expect(epic?.children.map((c) => c.id)).toEqual(['leaf']);
+    // Epic is authored backlog but rolls up to in_progress from its leaf.
+    expect(epic?.derived_status).toBe('in_progress');
+    // A flat task is not duplicated as a child anywhere.
+    expect(payload.task_tree.some((n) => n.id === 'leaf')).toBe(false);
+  });
+
+  test('--human renders the Task tree section', () => {
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'Epic', id: 'epic', layer: 'epic' }),
+    );
+    const res = withCapture(() => runStatusCmd({ human: true }));
+    expect(res.stdout).toContain('Task tree');
+    expect(res.stdout).toContain('epic: epic');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// milestone-cmd — close fires the curation trigger (1.2b)
+// ---------------------------------------------------------------------------
+
+describe('runMilestoneCmd close → curation trigger', () => {
+  /** Seed milestone + task + a linked run carrying one `hack` finding. */
+  function seedTaskWithFinding(milestoneId: string, taskId: string): void {
+    withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], {
+        title: `Milestone ${milestoneId}`,
+        id: milestoneId,
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], {
+        title: `Task ${taskId}`,
+        id: taskId,
+        milestone: milestoneId,
+      }),
+    );
+    const runRel = join('.prove', 'runs', 'feat', taskId);
+    withCapture(() => runLinkRunCmd(taskId, runRel, { workspaceRoot: workspace }));
+    appendEntry(join(workspace, runRel), {
+      id: 'h1',
+      ts: '2026-06-01T10:00:00Z',
+      type: 'hack',
+      agent: 'engineer',
+      run_path: runRel,
+      body: 'temporary shim',
+      file_refs: ['x.ts'],
+      cleanup_condition: 'when upstream lands',
+    });
+  }
+
+  test('emits a curation note for a task carrying findings', () => {
+    seedTaskWithFinding('mc1', 'cur-1');
+    const res = withCapture(() =>
+      runMilestoneCmd('close', ['mc1', undefined], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+    expect(res.stderr).toContain('curation: 1 task(s) proposed');
+  });
+
+  test('re-closing an already-closed milestone does not re-fire curation', () => {
+    seedTaskWithFinding('mc2', 'cur-2');
+    withCapture(() => runMilestoneCmd('close', ['mc2', undefined], { workspaceRoot: workspace }));
+    const second = withCapture(() =>
+      runMilestoneCmd('close', ['mc2', undefined], { workspaceRoot: workspace }),
+    );
+    expect(second.exit).toBe(0);
+    expect(second.stderr).not.toContain('curation:');
+  });
+
+  test('reports zero proposals when no task carries findings', () => {
+    withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], {
+        title: 'M',
+        id: 'mc3',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'cur-3', milestone: 'mc3' }),
+    );
+    const res = withCapture(() =>
+      runMilestoneCmd('close', ['mc3', undefined], { workspaceRoot: workspace }),
+    );
+    expect(res.stderr).toContain('curation: 0 task(s) proposed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// milestone-cmd — initiative grouping (the tier above milestone)
+// ---------------------------------------------------------------------------
+
+describe('runMilestoneCmd initiative grouping', () => {
+  test('create --initiative persists the grouping label', () => {
+    const res = withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], {
+        title: 'M',
+        id: 'm1',
+        initiative: 'q3-growth',
+      }),
+    );
+    expect(res.exit).toBe(0);
+    expect((JSON.parse(res.stdout.trim()) as { initiative: string | null }).initiative).toBe(
+      'q3-growth',
+    );
+  });
+
+  test('list --initiative filters to the matching initiative', () => {
+    withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], {
+        title: 'A',
+        id: 'ma',
+        initiative: 'bet1',
+      }),
+    );
+    withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], {
+        title: 'B',
+        id: 'mb',
+        initiative: 'bet1',
+      }),
+    );
+    withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], {
+        title: 'C',
+        id: 'mc',
+        initiative: 'bet2',
+      }),
+    );
+
+    const res = withCapture(() =>
+      runMilestoneCmd('list', [undefined, undefined], { initiative: 'bet1' }),
+    );
+    const ids = (JSON.parse(res.stdout.trim()) as Array<{ id: string }>).map((m) => m.id).sort();
+    expect(ids).toEqual(['ma', 'mb']);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -181,6 +366,34 @@ describe('runNextReadyCmd', () => {
     const rows = JSON.parse(res.stdout.trim()) as unknown[];
     expect(rows.length).toBeLessThanOrEqual(2);
   });
+
+  test('rationale surfaces escalation_boost + escalation_type for an open escalation', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'E', id: 'e' }));
+    withCapture(() => runTaskCmd('status', ['e', 'ready'], {}));
+    // biome-ignore lint/suspicious/noExplicitAny: test-only store reach-in to seed an escalation event.
+    const { openScrumStore } = require('../store') as any;
+    const s = openScrumStore({ override: join(workspace, '.prove', 'prove.db') });
+    try {
+      s.appendEvent({
+        taskId: 'e',
+        kind: 'blocker_raised',
+        payload: { escalation_type: 'ambiguous', summary: 'spec unclear' },
+      });
+    } finally {
+      s.close();
+    }
+    const json = withCapture(() => runNextReadyCmd({ workspaceRoot: workspace }));
+    const rows = JSON.parse(json.stdout.trim()) as Array<{
+      task: { id: string };
+      rationale: { escalation_boost: number; escalation_type: string | null };
+    }>;
+    const row = rows.find((r) => r.task.id === 'e');
+    expect(row?.rationale.escalation_boost).toBeGreaterThan(0);
+    expect(row?.rationale.escalation_type).toBe('ambiguous');
+
+    const human = withCapture(() => runNextReadyCmd({ workspaceRoot: workspace, human: true }));
+    expect(human.stdout).toContain('escalation=');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -206,6 +419,51 @@ describe('runTaskCmd', () => {
     expect(s.exit).toBe(0);
     const shown = JSON.parse(s.stdout.trim());
     expect(shown.task.id).toBe('hi');
+  });
+
+  test('create --parent --layer: persists the containment tree', () => {
+    const epic = withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], {
+        title: 'Auth epic',
+        id: 'epic-1',
+        layer: 'epic',
+      }),
+    );
+    expect(epic.exit).toBe(0);
+    expect(JSON.parse(epic.stdout.trim()).layer).toBe('epic');
+
+    const story = withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], {
+        title: 'Login story',
+        id: 'story-1',
+        parent: 'epic-1',
+        layer: 'story',
+      }),
+    );
+    expect(story.exit).toBe(0);
+    const row = JSON.parse(story.stdout.trim());
+    expect(row.parent_id).toBe('epic-1');
+    expect(row.layer).toBe('story');
+  });
+
+  test('create --layer: rejects an off-vocabulary tier with exit 1', () => {
+    const res = withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'X', id: 'x-bad', layer: 'sprint' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("invalid --layer 'sprint'");
+  });
+
+  test('create --parent: unknown parent surfaces the store error as exit 1', () => {
+    const res = withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], {
+        title: 'Orphan',
+        id: 'orphan-1',
+        parent: 'nonexistent',
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown parent_id 'nonexistent'");
   });
 
   test('unknown action: exit 1', () => {
@@ -279,6 +537,58 @@ describe('runTaskCmd', () => {
     const res = withCapture(() => runTaskCmd('delete', [undefined, undefined], {}));
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('<id> positional argument required');
+  });
+
+  // -------------------------------------------------------------------------
+  // cancel action (v7)
+  // -------------------------------------------------------------------------
+
+  test('cancel: single task records terminal provenance', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'C', id: 'c' }));
+    const res = withCapture(() =>
+      runTaskCmd('cancel', ['c', undefined], { reason: 'descoped', detail: 'cut from v1' }),
+    );
+    expect(res.exit).toBe(0);
+    const task = JSON.parse(res.stdout.trim()) as {
+      status: string;
+      terminal_reason: string;
+      terminal_detail: string;
+    };
+    expect(task.status).toBe('cancelled');
+    expect(task.terminal_reason).toBe('descoped');
+    expect(task.terminal_detail).toBe('cut from v1');
+  });
+
+  test('cancel --cascade cancels the subtree and reports the ids', () => {
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'E', id: 'e', layer: 'epic' }),
+    );
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], {
+        title: 'S',
+        id: 's',
+        parent: 'e',
+        layer: 'story',
+      }),
+    );
+    const res = withCapture(() => runTaskCmd('cancel', ['e', undefined], { cascade: true }));
+    expect(res.exit).toBe(0);
+    const out = JSON.parse(res.stdout.trim()) as { cancelled: string[] };
+    expect(out.cancelled.sort()).toEqual(['e', 's']);
+  });
+
+  test('cancel: missing <id> exits 1 with a usage hint', () => {
+    const res = withCapture(() => runTaskCmd('cancel', [undefined, undefined], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('<id> positional argument required');
+  });
+
+  test('cancel: already-terminal task surfaces the store error as exit 1', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'C2', id: 'c2' }));
+    withCapture(() => runTaskCmd('cancel', ['c2', undefined], {}));
+    const res = withCapture(() => runTaskCmd('cancel', ['c2', undefined], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('already terminal');
   });
 
   // -------------------------------------------------------------------------
@@ -506,6 +816,180 @@ describe('runTaskCmd', () => {
 });
 
 // ---------------------------------------------------------------------------
+// task acceptance (v5) — positional = [sub-action, task-id]
+// ---------------------------------------------------------------------------
+
+describe('runTaskCmd acceptance', () => {
+  function seedAcTask(id = 'at') {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: id, id }));
+  }
+
+  test('add + list round-trip', () => {
+    seedAcTask();
+    const add = withCapture(() =>
+      runTaskCmd('acceptance', ['add', 'at'], {
+        text: 'builds clean',
+        verifiesBy: 'bash',
+        check: 'bun run build',
+        idempotent: true,
+        criterion: 'c1',
+      }),
+    );
+    expect(add.exit).toBe(0);
+
+    const list = withCapture(() => runTaskCmd('acceptance', ['list', 'at'], {}));
+    expect(list.exit).toBe(0);
+    const criteria = JSON.parse(list.stdout.trim()) as Array<{ id: string; idempotent: boolean }>;
+    expect(criteria.map((c) => c.id)).toEqual(['c1']);
+    expect(criteria[0]?.idempotent).toBe(true);
+  });
+
+  test('add rejects an invalid --verifies-by', () => {
+    seedAcTask();
+    const res = withCapture(() =>
+      runTaskCmd('acceptance', ['add', 'at'], { text: 't', verifiesBy: 'bogus', check: 'x' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--verifies-by must be one of');
+  });
+
+  test('add requires --text and --check', () => {
+    seedAcTask();
+    const noText = withCapture(() =>
+      runTaskCmd('acceptance', ['add', 'at'], { verifiesBy: 'bash', check: 'x' }),
+    );
+    expect(noText.exit).toBe(1);
+    expect(noText.stderr).toContain('--text is required');
+  });
+
+  test('supersede flips status, retains the criterion (append-only)', () => {
+    seedAcTask();
+    withCapture(() =>
+      runTaskCmd('acceptance', ['add', 'at'], {
+        text: 'old',
+        verifiesBy: 'bash',
+        check: 'x',
+        criterion: 'c1',
+      }),
+    );
+    const res = withCapture(() =>
+      runTaskCmd('acceptance', ['supersede', 'at'], { criterion: 'c1', reason: 'replaced' }),
+    );
+    expect(res.exit).toBe(0);
+
+    const list = withCapture(() => runTaskCmd('acceptance', ['list', 'at'], {}));
+    const criteria = JSON.parse(list.stdout.trim()) as Array<{ id: string; status: string }>;
+    expect(criteria).toHaveLength(1);
+    expect(criteria[0]?.status).toBe('superseded');
+  });
+
+  test('unknown acceptance sub-action: exit 1', () => {
+    seedAcTask();
+    const res = withCapture(() => runTaskCmd('acceptance', ['nope', 'at'], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('sub-action required');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// task bounds (v6) — positional = [sub-action, task-id]
+// ---------------------------------------------------------------------------
+
+describe('runTaskCmd bounds', () => {
+  function seedBoundsTask(id = 'bt') {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: id, id }));
+  }
+
+  test('create --bounds round-trips into the task', () => {
+    const bounds = JSON.stringify({ tools: { allow: ['Bash(go test *)'] } });
+    const create = withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'bt', id: 'bt', bounds }),
+    );
+    expect(create.exit).toBe(0);
+    const task = JSON.parse(create.stdout.trim()) as { bounds: unknown };
+    expect(task.bounds).toEqual({ tools: { allow: ['Bash(go test *)'] } });
+  });
+
+  test('create --bounds with malformed JSON exits 1', () => {
+    const res = withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'bt', id: 'bt', bounds: '{not json' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('not valid JSON');
+  });
+
+  test('create --bounds with unknown top-level key exits 1', () => {
+    const res = withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], {
+        title: 'bt',
+        id: 'bt',
+        bounds: JSON.stringify({ reads: ['oops'] }),
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('unknown top-level key');
+  });
+
+  test('bounds set + show round-trip', () => {
+    seedBoundsTask();
+    const set = withCapture(() =>
+      runTaskCmd('bounds', ['set', 'bt'], {
+        bounds: JSON.stringify({ read: ['src/**'], budgets: { tokens: 1000 } }),
+      }),
+    );
+    expect(set.exit).toBe(0);
+
+    const show = withCapture(() => runTaskCmd('bounds', ['show', 'bt'], {}));
+    expect(show.exit).toBe(0);
+    const bounds = JSON.parse(show.stdout.trim()) as Record<string, unknown>;
+    expect(bounds).toEqual({ read: ['src/**'], budgets: { tokens: 1000 } });
+  });
+
+  test('bounds set with empty --bounds clears the bounds', () => {
+    seedBoundsTask();
+    withCapture(() =>
+      runTaskCmd('bounds', ['set', 'bt'], { bounds: JSON.stringify({ read: ['src/**'] }) }),
+    );
+    const cleared = withCapture(() => runTaskCmd('bounds', ['set', 'bt'], { bounds: '' }));
+    expect(cleared.exit).toBe(0);
+
+    const show = withCapture(() => runTaskCmd('bounds', ['show', 'bt'], {}));
+    expect(show.stdout.trim()).toBe('null');
+  });
+
+  test('bounds set requires --bounds', () => {
+    seedBoundsTask();
+    const res = withCapture(() => runTaskCmd('bounds', ['set', 'bt'], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--bounds <json> is required');
+  });
+
+  test('bounds set rejects an unknown top-level key', () => {
+    seedBoundsTask();
+    const res = withCapture(() =>
+      runTaskCmd('bounds', ['set', 'bt'], { bounds: JSON.stringify({ tool: {} }) }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('unknown top-level key');
+  });
+
+  test('bounds show on a task with no bounds prints null', () => {
+    seedBoundsTask();
+    const show = withCapture(() => runTaskCmd('bounds', ['show', 'bt'], {}));
+    expect(show.exit).toBe(0);
+    expect(show.stdout.trim()).toBe('null');
+    expect(show.stderr).toContain('unbounded');
+  });
+
+  test('unknown bounds sub-action: exit 1', () => {
+    seedBoundsTask();
+    const res = withCapture(() => runTaskCmd('bounds', ['nope', 'bt'], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('sub-action required');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // milestone-cmd
 // ---------------------------------------------------------------------------
 
@@ -684,6 +1168,37 @@ describe('runAlertsCmd', () => {
       orphan_runs: Array<{ slug: string }>;
     };
     expect(payload.orphan_runs.some((r) => r.slug === 'tracked-run')).toBe(false);
+  });
+
+  test('open escalations surface with type + age in JSON and --human', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'B', id: 'b' }));
+    withCapture(() => runTaskCmd('status', ['b', 'ready'], {}));
+    const old = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000).toISOString();
+    // biome-ignore lint/suspicious/noExplicitAny: test-only store reach-in to seed an escalation event.
+    const { openScrumStore } = require('../store') as any;
+    const s = openScrumStore({ override: join(workspace, '.prove', 'prove.db') });
+    try {
+      s.appendEvent({
+        taskId: 'b',
+        kind: 'blocker_raised',
+        payload: { escalation_type: 'conflict', summary: 'two reqs clash' },
+        ts: old,
+      });
+    } finally {
+      s.close();
+    }
+    const json = withCapture(() => runAlertsCmd({ workspaceRoot: workspace }));
+    const payload = JSON.parse(json.stdout.trim()) as {
+      stale_escalations: Array<{ id: string; escalation_type: string; escalated_days: number }>;
+    };
+    const e = payload.stale_escalations.find((x) => x.id === 'b');
+    expect(e?.escalation_type).toBe('conflict');
+    expect(e?.escalated_days).toBeGreaterThanOrEqual(4);
+    expect(json.stderr).toContain('open escalations');
+
+    const human = withCapture(() => runAlertsCmd({ workspaceRoot: workspace, human: true }));
+    expect(human.stdout).toContain('Open escalations');
+    expect(human.stdout).toContain('conflict');
   });
 
   test('--human table is produced when the flag is set', () => {
@@ -910,6 +1425,44 @@ describe('runDecisionCmd', () => {
     expect(res.stderr).toMatch(/\(\d+ bytes\)/);
   });
 
+  test('record --kind: persists a canonical Codex subtype, case-normalized', () => {
+    const rel = writeDecision('.prove/decisions/2026-06-01-kindly.md', '# Kindly\n\nBody\n');
+    const res = withCapture(() => runDecisionCmd('record', [rel, undefined], { kind: 'ADR' }));
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as { id: string; kind: string | null };
+    expect(row.kind).toBe('adr');
+  });
+
+  test('record --kind: unknown subtype → exit 1, no row recorded', () => {
+    const rel = writeDecision('.prove/decisions/2026-06-01-bogus.md', '# Bogus\n\nBody\n');
+    const res = withCapture(() => runDecisionCmd('record', [rel, undefined], { kind: 'lore' }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown --kind 'lore'");
+    expect(res.stderr).toContain('adr, glossary, pattern');
+    const list = withCapture(() => runDecisionCmd('list', [undefined, undefined], {}));
+    expect(JSON.parse(list.stdout.trim()) as unknown[]).toHaveLength(0);
+  });
+
+  test('record without --kind: kind stays null', () => {
+    const rel = writeDecision('.prove/decisions/2026-06-01-nokind.md', '# NoKind\n\nBody\n');
+    const res = withCapture(() => runDecisionCmd('record', [rel, undefined], {}));
+    expect(res.exit).toBe(0);
+    expect((JSON.parse(res.stdout.trim()) as { kind: string | null }).kind).toBeNull();
+  });
+
+  test('list --kind: filters to the matching Codex subtype', () => {
+    const a = writeDecision('.prove/decisions/2026-06-01-pat.md', '# Pat\n\nBody\n');
+    const b = writeDecision('.prove/decisions/2026-06-01-adr.md', '# Adr\n\nBody\n');
+    withCapture(() => runDecisionCmd('record', [a, undefined], { kind: 'pattern' }));
+    withCapture(() => runDecisionCmd('record', [b, undefined], { kind: 'adr' }));
+
+    const res = withCapture(() =>
+      runDecisionCmd('list', [undefined, undefined], { kind: 'pattern' }),
+    );
+    const rows = JSON.parse(res.stdout.trim()) as Array<{ id: string; kind: string }>;
+    expect(rows.map((r) => r.id)).toEqual(['2026-06-01-pat']);
+  });
+
   test('record: nonexistent file → exit 1, no row', () => {
     const res = withCapture(() =>
       runDecisionCmd('record', ['.prove/decisions/ghost.md', undefined], {}),
@@ -986,10 +1539,140 @@ describe('runDecisionCmd', () => {
     expect(res.stdout).toContain('RECORDED_AT');
   });
 
+  test('supersede: happy path flips old to superseded with pointer + reason', () => {
+    const oldRel = writeDecision('.prove/decisions/2026-04-24-old.md', '# Old\n');
+    const newRel = writeDecision('.prove/decisions/2026-04-24-new.md', '# New\n');
+    withCapture(() => runDecisionCmd('record', [oldRel, undefined], {}));
+    withCapture(() => runDecisionCmd('record', [newRel, undefined], {}));
+
+    const res = withCapture(() =>
+      runDecisionCmd('supersede', ['2026-04-24-old', undefined], {
+        by: '2026-04-24-new',
+        reason: 'better approach',
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as {
+      id: string;
+      status: string;
+      superseded_by: string | null;
+      reason: string | null;
+    };
+    expect(row.status).toBe('superseded');
+    expect(row.superseded_by).toBe('2026-04-24-new');
+    expect(row.reason).toBe('better approach');
+
+    // Append-only: the superseded row still lists.
+    const list = withCapture(() => runDecisionCmd('list', [undefined, undefined], {}));
+    const rows = JSON.parse(list.stdout.trim()) as Array<{ id: string }>;
+    expect(rows.map((r) => r.id).sort()).toEqual(['2026-04-24-new', '2026-04-24-old']);
+  });
+
+  test('supersede: missing --by → exit 1', () => {
+    const rel = writeDecision('.prove/decisions/2026-04-24-x.md', '# X\n');
+    withCapture(() => runDecisionCmd('record', [rel, undefined], {}));
+    const res = withCapture(() =>
+      runDecisionCmd('supersede', ['2026-04-24-x', undefined], { reason: 'why' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--by <new-id> is required');
+  });
+
+  test('supersede: missing --reason → exit 1', () => {
+    const rel = writeDecision('.prove/decisions/2026-04-24-y.md', '# Y\n');
+    withCapture(() => runDecisionCmd('record', [rel, undefined], {}));
+    const res = withCapture(() =>
+      runDecisionCmd('supersede', ['2026-04-24-y', undefined], { by: '2026-04-24-y' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--reason <text> is required');
+  });
+
+  test('supersede: unknown replacement → exit 1', () => {
+    const rel = writeDecision('.prove/decisions/2026-04-24-z.md', '# Z\n');
+    withCapture(() => runDecisionCmd('record', [rel, undefined], {}));
+    const res = withCapture(() =>
+      runDecisionCmd('supersede', ['2026-04-24-z', undefined], { by: 'ghost', reason: 'why' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown replacement decision 'ghost'");
+  });
+
   test('unknown action → exit 1', () => {
     const res = withCapture(() => runDecisionCmd('bogus', [undefined, undefined], {}));
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain("unknown decision action 'bogus'");
+  });
+
+  // -------------------------------------------------------------------------
+  // review-stale (v7)
+  // -------------------------------------------------------------------------
+
+  /** Record a decision then backdate its `recorded_at` to `daysAgo` days old. */
+  function recordStale(id: string, daysAgo: number): void {
+    const rel = writeDecision(`.prove/decisions/${id}.md`, `# ${id}\n`);
+    withCapture(() => runDecisionCmd('record', [rel, undefined], {}));
+    // biome-ignore lint/suspicious/noExplicitAny: test-only store reach-in to backdate.
+    const { openScrumStore } = require('../store') as any;
+    const s = openScrumStore({ override: join(workspace, '.prove', 'prove.db') });
+    try {
+      const old = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000).toISOString();
+      s.getStore()
+        .getDb()
+        .prepare('UPDATE scrum_decisions SET recorded_at = ? WHERE id = ?')
+        .run(old, id);
+    } finally {
+      s.close();
+    }
+  }
+
+  test('review-stale flags decisions older than the threshold, oldest-first', () => {
+    recordStale('old-1', 200);
+    recordStale('old-2', 120);
+    recordStale('fresh', 5);
+
+    const res = withCapture(() => runDecisionCmd('review-stale', [undefined, undefined], {}));
+    expect(res.exit).toBe(0);
+    const rows = JSON.parse(res.stdout.trim()) as Array<{ id: string; age_days: number }>;
+    expect(rows.map((r) => r.id)).toEqual(['old-1', 'old-2']);
+    expect(rows[0]?.age_days).toBeGreaterThanOrEqual(rows[1]?.age_days ?? 0);
+  });
+
+  test('review-stale honors a custom --days threshold and mutates nothing', () => {
+    recordStale('d', 30);
+    const flagged = withCapture(() =>
+      runDecisionCmd('review-stale', [undefined, undefined], { days: 20 }),
+    );
+    expect((JSON.parse(flagged.stdout.trim()) as unknown[]).length).toBe(1);
+
+    const none = withCapture(() =>
+      runDecisionCmd('review-stale', [undefined, undefined], { days: 60 }),
+    );
+    expect((JSON.parse(none.stdout.trim()) as unknown[]).length).toBe(0);
+
+    // Report-only: the decision is untouched (still listed, still accepted).
+    const list = withCapture(() => runDecisionCmd('list', [undefined, undefined], {}));
+    const rows = JSON.parse(list.stdout.trim()) as Array<{ id: string; status: string }>;
+    expect(rows.find((r) => r.id === 'd')?.status).toBe('accepted');
+  });
+
+  test('review-stale excludes superseded decisions', () => {
+    recordStale('keep', 200);
+    recordStale('gone', 200);
+    withCapture(() =>
+      runDecisionCmd('supersede', ['gone', undefined], { by: 'keep', reason: 'merged' }),
+    );
+    const res = withCapture(() => runDecisionCmd('review-stale', [undefined, undefined], {}));
+    const rows = JSON.parse(res.stdout.trim()) as Array<{ id: string }>;
+    expect(rows.map((r) => r.id)).toEqual(['keep']);
+  });
+
+  test('review-stale rejects a non-positive --days with exit 1', () => {
+    const res = withCapture(() =>
+      runDecisionCmd('review-stale', [undefined, undefined], { days: 0 }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--days must be a positive integer');
   });
 });
 

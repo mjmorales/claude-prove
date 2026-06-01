@@ -207,4 +207,30 @@ describe('runSubagentStop', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  test('emits a stderr diagnostic and no-ops when state.json is corrupt', () => {
+    const { root } = initGitRepo();
+    const original = process.stderr.write.bind(process.stderr);
+    const captured: string[] = [];
+    // @ts-expect-error narrow override for the test
+    process.stderr.write = (chunk: string) => {
+      captured.push(String(chunk));
+      return true;
+    };
+    try {
+      writeSlugMarker(root, 'demo');
+      const runDir = join(root, '.prove', 'runs', 'feature', 'demo');
+      mkdirSync(runDir, { recursive: true });
+      // Truncated/invalid JSON: loadState's JSON.parse throws.
+      writeFileSync(join(runDir, 'state.json'), '{ "kind": "state", ');
+
+      const result = runSubagentStop({ cwd: root });
+      expect(result).toEqual({ exitCode: 0, stdout: '', stderr: '' });
+      const diag = captured.join('');
+      expect(diag).toContain('subagent-stop could not load state for demo');
+    } finally {
+      process.stderr.write = original;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });

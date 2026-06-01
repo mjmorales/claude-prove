@@ -19,9 +19,12 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { appendEntry } from '../acb/reasoning-log-store';
 import {
+  type CurationProposedPayload,
   ORPHAN_TASK_ID,
   buildContextBundle,
+  reconcileMilestoneClosed,
   reconcileRunCompleted,
   sweepUnreconciled,
 } from './reconcile';
@@ -235,6 +238,24 @@ describe('reconcileRunCompleted — orphan run', () => {
     const orphanEvents = events.filter((e) => e.kind === 'unlinked_run_detected');
     expect(orphanEvents).toHaveLength(2);
   });
+
+  test('revives a soft-deleted orphan sentinel instead of hitting a PK conflict', () => {
+    // First orphan run creates the sentinel; an operator then soft-deletes it.
+    reconcileRunCompleted(writeRun({ branch: 'feat-a', slug: 'one', taskId: null }), store);
+    store.softDeleteTask(ORPHAN_TASK_ID);
+    expect(store.getTask(ORPHAN_TASK_ID)).toBeNull();
+
+    // A later orphan run must revive the sentinel, not throw a UNIQUE conflict.
+    const result = reconcileRunCompleted(
+      writeRun({ branch: 'feat-b', slug: 'two', taskId: null }),
+      store,
+    );
+    expect(result.kind).toBe('orphan');
+    expect(store.getTask(ORPHAN_TASK_ID)).not.toBeNull();
+    expect(
+      store.listEventsForTask(ORPHAN_TASK_ID).some((e) => e.kind === 'unlinked_run_detected'),
+    ).toBe(true);
+  });
 });
 
 // ===========================================================================
@@ -398,5 +419,176 @@ describe('sweepUnreconciled', () => {
   test('returns empty result when .prove/runs is absent', () => {
     const result = sweepUnreconciled(store, 0);
     expect(result).toEqual({ scanned: 0, reconciled: 0, errors: [] });
+  });
+});
+
+// ===========================================================================
+// reconcileMilestoneClosed — curation candidate bubble-up
+// ===========================================================================
+
+// Per-type required fields beyond the envelope (mirrors reasoning-log.ts).
+const TYPE_EXTRA: Record<string, Record<string, unknown>> = {
+  decision: { alternatives: ['a', 'b'], selected_rationale: 'a won' },
+  hack: { file_refs: ['x.ts'], cleanup_condition: 'when stable' },
+  risk: { severity: 'high', mitigation: 'monitor it' },
+  assumption: { resolved: false, resolution_ref: null },
+  bailout: { attempted: 'x', reason_abandoned: 'y' },
+  synthesis: { outcome: 'shipped' },
+  discovery: {},
+  context: {},
+  review_feedback: {},
+  verification: {},
+};
+
+/** Write a valid reasoning-log entry of `type` under `runDir`. */
+function writeLogEntry(runDir: string, id: string, type: string, agent = 'engineer'): void {
+  appendEntry(runDir, {
+    id,
+    ts: `2026-06-01T10:00:00Z#${id}`,
+    type,
+    agent,
+    run_path: runDir,
+    body: `${type} body for ${id}`,
+    ...TYPE_EXTRA[type],
+  });
+}
+
+/** Link `taskId` to a run dir under `project` and return the absolute run dir. */
+function linkRunDir(taskId: string, slug: string, branch = 'feat'): string {
+  const runRel = join('.prove', 'runs', branch, slug);
+  store.linkRun({ taskId, runPath: runRel, branch, slug });
+  return join(project, runRel);
+}
+
+/** The decoded payload of the single curation_proposed event on `taskId`. */
+function curationPayload(taskId: string): CurationProposedPayload | null {
+  const event = store.listEventsForTask(taskId).find((e) => e.kind === 'curation_proposed');
+  return event ? (event.payload as CurationProposedPayload) : null;
+}
+
+describe('reconcileMilestoneClosed', () => {
+  test('emits one curation_proposed per task with findings, keeping only the four curation types', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    store.createTask({ id: 'task-a', title: 'A', milestoneId: 'm1' });
+
+    const runDir = linkRunDir('task-a', 'a');
+    writeLogEntry(runDir, 'd1', 'decision');
+    writeLogEntry(runDir, 'h1', 'hack');
+    writeLogEntry(runDir, 'r1', 'risk');
+    writeLogEntry(runDir, 'as1', 'assumption');
+    // Non-curation entries must be excluded from candidates.
+    writeLogEntry(runDir, 'disc1', 'discovery');
+    writeLogEntry(runDir, 'syn1', 'synthesis');
+    writeLogEntry(runDir, 'bail1', 'bailout');
+
+    const result = reconcileMilestoneClosed('m1', store);
+
+    expect(result.emitted).toEqual([{ taskId: 'task-a', candidateCount: 4 }]);
+    const payload = curationPayload('task-a');
+    expect(payload?.milestone_id).toBe('m1');
+    expect(payload?.candidates.map((c) => c.type).sort()).toEqual([
+      'assumption',
+      'decision',
+      'hack',
+      'risk',
+    ]);
+    expect(
+      payload?.candidates.every((c) => c.run_path === join('.prove', 'runs', 'feat', 'a')),
+    ).toBe(true);
+  });
+
+  test('no-op for a task whose runs carry no curation-relevant findings', () => {
+    store.createMilestone({ id: 'm2', title: 'M2' });
+    store.createTask({ id: 'task-clean', title: 'Clean', milestoneId: 'm2' });
+    const runDir = linkRunDir('task-clean', 'clean');
+    writeLogEntry(runDir, 'disc', 'discovery');
+    writeLogEntry(runDir, 'syn', 'synthesis');
+
+    const result = reconcileMilestoneClosed('m2', store);
+
+    expect(result.emitted).toHaveLength(0);
+    expect(result.skippedNoFindings).toBe(1);
+    expect(curationPayload('task-clean')).toBeNull();
+  });
+
+  test('no-op for a task with no linked runs at all', () => {
+    store.createMilestone({ id: 'm3', title: 'M3' });
+    store.createTask({ id: 'task-norun', title: 'NoRun', milestoneId: 'm3' });
+
+    const result = reconcileMilestoneClosed('m3', store);
+    expect(result.emitted).toHaveLength(0);
+    expect(result.skippedNoFindings).toBe(1);
+  });
+
+  test('idempotent: a second close does not re-emit and reports already-emitted', () => {
+    store.createMilestone({ id: 'm4', title: 'M4' });
+    store.createTask({ id: 'task-i', title: 'I', milestoneId: 'm4' });
+    const runDir = linkRunDir('task-i', 'i');
+    writeLogEntry(runDir, 'h', 'hack');
+
+    const first = reconcileMilestoneClosed('m4', store);
+    expect(first.emitted).toHaveLength(1);
+
+    const second = reconcileMilestoneClosed('m4', store);
+    expect(second.emitted).toHaveLength(0);
+    expect(second.skippedAlreadyEmitted).toBe(1);
+
+    const count = store
+      .listEventsForTask('task-i')
+      .filter((e) => e.kind === 'curation_proposed').length;
+    expect(count).toBe(1);
+  });
+
+  test('aggregates and dedupes candidates across multiple linked runs', () => {
+    store.createMilestone({ id: 'm5', title: 'M5' });
+    store.createTask({ id: 'task-multi', title: 'Multi', milestoneId: 'm5' });
+    const run1 = linkRunDir('task-multi', 'one');
+    const run2 = linkRunDir('task-multi', 'two');
+    writeLogEntry(run1, 'h-one', 'hack');
+    writeLogEntry(run2, 'r-two', 'risk');
+    // Same entry id surfacing through both runs is collapsed to one candidate.
+    writeLogEntry(run1, 'dup', 'decision');
+    writeLogEntry(run2, 'dup', 'decision');
+
+    const result = reconcileMilestoneClosed('m5', store);
+    expect(result.emitted[0]?.candidateCount).toBe(3);
+    const ids = curationPayload('task-multi')
+      ?.candidates.map((c) => c.entry_id)
+      .sort();
+    expect(ids).toEqual(['dup', 'h-one', 'r-two']);
+  });
+
+  test('emits per-task: only milestone members with findings get an event', () => {
+    store.createMilestone({ id: 'm6', title: 'M6' });
+    store.createTask({ id: 'm6-a', title: 'A', milestoneId: 'm6' });
+    store.createTask({ id: 'm6-b', title: 'B', milestoneId: 'm6' });
+    // A task in a different milestone must be untouched.
+    store.createMilestone({ id: 'other', title: 'Other' });
+    store.createTask({ id: 'other-a', title: 'Other A', milestoneId: 'other' });
+
+    writeLogEntry(linkRunDir('m6-a', 'a6'), 'h', 'hack');
+    writeLogEntry(linkRunDir('other-a', 'oa'), 'h', 'hack');
+
+    const result = reconcileMilestoneClosed('m6', store);
+    expect(result.emitted.map((e) => e.taskId)).toEqual(['m6-a']);
+    expect(result.skippedNoFindings).toBe(1); // m6-b
+    expect(curationPayload('other-a')).toBeNull();
+  });
+
+  test('skips a malformed log dir without aborting the milestone curation', () => {
+    store.createMilestone({ id: 'm7', title: 'M7' });
+    store.createTask({ id: 'm7-bad', title: 'Bad', milestoneId: 'm7' });
+    store.createTask({ id: 'm7-ok', title: 'Ok', milestoneId: 'm7' });
+
+    const badDir = linkRunDir('m7-bad', 'bad');
+    mkdirSync(join(badDir, 'log', 'engineer'), { recursive: true });
+    writeFileSync(join(badDir, 'log', 'engineer', 'broken.json'), '{ not json');
+
+    writeLogEntry(linkRunDir('m7-ok', 'ok'), 'h', 'hack');
+
+    const result = reconcileMilestoneClosed('m7', store);
+    // The corrupt run contributes nothing; the good task still curates.
+    expect(result.emitted.map((e) => e.taskId)).toEqual(['m7-ok']);
+    expect(result.skippedNoFindings).toBe(1); // m7-bad yielded zero candidates
   });
 });

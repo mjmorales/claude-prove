@@ -1,7 +1,6 @@
 /**
- * Tests for the PCD structural-map generator. Originally ported 1:1 from the
- * retired `tools/pcd/test_structural_map.py`; no longer bound to Python
- * parity — TypeScript is now the source of truth.
+ * Tests for the PCD structural-map generator. TypeScript is the source of
+ * truth for output shape; fixtures act as a regression fence.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -12,6 +11,7 @@ import { dirname, join } from 'node:path';
 import { validateArtifact } from './schemas';
 import {
   _buildDependencyGraph,
+  _clearGoModCache,
   _clusterFiles,
   _countLines,
   _discoverWorkspacePackages,
@@ -590,6 +590,52 @@ describe('generateStructuralMap', () => {
       if (mod === undefined) throw new Error('expected at least one module');
       expect('cafi_description' in mod).toBe(false);
     } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('malformed cache without a files key degrades to no descriptions', () => {
+    const tmp = mkTmp();
+    try {
+      write(tmp, 'main.py', "print('hello')\n");
+
+      // Hand-edited / partial cache: passes loadCache's version check but has
+      // no `files` key. Must degrade to absent descriptions, not throw. (F-3-001)
+      const cacheDir = join(tmp, '.prove');
+      mkdirSync(cacheDir, { recursive: true });
+      writeFileSync(join(cacheDir, 'file-index.json'), JSON.stringify({ version: 1 }), 'utf8');
+
+      const result = generateStructuralMap(tmp, ['main.py']);
+      expect(result.summary.total_files).toBe(1);
+      const mod = result.modules[0];
+      if (mod === undefined) throw new Error('expected at least one module');
+      expect('cafi_description' in mod).toBe(false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test('go.mod prefix is memoized across imports and cleared by _clearGoModCache', () => {
+    const tmp = mkTmp();
+    try {
+      _clearGoModCache();
+      write(tmp, 'go.mod', 'module example.com/foo\n');
+      write(tmp, 'a.go', 'package main\nimport "example.com/foo/b"\n');
+      write(tmp, 'b/b.go', 'package b\n');
+
+      // Resolves the module-prefixed import against the cached go.mod.
+      const first = generateStructuralMap(tmp, ['a.go', 'b/b.go']);
+      expect(first.modules.find((m) => m.path === 'a.go')?.imports_from).toContain('b/b.go');
+
+      // Rewrite go.mod with a new prefix; without clearing, the stale prefix
+      // would still resolve. Clearing makes the new prefix take effect.
+      write(tmp, 'go.mod', 'module example.com/bar\n');
+      _clearGoModCache();
+      write(tmp, 'c.go', 'package main\nimport "example.com/bar/b"\n');
+      const second = generateStructuralMap(tmp, ['c.go', 'b/b.go']);
+      expect(second.modules.find((m) => m.path === 'c.go')?.imports_from).toContain('b/b.go');
+    } finally {
+      _clearGoModCache();
       rmSync(tmp, { recursive: true, force: true });
     }
   });

@@ -28,3 +28,4 @@ review-ui-*.png
 review-ui-*.jpeg
 page-*.yml
 console-*.log
+bin/prove
