@@ -10,6 +10,7 @@
  *   claude-prove acb hook <event>      [--workspace-root W]   (event: post-commit)
  *   claude-prove acb migrate-legacy-db [--workspace-root W]
  *   claude-prove acb log <sub>         [--run-dir D] [--file F]  (sub: append|list|episodes)
+ *   claude-prove acb brief <sub>       [--run-dir D] [--file F]  (sub: render|validate)
  *
  * `ensureLegacyImported(workspaceRoot)` runs at the top of every non-migrate
  * handler so the standalone `.prove/acb.db` gets absorbed into the unified
@@ -29,14 +30,22 @@
 
 import type { CAC } from 'cac';
 import { runAssemble } from './acb/cli/assemble-cmd';
+import { runBrief } from './acb/cli/brief-cmd';
 import { runHookCmd } from './acb/cli/hook-cmd';
 import { runLog } from './acb/cli/log-cmd';
 import { runMigrateLegacy } from './acb/cli/migrate-legacy-cmd';
 import { runSaveManifest } from './acb/cli/save-manifest-cmd';
 
-type AcbAction = 'save-manifest' | 'assemble' | 'hook' | 'migrate-legacy-db' | 'log';
+type AcbAction = 'save-manifest' | 'assemble' | 'hook' | 'migrate-legacy-db' | 'log' | 'brief';
 
-const ACB_ACTIONS: AcbAction[] = ['save-manifest', 'assemble', 'hook', 'migrate-legacy-db', 'log'];
+const ACB_ACTIONS: AcbAction[] = [
+  'save-manifest',
+  'assemble',
+  'hook',
+  'migrate-legacy-db',
+  'log',
+  'brief',
+];
 
 type HookEvent = 'post-commit';
 
@@ -127,5 +136,8 @@ function dispatch(action: AcbAction, arg: string | undefined, flags: AcbFlags): 
 
     case 'log':
       return runLog(arg, { runDir: flags.runDir, file: flags.file });
+
+    case 'brief':
+      return runBrief(arg, { runDir: flags.runDir, file: flags.file });
   }
 }
