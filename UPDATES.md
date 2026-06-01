@@ -6,6 +6,28 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.1.0 — Phase-0 mechanical trust floors on the scrum store
+
+Six engine-owned guards that make the already-shipped v3 data model (reasoning log, acceptance criteria, `parent_id` tree, decisions) *trustworthy*. All mechanical — no new skills or subsystems. Decision record: `.prove/decisions/2026-06-01-phase0-trust-floors-store-layer.md`.
+
+**Story-layer transition floors** (`ScrumStore.updateTaskStatus`, store-enforced so the CLI and the reconciler both inherit them):
+- **≥1 acceptance criterion** (onleash §9.1): a `layer=story` task cannot transition to `ready`/`in_progress`/`done` with zero *active* criteria. Non-story layers are exempt.
+- **Synthesis floor** (onleash §10.4/§3.3): a `layer=story` task cannot reach `done` when its most-recent linked run carries no `synthesis` reasoning-log entry. Run-gated — a story with no linked run (manually driven, no worker) is exempt; the orchestrator always links a run.
+
+**AC mid-flight freeze** (onleash §14.13): `task acceptance add|supersede` is rejected while the task is `in_progress` — interrupt the worker (move it off `in_progress`) before amending criteria.
+
+**New CLI — `scrum task cancel <id> [--cascade] [--reason R] [--detail D]`**: cancels a task (or, with `--cascade`, every non-terminal descendant in its `parent_id` subtree) and records terminal provenance. The root carries `terminal_reason` (default `cancelled`); cascade descendants carry `parent_cancelled`. Already-terminal nodes are left untouched but their children are still swept.
+
+**New CLI — `scrum decision review-stale [--days N] [--human]`**: reports decisions whose `recorded_at` is older than `N` days (default 90), oldest-first, excluding superseded rows. **Report-only** (onleash §8.8) — never prunes or mutates.
+
+**Tree-aware `scrum status`**: the JSON payload gains a `task_tree` (the `parent_id` forest, each node carrying its rolled-up `derived_status`), and `--human` renders a nested Task tree section. Flat (parent-less) tasks render as single-node roots — pre-v3 stores are unaffected.
+
+**Migration — scrum store v6→v7** (`scrum_tasks.terminal_reason` + `scrum_tasks.terminal_detail`, both nullable): applied automatically on the next store open (`runMigrations`); no manual step. This is a scrum-store migration, separate from the `.claude/.prove.json` config schema — `CURRENT_SCHEMA_VERSION` is unchanged.
+
+**Auto-adoption**: the new `task cancel`/`decision review-stale` subcommands and the status tree ship in the CLI; the v7 columns migrate on first store open. No config edit required. Run `/prove:update` to sync.
+
+---
+
 ## v3.0.0 — onleash methodology on prove machinery: the `decompose` skill + layered task creation
 
 Lands onleash's two structured-agent methodologies (audit §2.2a/b) as a driver skill on top of the foundation shipped over the prior tasks (scrum hierarchy `parent_id`/`layer`, decision supersession, first-class acceptance criteria + the four verification kinds, and the `acb` reasoning log). You are the driver Claude session — prove emits the scrum tree, the criteria, and the reasoning log, and the Agent tool / native `/workflows` does the fan-out; prove never spawns Claude.
