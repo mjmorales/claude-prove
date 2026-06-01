@@ -16,6 +16,7 @@
 
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
+import { reconcileMilestoneClosed } from '../reconcile';
 import { type ScrumStore, openScrumStore } from '../store';
 import type { MilestoneStatus } from '../types';
 import { generateId } from './scrum-utils';
@@ -67,7 +68,7 @@ export function runMilestoneCmd(
       case 'show':
         return doShow(store, positional[0]);
       case 'close':
-        return doClose(store, positional[0]);
+        return doClose(store, positional[0], workspaceRoot);
       case 'activate':
         return doActivate(store, positional[0]);
       case 'reopen':
@@ -139,14 +140,26 @@ function doShow(store: ScrumStore, id: string | undefined): number {
   return 0;
 }
 
-function doClose(store: ScrumStore, id: string | undefined): number {
+function doClose(store: ScrumStore, id: string | undefined, workspaceRoot: string): number {
   if (id === undefined || id.length === 0) {
     process.stderr.write('scrum milestone close: <id> positional argument required\n');
     return 1;
   }
+  // Capture prior status before the close so the curation trigger fires only
+  // on a real planned/active → closed transition. Re-closing an already-closed
+  // milestone must not re-emit curation_proposed events (onleash §8.3, the
+  // Forced Bubble-Up is once-per-close).
+  const prior = store.getMilestone(id);
   const milestone = store.closeMilestone(id);
+
+  let curationNote = '';
+  if (prior !== null && prior.status !== 'closed') {
+    const curation = reconcileMilestoneClosed(id, store, workspaceRoot);
+    curationNote = ` (curation: ${curation.emitted.length} task(s) proposed)`;
+  }
+
   process.stdout.write(`${JSON.stringify(milestone)}\n`);
-  process.stderr.write(`scrum milestone close: ${id}\n`);
+  process.stderr.write(`scrum milestone close: ${id}${curationNote}\n`);
   return 0;
 }
 

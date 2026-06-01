@@ -48,7 +48,8 @@ export type EventKind =
   | 'decision_linked'
   | 'blocker_raised'
   | 'note'
-  | 'unlinked_run_detected';
+  | 'unlinked_run_detected'
+  | 'curation_proposed';
 
 /**
  * Dependency direction. Pinned by a CHECK constraint on `scrum_deps.kind`;

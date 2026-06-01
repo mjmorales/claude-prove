@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { appendEntry } from '../../acb/reasoning-log-store';
 import { runAlertsCmd } from './alerts-cmd';
 import { parseDecisionFile, runDecisionCmd } from './decision-cmd';
 import { runHookCmd } from './hook-cmd';
@@ -215,6 +216,78 @@ describe('runStatusCmd', () => {
     const res = withCapture(() => runStatusCmd({ human: true }));
     expect(res.stdout).toContain('Task tree');
     expect(res.stdout).toContain('epic: epic');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// milestone-cmd — close fires the curation trigger (1.2b)
+// ---------------------------------------------------------------------------
+
+describe('runMilestoneCmd close → curation trigger', () => {
+  /** Seed milestone + task + a linked run carrying one `hack` finding. */
+  function seedTaskWithFinding(milestoneId: string, taskId: string): void {
+    withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], {
+        title: `Milestone ${milestoneId}`,
+        id: milestoneId,
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], {
+        title: `Task ${taskId}`,
+        id: taskId,
+        milestone: milestoneId,
+      }),
+    );
+    const runRel = join('.prove', 'runs', 'feat', taskId);
+    withCapture(() => runLinkRunCmd(taskId, runRel, { workspaceRoot: workspace }));
+    appendEntry(join(workspace, runRel), {
+      id: 'h1',
+      ts: '2026-06-01T10:00:00Z',
+      type: 'hack',
+      agent: 'engineer',
+      run_path: runRel,
+      body: 'temporary shim',
+      file_refs: ['x.ts'],
+      cleanup_condition: 'when upstream lands',
+    });
+  }
+
+  test('emits a curation note for a task carrying findings', () => {
+    seedTaskWithFinding('mc1', 'cur-1');
+    const res = withCapture(() =>
+      runMilestoneCmd('close', ['mc1', undefined], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+    expect(res.stderr).toContain('curation: 1 task(s) proposed');
+  });
+
+  test('re-closing an already-closed milestone does not re-fire curation', () => {
+    seedTaskWithFinding('mc2', 'cur-2');
+    withCapture(() => runMilestoneCmd('close', ['mc2', undefined], { workspaceRoot: workspace }));
+    const second = withCapture(() =>
+      runMilestoneCmd('close', ['mc2', undefined], { workspaceRoot: workspace }),
+    );
+    expect(second.exit).toBe(0);
+    expect(second.stderr).not.toContain('curation:');
+  });
+
+  test('reports zero proposals when no task carries findings', () => {
+    withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], {
+        title: 'M',
+        id: 'mc3',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'cur-3', milestone: 'mc3' }),
+    );
+    const res = withCapture(() =>
+      runMilestoneCmd('close', ['mc3', undefined], { workspaceRoot: workspace }),
+    );
+    expect(res.stderr).toContain('curation: 0 task(s) proposed');
   });
 });
 
