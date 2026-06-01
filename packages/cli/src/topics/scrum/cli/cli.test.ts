@@ -15,7 +15,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -111,6 +111,32 @@ describe('runInitCmd', () => {
     const payload = JSON.parse(second.stdout.trim()) as { seeded: boolean; reason: string };
     expect(payload.seeded).toBe(false);
     expect(payload.reason).toBe('already-seeded');
+  });
+
+  test('a mid-import id collision rolls back the seed and leaves planning/ intact', () => {
+    // Pre-create milestone `alpha` (matching the id the ROADMAP importer will
+    // derive from `## Milestone: Alpha`). hasExistingTasks checks tasks only, so
+    // the importer still runs, then its createMilestone({id:'alpha'}) throws a
+    // UNIQUE conflict mid-import.
+    withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], { title: 'Alpha', id: 'alpha' }),
+    );
+
+    mkdirSync(join(workspace, 'planning'), { recursive: true });
+    const roadmapPath = join(workspace, 'planning', 'ROADMAP.md');
+    writeFileSync(roadmapPath, ['## Milestone: Alpha', '- a real task', ''].join('\n'), 'utf8');
+
+    expect(() => runInitCmd({ workspaceRoot: workspace })).toThrow();
+
+    // The whole seed rolled back: no tasks landed, so the next invocation is
+    // not wedged on already-seeded — the import stays retryable.
+    const list = withCapture(() => runTaskCmd('list', [undefined, undefined], {}));
+    const rows = JSON.parse(list.stdout.trim()) as Array<{ id: string }>;
+    expect(rows).toHaveLength(0);
+
+    // cleanupLegacyFiles ran OUTSIDE the transaction (after a commit that never
+    // happened), so the planning file survives for the retry.
+    expect(existsSync(roadmapPath)).toBe(true);
   });
 });
 

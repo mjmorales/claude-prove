@@ -318,6 +318,18 @@ async function postJSON<T>(url: string, body: unknown): Promise<T> {
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
   });
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${url}`);
+  if (!r.ok) {
+    // Surface the server's JSON error body (e.g. {error:'milestone not found'})
+    // so callers can show actionable detail instead of a bare status line.
+    let detail = "";
+    try {
+      detail = await r.text();
+    } catch {
+      /* body unreadable — fall back to the status line alone */
+    }
+    throw new Error(
+      `${r.status} ${r.statusText}: ${url}${detail ? ` — ${detail.slice(0, 500)}` : ""}`,
+    );
+  }
   return r.json() as Promise<T>;
 }

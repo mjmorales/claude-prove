@@ -235,6 +235,24 @@ describe('reconcileRunCompleted — orphan run', () => {
     const orphanEvents = events.filter((e) => e.kind === 'unlinked_run_detected');
     expect(orphanEvents).toHaveLength(2);
   });
+
+  test('revives a soft-deleted orphan sentinel instead of hitting a PK conflict', () => {
+    // First orphan run creates the sentinel; an operator then soft-deletes it.
+    reconcileRunCompleted(writeRun({ branch: 'feat-a', slug: 'one', taskId: null }), store);
+    store.softDeleteTask(ORPHAN_TASK_ID);
+    expect(store.getTask(ORPHAN_TASK_ID)).toBeNull();
+
+    // A later orphan run must revive the sentinel, not throw a UNIQUE conflict.
+    const result = reconcileRunCompleted(
+      writeRun({ branch: 'feat-b', slug: 'two', taskId: null }),
+      store,
+    );
+    expect(result.kind).toBe('orphan');
+    expect(store.getTask(ORPHAN_TASK_ID)).not.toBeNull();
+    expect(
+      store.listEventsForTask(ORPHAN_TASK_ID).some((e) => e.kind === 'unlinked_run_detected'),
+    ).toBe(true);
+  });
 });
 
 // ===========================================================================

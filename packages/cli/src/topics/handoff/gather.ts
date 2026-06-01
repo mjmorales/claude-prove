@@ -1,13 +1,11 @@
 /**
  * Core logic for the `handoff` topic — deterministic session-handoff context.
  *
- * Hardened replacement for the former `gather-context.sh` script. Emits the same markdown sections
- * (State / Files Modified / Recent Commits / Prove Artifacts / Discovery /
- * Task Plan Steps) but:
+ * Emits deterministic session-handoff markdown — the sections State / Files
+ * Modified / Recent Commits / Prove Artifacts / Discovery / Task Plan Steps:
  *   - composes Discovery and Task-Plan-Steps in-process via `composeSubagentContext`
- *     and `renderState` instead of re-shelling `claude-prove`;
- *   - fixes the script's `MERGE_BASE` unbound-variable crash on a repo with no
- *     `main`/`master` branch;
+ *     and `renderState` (no re-shelling `claude-prove`);
+ *   - handles a repo with no `main`/`master` branch (no merge-base);
  *   - runs every git call through `spawnSync` arg-arrays (no shell).
  *
  * `gatherContext` is pure (returns markdown). `runGather` adds the stale-file
@@ -137,8 +135,15 @@ export function gatherContext(opts: GatherOpts): string {
 export function runGather(opts: GatherOpts): number {
   const stale = join(opts.projectRoot, '.prove', 'handoff.md');
   if (existsSync(stale)) {
-    rmSync(stale);
-    process.stderr.write('handoff gather: cleaned stale .prove/handoff.md\n');
+    // Best-effort cleanup: a read-only mount, permission error, or TOCTOU race
+    // must not block emitting context. Degrade to a warning.
+    try {
+      rmSync(stale);
+      process.stderr.write('handoff gather: cleaned stale .prove/handoff.md\n');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`handoff gather: could not remove stale .prove/handoff.md: ${msg}\n`);
+    }
   }
   process.stdout.write(gatherContext(opts));
   return 0;

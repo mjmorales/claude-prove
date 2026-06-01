@@ -228,6 +228,17 @@ export class ScrumStore {
     return this.store;
   }
 
+  /**
+   * Run `fn` inside a single sqlite transaction, committing on return and
+   * rolling back every write if `fn` throws. Lets a caller make a multi-method
+   * sequence (e.g. the `scrum init` seed, many createTask/createMilestone
+   * calls) atomic: a mid-sequence failure leaves the store untouched rather
+   * than half-written. The inner per-method transactions nest as savepoints.
+   */
+  transaction<T>(fn: () => T): T {
+    return this.db.transaction(fn)();
+  }
+
   // ==========================================================================
   // Tasks
   // ==========================================================================
@@ -337,6 +348,25 @@ export class ScrumStore {
       `SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE id = ? AND deleted_at IS NULL`,
     ).get(id) as ScrumTaskRow | null;
     return row ? decodeTask(row) : null;
+  }
+
+  /**
+   * Fetch one task by id ignoring the soft-delete filter, or null if no row
+   * physically exists. Unlike `getTask`, a soft-deleted row is still returned.
+   * Used to distinguish "never existed" from "soft-deleted" so a unique
+   * sentinel (see `ensureOrphanTask`) can be revived rather than re-inserted
+   * into a PK conflict.
+   */
+  getTaskIncludingDeleted(id: string): ScrumTask | null {
+    const row = this.prep(`SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE id = ?`).get(
+      id,
+    ) as ScrumTaskRow | null;
+    return row ? decodeTask(row) : null;
+  }
+
+  /** Clear `deleted_at`, reviving a soft-deleted task. No-op on a live row. */
+  undeleteTask(id: string): void {
+    this.prep('UPDATE scrum_tasks SET deleted_at = NULL WHERE id = ?').run(id);
   }
 
   /**
@@ -465,11 +495,26 @@ export class ScrumStore {
     return updated;
   }
 
-  /** Soft-delete: stamp `deleted_at = now()`. Does not cascade to dependents. */
+  /**
+   * Soft-delete: stamp `deleted_at = now()`. Does not cascade to dependents.
+   * Appends a `task_deleted` event inside the same transaction so the
+   * append-only audit log records the retirement (design-principles §4) —
+   * matching createTask/updateTaskStatus/updateTaskMilestone, which all emit
+   * an event under their write. Without this the events table — the sole
+   * audit + reconcile signal — would have no trace of when a task was retired.
+   */
   softDeleteTask(id: string): void {
     const task = this.getTask(id);
     if (!task) throw new Error(`softDeleteTask: unknown task '${id}'`);
-    this.prep('UPDATE scrum_tasks SET deleted_at = ? WHERE id = ?').run(isoNow(), id);
+
+    const ts = isoNow();
+    const tx = this.db.transaction(() => {
+      this.prep('UPDATE scrum_tasks SET deleted_at = ? WHERE id = ?').run(ts, id);
+      this.prep(
+        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
+      ).run(id, ts, 'task_deleted', null, JSON.stringify({ status: task.status }));
+    });
+    tx();
   }
 
   // ==========================================================================
@@ -536,10 +581,10 @@ export class ScrumStore {
   // ==========================================================================
   // Acceptance criteria (v5, audit §5.2) — append-only, never hard-delete
   //
-  // TODO(story-close): the wave-4 story-close workflow consumes these criteria
-  // and dispatches by `verifies_by` (bash→validators, assert→expression,
-  // gate→AskUserQuestion, agent→validation-agent). This task only lands the
-  // data model + authoring surface; no evaluation happens here.
+  // TODO(story-close): the story-close workflow consumes these criteria and
+  // dispatches by `verifies_by` (bash→validators, assert→expression,
+  // gate→AskUserQuestion, agent→validation-agent). This module lands the
+  // data model + authoring surface only; no evaluation happens here.
   // ==========================================================================
 
   /**
@@ -1357,14 +1402,36 @@ function isoNow(): string {
  * transforms are `acceptance_json` (TEXT|NULL) → `acceptance` and `bounds_json`
  * (TEXT|NULL) → `bounds`; every other column passes through unchanged. NULL
  * JSON → `null`.
+ *
+ * The JSON columns have no SQL-level guarantee of valid JSON (`validateBounds`/
+ * `validateAcceptance` only run on writes through the store API). `decodeTask`
+ * is on the hot read path of getTask/listTasks/getChildren/listTasksForTag/
+ * nextReady, so a single corrupt row must NOT throw and brick every task read.
+ * `safeParseJson` degrades a poisoned column to `null` (with a stderr warning)
+ * instead — the task still reads, just without its acceptance/bounds.
  */
 function decodeTask(row: ScrumTaskRow): ScrumTask {
   const { acceptance_json, bounds_json, ...rest } = row;
   return {
     ...rest,
-    acceptance: acceptance_json === null ? null : (JSON.parse(acceptance_json) as Acceptance),
-    bounds: bounds_json === null ? null : (JSON.parse(bounds_json) as TaskBounds),
+    acceptance: safeParseJson<Acceptance>(acceptance_json, row.id, 'acceptance_json'),
+    bounds: safeParseJson<TaskBounds>(bounds_json, row.id, 'bounds_json'),
   };
+}
+
+/**
+ * Parse a nullable JSON column without throwing. NULL → `null`. On a parse
+ * failure, emit a one-line stderr warning naming the task and field, then
+ * return `null` so a single corrupt row cannot crash every task read.
+ */
+function safeParseJson<T>(raw: string | null, taskId: string, field: string): T | null {
+  if (raw === null) return null;
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    process.stderr.write(`scrum: task '${taskId}' has corrupt ${field}; treating as null\n`);
+    return null;
+  }
 }
 
 /** Closed top-level key set for `TaskBounds` (declared-bounds decision §2). */

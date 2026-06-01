@@ -70,14 +70,7 @@ function iterActiveRuns(runsRoot: string): RunLocator[] {
       out.push({
         branch,
         slug,
-        paths: new RunPaths({
-          root: runDir,
-          prd: join(runDir, 'prd.json'),
-          plan: join(runDir, 'plan.json'),
-          state: statePath,
-          state_lock: join(runDir, 'state.json.lock'),
-          reports_dir: join(runDir, 'reports'),
-        }),
+        paths: RunPaths.forRun(runsRoot, branch, slug),
       });
     }
   }
@@ -94,9 +87,18 @@ export function runStop(payload: Record<string, unknown> | null): HookResult {
   const allChanges: TaggedChange[] = [];
 
   for (const run of iterActiveRuns(runsRoot)) {
-    const changes = reconcile(run.paths, { reasonOnHalt: HALT_REASON });
-    for (const c of changes) {
-      allChanges.push({ branch: run.branch, slug: run.slug, ...c });
+    // Isolate each run: a malformed state.json, an I/O error, or an illegal
+    // task transition in one run must not abort reconciliation of the others.
+    // Stop fires once per session end, so an unguarded throw here would
+    // silently leave every later active run with ghost in_progress steps.
+    try {
+      const changes = reconcile(run.paths, { reasonOnHalt: HALT_REASON });
+      for (const c of changes) {
+        allChanges.push({ branch: run.branch, slug: run.slug, ...c });
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`run_state: reconcile failed for ${run.branch}/${run.slug}: ${msg}\n`);
     }
   }
 

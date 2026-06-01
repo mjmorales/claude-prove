@@ -65,6 +65,11 @@ function save(state: PanelSizes) {
 export function usePanelSizes(numColumns: number, min = 160, max = 900) {
   const [state, setState] = useState<PanelSizes>(() => load(numColumns));
   const framing = useRef<number | null>(null);
+  // Mirror the latest state so the in-flight drag closure reads live values
+  // instead of the snapshot captured at mousedown — otherwise a concurrent
+  // toggleCollapse/reset/resize during a drag gets clobbered by onMove.
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   const commit = useCallback((next: PanelSizes) => {
     setState(next);
@@ -76,18 +81,19 @@ export function usePanelSizes(numColumns: number, min = 160, max = 900) {
     (index: number, container: HTMLElement) => (e: React.MouseEvent) => {
       e.preventDefault();
       const startX = e.clientX;
-      const startWidth = state.widths[index];
+      const startWidth = stateRef.current.widths[index];
       const onMove = (ev: MouseEvent) => {
+        const cur = stateRef.current;
         const rect = container.getBoundingClientRect();
-        const sumActive = state.widths
-          .map((w, i) => (state.collapsed[i] ? 0 : w))
+        const sumActive = cur.widths
+          .map((w, i) => (cur.collapsed[i] ? 0 : w))
           .reduce((s, w, i) => (i === index ? s : s + w), 0);
         let next = startWidth + (ev.clientX - startX);
         const maxForIdx = Math.max(min, rect.width - sumActive - 160);
         next = Math.max(min, Math.min(Math.min(max, maxForIdx), next));
-        const copy = state.widths.slice();
+        const copy = cur.widths.slice();
         copy[index] = Math.round(next);
-        commit({ ...state, widths: copy });
+        commit({ ...cur, widths: copy });
       };
       const onUp = () => {
         window.removeEventListener("mousemove", onMove);
@@ -100,7 +106,7 @@ export function usePanelSizes(numColumns: number, min = 160, max = 900) {
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
     },
-    [state, commit, min, max],
+    [commit, min, max],
   );
 
   const toggleCollapse = useCallback(

@@ -280,6 +280,27 @@ describe('walkProject (git integration)', () => {
     }
   });
 
+  test('_gitCheckIgnore handles a path whose filename contains a newline', () => {
+    const tmp = makeTmp('checkign-nl');
+    try {
+      initGitRepo(tmp);
+      // A literal newline is a legal POSIX filename character. With '\n'
+      // framing it would be split into two corrupted entries; NUL framing
+      // keeps it intact so the file is correctly reported as ignored.
+      const weird = 'we\nird.env';
+      write(join(tmp, weird), 'KEY=val\n');
+      write(join(tmp, 'keep.py'), '# keep\n');
+      write(join(tmp, '.gitignore'), '*.env\n');
+      gitAddCommit(tmp);
+
+      const ignored = _gitCheckIgnore(tmp, [weird, 'keep.py']);
+      expect(ignored.has(weird)).toBe(true);
+      expect(ignored.has('keep.py')).toBe(false);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
   test('_gitCheckIgnore returns empty set for empty input', () => {
     expect(_gitCheckIgnore('/tmp', []).size).toBe(0);
   });

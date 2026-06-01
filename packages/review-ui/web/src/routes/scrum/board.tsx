@@ -67,7 +67,7 @@ function Column({ status, tasks }: { status: TaskStatus; tasks: ScrumTask[] }) {
   );
 }
 
-function bucketByStatus(tasks: ScrumTask[]): Record<TaskStatus, ScrumTask[]> {
+export function bucketByStatus(tasks: ScrumTask[]): Record<TaskStatus, ScrumTask[]> {
   const out: Record<TaskStatus, ScrumTask[]> = {
     backlog: [],
     ready: [],
@@ -78,7 +78,11 @@ function bucketByStatus(tasks: ScrumTask[]): Record<TaskStatus, ScrumTask[]> {
     cancelled: [],
   };
   for (const t of tasks) {
-    out[t.status].push(t);
+    // status is `TEXT NOT NULL` server-side with no CHECK constraint, so a
+    // value outside the canonical enum (manual DB edit, a newer CLI status not
+    // yet mirrored here) is possible. Route unknowns to backlog rather than
+    // crashing on a push to an undefined bucket — and avoid silently dropping.
+    (out[t.status] ?? out.backlog).push(t);
   }
   return out;
 }

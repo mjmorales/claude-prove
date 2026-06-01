@@ -1,22 +1,20 @@
 /**
  * Assemble per-commit intent manifests into a cumulative ACB review document.
  *
- * Ported 1:1 from `tools/acb/assembler.py`. Merge rules, dedup keys, and JSON
- * hashing are byte-compatible with the Python reference so manifests written
- * by either implementation yield identical ACB documents — parity is pinned
- * via `__fixtures__/assembler/python-captures/`.
+ * Merge rules, dedup keys, and JSON hashing are byte-stable — the assembled
+ * document is reproducible byte-for-byte, pinned via
+ * `__fixtures__/assembler/python-captures/`.
  *
  * Design notes:
- *   - `computeAcbHash` must produce the exact bytes of Python's
+ *   - `computeAcbHash` must produce the exact bytes of
  *     `json.dumps(..., sort_keys=True, separators=(",", ":"))`. The sorted-
  *     keys serializer below walks the value tree, stringifying primitives
  *     the JSON way, preserving array order, and emitting object keys in
  *     lexicographic order.
- *   - `loadManifestsFromStore` logs (warn) invalid manifests and skips
- *     them. Matches Python's `logger.warning` path. Manifest count in the
- *     assembled doc reflects valid-only.
- *   - `mergeIntentGroups` mirrors Python exactly, including in-place
- *     mutation of the first-seen ref dicts when adding novel ranges.
+ *   - `loadManifestsFromStore` warn-logs invalid manifests and skips them;
+ *     the assembled doc's manifest count reflects valid-only.
+ *   - `mergeIntentGroups` mutates the first-seen ref dicts in place when
+ *     adding novel ranges.
  */
 
 import { createHash, randomUUID } from 'node:crypto';
@@ -102,6 +100,14 @@ export interface AssembleOpts {
   baseRef: string;
   headRef?: string;
   taskStatement?: TaskStatement;
+  /**
+   * Working directory for the `git diff` that computes diffFiles/uncovered.
+   * Defaults to `process.cwd()`. Pass the branch worktree root when the
+   * store/manifests come from a tree other than the process cwd (e.g.
+   * `--workspace-root` decouples the DB location from the git cwd), so
+   * uncovered_files binds to the same tree the manifests describe.
+   */
+  cwd?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -110,8 +116,7 @@ export interface AssembleOpts {
 
 /**
  * Load every manifest stored against `branch`, validate it, and return only
- * the valid ones. Invalid manifests are skipped with a `warn` log line —
- * matches `tools/acb/assembler.py::load_manifests_from_store`.
+ * the valid ones. Invalid manifests are skipped with a `warn` log line.
  */
 export function loadManifestsFromStore(store: AcbStore, branch: string): Record<string, unknown>[] {
   const manifests: Record<string, unknown>[] = [];
@@ -413,15 +418,15 @@ function encodeJsonString(s: string): string {
 
 /**
  * Assemble manifests for `branch` into a single ACB document. Top-level
- * orchestrator matching `tools/acb/assembler.py::assemble`.
+ * orchestrator over load → merge → collect → diff.
  */
 export function assemble(opts: AssembleOpts): AcbDocument {
-  const { store, branch, baseRef, headRef, taskStatement } = opts;
+  const { store, branch, baseRef, headRef, taskStatement, cwd } = opts;
   const manifests = loadManifestsFromStore(store, branch);
   const intentGroups = mergeIntentGroups(manifests);
   const negativeSpace = collectNegativeSpace(manifests);
   const openQuestions = collectOpenQuestions(manifests);
-  const diffFiles = getDiffFiles(baseRef);
+  const diffFiles = getDiffFiles(baseRef, cwd);
   const uncovered = detectUncoveredFiles(intentGroups, diffFiles);
 
   return {

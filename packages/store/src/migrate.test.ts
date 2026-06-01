@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { type Store, openStore } from './connection';
-import { dropAllDomainTables, runMigrations } from './migrate';
+import { MigrationError, dropAllDomainTables, runMigrations } from './migrate';
 import { clearRegistry, registerSchema } from './registry';
 
 function makeStore(): Store {
@@ -143,6 +143,54 @@ describe('runMigrations', () => {
       expect(tables).toEqual([]);
       const log = store.all<{ version: number }>('SELECT version FROM _migrations_log');
       expect(log).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test('reports already-committed domains on a later domain failure', () => {
+    // Domains migrate in alphabetical order (listDomains sorts), so 'a-good'
+    // commits before 'z-bad' throws. Cross-domain commits are NOT rolled back,
+    // so the throw must surface what 'a-good' durably applied.
+    registerSchema({
+      domain: 'a-good',
+      migrations: [
+        {
+          version: 1,
+          description: 'good init',
+          up: (db) => db.run('CREATE TABLE a_good (id INTEGER)'),
+        },
+      ],
+    });
+    registerSchema({
+      domain: 'z-bad',
+      migrations: [
+        {
+          version: 1,
+          description: 'boom',
+          up: () => {
+            throw new Error('synthetic failure');
+          },
+        },
+      ],
+    });
+
+    const store = makeStore();
+    try {
+      let caught: unknown;
+      try {
+        runMigrations(store);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(MigrationError);
+      const partial = (caught as MigrationError).partial;
+      // 'a-good' committed; 'z-bad' rolled back and contributes nothing.
+      expect(partial.applied.map((a) => `${a.domain}:${a.version}`)).toEqual(['a-good:1']);
+
+      // The committed domain is durably present in the DB despite the throw.
+      const log = store.all<{ domain: string }>('SELECT domain FROM _migrations_log');
+      expect(log).toEqual([{ domain: 'a-good' }]);
     } finally {
       store.close();
     }

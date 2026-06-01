@@ -16,6 +16,7 @@ import {
   resolvePluginRoot,
   writeSettingsHooks,
 } from '@claude-prove/installer';
+import { disabledToolsFromConfig } from './disabled-tools';
 
 export interface InitOptions {
   project?: string;
@@ -36,7 +37,14 @@ export function runInit(opts: InitOptions): number {
   // writeSettingsHooks writes a sibling `.tmp` before renaming, so the
   // parent must exist. bootstrapProveJson creates `.claude/` itself.
   mkdirSync(dirname(settingsPath), { recursive: true });
-  const hooksWrote = writeSettingsHooks(settingsPath, prefix, { force: opts.force });
+  // Honor tool toggles from an existing `.claude/.prove.json` so disabled
+  // tools' hook blocks are not installed. On a first-time install the config
+  // does not exist yet → every tool is enabled (empty set).
+  const disabledTools = disabledToolsFromConfig(projectRoot);
+  const hooksWrote = writeSettingsHooks(settingsPath, prefix, {
+    force: opts.force,
+    disabledTools,
+  });
   bootstrapProveJson(projectRoot, { force: opts.force });
 
   const configPath = join(projectRoot, '.claude', '.prove.json');

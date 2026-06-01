@@ -98,7 +98,15 @@ interface Plan {
   schema_version: string;
   kind: 'plan';
   mode: 'simple' | 'full';
-  task_id: string;
+  /**
+   * Run-state's PLAN_SCHEMA reserves `task_id` for a single scrum TASK id (the
+   * reconciler calls `store.getTask(plan.task_id)`). A compiled milestone plan
+   * fans out to MANY scrum tasks, so there is no single task_id to set — a
+   * milestone id here mis-classifies every run as orphan. Omitted entirely;
+   * milestone→plan linkage lives in the `scrum-map.json` sidecar, and per-task
+   * run linkage is established at reconcile time from each task's plan.json.
+   */
+  task_id?: string;
   tasks: PlanTask[];
 }
 
@@ -131,7 +139,7 @@ export function runCompilePlanCmd(flags: CompilePlanCmdFlags): number {
       return 1;
     }
 
-    const { plan, scrumMap } = compile(store, milestoneId, actionable);
+    const { plan, scrumMap } = compile(store, actionable);
     const payload: Record<string, unknown> = { plan, scrum_map: scrumMap };
 
     if (flags.out !== undefined && flags.out.length > 0) {
@@ -168,7 +176,6 @@ export function runCompilePlanCmd(flags: CompilePlanCmdFlags): number {
  */
 function compile(
   store: ScrumStore,
-  milestoneId: string,
   tasks: ScrumTask[],
 ): { plan: Plan; scrumMap: Record<string, string> } {
   const inScope = new Set(tasks.map((t) => t.id));
@@ -247,7 +254,8 @@ function compile(
     schema_version: PLAN_SCHEMA_VERSION,
     kind: 'plan',
     mode: tasks.length >= FULL_MODE_THRESHOLD ? 'full' : 'simple',
-    task_id: milestoneId,
+    // task_id intentionally omitted — see the Plan interface. A milestone id
+    // here would mis-classify every reconciled run as orphan.
     tasks: planTasks,
   };
   return { plan, scrumMap };

@@ -1,20 +1,52 @@
 import { useQuery } from "@tanstack/react-query";
-import type { ScrumMilestone, TaskStatus } from "@claude-prove/cli/scrum/types";
+import type { ScrumMilestone, ScrumTask, TaskStatus } from "@claude-prove/cli/scrum/types";
 import { scrumApi } from "../../lib/scrumApi";
 import { EmptyState, ErrorBox, Loading, TASK_STATUSES, statusMeta } from "./_components";
 
 const STALE_MS = 30_000;
 
+type MilestoneRollup = { rollup: Record<TaskStatus, number>; total: number };
+
+function emptyRollup(): Record<TaskStatus, number> {
+  const r = {} as Record<TaskStatus, number>;
+  for (const s of TASK_STATUSES) r[s] = 0;
+  return r;
+}
+
+/**
+ * Compute per-milestone status rollups from a single tasks list, grouped by
+ * `milestone_id` — one pass over the tasks query, no per-milestone fetch.
+ * Unknown statuses are ignored by the fixed-key record.
+ */
+function rollupsByMilestone(tasks: ScrumTask[]): Map<string, MilestoneRollup> {
+  const byMilestone = new Map<string, MilestoneRollup>();
+  for (const t of tasks) {
+    if (!t.milestone_id) continue;
+    let entry = byMilestone.get(t.milestone_id);
+    if (!entry) {
+      entry = { rollup: emptyRollup(), total: 0 };
+      byMilestone.set(t.milestone_id, entry);
+    }
+    if (t.status in entry.rollup) entry.rollup[t.status] += 1;
+    entry.total += 1;
+  }
+  return byMilestone;
+}
+
 /**
  * Milestones view. Lists all milestones with a per-milestone status rollup
- * fetched via a fan-out of `GET /api/scrum/milestones/:id` queries. Each
- * rollup is its own query key so React Query can cache/refresh per milestone
- * without knocking out neighbors.
+ * computed client-side from a single `scrumApi.tasks()` fetch grouped by
+ * `milestone_id` — no per-milestone request fan-out.
  */
 export function ScrumMilestonesView() {
   const list = useQuery({
     queryKey: ["scrum", "milestones", {}],
     queryFn: () => scrumApi.milestones(),
+    staleTime: STALE_MS,
+  });
+  const tasksQ = useQuery({
+    queryKey: ["scrum", "tasks", {}],
+    queryFn: () => scrumApi.tasks(),
     staleTime: STALE_MS,
   });
 
@@ -28,22 +60,36 @@ export function ScrumMilestonesView() {
     );
   }
 
+  const rollups = tasksQ.isSuccess
+    ? rollupsByMilestone(tasksQ.data.tasks)
+    : undefined;
+
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-4">
       {list.data.milestones.map((m) => (
-        <MilestoneRow key={m.id} milestone={m} />
+        <MilestoneRow
+          key={m.id}
+          milestone={m}
+          rollup={rollups?.get(m.id) ?? { rollup: emptyRollup(), total: 0 }}
+          loading={tasksQ.isPending}
+          error={tasksQ.isError ? tasksQ.error : null}
+        />
       ))}
     </div>
   );
 }
 
-function MilestoneRow({ milestone }: { milestone: ScrumMilestone }) {
-  const rollup = useQuery({
-    queryKey: ["scrum", "milestone", milestone.id],
-    queryFn: () => scrumApi.milestone(milestone.id),
-    staleTime: STALE_MS,
-  });
-
+function MilestoneRow({
+  milestone,
+  rollup,
+  loading,
+  error,
+}: {
+  milestone: ScrumMilestone;
+  rollup: MilestoneRollup;
+  loading: boolean;
+  error: unknown;
+}) {
   return (
     <section
       aria-labelledby={`ms-${milestone.id}`}
@@ -69,9 +115,11 @@ function MilestoneRow({ milestone }: { milestone: ScrumMilestone }) {
         <span className="mono text-[11px] text-fg-faint shrink-0">{milestone.id.slice(0, 10)}</span>
       </header>
       <div className="p-3">
-        {rollup.isPending && <Loading label="Loading rollup…" />}
-        {rollup.isError && <ErrorBox error={rollup.error} />}
-        {rollup.isSuccess && <RollupGrid rollup={rollup.data.rollup} total={rollup.data.tasks.length} />}
+        {loading && <Loading label="Loading rollup…" />}
+        {error != null && <ErrorBox error={error} />}
+        {!loading && error == null && (
+          <RollupGrid rollup={rollup.rollup} total={rollup.total} />
+        )}
       </div>
     </section>
   );

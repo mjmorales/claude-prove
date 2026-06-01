@@ -147,6 +147,72 @@ describe('ScrumStore — tasks', () => {
         .sort(),
     ).toEqual(['t1', 't2']);
   });
+
+  test('softDeleteTask appends a task_deleted event recording the prior status', () => {
+    seedTask('t1', { status: 'ready' });
+    store.softDeleteTask('t1');
+
+    // The task is gone from the live read path...
+    expect(store.getTask('t1')).toBeNull();
+    // ...but the deletion is on the append-only audit log.
+    const events = store.listEventsForTask('t1');
+    const deleted = events.find((e) => e.kind === 'task_deleted');
+    if (!deleted) throw new Error('expected a task_deleted event');
+    expect(deleted.payload).toEqual({ status: 'ready' });
+  });
+
+  test('getTaskIncludingDeleted returns a soft-deleted row that getTask hides', () => {
+    seedTask('t1');
+    store.softDeleteTask('t1');
+    expect(store.getTask('t1')).toBeNull();
+    expect(store.getTaskIncludingDeleted('t1')?.id).toBe('t1');
+    expect(store.getTaskIncludingDeleted('never')).toBeNull();
+  });
+
+  test('undeleteTask revives a soft-deleted task', () => {
+    seedTask('t1');
+    store.softDeleteTask('t1');
+    store.undeleteTask('t1');
+    expect(store.getTask('t1')?.id).toBe('t1');
+  });
+
+  test('decodeTask degrades a corrupt acceptance_json column to null instead of throwing', () => {
+    seedTask('t1');
+    // Simulate a poisoned column (manual DB edit / aborted migration) by
+    // writing invalid JSON through raw SQL, bypassing the store's write guards.
+    store
+      .getStore()
+      .getDb()
+      .prepare('UPDATE scrum_tasks SET acceptance_json = ? WHERE id = ?')
+      .run('{not json', 't1');
+
+    const task = store.getTask('t1');
+    expect(task?.id).toBe('t1');
+    expect(task?.acceptance).toBeNull();
+  });
+
+  test('transaction rolls back every write when the body throws', () => {
+    expect(() =>
+      store.transaction(() => {
+        seedTask('t1');
+        seedTask('t2');
+        throw new Error('boom mid-sequence');
+      }),
+    ).toThrow(/boom mid-sequence/);
+
+    // Both inserts rolled back — the store is untouched.
+    expect(store.listTasks()).toHaveLength(0);
+  });
+
+  test('transaction commits and returns the body value on success', () => {
+    const count = store.transaction(() => {
+      seedTask('t1');
+      seedTask('t2');
+      return store.listTasks().length;
+    });
+    expect(count).toBe(2);
+    expect(store.listTasks()).toHaveLength(2);
+  });
 });
 
 // ===========================================================================

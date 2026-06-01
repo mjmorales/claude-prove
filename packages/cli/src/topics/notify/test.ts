@@ -1,14 +1,16 @@
 /**
  * `claude-prove notify test <event>` — exercise the notification pipeline.
  *
- * Replaces `scripts/notify-test.sh`. Flow:
+ * Flow:
  *   1. Read `.claude/.prove.json` from the current project root.
  *   2. Count reporters matching `<event>`. Report counts on stdout.
  *   3. Derive a test slug (PROVE_TASK env, else `orchestrator/*` branch name).
- *   4. Back up `.prove/runs/<slug>/dispatch-state.json` if present and clear
- *      the dedup ledger so the test event actually fires.
- *   5. Populate PROVE_* env with test values and invoke `runNotifyDispatch`.
- *   6. Restore the dedup state file.
+ *   4. Seed a throwaway `.prove/runs/<test-branch>/<slug>/state.json` so the
+ *      run-state dedup ledger has an anchor (runNotifyDispatch requires it and
+ *      otherwise exits 0 without firing any reporter).
+ *   5. Populate PROVE_* env with test values and invoke `runNotifyDispatch`
+ *      with the throwaway branch/slug so reporters actually fire.
+ *   6. Remove the throwaway run directory.
  *
  * Exit codes:
  *   0  all tested reporters invoked (dispatch return code non-blocking)
@@ -17,8 +19,9 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { RunPaths } from '../run-state/paths';
 import { countAllReporters, countMatchingReporters, runNotifyDispatch } from './dispatch';
 
 export interface NotifyTestOpts {
@@ -27,6 +30,12 @@ export interface NotifyTestOpts {
 }
 
 const DEFAULT_EVENT = 'step-complete';
+
+/**
+ * Synthetic branch the test run lives under. Namespaced so the throwaway
+ * state.json never collides with a real `.prove/runs/<branch>/` directory.
+ */
+const TEST_BRANCH = 'test/notify-test';
 
 export function runNotifyTest(opts: NotifyTestOpts): number {
   const event = opts.eventType || DEFAULT_EVENT;
@@ -64,25 +73,19 @@ export function runNotifyTest(opts: NotifyTestOpts): number {
     return 1;
   }
 
-  // Legacy dedup sidecar path (kept for backward compatibility with setups
-  // that still use the pre-run_state dispatcher). New dedup lives in
-  // state.json.dispatch.dispatched[]; clearing the state file wholesale
-  // here would risk wider damage, so we only touch the legacy sidecar.
-  const legacyStateFile = join(projectRoot, '.prove', 'runs', testSlug, 'dispatch-state.json');
-  const hasBackup = existsSync(legacyStateFile);
-  if (hasBackup) {
-    copyFileSync(legacyStateFile, `${legacyStateFile}.bak`);
-    writeFileSync(legacyStateFile, '{"dispatched":[]}');
-  }
-
   process.stdout.write('=== Notify Test ===\n');
   process.stdout.write(`Event: ${event}\n`);
   process.stdout.write(`Reporters matching: ${matching}\n`);
   process.stdout.write('\n');
 
-  // The run_state ledger lives under `.prove/runs/<branch>/<slug>/state.json`.
-  // For a pure notification test we synthesize PROVE_TASK/STEP/etc. env and
-  // let runNotifyDispatch skip dedup cleanly if state.json is absent.
+  // runNotifyDispatch requires `.prove/runs/<branch>/<slug>/state.json` for its
+  // dedup ledger and silently exits 0 (firing nothing) if it is absent. Seed a
+  // throwaway run under the synthetic TEST_BRANCH so reporters actually fire,
+  // then tear it down in `finally`.
+  const runsRoot = join(projectRoot, '.prove', 'runs');
+  const paths = RunPaths.forRun(runsRoot, TEST_BRANCH, testSlug);
+  const seeded = seedTestState(paths, TEST_BRANCH, testSlug);
+
   const priorEnv = {
     PROVE_TASK: process.env.PROVE_TASK,
     PROVE_STEP: process.env.PROVE_STEP,
@@ -93,24 +96,24 @@ export function runNotifyTest(opts: NotifyTestOpts): number {
   process.env.PROVE_TASK = 'test-notification';
   process.env.PROVE_STEP = '0';
   process.env.PROVE_STATUS = 'test';
-  process.env.PROVE_BRANCH = 'test/notify-test';
+  process.env.PROVE_BRANCH = TEST_BRANCH;
   process.env.PROVE_DETAIL = 'Test notification from claude-prove notify test';
 
-  const dispatchCode = runNotifyDispatch({
-    eventType: event,
-    projectRoot,
-    // Inherit PROVE_RUN_SLUG/BRANCH from env if set; otherwise dispatch
-    // returns 0 with a missing-context stderr message.
-  });
-
-  // Restore env (process-scoped, so only matters under a reused bun process).
-  for (const [key, val] of Object.entries(priorEnv)) {
-    if (val === undefined) delete process.env[key];
-    else process.env[key] = val;
-  }
-
-  if (hasBackup) {
-    renameSync(`${legacyStateFile}.bak`, legacyStateFile);
+  let dispatchCode: number;
+  try {
+    dispatchCode = runNotifyDispatch({
+      eventType: event,
+      projectRoot,
+      branch: TEST_BRANCH,
+      slug: testSlug,
+    });
+  } finally {
+    // Restore env (process-scoped, so only matters under a reused bun process).
+    for (const [key, val] of Object.entries(priorEnv)) {
+      if (val === undefined) delete process.env[key];
+      else process.env[key] = val;
+    }
+    if (seeded) cleanupTestState(paths.root, runsRoot);
   }
 
   process.stdout.write('\n');
@@ -127,9 +130,56 @@ export function runNotifyTest(opts: NotifyTestOpts): number {
 }
 
 /**
- * Resolve a slug for dedup-state clearing. Mirrors the retired shell's
- * fallback chain: `PROVE_TASK` env first, then the current branch name when
- * it is an `orchestrator/*` branch.
+ * Write a minimal valid state.json for the throwaway test run. Returns `true`
+ * when a fresh run directory was created (so cleanup can remove it). Returns
+ * `false` if a real run already occupies the path — in that case we leave it
+ * untouched and dispatch reuses the existing ledger.
+ */
+function seedTestState(paths: RunPaths, branch: string, slug: string): boolean {
+  if (existsSync(paths.state)) return false;
+  mkdirSync(paths.reports_dir, { recursive: true });
+  writeFileSync(
+    paths.state,
+    JSON.stringify({
+      schema_version: '1',
+      kind: 'state',
+      run_status: 'in_progress',
+      slug,
+      branch,
+      current_task: '',
+      current_step: '',
+      started_at: '',
+      updated_at: new Date().toISOString(),
+      ended_at: '',
+      tasks: [],
+      dispatch: { dispatched: [] },
+    }),
+  );
+  return true;
+}
+
+/**
+ * Remove the throwaway run directory, then prune the now-empty TEST_BRANCH
+ * parent if nothing else lives under it. Best-effort: cleanup must never fail
+ * the test command.
+ */
+function cleanupTestState(runRoot: string, runsRoot: string): void {
+  try {
+    rmSync(runRoot, { recursive: true, force: true });
+    // Prune the synthetic branch dir only if no other run lives under it.
+    const branchDir = join(runsRoot, TEST_BRANCH);
+    if (existsSync(branchDir) && readdirSync(branchDir).length === 0) {
+      rmSync(branchDir, { recursive: true, force: true });
+    }
+  } catch {
+    /* best-effort — leave any directory we could not remove */
+  }
+}
+
+/**
+ * Resolve a slug for the throwaway test run. Fallback chain: `PROVE_TASK`
+ * env first, then the current branch name when it is an `orchestrator/*`
+ * branch.
  */
 function deriveTestSlug(projectRoot: string): string {
   const fromEnv = process.env.PROVE_TASK;

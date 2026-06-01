@@ -1,11 +1,10 @@
 /**
  * End-to-end parity tests for the `claude-prove claude-md` topic.
  *
- * The Python reference implementation (`skills/claude-md/__main__.py`) was
- * run against four fixture projects with deterministic (sorted) filesystem
- * traversal; the resulting scan JSON, CLAUDE.md, and subagent-context
- * markdown live under `__fixtures__/golden/` with `__PLUGIN_DIR__` as a
- * placeholder for the absolute plugin path.
+ * Golden fixtures under `__fixtures__/golden/` capture scan JSON, CLAUDE.md,
+ * and subagent-context markdown for four fixture projects (deterministic
+ * sorted traversal), with `__PLUGIN_DIR__` as a placeholder for the absolute
+ * plugin path.
  *
  * This suite drives the TS CLI the same way (spawning `bun run bin/run.ts
  * claude-md ...` per the task contract), substitutes the placeholder in the
@@ -19,8 +18,16 @@
  *   - python-fixture (minimal Python project)
  */
 
-import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -162,6 +169,27 @@ describe('claude-md — golden parity (direct API)', () => {
   const teardown = () => {
     for (const d of toClean.splice(0)) rmSync(d, { recursive: true, force: true });
   };
+
+  // The `self` fixture scans the live repo. A developer's local CAFI index
+  // (.prove/file-index.json — gitignored, regenerable) would flip
+  // cafi.available to true and make the composer emit the Discovery block,
+  // diverging from the committed clean-checkout goldens (which encode
+  // available:false). Hide it for the duration of this suite so the scan is
+  // hermetic regardless of local state. No other test reads the real cache.
+  const liveCafiCache = join(PLUGIN_ROOT, '.prove', 'file-index.json');
+  const hiddenCafiCache = `${liveCafiCache}.golden-test-bak`;
+  let cafiCacheHidden = false;
+  beforeAll(() => {
+    if (existsSync(liveCafiCache)) {
+      renameSync(liveCafiCache, hiddenCafiCache);
+      cafiCacheHidden = true;
+    }
+  });
+  afterAll(() => {
+    if (cafiCacheHidden && existsSync(hiddenCafiCache)) {
+      renameSync(hiddenCafiCache, liveCafiCache);
+    }
+  });
 
   for (const fixture of fixtures) {
     test(`${fixture.name} — scan matches golden`, () => {

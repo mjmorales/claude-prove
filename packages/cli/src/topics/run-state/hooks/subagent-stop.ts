@@ -15,7 +15,7 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { headSha } from '@claude-prove/shared';
+import { headSha, mainWorktreeRoot } from '@claude-prove/shared';
 import { RunPaths } from '../paths';
 import {
   type ReconcileChange,
@@ -50,8 +50,7 @@ function isFile(path: string): boolean {
 }
 
 /** Walk `cwd` upward looking for `.prove-wt-slug.txt`. Stop at repo root
- *  (any ancestor with a `.git` entry — dir OR file for worktree support).
- *  Matches Python's `_resolve_slug`. */
+ *  (any ancestor with a `.git` entry — dir OR file for worktree support). */
 function resolveSlug(cwd: string): string | null {
   let cur = resolve(cwd);
   for (let depth = 0; depth <= MAX_ANCESTOR_DEPTH; depth++) {
@@ -68,37 +67,13 @@ function resolveSlug(cwd: string): string | null {
   return null;
 }
 
-/** Resolve the main worktree (the one backed by `.git/` rather than a
- *  `.git` file). `.prove/runs/` always lives off the main worktree even
- *  when the subagent runs from a linked worktree. Matches Python's
- *  `_main_worktree` — first "worktree <path>" line from `git worktree list`. */
-function mainWorktree(cwd: string): string {
-  const proc = Bun.spawnSync({
-    cmd: ['git', 'worktree', 'list', '--porcelain'],
-    cwd,
-    stdout: 'pipe',
-    stderr: 'ignore',
-  });
-  if (proc.exitCode !== 0) {
-    // Fallback: `git worktree list` failed (non-repo cwd, missing git, permissions).
-    // Treat `cwd` as the main worktree so reconciliation still has a root to scan.
-    console.warn(
-      `run_state: mainWorktree() falling back to cwd=${cwd} (git worktree list exited ${proc.exitCode})`,
-    );
-    return cwd;
-  }
-  const out = proc.stdout.toString();
-  for (const line of out.split('\n')) {
-    if (line.startsWith('worktree ')) {
-      return line.slice('worktree '.length).trim();
-    }
-  }
-  // Fallback: git succeeded but emitted no `worktree <path>` line — unexpected
-  // on any working repo. Log so the oddity is visible rather than silent.
-  console.warn(
-    `run_state: mainWorktree() falling back to cwd=${cwd} (no 'worktree' line in porcelain output)`,
-  );
-  return cwd;
+/** `.prove/runs/` always lives off the main worktree even when the subagent
+ *  runs from a linked worktree. `mainWorktreeRoot` does this with a single
+ *  `git rev-parse --git-common-dir`; fall back to `cwd` when it returns null
+ *  (non-repo cwd, bare repo, missing git) so reconciliation still has a root
+ *  to scan. */
+function resolveMainRoot(cwd: string): string {
+  return mainWorktreeRoot(cwd) ?? cwd;
 }
 
 /** `true` iff HEAD's commit timestamp is >= the step's `started_at`.
@@ -143,18 +118,9 @@ function findPaths(mainRoot: string, slug: string): { branch: string; paths: Run
   }
 
   for (const branch of branches) {
-    const runDir = join(runsRoot, branch, slug);
-    const statePath = join(runDir, 'state.json');
+    const statePath = join(runsRoot, branch, slug, 'state.json');
     if (!existsSync(statePath)) continue;
-    const paths = new RunPaths({
-      root: runDir,
-      prd: join(runDir, 'prd.json'),
-      plan: join(runDir, 'plan.json'),
-      state: statePath,
-      state_lock: join(runDir, 'state.json.lock'),
-      reports_dir: join(runDir, 'reports'),
-    });
-    return { branch, paths };
+    return { branch, paths: RunPaths.forRun(runsRoot, branch, slug) };
   }
   return null;
 }
@@ -175,7 +141,11 @@ export function runSubagentStop(payload: Record<string, unknown> | null): HookRe
   const slug = resolveSlug(cwd);
   if (!slug) return EMPTY_HOOK_RESULT;
 
-  const mainRoot = mainWorktree(cwd);
+  // Locating the run dir requires the main worktree root (one rev-parse).
+  // Everything heavier — headSha and the per-step newCommitsSince git calls —
+  // is gated behind the in_progress check below so the common no-reconcile
+  // case pays no extra git subprocesses.
+  const mainRoot = resolveMainRoot(cwd);
   const found = findPaths(mainRoot, slug);
   if (!found) return EMPTY_HOOK_RESULT;
   const { branch, paths } = found;
@@ -183,13 +153,20 @@ export function runSubagentStop(payload: Record<string, unknown> | null): HookRe
   let state: StateData;
   try {
     state = loadState(paths);
-  } catch {
+  } catch (err) {
+    // A corrupt/truncated state.json must not be indistinguishable from a
+    // clean no-op: emit a diagnostic so a stuck run that never reconciles is
+    // visible to the operator. Keeps the non-throwing hook contract.
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`run_state: subagent-stop could not load state for ${slug}: ${msg}\n`);
     return EMPTY_HOOK_RESULT;
   }
 
   const inprogress = findInprogressSteps(state);
   if (inprogress.length === 0) return EMPTY_HOOK_RESULT;
 
+  // Reconcile-needed path only: the git subprocesses below run solely when an
+  // in_progress step actually exists.
   const scopeIds = new Set(inprogress.map(([, sid]) => sid));
   const latestSha = headSha(cwd);
 

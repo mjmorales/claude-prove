@@ -1,7 +1,7 @@
 /**
  * Conventional-commits validator used by `.pre-commit-config.yaml`.
  *
- * Ported 1:1 from `scripts/validate_commit_msg.py` (stdlib-only). Preserves:
+ * Enforces:
  *   - `TYPES` set (11 canonical conventional-commits types)
  *   - `BUILTIN_SCOPES` set (always-allowed cross-cutting scopes)
  *   - `PATTERN` regex (type, optional scope, optional `!`, `: `, description)
@@ -11,9 +11,7 @@
  *
  * Invocation: `claude-prove commit validate-msg <path-to-commit-msg-file>`.
  * Pre-commit runs the hook from the repo root, so `.claude/.prove.json` is
- * looked up relative to `process.cwd()` — matches the Python resolution
- * (`Path(__file__).resolve().parent.parent / ".claude/.prove.json"`), which
- * also pointed at the repo root when the script lived in `scripts/`.
+ * looked up relative to `process.cwd()`.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -37,14 +35,12 @@ export const TYPES: ReadonlySet<string> = new Set([
 export const BUILTIN_SCOPES: ReadonlySet<string> = new Set(['docs', 'repo', 'config', 'release']);
 
 // type(scope): description  OR  type: description  (optional `!` before `:`)
-// Matches the Python re verbatim — see scripts/validate_commit_msg.py.
 export const PATTERN = /^(?<type>[a-z]+)(?:\((?<scope>[a-z][a-z0-9_-]*)\))?!?: (?<description>.+)/;
 
 /**
  * Load user-registered scopes from `.claude/.prove.json` at `cwd`. Missing
- * file or malformed JSON → empty set (matches Python's `Path.exists()`
- * short-circuit; malformed JSON would raise in Python, but we downgrade to
- * empty-set to keep the hook non-fatal on transient edits).
+ * file or malformed JSON → empty set, keeping the hook non-fatal on
+ * transient edits.
  */
 export function loadScopes(cwd: string = process.cwd()): Set<string> {
   const proveJson = join(cwd, '.claude', '.prove.json');
@@ -68,7 +64,13 @@ export function loadScopes(cwd: string = process.cwd()): Set<string> {
  * separation).
  */
 export function runValidateMsgCmd(msgFile: string, cwd: string = process.cwd()): number {
-  const contents = readFileSync(msgFile, 'utf8');
+  let contents: string;
+  try {
+    contents = readFileSync(msgFile, 'utf8');
+  } catch {
+    console.error(`ERROR: cannot read commit-msg file at ${msgFile}`);
+    return 1;
+  }
   const firstLine = (contents.split('\n', 1)[0] ?? '').trim();
 
   // Allow merge commits and revert auto-messages (git's own templates).

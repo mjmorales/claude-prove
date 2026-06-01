@@ -1,29 +1,24 @@
 /**
  * ACB v2.1 unified-store topic module.
  *
- * Ports `tools/acb/store.py` to TypeScript and registers the `acb` domain
- * with `@claude-prove/store` via `registerSchema`. On-disk layout is the
- * unified prove store (`.prove/prove.db`, shared across domains) rather
- * than the standalone `.prove/acb.db` used by the Python implementation.
+ * Registers the `acb` domain with `@claude-prove/store` via `registerSchema`.
+ * On-disk layout is the unified prove store (`.prove/prove.db`, shared across
+ * domains).
  *
  * Table-name convention: all domain tables carry the `acb_` prefix per
  * `.prove/decisions/2026-04-21-unified-prove-store.md` § "Schema
- * namespacing". Python's bare `manifests` / `acb_documents` /
- * `review_state` names do NOT carry over — they become `acb_manifests`,
- * `acb_acb_documents`, `acb_review_state`.
+ * namespacing" — hence `acb_manifests`, `acb_acb_documents`,
+ * `acb_review_state`.
  *
  * Design notes:
  *   - Side-effect `registerSchema` at import time mirrors the
  *     decision-record protocol so any import of this module declares the
  *     acb schema to the store registry.
  *   - `openAcbStore` wraps `openStore` + `runMigrations` to give ACB
- *     consumers a one-call entry point matching the ergonomic of the
- *     Python `open_store(project_root)` helper.
- *   - All 14 Python methods land on the exported `AcbStore` class with
- *     camelCase names. Shapes match the Python reference: saveManifest
- *     returns the new rowid as `number`; load* returns `unknown | null`;
- *     cleanBranch returns per-table deletion counts keyed by the
- *     acb-prefixed table names.
+ *     consumers a one-call entry point.
+ *   - The `AcbStore` class exposes camelCase methods: saveManifest returns
+ *     the new rowid as `number`; load* returns `unknown | null`; cleanBranch
+ *     returns per-table deletion counts keyed by the acb-prefixed table names.
  */
 
 import type { Database } from 'bun:sqlite';
@@ -35,7 +30,7 @@ import {
   registerSchema,
   runMigrations,
 } from '@claude-prove/store';
-import type { VerdictValue } from './schemas';
+import { VERDICT_VALUES, type VerdictValue } from './schemas';
 
 // ---------------------------------------------------------------------------
 // Schema registration
@@ -218,9 +213,14 @@ export interface GroupVerdictRecord {
 /**
  * Normalize a verdict string read from the DB to canonical `VerdictValue`.
  * Handles legacy values (`'approved'` → `'accepted'`, `'discuss'` →
- * `'needs_discussion'`) written by pre-v3 review-UI builds. Unknown strings
- * fall through as-is and are surfaced to callers unchanged — the type
- * assertion at the call site narrows them.
+ * `'needs_discussion'`) written by pre-v3 review-UI builds.
+ *
+ * Out-of-vocabulary strings — a corrupt row, a hand-edited DB, or a future
+ * value not yet known to this build — are NOT asserted through to the
+ * canonical type (which would launder them past `VERDICT_VALUES`, the single
+ * source of truth, and propagate to every reader and the review-UI read
+ * path verbatim). Instead they degrade to the safe `'pending'` fallback,
+ * which keeps the record renderable without claiming a verdict was reached.
  *
  * Runtime complement to migration v3: when the DB file is at v2 (older
  * installs on first boot after upgrade) the migration has already run by
@@ -234,7 +234,13 @@ export function coerceLegacyVerdict(raw: string): GroupVerdict {
     case 'discuss':
       return 'needs_discussion';
     default:
-      return raw as GroupVerdict;
+      // `VERDICT_VALUES` is the canonical vocabulary; anything outside it is
+      // an unknown/corrupt value rather than a verdict we can trust.
+      if ((VERDICT_VALUES as readonly string[]).includes(raw)) {
+        return raw as GroupVerdict;
+      }
+      console.warn(`acb: unknown verdict '${raw}' read from DB; coercing to 'pending'`);
+      return 'pending';
   }
 }
 
@@ -287,8 +293,7 @@ export class AcbStore {
    * KEY AUTOINCREMENT).
    *
    * The stored timestamp defaults to `data.timestamp` when present and
-   * falls back to now() — matching the Python reference exactly so a
-   * manifest written by either implementation orders identically in
+   * falls back to now(), so manifests order deterministically in
    * `listManifests`.
    */
   saveManifest(branch: string, commitSha: string, data: unknown, runSlug?: string): number {
@@ -481,10 +486,8 @@ export class AcbStore {
 
   /**
    * Delete every row for `branch` across all three acb_* tables.
-   * Returned counts are keyed by the acb-prefixed table names — these
-   * differ from the Python reference (which used bare `manifests`,
-   * `acb_documents`, `review_state`) because the unified store namespaces
-   * all domain tables.
+   * Returned counts are keyed by the acb-prefixed table names; the unified
+   * store namespaces all domain tables with the `acb_` prefix.
    */
   cleanBranch(branch: string): CleanBranchCounts {
     return {

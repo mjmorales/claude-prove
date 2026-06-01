@@ -27,6 +27,7 @@ import { useUrlState } from "../hooks/useUrlState";
 import { useSelection } from "../lib/store";
 import { useScrumSelection } from "../lib/scrumStore";
 import { ScrumRoute } from "./scrum";
+import { bucketByStatus } from "./scrum/board";
 
 /** Minimal ACB stub that proves `useUrlState` runs inside the route. */
 function AcbStub() {
@@ -151,6 +152,96 @@ describe("App routes", () => {
     );
     // Nav is rendered by the layout — confirms the layout mounted.
     expect(r.getByRole("navigation", { name: /scrum views/i })).toBeDefined();
+  });
+
+  test("bucketByStatus routes an out-of-enum status into backlog, not a throw", () => {
+    // status is `TEXT NOT NULL` server-side (no CHECK), so a value outside the
+    // canonical enum can arrive. bucketByStatus must not throw on a push to an
+    // undefined bucket (F-8-001) — route the unknown into backlog so it stays
+    // visible rather than silently dropped.
+    const mk = (id: string, status: string) =>
+      ({ id, status } as unknown as Parameters<typeof bucketByStatus>[0][number]);
+    const out = bucketByStatus([
+      mk("known", "in_progress"),
+      mk("rogue", "archived"),
+    ]);
+    expect(out.in_progress.map((t) => t.id)).toEqual(["known"]);
+    expect(out.backlog.map((t) => t.id)).toEqual(["rogue"]);
+  });
+
+  test("/scrum/milestones computes rollups from a single tasks fetch", async () => {
+    // F-8-004: one tasks query, grouped client-side — no per-milestone fan-out.
+    const milestones = [
+      {
+        id: "m-alpha",
+        title: "Alpha milestone",
+        description: null,
+        target_state: null,
+        status: "active" as const,
+        created_at: "2026-04-20T00:00:00.000Z",
+      },
+    ];
+    const mkTask = (id: string, status: string) => ({
+      id,
+      title: `task ${id}`,
+      description: null,
+      status,
+      milestone_id: "m-alpha",
+      parent_id: null,
+      layer: null,
+      acceptance: null,
+      bounds: null,
+      created_by_agent: "scrum-master",
+      created_at: "2026-04-20T00:00:00.000Z",
+      last_event_at: "2026-04-20T00:00:00.000Z",
+      deleted_at: null,
+    });
+    const milestoneIdHits: string[] = [];
+    fetchStub = (url) => {
+      if (url.startsWith("/api/scrum/milestones/")) {
+        milestoneIdHits.push(url);
+        return { status: 404, body: { error: "should not be called" } };
+      }
+      if (url.startsWith("/api/scrum/milestones"))
+        return { status: 200, body: { milestones } };
+      if (url.startsWith("/api/scrum/tasks"))
+        return {
+          status: 200,
+          body: { tasks: [mkTask("t1", "done"), mkTask("t2", "in_progress")] },
+        };
+      return { status: 404, body: { error: "not found" } };
+    };
+    const qc = makeClient();
+    qc.setQueryData(["scrum", "milestones", {}], { milestones });
+    qc.setQueryData(["scrum", "tasks", {}], {
+      tasks: [mkTask("t1", "done"), mkTask("t2", "in_progress")],
+    });
+    const r = render(
+      <QueryClientProvider client={qc}>
+        <MemoryRouter initialEntries={["/scrum/milestones"]}>
+          <AppStub />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(r.getByRole("heading", { name: /alpha milestone/i })).toBeDefined();
+    // The per-milestone rollup endpoint must NOT be hit (no N+1 fan-out).
+    expect(milestoneIdHits).toHaveLength(0);
+  });
+
+  test("selectRun/selectBranch reset per-run review-session state", () => {
+    // F-8-005: activeIntentId is per-run; reviewMode must not survive a run
+    // switch and activeIntentId must not survive a branch switch.
+    const sel = useSelection.getState;
+    useSelection.setState({ reviewMode: true, activeIntentId: "intent-x" });
+    sel().selectRun("feat%2Fother");
+    expect(sel().reviewMode).toBe(false);
+    expect(sel().activeIntentId).toBeNull();
+
+    useSelection.setState({ reviewMode: true, activeIntentId: "intent-y" });
+    sel().selectBranch("feat/branch", "main");
+    expect(sel().activeIntentId).toBeNull();
+    // Branch switch is within-run — reviewMode stays.
+    expect(sel().reviewMode).toBe(true);
   });
 
   test("/scrum/task/:id renders task detail with seeded fixture", async () => {
