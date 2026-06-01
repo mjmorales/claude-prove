@@ -15,7 +15,8 @@ Source of truth for validators and reporters. If present, auto-detection is skip
     { "name": "build", "command": "go build ./...", "phase": "build" },
     { "name": "lint",  "command": "go vet ./...",   "phase": "lint" },
     { "name": "tests", "command": "go test ./...",  "phase": "test" },
-    { "name": "doc-quality", "prompt": ".prove/prompts/doc-quality.md", "phase": "llm" }
+    { "name": "doc-quality", "prompt": ".prove/prompts/doc-quality.md", "phase": "llm" },
+    { "name": "comment-audit", "skill": "claude-skills:comment-audit", "phase": "llm" }
   ],
   "reporters": [
     { "name": "slack", "command": "./.prove/notify.sh", "events": ["step-complete", "step-halted"] }
@@ -30,17 +31,20 @@ Tracks config format for migration. Missing field = v0 (pre-schema). Run `/prove
 | Version | Changes |
 |---------|---------|
 | `"1"` | Initial versioned schema |
+| ... | (see `migrate.ts` for intermediate versions) |
+| `"7"` | Validators gain an optional `skill` field (skill-invoked gates) |
 
 ### Validator Fields
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `name` | string | yes | Human-readable name (appears in run-log) |
-| `command` | string | conditional | Shell command. Required if `prompt` is not set |
-| `prompt` | string | conditional | Path to validation prompt markdown (relative to project root). Required if `command` is not set |
+| `command` | string | conditional | Shell command |
+| `prompt` | string | conditional | Path to validation prompt markdown (relative to project root) |
+| `skill` | string | conditional | Skill to invoke as the gate (e.g. `claude-skills:comment-audit`) |
 | `phase` | string | yes | `build`, `lint`, `test`, `custom`, or `llm` -- determines execution order |
 
-Each validator has exactly one of `command` or `prompt`.
+Each validator has exactly one of `command`, `prompt`, or `skill` (conditional = required when the other two are unset).
 
 ### Reporter Fields
 
@@ -85,6 +89,18 @@ Verify that all new or modified public functions have doc comments that:
 3. Document return values
 4. Include at least one usage example for non-trivial functions
 ```
+
+## Skill Validators
+
+The driver session (orchestrator / workflow) invokes the named skill via the Skill tool, scoped to the current step diff. The `skill` value must resolve through the Skill tool (built-in, plugin-namespaced `plugin:skill`, or user skill).
+
+**Skill receives:** the step diff as target scope, plus read access to project context.
+
+**Skill returns:** PASS when clean, FAIL on actionable findings (each referencing `file:line`). Same one-retry-then-halt semantics as command and prompt validators.
+
+A skill that performs edits behind a human gate (e.g. `claude-skills:comment-audit`) runs **audit-only** here -- the driver consumes findings as the PASS/FAIL signal and does not auto-apply edits inside the gate.
+
+**Example**: `{ "name": "comment-audit", "skill": "claude-skills:comment-audit", "phase": "llm" }` -- runs comment-audit against each step's diff, halts on unresolved comment smell.
 
 ## Auto-Detection Fallback
 
