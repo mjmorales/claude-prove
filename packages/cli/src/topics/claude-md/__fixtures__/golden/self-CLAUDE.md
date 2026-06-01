@@ -25,6 +25,10 @@ JavaScript/TypeScript (npm)
 
 @__PLUGIN_DIR__/references/claude-prove-reference.md
 
+### Onleash Design Principles
+
+@__PLUGIN_DIR__/references/onleash-design-principles.md
+
 ### LLM-Optimized Coding Standards
 
 @references/llm-coding-standards.md
