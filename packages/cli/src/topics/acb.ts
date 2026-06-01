@@ -59,6 +59,7 @@ interface AcbFlags {
   workspaceRoot?: string;
   runDir?: string;
   file?: string;
+  tokenBudget?: number;
 }
 
 export function register(cli: CAC): void {
@@ -75,8 +76,9 @@ export function register(cli: CAC): void {
       '--workspace-root <w>',
       'Main worktree root; pins store to <root>/.prove/prove.db (default: git common-dir)',
     )
-    .option('--run-dir <d>', 'Run directory holding log/<agent>/<id>.json entries (log)')
-    .option('--file <f>', 'Entry JSON file path (log append; default: stdin)')
+    .option('--run-dir <d>', 'Run directory holding log/<agent>/<id>.json entries (log, brief)')
+    .option('--file <f>', 'Entry JSON file path (log append) / brief markdown (brief validate)')
+    .option('--token-budget <n>', 'Episode-chunk token budget (brief chunk; default: 6000)')
     .action((action: string, arg: string | undefined, flags: AcbFlags) => {
       if (!isAcbAction(action)) {
         console.error(
@@ -138,6 +140,10 @@ function dispatch(action: AcbAction, arg: string | undefined, flags: AcbFlags): 
       return runLog(arg, { runDir: flags.runDir, file: flags.file });
 
     case 'brief':
-      return runBrief(arg, { runDir: flags.runDir, file: flags.file });
+      return runBrief(arg, {
+        runDir: flags.runDir,
+        file: flags.file,
+        tokenBudget: flags.tokenBudget,
+      });
   }
 }
