@@ -201,10 +201,9 @@ function planReasoningLogMigration(runDir: string): ArtifactMigration | null {
 }
 
 /**
- * Plan content migration across every run under `runsRoot`. Reuses the
- * deterministic chain's run-dir discovery so the two migrate surfaces sweep
- * the same set. `runDirs` is injected (rather than re-walking here) to keep
- * this module pure and testable; the CLI handler passes the discovered leaves.
+ * Plan content migration across the given run directories. `runDirs` is
+ * injected (rather than re-walking here) to keep this module pure and
+ * testable; the CLI handler discovers the run leaves and passes them in.
  */
 export function planContentMigration(runDirs: readonly string[]): MigrationPlan {
   const runs: RunMigrationPlan[] = [];

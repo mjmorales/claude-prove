@@ -20,7 +20,7 @@ You are the **driver**. Two facts govern this skill — read them before any com
 - **You run only when the operator asks.** This is an on-demand migration, never a background or resident loop. Each invocation is one explicit operator request; you plan, you propose, you apply behind an operator gate, then you stop.
 - **You reshape content; the deterministic chain reshapes structure.** `schema migrate` already moves columns mechanically (version bumps, a string promoted to a structured field, a renamed key). This skill covers only what a model must do: rewriting stored prose or structured findings (a reasoning-log entry body, a synthesis outcome, a free-form risk note) to fit a new shape that no fixed rule can produce. The two compose — structural first, content second.
 
-The split follows the engine boundary — the engine owns mechanical work, the model owns judgment. The `run-state migrate-runs` CLI owns the mechanical half (detect which artifacts are behind, emit the plan and its instruction files). You own the judgment half (read the prose, reshape it faithfully).
+The `run-state migrate-runs` CLI owns the mechanical half — detect which artifacts are behind, emit the plan and its instruction files. You own the judgment half — read the prose, reshape it faithfully.
 
 A run dir is `.prove/runs/<branch>/<slug>`; its JSON artifacts are `prd.json`, `plan.json`, `state.json`, and its reasoning log lives at `<run-dir>/log/<agent>/<id>.json`.
 
