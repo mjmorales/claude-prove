@@ -1,4 +1,4 @@
-Migration plan for <FIXTURE_PATH> (v1 -> v6):
+Migration plan for <FIXTURE_PATH> (v1 -> v7):
   ~ schema_version: "1" -> "2"
   ~ validators[lint].stage: renamed "stage" -> "phase"
   ~ validators[test].stage: renamed "stage" -> "phase"
@@ -10,3 +10,4 @@ Migration plan for <FIXTURE_PATH> (v1 -> v6):
   + tools.scrum: added (scrum task management — enabled, scope 'user', empty config)
   ~ schema_version: "5" -> "6"
   + dev_mode: added (false — installed-binary mode; flip to true when running from a plugin git checkout)
+  ~ schema_version: "6" -> "7"

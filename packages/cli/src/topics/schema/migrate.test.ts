@@ -534,10 +534,11 @@ describe('TestV4ToV5', () => {
     const [target, changes] = planMigration(config);
 
     expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
-    // Changes reflect both v4->v5 (version bump only, scrum already correct) and
-    // v5->v6 (version bump + dev_mode add). No tools.scrum mutation.
+    // Changes reflect v4->v5 (version bump only, scrum already correct),
+    // v5->v6 (version bump + dev_mode add), and v6->v7 (version bump only). No
+    // tools.scrum mutation.
     const paths = changes.map((c) => c.path);
-    expect(paths).toEqual(['schema_version', 'schema_version', 'dev_mode']);
+    expect(paths).toEqual(['schema_version', 'schema_version', 'dev_mode', 'schema_version']);
     // Keys outside schema_version/tools/dev_mode untouched.
     const keys = Object.keys(target).filter(
       (k) => k !== 'schema_version' && k !== 'tools' && k !== 'dev_mode',
