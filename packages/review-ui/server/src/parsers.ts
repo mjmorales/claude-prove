@@ -91,13 +91,13 @@ export type PlanJson = {
     wave?: number;
     deps?: string[];
     description?: string;
-    acceptance_criteria?: string[];
+    acceptance_criteria?: PlanCriterion[];
     worktree?: { path?: string; branch?: string };
     steps?: Array<{
       id: string;
       title: string;
       description?: string;
-      acceptance_criteria?: string[];
+      acceptance_criteria?: PlanCriterion[];
     }>;
   }>;
 };
@@ -186,6 +186,15 @@ export function runDir(repoRoot: string, branch: string, slug: string): string {
 }
 
 /** Merge plan.json + state.json into the view the UI consumes. */
+/** A plan-task/step acceptance criterion: a v3 structured dict, or a legacy v2 bare string. */
+export type PlanCriterion = string | { text: string; verifies_by?: string; check?: string };
+
+/** Display text for a criterion — v3 `text` (+ kind), or the legacy string verbatim. */
+function criterionText(c: PlanCriterion): string {
+  if (typeof c === "string") return c;
+  return c.verifies_by ? `${c.text} (${c.verifies_by}${c.check ? `: ${c.check}` : ""})` : c.text;
+}
+
 export function buildTaskViews(plan: PlanJson | null, state: StateJson | null): PlanTaskView[] {
   if (!plan?.tasks) return [];
   const stateTasks = new Map<string, NonNullable<StateJson["tasks"]>[number]>();
@@ -202,7 +211,7 @@ export function buildTaskViews(plan: PlanJson | null, state: StateJson | null): 
         id: ps.id,
         title: ps.title,
         description: ps.description ?? "",
-        acceptanceCriteria: ps.acceptance_criteria ?? [],
+        acceptanceCriteria: (ps.acceptance_criteria ?? []).map(criterionText),
         status: ss?.status ?? "pending",
         startedAt: ss?.started_at ?? "",
         endedAt: ss?.ended_at ?? "",
@@ -218,7 +227,7 @@ export function buildTaskViews(plan: PlanJson | null, state: StateJson | null): 
       wave: pt.wave ?? 1,
       deps: pt.deps ?? [],
       description: pt.description ?? "",
-      acceptanceCriteria: pt.acceptance_criteria ?? [],
+      acceptanceCriteria: (pt.acceptance_criteria ?? []).map(criterionText),
       status: st?.status ?? "pending",
       startedAt: st?.started_at ?? "",
       endedAt: st?.ended_at ?? "",

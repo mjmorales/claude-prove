@@ -17,7 +17,21 @@ import type { FieldSpec, Schema } from './validator-engine';
 // v1 -> v2: plan.json tasks[] gained an optional `bounds` field (declared
 // per-task execution bounds; see .prove/decisions/2026-05-31-declared-bounds-home.md).
 // Absent bounds = current behavior, so the migration is a pure version bump.
-export const CURRENT_SCHEMA_VERSION = '2';
+//
+// v2 -> v3: plan.json tasks[]/steps[] `acceptance_criteria` items changed from
+// bare strings to a structured criterion dict mirroring scrum's
+// AcceptanceCriterion (text required; verifies_by/check/idempotent/status/...
+// optional). A bare `{ text }` is valid, so text-only forwarding still works;
+// the migration rewrites each legacy string into `{ text: <string> }`.
+export const CURRENT_SCHEMA_VERSION = '3';
+
+// Verification mechanism for a structured acceptance criterion. Mirrors
+// `AcceptanceVerifiesBy` in topics/scrum/types.ts — keep the two in sync.
+export const ACCEPTANCE_VERIFIES_BY = ['bash', 'assert', 'gate', 'agent'] as const;
+
+// Lifecycle of a single criterion. Mirrors `AcceptanceCriterionStatus` in
+// topics/scrum/types.ts.
+export const ACCEPTANCE_CRITERION_STATUSES = ['active', 'superseded'] as const;
 
 export const STEP_STATUSES = [
   'pending',
@@ -119,6 +133,55 @@ export const PRD_SCHEMA: Schema = {
 
 // --- plan.json ---
 
+// One structured acceptance criterion on a plan task/step. Mirrors scrum's
+// `AcceptanceCriterion` (topics/scrum/types.ts §5.2), but only `text` is
+// required here: `compile-plan` forwards the full scrum shape, while a
+// hand-authored or migrated plan may carry a bare `{ text }`. The extra scrum
+// fields (verifies_by/check/idempotent/status/...) are optional so a v2 plan
+// migrated to v3 (string -> `{ text }`) validates without injection.
+const ACCEPTANCE_CRITERION_SPEC: FieldSpec = {
+  type: 'dict',
+  fields: {
+    id: {
+      type: 'str',
+      required: false,
+      description: 'Stable criterion id (from the source scrum criterion)',
+      default: '',
+    },
+    text: {
+      type: 'str',
+      required: true,
+      description: 'Human-readable statement of what must hold',
+    },
+    verifies_by: {
+      type: 'str',
+      required: false,
+      enum: ACCEPTANCE_VERIFIES_BY,
+      description:
+        'How the criterion is verified: bash (shell command), assert (boolean expr), gate (operator prompt), agent (validation-agent prompt)',
+    },
+    check: {
+      type: 'str',
+      required: false,
+      description: 'Kind-specific check payload (command / expression / prompt)',
+      default: '',
+    },
+    status: {
+      type: 'str',
+      required: false,
+      enum: ACCEPTANCE_CRITERION_STATUSES,
+      description: 'Criterion lifecycle; compile-plan drops superseded criteria',
+      default: 'active',
+    },
+    idempotent: {
+      type: 'bool',
+      required: false,
+      description: 'Safe to re-run without side effects (gates parallel/failed-only eval)',
+      default: false,
+    },
+  },
+};
+
 const STEP_PLAN_SPEC: FieldSpec = {
   type: 'dict',
   fields: {
@@ -140,9 +203,9 @@ const STEP_PLAN_SPEC: FieldSpec = {
     },
     acceptance_criteria: {
       type: 'list',
-      items: { type: 'str' },
+      items: ACCEPTANCE_CRITERION_SPEC,
       required: false,
-      description: 'Criteria this step must satisfy before completion',
+      description: 'Structured criteria this step must satisfy before completion',
       default: [],
     },
   },
@@ -181,9 +244,9 @@ const TASK_PLAN_SPEC: FieldSpec = {
     },
     acceptance_criteria: {
       type: 'list',
-      items: { type: 'str' },
+      items: ACCEPTANCE_CRITERION_SPEC,
       required: false,
-      description: 'Criteria the task must satisfy before review',
+      description: 'Structured criteria the task must satisfy before review',
       default: [],
     },
     worktree: {

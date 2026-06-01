@@ -73,7 +73,7 @@ const PLAN = {
       id: '1',
       title: 'extend-feature',
       description: 'Extend the feature.',
-      acceptance_criteria: ['Must work'],
+      acceptance_criteria: [{ text: 'Must work', verifies_by: 'agent', check: 'reviewer judges' }],
     },
   ],
 };
@@ -107,7 +107,9 @@ describe('orchestrator review-prompt', () => {
     expect(stdoutBuf).toContain('# Architectural Review: Task 1 — extend-feature');
     expect(stdoutBuf).toContain('Files actually changed: a.txt\nb.txt');
     expect(stdoutBuf).toMatch(/```diff[\s\S]*diff --git[\s\S]*```/);
-    expect(stdoutBuf).toContain('- Must work');
+    // Task criterion is structured (renders text + verification annotation);
+    // PRD criteria stay bare strings.
+    expect(stdoutBuf).toContain('- Must work (agent: reviewer judges)');
     expect(stdoutBuf).toContain('- Ship it');
   });
 

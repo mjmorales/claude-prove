@@ -2,7 +2,7 @@
   "name": "state_all_completed",
   "artifact": "state",
   "data": {
-    "schema_version": "2",
+    "schema_version": "3",
     "kind": "state",
     "run_status": "completed",
     "slug": "demo",
