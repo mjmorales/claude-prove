@@ -72,7 +72,7 @@ export function gatherContext(opts: GatherOpts): string {
   out.push('');
 
   // --- Files modified ---
-  out.push('## Files Modified (this session)');
+  out.push('## Files Modified');
   out.push('');
   const staged = splitLines(g(root, ['diff', '--cached', '--name-only']));
   const unstaged = splitLines(g(root, ['diff', '--name-only']));

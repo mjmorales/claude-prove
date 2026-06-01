@@ -321,7 +321,7 @@ function doStatus(store: ScrumStore, id: string | undefined, next: string | unde
 }
 
 /**
- * Cancel a task, recording terminal provenance (v7, onleash §14.4–14.6).
+ * Cancel a task, recording terminal provenance (v7).
  *   --cascade : recursively cancel every non-terminal descendant in the
  *               `parent_id` subtree (root → 'cancelled', descendants →
  *               'parent_cancelled'). Prints `{ cancelled: [ids] }`.
@@ -534,7 +534,7 @@ function resolveDepKind(raw: string | undefined, action: 'add-dep' | 'remove-dep
 }
 
 // ---------------------------------------------------------------------------
-// acceptance — author/list/supersede acceptance criteria (v5, audit §5.2)
+// acceptance — author/list/supersede acceptance criteria (v5)
 //
 //   task acceptance add <task-id> --text T --verifies-by K --check C
 //                                 [--idempotent] [--timeout 30s] [--criterion ID]
@@ -650,7 +650,7 @@ function doAcceptanceSupersede(store: ScrumStore, taskId: string, flags: TaskCmd
 }
 
 // ---------------------------------------------------------------------------
-// bounds — author/show declared bounds (v6, declared-bounds decision §2)
+// bounds — author/show declared bounds (v6)
 //
 //   task bounds set <task-id>  --bounds '<json>'   (pass --bounds '' to clear)
 //   task bounds show <task-id>

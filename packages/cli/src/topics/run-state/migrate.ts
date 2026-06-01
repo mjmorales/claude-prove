@@ -33,9 +33,8 @@
  * converter, not a schema-version chain; this module preserves that
  * semantics. The artifact `schema_version` chain (v1→v2, …) is a separate
  * concern handled by `schema-migrate.ts` (registry pattern); do not conflate
- * the two. See `.prove/decisions/2026-04-17-prove-runs-json-first.md` for the
- * markdown-cutover intent and `2026-05-31-declared-bounds-home.md` for the
- * v2 `bounds` field that motivated the version chain.
+ * the two. The JSON-first run-artifact cutover and the v2 `bounds` field
+ * (declared per-task execution bounds) motivated the version chain.
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';

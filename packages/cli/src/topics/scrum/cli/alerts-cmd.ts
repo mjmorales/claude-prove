@@ -124,7 +124,7 @@ function findStalledWip(store: ScrumStore, stalledAfterDays: number): StalledEnt
 }
 
 /**
- * Open escalations across non-terminal tasks, stalest-first (audit §6.1). An
+ * Open escalations across non-terminal tasks, stalest-first. An
  * open escalation is alert-worthy regardless of age — it is an unresolved
  * blocker raised by a worker — so this surfaces every one, ranked by age so
  * the most overdue float to the top (the same staleness signal `nextReady`

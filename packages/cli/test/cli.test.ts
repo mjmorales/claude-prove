@@ -66,7 +66,7 @@ describe('claude-prove CLI stub topics', () => {
       const { stdout, status } = runBin([topic]);
       expect(status).toBe(0);
       expect(stdout).toContain('not yet implemented');
-      expect(stdout).toContain('2026-04-21-typescript-cli-unification.md');
+      expect(stdout).toContain('phase');
     }
   });
 });

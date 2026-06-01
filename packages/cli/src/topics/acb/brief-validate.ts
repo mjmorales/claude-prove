@@ -1,5 +1,5 @@
 /**
- * Stage-1 mechanical preservation validator for the Review Brief (audit §5.1).
+ * Stage-1 mechanical preservation validator for the Review Brief.
  *
  * Proves a rendered brief preserves every attention-bearing item from the
  * source reasoning log: each `hack`, `risk`, `bailout`, open `assumption`, and

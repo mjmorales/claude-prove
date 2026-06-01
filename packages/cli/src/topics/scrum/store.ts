@@ -138,7 +138,7 @@ export interface NextReadyOptions {
  * Input to `recordDecision`. `id` is the filename slug; `content` is the
  * raw markdown body. `content_sha` is derived from `content` at write
  * time, so callers do not supply it. Status defaults to `'accepted'`
- * per ADR convention.
+ * per decision-record convention.
  */
 export interface RecordDecisionInput {
   id: string;
@@ -166,8 +166,7 @@ export interface ListDecisionsFilter {
 
 /**
  * Allowed forward transitions. Terminal statuses (`done`, `cancelled`)
- * reject every outgoing edge. Keep in sync with the task lifecycle doc in
- * `.prove/decisions/2026-04-21-scrum-architecture.md` § Lifecycle.
+ * reject every outgoing edge. Keep in sync with the task lifecycle contract.
  */
 const ALLOWED_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
   backlog: ['ready', 'in_progress', 'cancelled'],
@@ -435,9 +434,9 @@ export class ScrumStore {
       );
     }
 
-    // Story-layer transition floors (onleash §9.1, §10.4/§3.3). Both are
-    // mechanical engine-owned gates: a `layer=story` task carries obligations
-    // a flat `layer=task` does not. Non-story layers pass straight through.
+    // Story-layer transition floors. Both are mechanical engine-owned gates:
+    // a `layer=story` task carries obligations a flat `layer=task` does not.
+    // Non-story layers pass straight through.
     if (task.layer === 'story') {
       this.assertStoryAcceptanceFloor(task, next);
       if (next === 'done') this.assertStorySynthesisFloor(task);
@@ -519,7 +518,7 @@ export class ScrumStore {
   /**
    * Soft-delete: stamp `deleted_at = now()`. Does not cascade to dependents.
    * Appends a `task_deleted` event inside the same transaction so the
-   * append-only audit log records the retirement (design-principles §4) —
+   * append-only audit log records the retirement —
    * matching createTask/updateTaskStatus/updateTaskMilestone, which all emit
    * an event under their write. Without this the events table — the sole
    * audit + reconcile signal — would have no trace of when a task was retired.
@@ -541,7 +540,7 @@ export class ScrumStore {
   }
 
   // ==========================================================================
-  // Cancellation + terminal provenance (v7, onleash §14.4–14.6)
+  // Cancellation + terminal provenance (v7)
   // ==========================================================================
 
   /**
@@ -568,7 +567,7 @@ export class ScrumStore {
 
   /**
    * Cancel a task and recursively cancel every non-terminal descendant in its
-   * `parent_id` subtree, in one transaction (onleash §14.4–14.6). The root
+   * `parent_id` subtree, in one transaction. The root
    * carries `terminal_reason = reason ?? 'cancelled'`; descendants carry
    * `terminal_reason = 'parent_cancelled'` with a detail naming the root.
    *
@@ -646,12 +645,12 @@ export class ScrumStore {
   }
 
   // ==========================================================================
-  // Story-layer transition floors (v7, onleash §9.1 + §10.4/§3.3)
+  // Story-layer transition floors (v7)
   // ==========================================================================
 
   /**
    * Reject a `layer=story` transition INTO `ready`/`in_progress`/`done` when
-   * the story has zero ACTIVE acceptance criteria (onleash §9.1). A story with
+   * the story has zero ACTIVE acceptance criteria. A story with
    * no goalposts cannot be started or closed; superseded criteria do not count.
    * Other target statuses (`blocked`, `review`, `cancelled`, `backlog`) pass —
    * a story may be parked or abandoned without criteria. Invariant: only
@@ -669,7 +668,7 @@ export class ScrumStore {
 
   /**
    * Reject a `layer=story` -> `done` transition when the story's most-recent
-   * linked run carries no `synthesis` reasoning-log entry (onleash §10.4/§3.3).
+   * linked run carries no `synthesis` reasoning-log entry.
    * The synthesis entry is the worker's hand-off-of-record; closing a story
    * without it loses the episode's outcome.
    *
@@ -737,9 +736,9 @@ export class ScrumStore {
   }
 
   /**
-   * Status of `taskId` rolled up from its subtree (audit §3.4). Computed,
+   * Status of `taskId` rolled up from its subtree. Computed,
    * never stored. A leaf (no live children) returns its authored status, so
-   * pre-v3 flat tasks behave exactly as before. A parent folds its children's
+   * flat tasks behave exactly as a single self-status read. A parent folds its children's
    * DERIVED statuses post-order by precedence:
    *
    *   in_progress — any child derives in_progress
@@ -781,7 +780,7 @@ export class ScrumStore {
   }
 
   // ==========================================================================
-  // Acceptance criteria (v5, audit §5.2) — append-only, never hard-delete
+  // Acceptance criteria (v5) — append-only, never hard-delete
   //
   // TODO(story-close): the story-close workflow consumes these criteria and
   // dispatches by `verifies_by` (bash→validators, assert→expression,
@@ -791,7 +790,7 @@ export class ScrumStore {
 
   /**
    * Replace a task's entire acceptance object. Validates the
-   * idempotent/policy invariant (audit §5.2): `parallel` eval_order or
+   * idempotent/policy invariant: `parallel` eval_order or
    * `failed_only` rerun_policy require every criterion to be
    * `idempotent: true`. Throws on an unknown task id. Pass `null` to clear.
    */
@@ -804,7 +803,7 @@ export class ScrumStore {
   }
 
   /**
-   * Append one criterion to a task's acceptance list (audit §5.2). Creates
+   * Append one criterion to a task's acceptance list. Creates
    * the acceptance object if the task had none. Rejects a duplicate criterion
    * id and re-validates the idempotent/policy invariant against any existing
    * policy. Append-only — existing criteria are never mutated or removed.
@@ -826,7 +825,7 @@ export class ScrumStore {
   }
 
   /**
-   * Supersede a criterion in place (audit §5.2 / §5.3, append-only). Flips
+   * Supersede a criterion in place (append-only). Flips
    * its `status` to `'superseded'`, records `reason`, and optionally points
    * `superseded_by` at a replacement criterion id. Never removes the row —
    * the retired criterion stays in the array for audit, mirroring
@@ -866,8 +865,8 @@ export class ScrumStore {
   }
 
   /**
-   * The criteria a child should inherit from `parentId` via shared_acceptance
-   * (audit §5.2). Returns independent deep copies of the parent's ACTIVE
+   * The criteria a child should inherit from `parentId` via shared_acceptance.
+   * Returns independent deep copies of the parent's ACTIVE
    * criteria, each tagged `inherited_from: parentId` and reset to
    * `status: 'active'` with cleared supersession pointers. Returns `[]` when
    * the parent is unknown or carries no active criteria.
@@ -909,7 +908,7 @@ export class ScrumStore {
   }
 
   // ==========================================================================
-  // Declared bounds (v6, declared-bounds decision §2)
+  // Declared bounds (v6)
   //
   // The optional milestone-authored authoring source for per-task bounds.
   // `compile-plan` forwards this into the emitted plan's `tasks[].bounds`;
@@ -1109,10 +1108,10 @@ export class ScrumStore {
     if (!this.getTask(input.taskId)) {
       throw new Error(`appendEvent: unknown task '${input.taskId}'`);
     }
-    // A `blocker_raised` event carries a typed escalation payload (onleash
-    // §11.2). Validate it at the boundary so a malformed escalation surfaces a
-    // domain error here rather than a silently-untyped row that nextReady/alerts
-    // later fail to rank. Other event kinds carry free-form payloads.
+    // A `blocker_raised` event carries a typed escalation payload. Validate it
+    // at the boundary so a malformed escalation surfaces a domain error here
+    // rather than a silently-untyped row that nextReady/alerts later fail to
+    // rank. Other event kinds carry free-form payloads.
     if (input.kind === 'blocker_raised') {
       validateEscalationPayload(input.payload);
     }
@@ -1289,7 +1288,7 @@ export class ScrumStore {
     // candidate count. Per-invocation only — tags mutate between calls.
     const tagBoostByTask = this.fetchTagBoosts(candidates.map((t) => t.id));
 
-    // Batch the per-candidate latest-escalation lookup (audit §6.1). A task
+    // Batch the per-candidate latest-escalation lookup. A task
     // with an open `blocker_raised` escalation auto-bubbles up, weighted by the
     // escalation's age. Per-invocation only — escalations mutate between calls.
     const escalationByTask = this.fetchLatestEscalations(candidates.map((t) => t.id));
@@ -1457,7 +1456,7 @@ export class ScrumStore {
   }
 
   /**
-   * Supersede a decision (audit §5.3, append-only). Sets the OLD decision's
+   * Supersede a decision (append-only). Sets the OLD decision's
    * `status` to `'superseded'`, points `superseded_by` at `supersededById`,
    * and records `reason`. Never hard-deletes — the original row stays
    * auditable, so `listDecisions`/`getDecision` keep returning it.
@@ -1512,8 +1511,8 @@ export class ScrumStore {
     }
     if (filter.status !== undefined) {
       // Status display casing is authored (e.g., `**Status**: Accepted` from the
-      // ADR body becomes stored as `Accepted`), but operator filters read
-      // naturally in lowercase. Comparison is case-insensitive on both sides
+      // decision-record body becomes stored as `Accepted`), but operator filters
+      // read naturally in lowercase. Comparison is case-insensitive on both sides
       // so `--status accepted` matches rows stored as `Accepted`, `ACCEPTED`,
       // or any other case variant without rewriting existing rows.
       clauses.push('lower(status) = lower(?)');
@@ -1521,7 +1520,7 @@ export class ScrumStore {
     }
     if (filter.kind !== undefined) {
       // Case-insensitive on both sides, matching topic/status — the curation
-      // step may author `ADR`/`adr` interchangeably.
+      // step may author `adr` in any letter case interchangeably.
       clauses.push('lower(kind) = lower(?)');
       params.push(filter.kind);
     }
@@ -1636,7 +1635,7 @@ export class ScrumStore {
   /**
    * Open escalations across all non-terminal, non-deleted tasks — the latest
    * `blocker_raised` per task, newest-first. Backs the `alerts` stale-escalation
-   * surface (audit §6.1): a `done`/`cancelled` task's escalation is resolved and
+   * surface: a `done`/`cancelled` task's escalation is resolved and
    * excluded. `age_days` is computed by the caller against its clock.
    */
   listOpenEscalations(): Array<{
@@ -1729,7 +1728,7 @@ function safeParseJson<T>(raw: string | null, taskId: string, field: string): T 
 }
 
 /**
- * Acceptance freeze guard (onleash §14.13). While a worker is in-flight on a
+ * Acceptance freeze guard. While a worker is in-flight on a
  * task (`status === 'in_progress'`), its acceptance criteria are frozen —
  * `addCriterion`/`supersedeCriterion` reject so the goalposts cannot move under
  * a running worker. Every other status is amendable; interrupt the worker
@@ -1744,7 +1743,7 @@ function assertAcceptanceUnfrozen(task: ScrumTask, method: string): void {
   }
 }
 
-/** Closed top-level key set for `TaskBounds` (declared-bounds decision §2). */
+/** Closed top-level key set for `TaskBounds`. */
 const BOUNDS_TOP_LEVEL_KEYS = new Set(['read', 'write', 'tools', 'budgets']);
 
 /**
@@ -1769,7 +1768,7 @@ function validateBounds(bounds: TaskBounds): void {
 }
 
 /**
- * Enforce the policy invariant (audit §5.2): a `parallel` eval_order or a
+ * Enforce the policy invariant: a `parallel` eval_order or a
  * `failed_only` rerun_policy is only valid when every criterion is
  * `idempotent: true`. Non-idempotent criteria cannot be safely re-run or
  * run concurrently, so the policy is rejected at write time. No policy (the
@@ -1884,7 +1883,7 @@ function computeContextHotness(lastEventAt: string | null, nowMs: number): numbe
 }
 
 // ---------------------------------------------------------------------------
-// Structured escalation typing (onleash §11.2, audit §6.1)
+// Structured escalation typing
 // ---------------------------------------------------------------------------
 
 /** Boost cap (days) and per-day weight for the staleness auto-bubble. */
@@ -1893,8 +1892,8 @@ const ESCALATION_AGE_CAP_DAYS = 30;
 const ESCALATION_PER_DAY = 0.5;
 
 /**
- * Validate a `blocker_raised` event payload as a typed `EscalationPayload`
- * (onleash §11.2). Requires `escalation_type` in the closed set and a string
+ * Validate a `blocker_raised` event payload as a typed `EscalationPayload`.
+ * Requires `escalation_type` in the closed set and a string
  * `summary`; `blocking_task_id`, when present, must be a string or null.
  * Throws a domain error on any violation so a malformed escalation fails at
  * `appendEvent` rather than persisting as an untyped row.
@@ -1938,7 +1937,7 @@ function parseEscalationType(payloadJson: string): EscalationType | null {
 }
 
 /**
- * Staleness auto-bubble boost for an open escalation (audit §6.1). Returns 0
+ * Staleness auto-bubble boost for an open escalation. Returns 0
  * when there is no escalation; otherwise a base boost that grows linearly with
  * the escalation's age, capped at `ESCALATION_AGE_CAP_DAYS`, so an unresolved
  * escalation ranks progressively higher in `nextReady` the longer it sits.

@@ -1,7 +1,7 @@
 /**
  * `claude-prove acb log <append|list|episodes> [--run-dir D] [--file F]`
  *
- * The reasoning-log surface (audit §5.1). Writes/reads typed reasoning-log
+ * The reasoning-log surface. Writes/reads typed reasoning-log
  * entries laid out as `<run-dir>/log/<agent>/<entry-id>.json`.
  *
  *   acb log append   [--run-dir D] [--file F]   (F or stdin = ONE entry JSON)

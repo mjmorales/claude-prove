@@ -25,7 +25,7 @@ export type TaskStatus =
 export type MilestoneStatus = 'planned' | 'active' | 'closed';
 
 /**
- * Optional containment tier for a task (audit §3.4). Matches
+ * Optional containment tier for a task. Matches
  * `scrum_tasks.layer`; NULL on the column means flat/untiered. The column
  * has no CHECK constraint, so this union documents the canonical set
  * without pinning the schema.
@@ -58,12 +58,12 @@ export type EventKind =
 export type DepKind = 'blocks' | 'blocked_by';
 
 // ---------------------------------------------------------------------------
-// Structured escalation typing (onleash §11.2, audit §6.1)
+// Structured escalation typing
 // ---------------------------------------------------------------------------
 
 /**
- * Closed taxonomy for how a worker subagent escalates back to the driver
- * (onleash §11.2). Rides inside a `blocker_raised` scrum event's payload —
+ * Closed taxonomy for how a worker subagent escalates back to the driver.
+ * Rides inside a `blocker_raised` scrum event's payload —
  * no new column, no migration (the event `kind`/`payload_json` are already
  * free-form). claude-prove stays human-in-the-loop: the type enriches the
  * agent→driver report so the driver routes it; there is NO agent-to-agent
@@ -96,11 +96,11 @@ export interface EscalationPayload {
 }
 
 // ---------------------------------------------------------------------------
-// Acceptance criteria (v5, audit §5.2)
+// Acceptance criteria (v5)
 // ---------------------------------------------------------------------------
 
 /**
- * How a single acceptance criterion is verified (audit §5.2). The four kinds
+ * How a single acceptance criterion is verified. The four kinds
  * map onto existing prove machinery at story-close time (not evaluated in
  * this module — only authored here):
  *
@@ -118,7 +118,7 @@ export type AcceptanceVerifiesBy = 'bash' | 'assert' | 'gate' | 'agent';
 export type AcceptanceCriterionStatus = 'active' | 'superseded';
 
 /**
- * One acceptance criterion on a task (audit §5.2). Criteria are append-only:
+ * One acceptance criterion on a task. Criteria are append-only:
  * a retired criterion flips `status` to `'superseded'` with a `reason` (and
  * optional `superseded_by` pointer) rather than being removed — mirrors the
  * v4 `scrum_decisions` supersession discipline.
@@ -150,7 +150,7 @@ export interface AcceptanceCriterion {
 }
 
 /**
- * Evaluation policy for a task's criteria (audit §5.2). `parallel`/`failed_only`
+ * Evaluation policy for a task's criteria. `parallel`/`failed_only`
  * are gated on every criterion being `idempotent: true` — enforced by
  * `ScrumStore.setAcceptance`/`addCriterion`.
  *
@@ -173,7 +173,7 @@ export interface Acceptance {
 }
 
 // ---------------------------------------------------------------------------
-// Declared bounds (v6, declared-bounds decision §2)
+// Declared bounds (v6)
 // ---------------------------------------------------------------------------
 
 /**
@@ -206,7 +206,7 @@ export interface TaskBoundsBudgets {
  * Mirrors the run-state v3 plan-side `TASK_PLAN_SPEC.bounds` shape so
  * `compile-plan` can forward it verbatim into `plan.tasks[].bounds`.
  *
- * Enforcement split (per the decision's post-implementation correction):
+ * Enforcement split:
  *   read    — advisory; rendered into the task prompt (no native read-deny).
  *   write   — advisory; the git worktree is the write wall. Native permission
  *             deny rules match a set, not its complement, so there is NO
@@ -214,7 +214,7 @@ export interface TaskBoundsBudgets {
  *   tools   — the only NATIVE surface; allow/deny merge into permissions.
  *   budgets — ADVISORY ONLY; soft ceilings rendered into the prompt.
  *
- * All fields optional; absent = unbounded (the pre-v6 behavior). The closed
+ * All fields optional; absent = unbounded. The closed
  * top-level key set (`read | write | tools | budgets`) is enforced on write
  * by `validateBounds` in `store.ts`.
  */
@@ -252,7 +252,7 @@ export interface ScrumTask {
    */
   bounds: TaskBounds | null;
   /**
-   * Coarse cause a task reached a terminal status (v7, onleash §14.4–14.6).
+   * Coarse cause a task reached a terminal status (v7).
    * Closed vocabulary: `'cancelled'` (direct `task cancel`) | `'parent_cancelled'`
    * (swept by a `--cascade` walk). NULL on live tasks and on `done` (success
    * carries no reason). TEXT column — forward-compatible, not pinned by CHECK.
@@ -327,18 +327,18 @@ export interface ScrumContextBundle {
 
 /**
  * One row of the `scrum_decisions` table. `id` is the filename slug
- * (e.g., `2026-04-24-decision-persistence`). `content_sha` is the
+ * (e.g., `decision-persistence`). `content_sha` is the
  * hex-encoded sha256 of `content`, computed at write time so drift
  * detection never needs to re-read the working-tree file. `source_path`
  * is nullable because git-recovered rows may lack a working-tree file.
  *
- * `status` defaults to `'accepted'` per ADR convention; the column is
- * `TEXT` (not a typed enum) so downstream domains can extend the
+ * `status` defaults to `'accepted'` per decision-record convention; the
+ * column is `TEXT` (not a typed enum) so downstream domains can extend the
  * vocabulary without a schema migration. The canonical closed vocabulary
- * is `accepted | superseded | deprecated` (audit §5.3) — kept as TEXT, not
+ * is `accepted | superseded | deprecated` — kept as TEXT, not
  * a CHECK constraint, to preserve the forward-compatible convention above.
  *
- * Supersession is append-only (audit §5.3 / design-principles §4): a
+ * Supersession is append-only: a
  * retired decision is never hard-deleted. Instead its `status` flips to
  * `'superseded'`, `superseded_by` points at the replacement's `id`, and
  * `reason` records why. Both are NULL on current (non-retired) decisions.
@@ -359,7 +359,7 @@ export interface DecisionRow {
   /** Rationale recorded at supersession time. NULL until superseded. */
   reason: string | null;
   /**
-   * Codex subtype (v8, onleash §8.10). Canonical closed vocabulary
+   * Codex subtype (v8). Canonical closed vocabulary
    * `adr | glossary | pattern`; NULL = untyped/legacy. TEXT column — not pinned
    * by a CHECK, matching the forward-compatible convention on `status`.
    */
@@ -387,7 +387,7 @@ export interface NextReadyRow {
     context_hotness: number;
     tag_boost: number;
     /**
-     * Staleness auto-bubble (audit §6.1): a task carrying an open
+     * Staleness auto-bubble: a task carrying an open
      * `blocker_raised` escalation gets a positive boost that grows with the
      * escalation's age, so unresolved escalations rank *up* over time. 0 when
      * the task has no open escalation.

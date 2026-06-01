@@ -14,9 +14,9 @@
  * The stderr line always carries a one-line summary so tailing hooks
  * see context regardless of format.
  *
- * The tree surfaces the v3 `derivedStatus` rollup that was previously computed
- * and thrown away at the operator boundary (audit §11.3). Flat tasks
- * (parent_id NULL, no children) appear as single-node roots, so pre-v3 stores
+ * The tree surfaces the v3 `derivedStatus` rollup that was computed
+ * and thrown away at the operator boundary. Flat tasks
+ * (parent_id NULL, no children) appear as single-node roots, so legacy stores
  * render exactly as before plus a now-trivial tree.
  *
  * Exit codes:

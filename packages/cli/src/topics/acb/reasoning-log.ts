@@ -1,11 +1,10 @@
 /**
  * Reasoning Log — typed, append-only reasoning capture for a run.
  *
- * Ports the 10 typed log entries + episode derivation from onleash's
- * reasoning journal (see `docs/onleash-port-audit.md` §5.1). This module is
- * the DATA + INGEST foundation: the entry union, a strict validator, and the
- * filesystem read/merge + episode-derivation primitives the `acb log`
- * subcommand exposes.
+ * Defines the 10 typed log entries + episode derivation that back the
+ * reasoning journal. This module is the DATA + INGEST foundation: the entry
+ * union, a strict validator, and the filesystem read/merge + episode-derivation
+ * primitives the `acb log` subcommand exposes.
  *
  * On-disk layout (one JSON file per entry, written by the native Write tool —
  * NOT through long prose flags, which would force Bash-quoting of multi-line
@@ -18,11 +17,11 @@
  *
  * Validation is STRICT and closed: unknown `type` values and unknown fields
  * (top-level or per-type) are rejected. The closed union is the contract the
- * brief synthesizer (a later task) reads — see the TODO seam in this module.
+ * brief synthesizer reads, so it must stay tight.
  */
 
 // ---------------------------------------------------------------------------
-// Closed type union — mirrors audit §5.1
+// Closed type union — the reasoning-journal entry taxonomy
 // ---------------------------------------------------------------------------
 
 /**
@@ -269,10 +268,10 @@ export interface Episode {
 
 /**
  * Derive episodes from a `ts`-sorted entry list. Pure: no IO. Consumed by the
- * Review Brief (audit §5.1): `buildBrief`/`chunkEpisodes`/`renderBrief` in
+ * Review Brief: `buildBrief`/`chunkEpisodes`/`renderBrief` in
  * `./brief.ts` assemble the mechanical 7-section brief and partition episodes
  * for multipass; the `acb brief` CLI exposes them; the `reasoning-brief` skill
- * synthesizes the §1/§4 prose via episode-chunk -> fragment -> merge.
+ * synthesizes the summary and changes prose via episode-chunk -> fragment -> merge.
  */
 export function deriveEpisodes(entries: LogEntry[]): Episode[] {
   const episodes: Episode[] = [];

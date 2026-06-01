@@ -79,8 +79,8 @@ export interface SweepResult {
 }
 
 /**
- * The reasoning-log entry types curation surfaces as promotion candidates
- * (onleash §8.3–8.4). These four carry durable, attention-bearing signal a
+ * The reasoning-log entry types curation surfaces as promotion candidates.
+ * These four carry durable, attention-bearing signal a
  * milestone-close should lift toward `scrum_decisions`: `decision` (→ adr),
  * `hack`/`risk` (→ pattern/tracked debt), `assumption` (→ glossary/decision).
  * `bailout`/`discovery`/`context`/`synthesis`/`review_feedback`/`verification`
@@ -286,14 +286,14 @@ export function sweepUnreconciled(
 /**
  * On milestone close, walk every task in the milestone, gather the
  * curation-relevant reasoning-log findings across its linked runs, and emit
- * one task-scoped `curation_proposed` event per task that has any (onleash
- * §8.3–8.4 — Forced Bubble-Up, design-principles §3). The reasoning log is
- * write-only until this runs; the event is what the curation *skill* reads to
- * propose Journal→Codex promotions.
+ * one task-scoped `curation_proposed` event per task that has any. The work
+ * surfaces structurally on the close transition rather than as opt-in
+ * hygiene. The reasoning log is write-only until this runs; the event is what
+ * the curation *skill* reads to propose Journal→Codex promotions.
  *
- * ENGINE side only (design-principles §1): this surfaces candidates
- * mechanically. The judgment — which findings become durable
- * `scrum_decisions`, and as what `kind` — is the model-owned curation skill.
+ * Engine side only: this surfaces candidates mechanically. The judgment —
+ * which findings become durable `scrum_decisions`, and as what `kind` — is the
+ * model-owned curation skill.
  *
  * Idempotent two ways: (1) a task already carrying a `curation_proposed`
  * event for this milestone is skipped, so a re-close never double-emits;

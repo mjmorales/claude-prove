@@ -5,10 +5,9 @@
  * On-disk layout is the unified prove store (`.prove/prove.db`, shared across
  * domains).
  *
- * Table-name convention: all domain tables carry the `acb_` prefix per
- * `.prove/decisions/2026-04-21-unified-prove-store.md` § "Schema
- * namespacing" — hence `acb_manifests`, `acb_acb_documents`,
- * `acb_review_state`.
+ * Table-name convention: all domain tables carry the `acb_` prefix (the
+ * schema-namespacing convention shared across domains) — hence
+ * `acb_manifests`, `acb_acb_documents`, `acb_review_state`.
  *
  * Design notes:
  *   - Side-effect `registerSchema` at import time mirrors the
@@ -112,7 +111,7 @@ UPDATE acb_group_verdicts SET verdict = 'needs_discussion' WHERE verdict = 'disc
 
 /**
  * Idempotent acb-domain registration. Safe to call from module side-effect
- * AND from tests that previously hit `clearRegistry()` — both paths land
+ * AND from tests that have hit `clearRegistry()` — both paths land
  * a single acb/v1 entry. The guard exists because other test files in the
  * same `bun test` process wipe the registry between tests, and bun shares
  * module cache across files, so a module-scoped `registerSchema` runs
@@ -213,7 +212,7 @@ export interface GroupVerdictRecord {
 /**
  * Normalize a verdict string read from the DB to canonical `VerdictValue`.
  * Handles legacy values (`'approved'` → `'accepted'`, `'discuss'` →
- * `'needs_discussion'`) written by pre-v3 review-UI builds.
+ * `'needs_discussion'`) written by legacy review-UI builds.
  *
  * Out-of-vocabulary strings — a corrupt row, a hand-edited DB, or a future
  * value not yet known to this build — are NOT asserted through to the

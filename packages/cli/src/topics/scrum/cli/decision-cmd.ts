@@ -12,11 +12,11 @@
  *   supersede <id> --by <new-id> --reason <text>
  *                              Append-only retire: flips <id> to status
  *                              'superseded', points it at <new-id>, records
- *                              <text>. Never hard-deletes (audit §5.3).
+ *                              <text>. Never hard-deletes.
  *   review-stale [--days N] [--human]
  *                              Report decisions whose `recorded_at` is older
  *                              than N days (default 90). Report-only — never
- *                              prunes or mutates (onleash §8.8).
+ *                              prunes or mutates.
  *
  * Stdout contract: JSON result per action on stdout; one-line human
  * summary on stderr. `list` returns a JSON array (or a table with `--human`).
@@ -65,17 +65,17 @@ const DECISION_ACTIONS: DecisionAction[] = [
   'review-stale',
 ];
 
-/** ADR default per `.prove/decisions/` convention. */
+/** Default decision-record status. */
 const DEFAULT_DECISION_STATUS = 'accepted';
 
 /**
- * Canonical closed Codex subtypes (v8, onleash §8.10). The CLI enforces this
+ * Canonical closed Codex subtypes (v8). The CLI enforces this
  * set on `--kind`; the column itself stays free TEXT so a future subtype lands
- * via a schema-version bump (design-principles §4), not a CHECK constraint.
+ * via a schema-version bump, not a CHECK constraint.
  */
 const CANONICAL_DECISION_KINDS = ['adr', 'glossary', 'pattern'] as const;
 
-/** Default staleness threshold for `review-stale` (onleash §8.8). */
+/** Default staleness threshold for `review-stale`. */
 const DEFAULT_STALE_DAYS = 90;
 
 export function runDecisionCmd(
@@ -229,7 +229,7 @@ function renderHumanTable(rows: DecisionRow[]): string {
 }
 
 // ---------------------------------------------------------------------------
-// supersede — append-only retire (audit §5.3)
+// supersede — append-only retire
 // ---------------------------------------------------------------------------
 
 /**
@@ -260,7 +260,7 @@ function doSupersede(store: ScrumStore, id: string | undefined, flags: DecisionC
 }
 
 // ---------------------------------------------------------------------------
-// review-stale — report decisions past a staleness threshold (onleash §8.8)
+// review-stale — report decisions past a staleness threshold
 // ---------------------------------------------------------------------------
 
 /** One stale-decision report row: the decision plus its computed age in days. */
@@ -274,7 +274,7 @@ interface StaleDecision {
 
 /**
  * Report decisions whose `recorded_at` is older than `--days` (default 90).
- * REPORT-ONLY (onleash §8.8): surfaces hygiene candidates for human review and
+ * REPORT-ONLY: surfaces hygiene candidates for human review and
  * mutates nothing — no prune, no status flip. Already-superseded decisions are
  * excluded (they are retired, not stale-but-live). Sorted oldest-first so the
  * most overdue review floats to the top. JSON array on stdout, or a table with
@@ -362,7 +362,7 @@ const DECISIONS_GLOB = '.prove/decisions/*.md';
  *   - All git calls use `spawnSync` with an explicit args array and no
  *     `shell: true` — paths never touch a shell.
  *   - Non-repo is a usage error (exit 1); empty history is a clean no-op.
- *   - Blobs that lack an H1 or are empty are skipped; they cannot be ADRs.
+ *   - Blobs that lack an H1 or are empty are skipped; they cannot be decision records.
  */
 function doRecover(store: ScrumStore, workspaceRoot: string, flags: DecisionCmdFlags): number {
   if (flags.fromGit !== true) {
@@ -484,8 +484,8 @@ function readBlobAtCommit(workspaceRoot: string, sha: string, path: string): str
 }
 
 /**
- * Gate blob content before parsing. An ADR must have at least one `# H1`
- * line; empty or plain-text blobs are skipped.
+ * Gate blob content before parsing. A decision record must have at least one
+ * `# H1` line; empty or plain-text blobs are skipped.
  */
 function isAdrBlob(content: string): boolean {
   if (content.length === 0) return false;
@@ -509,7 +509,7 @@ function isAdrBlob(content: string): boolean {
  *   - `topic`  = value of `**Topic**: X` or `Topic: X` line if present;
  *                otherwise `null`
  *   - `status` = value of `**Status**: X` if present; otherwise
- *                `'accepted'` (the ADR default)
+ *                `'accepted'` (the decision-record default)
  *   - `content`           = raw file content (not trimmed)
  *   - `sourcePath`        = the input `path` (as given, not resolved)
  *   - `recordedByAgent`   = `PROVE_AGENT` env var if set, else `null`
