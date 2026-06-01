@@ -14,7 +14,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 export interface TaskPromptOpts {
   runDir: string;
@@ -247,6 +247,8 @@ function renderTaskPrompt(input: RenderInput): string {
     ].join('\n'),
   );
   sections.push('');
+  sections.push(renderCheckpointInterrupt(opts.runDir, opts.projectRoot));
+  sections.push('');
   sections.push('## When Done');
   sections.push('');
   sections.push(
@@ -269,6 +271,45 @@ function renderTaskPrompt(input: RenderInput): string {
   );
 
   return `${sections.join('\n')}\n`;
+}
+
+/**
+ * Cooperative checkpoint-interrupt protocol (Layer 2) for the worker prompt.
+ *
+ * Best-effort graceful interrupt that layers ON TOP of the Layer-1
+ * cancel-and-redispatch floor — it never replaces it. The driver raises a
+ * cancel flag (a `CANCEL` file under the run dir); the worker polls it at
+ * natural checkpoints and, when set, writes a `synthesis` reasoning-log entry
+ * capturing progress + next steps, commits work-in-progress, and self-exits so
+ * a re-dispatch RESUMES from the handoff rather than restarting. A non-polling
+ * or stuck worker will not stop here — the token budget / subagent timeout
+ * (Layer 1) remains the hard backstop.
+ *
+ * A relative run dir is absolutized against `projectRoot` (the main worktree
+ * root), so the embedded flag path and handoff-append command target the main
+ * worktree's `.prove/runs/...` tree — never the worker's own task worktree,
+ * where `.prove/` is gitignored and absent.
+ */
+function renderCheckpointInterrupt(runDir: string, projectRoot: string): string {
+  const resolvedRunDir = isAbsolute(runDir) ? runDir : join(projectRoot, runDir);
+  const cancelFlag = join(resolvedRunDir, 'CANCEL');
+  return [
+    '## Cooperative checkpoint-interrupt (Layer 2)',
+    '',
+    'The driver can ask for an early, graceful stop by writing a cancel-flag file. Poll it at natural checkpoints (after a logical unit of work, before starting the next file or step):',
+    '',
+    '```bash',
+    `test -f "${cancelFlag}" && echo "cancel requested"`,
+    '```',
+    '',
+    'When the cancel-flag is present, perform a graceful handoff so a re-dispatch RESUMES instead of restarting:',
+    '',
+    `1. Write a \`synthesis\` reasoning-log entry capturing progress so far and the concrete next steps. Compose the entry JSON with the Write tool, then append it: \`claude-prove acb log append --run-dir "${resolvedRunDir}" --file <entry.json>\`.`,
+    '2. Commit your work-in-progress (`feat({scope}): WIP — graceful handoff at checkpoint`).',
+    '3. Self-exit; do not continue past the checkpoint.',
+    '',
+    'This path is best-effort and layers ON TOP of the Layer-1 cancel-and-redispatch floor — it never replaces it. When you are mid-step or cannot stop cleanly, keep working: the token budget and subagent timeout remain the hard backstop.',
+  ].join('\n');
 }
 
 function formatBulletList(items: string[]): string {

@@ -170,6 +170,17 @@ counts and the blocked subtree, if any.
   wait on cooperation: `scrum task cancel <id> --cascade` → `run-state init --overwrite`
   → re-dispatch, with the `/workflows` token budget + subagent timeout as the hard stop.
   See `skills/orchestrator/SKILL.md` → "Interrupting a run — the Layer-1 floor".
+- **Stopping a wave gracefully → the Layer-2 cooperative checkpoint-interrupt.** When you
+  want in-flight work preserved rather than discarded, raise a cancel-flag instead of a
+  hard abort: write a `CANCEL` file under the run dir
+  (`.prove/runs/<branch>/<slug>/CANCEL`, resolved from the main worktree). Task subagents
+  poll it at natural checkpoints — when set, each writes a `synthesis` graceful-handoff
+  entry (`claude-prove acb log append`), commits work-in-progress, and self-exits, so a
+  re-dispatch RESUMES from the handoff. Clear the flag (`rm -f .../CANCEL`) before
+  re-dispatching. This is best-effort and layers ON TOP of the Layer-1 floor — it never
+  replaces it: a non-polling or stuck task only stops at the token budget / subagent
+  timeout, so Layer 1 stays the backstop. The worker-side protocol ships in the prompt
+  emitted by `claude-prove orchestrator task-prompt`.
 
 ---
 
