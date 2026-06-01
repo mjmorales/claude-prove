@@ -25,6 +25,7 @@ import {
   SCRUM_MIGRATION_V7_SQL,
   SCRUM_MIGRATION_V8_SQL,
   SCRUM_MIGRATION_V9_SQL,
+  SCRUM_MIGRATION_V10_SQL,
   ensureScrumSchemaRegistered,
 } from './schemas';
 
@@ -412,12 +413,12 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('full migration chain from v0 applies v1..v9 in order', () => {
+  test('full migration chain from v0 applies v1..v10 in order', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       const result = runMigrations(raw);
       expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
       ]);
     } finally {
       raw.close();
@@ -429,7 +430,7 @@ describe('scrum domain registration', () => {
     try {
       const first = runMigrations(raw);
       expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
       ]);
 
       const second = runMigrations(raw);
@@ -449,6 +450,7 @@ describe('scrum domain registration', () => {
         { version: 7 },
         { version: 8 },
         { version: 9 },
+        { version: 10 },
       ]);
     } finally {
       raw.close();
@@ -479,10 +481,10 @@ describe('scrum domain registration', () => {
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(log).toHaveLength(9);
-      const [v1, v2, v3, v4, v5, v6, v7, v8, v9] = log;
-      if (!v1 || !v2 || !v3 || !v4 || !v5 || !v6 || !v7 || !v8 || !v9)
-        throw new Error('expected nine log entries');
+      expect(log).toHaveLength(10);
+      const [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10] = log;
+      if (!v1 || !v2 || !v3 || !v4 || !v5 || !v6 || !v7 || !v8 || !v9 || !v10)
+        throw new Error('expected ten log entries');
       expect(v1.domain).toBe('scrum');
       expect(v1.version).toBe(1);
       expect(v1.description).toContain('scrum_tasks');
@@ -510,6 +512,30 @@ describe('scrum domain registration', () => {
       expect(v9.domain).toBe('scrum');
       expect(v9.version).toBe(9);
       expect(v9.description).toContain('last_modified_by');
+      expect(v10.domain).toBe('scrum');
+      expect(v10.version).toBe(10);
+      expect(v10.description).toContain('initiative');
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('SCRUM_MIGRATION_V10_SQL adds scrum_milestones.initiative', () => {
+    expect(SCRUM_MIGRATION_V10_SQL).toContain('ALTER TABLE scrum_milestones ADD COLUMN initiative');
+  });
+
+  test('v10 ADD COLUMN defaults initiative to NULL on existing milestones', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      raw.exec(
+        "INSERT INTO scrum_milestones (id, title, status, created_at) VALUES ('m1', 'M1', 'planned', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ initiative: string | null }>(
+        'SELECT initiative FROM scrum_milestones WHERE id = ?',
+        ['m1'],
+      );
+      expect(row).toEqual([{ initiative: null }]);
     } finally {
       raw.close();
     }

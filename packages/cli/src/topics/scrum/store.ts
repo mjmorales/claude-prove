@@ -98,6 +98,8 @@ export interface CreateMilestoneInput {
   description?: string | null;
   targetState?: string | null;
   status?: MilestoneStatus;
+  /** Initiative grouping label (v10); the tier above milestone. Omitted = NULL. */
+  initiative?: string | null;
   /** ISO-8601 timestamp; defaults to now(). */
   createdAt?: string;
 }
@@ -188,6 +190,10 @@ const ALLOWED_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
  */
 const TASK_COLUMNS =
   'id, title, description, status, milestone_id, parent_id, layer, acceptance_json, bounds_json, terminal_reason, terminal_detail, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, deleted_at';
+
+/** Canonical `scrum_milestones` SELECT column list; includes the v10 `initiative` grouping. */
+const MILESTONE_COLUMNS =
+  'id, title, description, target_state, status, initiative, created_at, closed_at';
 
 /**
  * Raw `scrum_tasks` SELECT shape — identical to `ScrumTask` except the v5
@@ -943,34 +949,49 @@ export class ScrumStore {
       description: input.description ?? null,
       target_state: input.targetState ?? null,
       status: input.status ?? 'planned',
+      initiative: input.initiative ?? null,
       created_at: input.createdAt ?? isoNow(),
       closed_at: null,
     };
     this.prep(
-      'INSERT INTO scrum_milestones (id, title, description, target_state, status, created_at, closed_at) VALUES (?, ?, ?, ?, ?, ?, NULL)',
-    ).run(row.id, row.title, row.description, row.target_state, row.status, row.created_at);
+      'INSERT INTO scrum_milestones (id, title, description, target_state, status, initiative, created_at, closed_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)',
+    ).run(
+      row.id,
+      row.title,
+      row.description,
+      row.target_state,
+      row.status,
+      row.initiative,
+      row.created_at,
+    );
     return row;
   }
 
-  listMilestones(status?: MilestoneStatus): ScrumMilestone[] {
-    if (status === undefined) {
-      return this.db
-        .prepare(
-          'SELECT id, title, description, target_state, status, created_at, closed_at FROM scrum_milestones ORDER BY created_at ASC',
-        )
-        .all() as ScrumMilestone[];
+  /**
+   * List milestones, optionally filtered by `status` and/or `initiative` (the
+   * tier above milestone). The initiative match is case-insensitive, matching
+   * the decision-kind filter style.
+   */
+  listMilestones(status?: MilestoneStatus, initiative?: string): ScrumMilestone[] {
+    const clauses: string[] = [];
+    const params: string[] = [];
+    if (status !== undefined) {
+      clauses.push('status = ?');
+      params.push(status);
     }
-    return this.db
-      .prepare(
-        'SELECT id, title, description, target_state, status, created_at, closed_at FROM scrum_milestones WHERE status = ? ORDER BY created_at ASC',
-      )
-      .all(status) as ScrumMilestone[];
+    if (initiative !== undefined && initiative.length > 0) {
+      clauses.push('lower(initiative) = lower(?)');
+      params.push(initiative);
+    }
+    const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
+    const sql = `SELECT ${MILESTONE_COLUMNS} FROM scrum_milestones ${where} ORDER BY created_at ASC`;
+    return this.prep(sql).all(...params) as ScrumMilestone[];
   }
 
   getMilestone(id: string): ScrumMilestone | null {
-    const row = this.prep(
-      'SELECT id, title, description, target_state, status, created_at, closed_at FROM scrum_milestones WHERE id = ?',
-    ).get(id) as ScrumMilestone | null;
+    const row = this.prep(`SELECT ${MILESTONE_COLUMNS} FROM scrum_milestones WHERE id = ?`).get(
+      id,
+    ) as ScrumMilestone | null;
     return row ?? null;
   }
 

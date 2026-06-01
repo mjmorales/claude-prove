@@ -338,10 +338,30 @@ ALTER TABLE scrum_tasks ADD COLUMN last_modified_by TEXT;
 ALTER TABLE scrum_tasks ADD COLUMN last_modified_at TEXT;
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v10 — initiative grouping on scrum_milestones (the tier above milestone)
+// ---------------------------------------------------------------------------
+
+/**
+ * v10: add an OPTIONAL `initiative` grouping to `scrum_milestones` — the tier
+ * above milestone. One nullable TEXT column:
+ *
+ *   initiative — a free-text label tying several milestones to one outcome
+ *                bet. NULL = the milestone belongs to no initiative (the flat
+ *                default).
+ *
+ * `ADD COLUMN` with a NULL default is safe on a populated table (no existing
+ * milestone needs an initiative). No CHECK — the column stays forward-compatible
+ * TEXT, matching the grouping/subtype columns on the other tables.
+ */
+export const SCRUM_MIGRATION_V10_SQL = `
+ALTER TABLE scrum_milestones ADD COLUMN initiative TEXT;
+`;
+
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that have hit `clearRegistry()` — both
- * paths land a single scrum/{v1..v9} entry set. Matches
+ * paths land a single scrum/{v1..v10} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -420,6 +440,13 @@ export function ensureScrumSchemaRegistered(): void {
           'add scrum_tasks.last_modified_by + scrum_tasks.last_modified_at for last-touch provenance',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V9_SQL);
+        },
+      },
+      {
+        version: 10,
+        description: 'add scrum_milestones.initiative (nullable) for the initiative grouping tier',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V10_SQL);
         },
       },
     ],

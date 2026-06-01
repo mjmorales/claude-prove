@@ -467,6 +467,27 @@ describe('ScrumStore — milestones', () => {
     expect(store.getMilestone('missing')).toBeNull();
   });
 
+  test('createMilestone persists the initiative grouping; absent = null', () => {
+    seedMilestone('m1', { initiative: 'q3-growth' });
+    expect(store.getMilestone('m1')?.initiative).toBe('q3-growth');
+    seedMilestone('m2');
+    expect(store.getMilestone('m2')?.initiative).toBeNull();
+  });
+
+  test('listMilestones filters by initiative case-insensitively, combinable with status', () => {
+    seedMilestone('m1', { initiative: 'q3-growth', status: 'active' });
+    seedMilestone('m2', { initiative: 'q3-growth', status: 'planned' });
+    seedMilestone('m3', { initiative: 'infra', status: 'active' });
+
+    expect(
+      store
+        .listMilestones(undefined, 'Q3-GROWTH')
+        .map((m) => m.id)
+        .sort(),
+    ).toEqual(['m1', 'm2']);
+    expect(store.listMilestones('active', 'q3-growth').map((m) => m.id)).toEqual(['m1']);
+  });
+
   test('closeMilestone flips status to closed and stamps closed_at', () => {
     seedMilestone('m1', { status: 'active' });
     const closed = store.closeMilestone('m1');

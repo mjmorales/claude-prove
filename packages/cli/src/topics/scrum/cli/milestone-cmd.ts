@@ -27,6 +27,8 @@ export interface MilestoneCmdFlags {
   targetState?: string;
   id?: string;
   status?: string;
+  /** `create`: initiative grouping label; `list`: filter to one initiative. */
+  initiative?: string;
   workspaceRoot?: string;
 }
 
@@ -99,6 +101,7 @@ function doCreate(store: ScrumStore, flags: MilestoneCmdFlags): number {
     title: flags.title,
     description: flags.description ?? null,
     targetState: flags.targetState ?? null,
+    initiative: flags.initiative ?? null,
   });
   process.stdout.write(`${JSON.stringify(milestone)}\n`);
   process.stderr.write(`scrum milestone create: ${milestone.id}\n`);
@@ -116,7 +119,7 @@ function doList(store: ScrumStore, flags: MilestoneCmdFlags): number {
     }
     status = flags.status as MilestoneStatus;
   }
-  const rows = store.listMilestones(status);
+  const rows = store.listMilestones(status, flags.initiative);
   process.stdout.write(`${JSON.stringify(rows)}\n`);
   process.stderr.write(`scrum milestone list: ${rows.length} milestones\n`);
   return 0;
