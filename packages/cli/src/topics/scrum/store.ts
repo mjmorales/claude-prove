@@ -148,12 +148,16 @@ export interface RecordDecisionInput {
   content: string;
   sourcePath?: string | null;
   recordedByAgent?: string | null;
+  /** Codex subtype (v8): `adr | glossary | pattern`. Omitted = untyped (NULL). */
+  kind?: string | null;
 }
 
-/** Filter shape for `listDecisions`. Both fields are optional and AND-combined. */
+/** Filter shape for `listDecisions`. All fields are optional and AND-combined. */
 export interface ListDecisionsFilter {
   topic?: string;
   status?: string;
+  /** Codex subtype filter (v8); case-insensitive, like `topic`/`status`. */
+  kind?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1383,14 +1387,15 @@ export class ScrumStore {
       // change (see ON CONFLICT below).
       superseded_by: null,
       reason: null,
+      kind: input.kind ?? null,
     };
 
     // All binds are named ($-prefixed) so the supersession-preserve flag
     // ($assertsStatus) and every column value survive a future reorder of the
     // INSERT column list — no positional `?N` to silently misalign.
     this.prep(
-      `INSERT INTO scrum_decisions (id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason)
-       VALUES ($id, $title, $topic, $status, $content, $source_path, $content_sha, $recorded_at, $recorded_by_agent, $superseded_by, $reason)
+      `INSERT INTO scrum_decisions (id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason, kind)
+       VALUES ($id, $title, $topic, $status, $content, $source_path, $content_sha, $recorded_at, $recorded_by_agent, $superseded_by, $reason, $kind)
        ON CONFLICT(id) DO UPDATE SET
          title = excluded.title,
          topic = excluded.topic,
@@ -1399,6 +1404,7 @@ export class ScrumStore {
          content_sha = excluded.content_sha,
          recorded_at = excluded.recorded_at,
          recorded_by_agent = excluded.recorded_by_agent,
+         kind = excluded.kind,
          -- Preserve a terminal supersession across a bare re-record. When the
          -- existing row is 'superseded' and the incoming record asserts no
          -- status ($assertsStatus = 0), keep status/superseded_by/reason
@@ -1430,6 +1436,7 @@ export class ScrumStore {
       $recorded_by_agent: row.recorded_by_agent,
       $superseded_by: row.superseded_by,
       $reason: row.reason,
+      $kind: row.kind,
       $assertsStatus: assertsStatus,
     });
 
@@ -1476,7 +1483,7 @@ export class ScrumStore {
   /** Fetch one decision by id, or null if missing. */
   getDecision(id: string): DecisionRow | null {
     const row = this.prep(
-      'SELECT id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason FROM scrum_decisions WHERE id = ?',
+      'SELECT id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason, kind FROM scrum_decisions WHERE id = ?',
     ).get(id) as DecisionRow | null;
     return row ?? null;
   }
@@ -1504,8 +1511,14 @@ export class ScrumStore {
       clauses.push('lower(status) = lower(?)');
       params.push(filter.status);
     }
+    if (filter.kind !== undefined) {
+      // Case-insensitive on both sides, matching topic/status — the curation
+      // step may author `ADR`/`adr` interchangeably.
+      clauses.push('lower(kind) = lower(?)');
+      params.push(filter.kind);
+    }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-    const sql = `SELECT id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason FROM scrum_decisions ${where} ORDER BY recorded_at DESC`;
+    const sql = `SELECT id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason, kind FROM scrum_decisions ${where} ORDER BY recorded_at DESC`;
     return this.prep(sql).all(...params) as DecisionRow[];
   }
 

@@ -288,10 +288,32 @@ ALTER TABLE scrum_tasks ADD COLUMN terminal_reason TEXT;
 ALTER TABLE scrum_tasks ADD COLUMN terminal_detail TEXT;
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v8 — Codex kind taxonomy on scrum_decisions (onleash §8.10)
+// ---------------------------------------------------------------------------
+
+/**
+ * v8: add an OPTIONAL `kind` to `scrum_decisions` (onleash Codex subtypes
+ * §8.10). One nullable TEXT column:
+ *
+ *   kind — the Codex subtype a decision belongs to. Canonical closed
+ *          vocabulary `adr | glossary | pattern`; NULL = an untyped/legacy
+ *          decision (every pre-v8 row). The curation step (model-owned) sets
+ *          it when promoting a reasoning-log finding into a durable decision.
+ *
+ * `ADD COLUMN` with a NULL default is safe on a populated table (no existing
+ * row needs a kind). No CHECK constraint — the column stays forward-compatible
+ * TEXT, matching the v2–v7 convention; the closed vocabulary is documented on
+ * `DecisionRow` in `types.ts`.
+ */
+export const SCRUM_MIGRATION_V8_SQL = `
+ALTER TABLE scrum_decisions ADD COLUMN kind TEXT;
+`;
+
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that previously hit `clearRegistry()` — both
- * paths land a single scrum/{v1..v7} entry set. Matches
+ * paths land a single scrum/{v1..v8} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -355,6 +377,13 @@ export function ensureScrumSchemaRegistered(): void {
           'add scrum_tasks.terminal_reason + scrum_tasks.terminal_detail for cancel provenance',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V7_SQL);
+        },
+      },
+      {
+        version: 8,
+        description: 'add scrum_decisions.kind (nullable) for the Codex subtype taxonomy',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V8_SQL);
         },
       },
     ],

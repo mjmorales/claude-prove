@@ -23,6 +23,7 @@ import {
   SCRUM_MIGRATION_V5_SQL,
   SCRUM_MIGRATION_V6_SQL,
   SCRUM_MIGRATION_V7_SQL,
+  SCRUM_MIGRATION_V8_SQL,
   ensureScrumSchemaRegistered,
 } from './schemas';
 
@@ -215,7 +216,7 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V4_SQL).toContain('ALTER TABLE scrum_decisions ADD COLUMN reason');
   });
 
-  test('scrum_decisions column shape gains v4 superseded_by + reason', () => {
+  test('scrum_decisions column shape gains v4 superseded_by + reason + v8 kind', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -237,6 +238,8 @@ describe('scrum domain registration', () => {
         // v4 appends, NULL default.
         'superseded_by:TEXT:0',
         'reason:TEXT:0',
+        // v8 appends the Codex subtype, NULL default.
+        'kind:TEXT:0',
       ]);
     } finally {
       raw.close();
@@ -342,6 +345,27 @@ describe('scrum domain registration', () => {
     }
   });
 
+  test('SCRUM_MIGRATION_V8_SQL adds scrum_decisions.kind', () => {
+    expect(SCRUM_MIGRATION_V8_SQL).toContain('ALTER TABLE scrum_decisions ADD COLUMN kind');
+  });
+
+  test('v8 ADD COLUMN defaults kind to NULL on existing rows', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      raw.exec(
+        "INSERT INTO scrum_decisions (id, title, status, content, content_sha, recorded_at) VALUES ('d1', 'D1', 'accepted', 'body', 'deadbeef', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ kind: string | null }>(
+        'SELECT kind FROM scrum_decisions WHERE id = ?',
+        ['d1'],
+      );
+      expect(row).toEqual([{ kind: null }]);
+    } finally {
+      raw.close();
+    }
+  });
+
   test('v5 ADD COLUMN defaults acceptance_json to NULL on existing rows', () => {
     const raw = openStore({ path: ':memory:' });
     try {
@@ -359,12 +383,12 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('full migration chain from v0 applies v1..v7 in order', () => {
+  test('full migration chain from v0 applies v1..v8 in order', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       const result = runMigrations(raw);
       expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7,
+        1, 2, 3, 4, 5, 6, 7, 8,
       ]);
     } finally {
       raw.close();
@@ -376,7 +400,7 @@ describe('scrum domain registration', () => {
     try {
       const first = runMigrations(raw);
       expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7,
+        1, 2, 3, 4, 5, 6, 7, 8,
       ]);
 
       const second = runMigrations(raw);
@@ -394,6 +418,7 @@ describe('scrum domain registration', () => {
         { version: 5 },
         { version: 6 },
         { version: 7 },
+        { version: 8 },
       ]);
     } finally {
       raw.close();
@@ -424,10 +449,10 @@ describe('scrum domain registration', () => {
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(log).toHaveLength(7);
-      const [v1, v2, v3, v4, v5, v6, v7] = log;
-      if (!v1 || !v2 || !v3 || !v4 || !v5 || !v6 || !v7)
-        throw new Error('expected seven log entries');
+      expect(log).toHaveLength(8);
+      const [v1, v2, v3, v4, v5, v6, v7, v8] = log;
+      if (!v1 || !v2 || !v3 || !v4 || !v5 || !v6 || !v7 || !v8)
+        throw new Error('expected eight log entries');
       expect(v1.domain).toBe('scrum');
       expect(v1.version).toBe(1);
       expect(v1.description).toContain('scrum_tasks');
@@ -449,6 +474,9 @@ describe('scrum domain registration', () => {
       expect(v7.domain).toBe('scrum');
       expect(v7.version).toBe(7);
       expect(v7.description).toContain('terminal_reason');
+      expect(v8.domain).toBe('scrum');
+      expect(v8.version).toBe(8);
+      expect(v8.description).toContain('kind');
     } finally {
       raw.close();
     }
