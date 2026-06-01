@@ -63,6 +63,28 @@ the **root input**, not a layer you create. Per layer you (1) spawn a planning s
 with a structured-output schema, (2) write each returned child as a layered scrum task,
 (3) gate accept, (4) recurse into the next tier.
 
+### Layer personas
+
+Each planning subagent gets a **layer-appropriate persona** so it decomposes at the right
+altitude — a PM thinking in capabilities produces different epics than a generic planner.
+The persona is keyed by the **child layer being produced** (onleash's role ladder).
+
+**Three personas are active for this ladder** — exactly the `epic → story → task` tiers it
+produces. Spawn only these:
+
+| Child layer produced | Planning persona | Decomposition frame |
+|----------------------|------------------|---------------------|
+| `epic` | **pm@milestone** | Product manager splitting a milestone into epics — coherent user-facing capabilities, each a scoped slice of the milestone outcome. |
+| `story` | **tech_lead@epic** | Tech lead splitting an epic into stories — architectural seams + integration order; each story independently shippable and verifiable. |
+| `task` | **engineer@story** | Engineer splitting a story into tasks — concrete PR-sized implementation units, each with a clear acceptance check. |
+
+**Two personas are NOT decomposition planners** — never spawn them from this ladder:
+
+| Persona | Why it is excluded |
+|---------|--------------------|
+| **strategy@initiative** | Reserved. The initiative tier above `milestone` is deferred ([[2026-06-01-initiative-tier-above-milestone]]); the milestone/VISION is the ladder's root, not a layer this ladder produces. Activate only if that tier lands. |
+| **implementer@task** | The leaf executor, not a planner. A `task` is the leaf — it is never decomposed further; the implementer executes it under story-close / orchestrator full-mode. |
+
 ### Phase L1: Resolve the root input
 
 - **Milestone root**: read `claude-prove scrum task list --milestone <id>` and
@@ -105,8 +127,10 @@ the contract; the subagent returns children, never prose you have to parse.
 }
 ```
 
-The subagent prompt carries: the parent artifact (title + description, or VISION text),
-the target child `layer`, and any relevant decisions (`claude-prove scrum decision list`).
+The subagent prompt carries: the **layer persona** for the child layer (see *Layer
+personas* above — `epic → pm@milestone`, `story → tech_lead@epic`, `task → engineer@story`)
+as the opening role frame, the parent artifact (title + description, or VISION text), the
+target child `layer`, and any relevant decisions (`claude-prove scrum decision list`).
 
 ### Phase L3: Write children + accept gate
 
@@ -297,16 +321,24 @@ const childrenSchema = {
 
 const TIERS = ["epic", "story", "task"]; // root (milestone/VISION) feeds the first tier
 
+// Layer persona keyed by the child layer being produced (see "Layer personas").
+const LAYER_PERSONAS = {
+  epic:  "You are a product manager (pm@milestone). Split this milestone into epics — coherent user-facing capabilities, each a scoped slice of the milestone outcome.",
+  story: "You are a tech lead (tech_lead@epic). Split this epic into stories — architectural seams and integration order; each story independently shippable and verifiable.",
+  task:  "You are an engineer (engineer@story). Split this story into tasks — concrete PR-sized implementation units, each with a clear acceptance check.",
+};
+
 async function decompose(parent, tierIndex, { milestone, autoAcceptThrough, maxFanout }) {
   if (tierIndex >= TIERS.length) return;          // leaf reached
   const layer = TIERS[tierIndex];
 
-  // L2: one planning subagent per parent, structured output.
+  // L2: one planning subagent per parent, with the layer-appropriate persona.
   const { children, discovery } = await phase(`plan-${parent.id}-${layer}`, () =>
     agent({
       subagent_type: "general-purpose",
       schema: childrenSchema,
-      prompt: `Decompose parent "${parent.title}" into ${layer} children.\n\n` +
+      prompt: `${LAYER_PERSONAS[layer]}\n\n` +
+              `Decompose parent "${parent.title}" into ${layer} children.\n\n` +
               `Parent description:\n${parent.description}\n\n` +
               `Return a child list; set "discovery" only on an unplanned hard dep.`,
     }),
