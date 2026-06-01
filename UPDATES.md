@@ -6,6 +6,54 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.3.0 — Methodology parity: reasoning Brief, milestone-close curation, escalation typing, initiative tier
+
+A feature batch raising the structured-agent methodology on prove machinery to parity: a trustworthy reasoning **Review Brief** with a mechanical preservation gate, a milestone-close **curation** pass that lifts findings into durable memory, typed escalations that auto-rank into the ready queue, a milestone-grouping **initiative** tier, and a set of integrity floors on the story-close lifecycle. Two distinct schema versions advance — they migrate by **separate** paths, so do not conflate them:
+
+- **Config schema** (`.claude/.prove.json`, `PROVE_SCHEMA`): **v7 → v8** — needs a one-time migration via `/prove:update` (or `claude-prove schema migrate --file .claude/.prove.json`).
+- **Scrum store** (`.prove/prove.db`): advances to **v10** (v8 decision kind, v9 task provenance, v10 milestone initiative) — **auto-migrates** on the next `claude-prove scrum …` command (or `claude-prove store migrate`); no manual step.
+
+**Reasoning Review Brief — `acb brief render|validate`.** A new synthesizer turns a run's reasoning log into the 7-section risk-forward Review Brief (Section 2 "Needs your attention" ordered hack > risk > open-assumption, reverse-chronological). The judgment half is a driver skill — **`reasoning-brief`** (`skills/reasoning-brief/SKILL.md`) — consuming `deriveEpisodes()` output plus the git diff; over a token threshold the episodes are chunked and synthesized across multiple passes (`acb brief chunk`). The mechanical half is a **Stage-1 preservation validator** (`acb brief validate`): it verifies every `hack`/`risk`/`bailout`/open-assumption finding and every decision's alternatives is present in the brief — without that gate the brief is advisory, not trustworthy. An optional non-blocking **Stage-2 prose judge** (the `brief-judge` agent) scores synthesized prose and records a failure as a risk entry rather than blocking the pipeline.
+
+**Milestone-level Brief — `acb milestone-brief render|validate --milestone <id>`.** A stakeholder rollup that recursively aggregates the per-story briefs of a milestone, with the same mechanical preservation guarantee applied recursively (every child finding must survive into the rollup).
+
+**Journal → Codex curation + decision kind taxonomy.** Milestone close now triggers a **curation** pass — the **`curate`** skill (`skills/curate/SKILL.md`) lifts durable reasoning-log findings into `scrum_decisions` so they survive the session that found them. Decisions gain an optional **kind** subtype — the closed set `adr | glossary | pattern`:
+- `scrum decision record <path> --kind <adr|glossary|pattern>` — tag a decision's subtype on record (an unknown value exits 1; the column itself stays free TEXT, forward-compatible).
+- `scrum decision list --kind <k>` — filter the decision list to one subtype.
+
+**Structured escalation typing + staleness auto-bubble.** Escalations now carry a typed reason from the closed set `blocked | ambiguous | conflict | missing_context`. Open escalations are ranked by staleness and auto-bubble into the ready queue: `scrum next-ready` annotates each candidate's rationale with an `escalation=<boost>(<type>)` term, and `scrum alerts` reports open escalations alongside stalled WIP and orphan runs.
+
+**Stale-memory review — `scrum decision review-stale [--days N]`.** Reports decisions older than the threshold (default 90, configurable via `memory.stale_threshold_days`), oldest-first, excluding superseded rows. **Report-only** — staleness never prunes or supersedes a decision.
+
+**Tree-aware `scrum status`.** The status view renders the epic → story → task containment tree with each node's rolled-up derived status, rather than a flat task list. Parent-less tasks render as single-node roots, so pre-tree stores are unaffected.
+
+**Cancel cascade + terminal provenance.** `scrum task cancel <id> [--cascade] [--reason R] [--detail D]` cancels a task — or, with `--cascade`, every non-terminal descendant in its `parent_id` subtree — and records terminal provenance (`terminal_reason` on the root, `parent_cancelled` on cascade descendants; an optional `terminal_detail`). This is the supersede / re-decompose lifecycle: cancel a subtree, then re-decompose under a fresh parent.
+
+**Story-close integrity floors** (store-enforced, so the CLI and the reconciler both inherit them):
+- **AC mid-flight freeze** — acceptance criteria are frozen while a `layer=story` task is `in_progress`; `task acceptance add|supersede` is rejected until the worker is moved off `in_progress`.
+- **Mandatory synthesis floor** — a `layer=story` task cannot reach `done` unless its most-recent linked run carries a `synthesis` reasoning-log entry. Run-gated: a story with no linked run is exempt.
+
+**Initiative tier above milestone.** A new `scrum_milestones.initiative` grouping column ties several milestones to one outcome bet — the tier above milestone. `scrum milestone create --initiative <label>` tags a milestone; `scrum milestone list --initiative <label>` filters to one initiative. NULL = the milestone belongs to no initiative (the flat default).
+
+**Typed decompose-layer personas.** The `decompose` skill now applies a layer-typed planning persona at each rung of the ladder (the epic planner, the story planner, the task planner each reason in a role calibrated to that layer's altitude), rather than one generic decomposition prompt for all layers.
+
+**Interrupt model — cancel-and-redispatch floor + cooperative checkpoint-interrupt.** Two layered interrupt mechanisms for in-flight workers: a Layer-1 **cancel-and-redispatch** floor (a hard stop that cancels a dispatched worker and re-dispatches fresh work) and a Layer-2 **cooperative checkpoint-interrupt** (a committed worker observes a CANCEL flag at safe checkpoints and yields cleanly without losing committed progress).
+
+**New config knobs** (`PROVE_SCHEMA` v8, all optional with defaults — absent = the documented default, so no config edit is required):
+- `brief.single_pass_token_threshold` (default `8000`) — episodes at or below this combined token count synthesize in one pass; above it, they chunk into multipass.
+- `brief.max_synthesis_retries` (default `2`) — retry budget for the brief synthesis step before giving up.
+- `brief.prose_judge_on` (default `true`) — whether the non-blocking Stage-2 prose judge runs.
+- `memory.stale_threshold_days` (default `90`) — age past which `decision review-stale` flags a decision.
+- `decomposition.auto_accept_through` (default `none`; enum `none|epic|story|task`) — the decompose layer through which children auto-promote `backlog → ready` without a human accept gate; every layer at or above the named one auto-accepts, and the gate still fires below it.
+
+**Migration — config schema v7 → v8**: `CURRENT_SCHEMA_VERSION` bumped `'7'` → `'8'`. The hop adds the optional `brief`/`memory`/`decomposition` blocks with their defaults; no existing field is rewritten, so a v7 config migrates cleanly and configs that never set a knob inherit the defaults. **Manual step**: run `/prove:update` (or `claude-prove schema migrate --file .claude/.prove.json`) at the repo root to stamp v8; commit the updated file and delete the generated `.bak`.
+
+**Migration — scrum store → v10**: the v8 (`scrum_decisions.kind`), v9 (`scrum_tasks.last_modified_by` + `last_modified_at`), and v10 (`scrum_milestones.initiative`) migrations all `ADD COLUMN` with a NULL default — append-only, no existing row rewritten. **No manual step**: the unified store self-migrates on the next `claude-prove scrum …` command (or `claude-prove store migrate`). Separate from the config schema — `CURRENT_SCHEMA_VERSION` does not track it.
+
+**Auto-adoption**: the `reasoning-brief` and `curate` skills, the `brief-judge` agent, and the layer-typed `decompose` personas are discovered on plugin load after update; the `acb brief`/`acb milestone-brief`, `scrum decision --kind`, `scrum decision review-stale`, `scrum task cancel --cascade`, and `scrum milestone --initiative` surfaces, plus the escalation ranking and tree-aware status, ship in the CLI; the v10 store columns self-migrate on next open. The **only** manual step is the config schema v7 → v8 stamp — run `/prove:update` to sync.
+
+---
+
 ## v3.2.0 — Skill validators in `.claude/.prove.json` (config schema v7)
 
 Validators can now invoke an installed **skill** as a gate, alongside the existing `command` and `prompt` kinds.
