@@ -21,6 +21,7 @@
  *   claude-prove run-state dispatch <record|has> <key> [<event>]
  *   claude-prove run-state report write <step_id> --status S [--commit SHA] [--json FILE] [--notes TEXT]
  *   claude-prove run-state migrate [--dry-run] [--overwrite]
+ *   claude-prove run-state migrate-runs [--branch B] [--slug S]
  *   claude-prove run-state hook <guard|validate|session-start|stop|subagent-stop>
  *
  * Exit codes:
@@ -43,6 +44,7 @@ import { runDispatch } from './run-state/cli/dispatch-cmd';
 import { runInit } from './run-state/cli/init-cmd';
 import { runLs } from './run-state/cli/ls-cmd';
 import { runMigrate } from './run-state/cli/migrate-cmd';
+import { runMigrateRuns } from './run-state/cli/migrate-runs-cmd';
 import { runReportWrite } from './run-state/cli/report-cmd';
 import { runCurrent, runShow, runShowReport, runSummary } from './run-state/cli/show-cmd';
 import { type StepAction, runStep } from './run-state/cli/step-cmd';
@@ -93,6 +95,7 @@ type RunStateAction =
   | 'dispatch'
   | 'report'
   | 'migrate'
+  | 'migrate-runs'
   | 'hook';
 
 const ACTIONS: RunStateAction[] = [
@@ -110,6 +113,7 @@ const ACTIONS: RunStateAction[] = [
   'dispatch',
   'report',
   'migrate',
+  'migrate-runs',
   'hook',
 ];
 
@@ -233,6 +237,12 @@ function dispatch(
         runsRoot: flags.runsRoot,
         dryRun: flags.dryRun,
         overwrite: flags.overwrite,
+      });
+    case 'migrate-runs':
+      return runMigrateRuns({
+        runsRoot: flags.runsRoot,
+        branch: flags.branch,
+        slug: flags.slug,
       });
     case 'hook':
       return dispatchHook(pos);

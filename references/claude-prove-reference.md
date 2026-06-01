@@ -39,9 +39,10 @@ Ex: `cafi lookup scrum`. Run `cafi context`/`cafi lookup` before Glob/Grep.
 
 ### run-state — orchestrator run CRUD on `.prove/runs/<branch>/<slug>/`
 
-Actions: `validate` `init` `show` `show-report` `ls` `summary` `current` `step` `step-info` `validator` `task` `dispatch` `report` `migrate` `hook`.
+Actions: `validate` `init` `show` `show-report` `ls` `summary` `current` `step` `step-info` `validator` `task` `dispatch` `report` `migrate` `migrate-runs` `hook`.
 Flags: `--runs-root` `--branch` `--slug` `--kind` `--plan` `--prd` `--overwrite` `--format md|json` `--commit` `--reason` `--verdict` `--notes` `--reviewer` `--status` `--strict` `--dry-run` `--json`.
 Ex: `run-state step --branch main --slug add-login --commit <sha> --verdict pass`
+`migrate` applies the deterministic structural chain (column moves on run JSON); `migrate-runs` is the read-only planner for model-driven CONTENT reshaping — it detects which artifacts are behind the current schema and emits a plan (target artifacts + per-hop instruction file) that the operator-invoked `run-migrate` skill consumes. `migrate-runs` never calls a model and never mutates; it composes with `migrate` (structure first, content second) and runs only on explicit invocation, never as a background loop.
 
 ### scrum — tasks, milestones, tags on `.prove/prove.db`
 
