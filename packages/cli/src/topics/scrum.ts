@@ -7,7 +7,7 @@
  *   claude-prove scrum status                    [--human]
  *   claude-prove scrum next-ready                [--limit N] [--milestone M] [--human]
  *   claude-prove scrum compile-plan              --milestone M [--out plan.json]
- *   claude-prove scrum task create               --title X [--description Y] [--milestone M] [--id I] [--parent P] [--layer epic|story|task]
+ *   claude-prove scrum task create               --title X [--description Y] [--milestone M] [--id I] [--parent P] [--layer epic|story|task] [--bounds JSON]
  *   claude-prove scrum task show <id>
  *   claude-prove scrum task list                 [--status S] [--milestone M] [--tag T]
  *   claude-prove scrum task tag <id> <tag>
@@ -19,6 +19,8 @@
  *   claude-prove scrum task acceptance add <id>    --text T --verifies-by K --check C [--idempotent] [--timeout 30s] [--criterion ID]
  *   claude-prove scrum task acceptance list <id>
  *   claude-prove scrum task acceptance supersede <id> --criterion ID --reason R [--by NEW-ID]
+ *   claude-prove scrum task bounds set <id>      --bounds JSON   (pass --bounds '' to clear)
+ *   claude-prove scrum task bounds show <id>
  *   claude-prove scrum alerts                    [--human] [--stalled-after-days N]
  *   claude-prove scrum milestone create          --title X [--description Y] [--target-state S] [--id I]
  *   claude-prove scrum milestone list            [--status S]
@@ -119,6 +121,8 @@ interface ScrumFlags {
   idempotent?: boolean;
   timeout?: string;
   criterion?: string;
+  // `task create` + `task bounds set` declared-bounds JSON blob (v6).
+  bounds?: string;
 }
 
 export function register(cli: CAC): void {
@@ -155,6 +159,10 @@ export function register(cli: CAC): void {
     .option('--idempotent', 'task acceptance add: mark the criterion safe to re-run')
     .option('--timeout <t>', 'task acceptance add: optional wall-clock budget (e.g. 30s)')
     .option('--criterion <id>', 'task acceptance: explicit criterion id (default: generated)')
+    .option(
+      '--bounds <json>',
+      "task create / task bounds set: declared bounds JSON ({ read?, write?, tools?, budgets? }); pass '' to clear",
+    )
     .option(
       '--workspace-root <w>',
       'Main worktree root; pins store to <root>/.prove/prove.db (default: git common-dir)',
@@ -222,7 +230,7 @@ function dispatch(
     case 'task':
       if (arg1 === undefined) {
         console.error(
-          'error: scrum task: sub-action required (one of: create | show | list | tag | link-decision | status | move | delete | add-dep | remove-dep | acceptance)',
+          'error: scrum task: sub-action required (one of: create | show | list | tag | link-decision | status | move | delete | add-dep | remove-dep | acceptance | bounds)',
         );
         return 1;
       }
@@ -245,6 +253,7 @@ function dispatch(
         criterion: flags.criterion,
         reason: flags.reason,
         by: flags.by,
+        bounds: flags.bounds,
         workspaceRoot: flags.workspaceRoot,
       });
 

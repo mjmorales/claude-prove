@@ -627,6 +627,104 @@ describe('runTaskCmd acceptance', () => {
 });
 
 // ---------------------------------------------------------------------------
+// task bounds (v6) — positional = [sub-action, task-id]
+// ---------------------------------------------------------------------------
+
+describe('runTaskCmd bounds', () => {
+  function seedBoundsTask(id = 'bt') {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: id, id }));
+  }
+
+  test('create --bounds round-trips into the task', () => {
+    const bounds = JSON.stringify({ tools: { allow: ['Bash(go test *)'] } });
+    const create = withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'bt', id: 'bt', bounds }),
+    );
+    expect(create.exit).toBe(0);
+    const task = JSON.parse(create.stdout.trim()) as { bounds: unknown };
+    expect(task.bounds).toEqual({ tools: { allow: ['Bash(go test *)'] } });
+  });
+
+  test('create --bounds with malformed JSON exits 1', () => {
+    const res = withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'bt', id: 'bt', bounds: '{not json' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('not valid JSON');
+  });
+
+  test('create --bounds with unknown top-level key exits 1', () => {
+    const res = withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], {
+        title: 'bt',
+        id: 'bt',
+        bounds: JSON.stringify({ reads: ['oops'] }),
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('unknown top-level key');
+  });
+
+  test('bounds set + show round-trip', () => {
+    seedBoundsTask();
+    const set = withCapture(() =>
+      runTaskCmd('bounds', ['set', 'bt'], {
+        bounds: JSON.stringify({ read: ['src/**'], budgets: { tokens: 1000 } }),
+      }),
+    );
+    expect(set.exit).toBe(0);
+
+    const show = withCapture(() => runTaskCmd('bounds', ['show', 'bt'], {}));
+    expect(show.exit).toBe(0);
+    const bounds = JSON.parse(show.stdout.trim()) as Record<string, unknown>;
+    expect(bounds).toEqual({ read: ['src/**'], budgets: { tokens: 1000 } });
+  });
+
+  test('bounds set with empty --bounds clears the bounds', () => {
+    seedBoundsTask();
+    withCapture(() =>
+      runTaskCmd('bounds', ['set', 'bt'], { bounds: JSON.stringify({ read: ['src/**'] }) }),
+    );
+    const cleared = withCapture(() => runTaskCmd('bounds', ['set', 'bt'], { bounds: '' }));
+    expect(cleared.exit).toBe(0);
+
+    const show = withCapture(() => runTaskCmd('bounds', ['show', 'bt'], {}));
+    expect(show.stdout.trim()).toBe('null');
+  });
+
+  test('bounds set requires --bounds', () => {
+    seedBoundsTask();
+    const res = withCapture(() => runTaskCmd('bounds', ['set', 'bt'], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--bounds <json> is required');
+  });
+
+  test('bounds set rejects an unknown top-level key', () => {
+    seedBoundsTask();
+    const res = withCapture(() =>
+      runTaskCmd('bounds', ['set', 'bt'], { bounds: JSON.stringify({ tool: {} }) }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('unknown top-level key');
+  });
+
+  test('bounds show on a task with no bounds prints null', () => {
+    seedBoundsTask();
+    const show = withCapture(() => runTaskCmd('bounds', ['show', 'bt'], {}));
+    expect(show.exit).toBe(0);
+    expect(show.stdout.trim()).toBe('null');
+    expect(show.stderr).toContain('unbounded');
+  });
+
+  test('unknown bounds sub-action: exit 1', () => {
+    seedBoundsTask();
+    const res = withCapture(() => runTaskCmd('bounds', ['nope', 'bt'], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('sub-action required');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // milestone-cmd
 // ---------------------------------------------------------------------------
 
