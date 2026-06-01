@@ -35,7 +35,7 @@ Restart Claude Code after installation for the plugin to take effect.
 | Subsystem | Entry Point | What It Does |
 |-----------|-------------|--------------|
 | **Orchestrator** | `/prove:orchestrator` | Executes a task plan step-by-step. Runs build/lint/test validators after each step. Auto-scales: 1-3 steps run sequentially; 4+ steps use parallel git worktrees with mandatory principal-architect review before merge. |
-| **Scrum** | `/prove:scrum` | Agentic task management backed by `.prove/prove.db`. Tasks, milestones, tags, and dependency graph. SessionStart/SubagentStop/Stop hooks reconcile state at task boundaries. Orchestrator runs link to tasks via `task_id` in `plan.json`. |
+| **Scrum** | `/prove:scrum` | Agentic task management backed by `.prove/prove.db`. Tasks, milestones, tags, dependency graph, a layered containment tree (epic/story/task), and first-class acceptance criteria. The `decompose` skill drives top-down planning (charter → epic → story → task) over these primitives. SessionStart/SubagentStop/Stop hooks reconcile state at task boundaries; orchestrator runs link via `task_id` in `plan.json`. |
 | **ACB** (Agent Change Brief) | `/prove:review-ui` | Every feature-branch commit carries an ACB v0.2 intent manifest written by a PostToolUse hook at commit time. The review UI (React + Fastify, Docker) surfaces intent-grouped diffs for structured review with verdicts: accepted / rejected / needs_discussion / rework. |
 
 ## Command Reference

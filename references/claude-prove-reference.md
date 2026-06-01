@@ -45,9 +45,11 @@ Ex: `run-state step --branch main --slug add-login --commit <sha> --verdict pass
 
 ### scrum — tasks, milestones, tags on `.prove/prove.db`
 
-Actions: `init` `status` `next-ready` `compile-plan` `alerts` `task <create|show|list|tag|link-decision|status|delete|add-dep|remove-dep>` `milestone <create|list|show|close|activate|reopen>` `tag <add|remove|list>` `link-run` `hook <session-start|subagent-stop|stop>`.
-Flags: `--human` `--limit` `--milestone` `--title` `--description` `--id` `--status` `--tag` `--task` `--target-state` `--branch` `--slug` `--out` (compile-plan) `--stalled-after-days` (default 7) `--workspace-root`.
+Actions: `init` `status` `next-ready` `compile-plan` `alerts` `task <create|show|list|tag|link-decision|status|delete|add-dep|remove-dep|acceptance|bounds>` `milestone <create|list|show|close|activate|reopen>` `tag <add|remove|list>` `link-run` `hook <session-start|subagent-stop|stop>`.
+`task acceptance <add|list|supersede>` manages first-class acceptance criteria; `task bounds <set|show>` reads/writes the per-task `bounds` declaration. `task create --parent <id> --layer <epic|story|task>` writes layered children into the containment tree.
+Flags: `--human` `--limit` `--milestone` `--title` `--description` `--id` `--status` `--tag` `--task` `--target-state` `--branch` `--slug` `--out` (compile-plan) `--stalled-after-days` (default 7) `--workspace-root` `--parent` `--layer <epic|story|task>` `--bounds <json>` `--text` `--verifies-by <bash|assert|gate|agent>` `--check` `--idempotent` `--criterion` `--by` `--reason`.
 Ex: `scrum task create --title "Add login" --milestone auth-v1 --tag backend`.
+Ex: `scrum task create --title "OAuth" --parent <epic-id> --layer story` · `scrum task acceptance add <id> --text "builds clean" --verifies-by bash --check "bun run build"`.
 `compile-plan --milestone <id> [--out plan.json]` emits a run-state plan.json (waves from `blocked_by` edges) + a `scrum-map.json` sidecar — the `/prove:workflow` source-compile step.
 `scrum hook` is hook-driven — do not call inline.
 
