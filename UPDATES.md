@@ -22,6 +22,29 @@ The skill embeds the canonical native `/workflows` (Workflow tool) script for ea
 
 **Auto-adoption**: the `decompose` skill is discovered on plugin load after update; the `scrum task create --parent/--layer` flags ship in the CLI. No config edit required. Run `/prove:update` to sync.
 
+### Declared task bounds: `plan.json tasks[].bounds` + prep-permissions consumes it
+
+Lands onleash's per-task `bounds` (audit §6.2) as **declarations enforced by native permissions**, not a daemon wall. Decision record: `.prove/decisions/2026-05-31-declared-bounds-home.md`.
+
+**New plan field — `plan.json tasks[].bounds`** (run-state schema): an optional per-task block beside `worktree`:
+
+```jsonc
+"bounds": {
+  "read":  ["src/auth/**"],
+  "write": ["src/auth/**"],
+  "tools": { "allow": ["Bash(go test *)"], "deny": ["Bash(git push *)"] },
+  "budgets": { "tokens": 200000, "tool_calls": 100, "wall_clock_s": 1800 }  // ADVISORY ONLY
+}
+```
+
+All sub-fields are optional; **absent `bounds` = current behavior** (unbounded). `budgets.*` are **advisory only** — claude-prove has no enforcement daemon; nothing blocks on them.
+
+**Behavior — `prep-permissions` now consumes `tasks[].bounds`** (`skills/prep-permissions/SKILL.md`): `tools.allow`/`tools.deny` merge into native `permissions.allow`/`permissions.deny`; `write[]` globs emit `Edit`/`Write` deny rules outside them (the git worktree remains the primary write wall); `read[]` and `budgets` render into the task prompt as advisory guidance (no native surface). It emits ONE workspace `settings.local.json` — the **union** of all tasks' rules (known limitation: task A can use task B's tools; per-worktree isolation is deferred). `prep-permissions` is still **operator-invoked** — it is NOT auto-wired into orchestrator/workflow dispatch.
+
+**Migration — run-state schema v1 → v2**: `CURRENT_SCHEMA_VERSION` bumped `'1'` → `'2'`. The hop (`packages/cli/src/topics/run-state/schema-migrate.ts`, `_migrate_v1_to_v2`) is a pure version bump — `bounds` is added as optional, and absent bounds preserves v1 behavior, so no data is rewritten. Existing `plan.json` files keep working unchanged; newly created plans carry `schema_version: "2"`.
+
+**Auto-adoption**: the edited `prep-permissions` skill is picked up on plugin load after update; the new plan field is available to anyone authoring `plan.json` by hand or via `/prove:plan`. No config edit required. Run `/prove:update` to sync.
+
 ---
 
 ## v2.8.0 — New `/prove:workflow` command: run a whole milestone (or plan.json) as a parallel fan-out
