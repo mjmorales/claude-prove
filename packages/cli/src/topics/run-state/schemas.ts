@@ -14,7 +14,10 @@ import type { FieldSpec, Schema } from './validator-engine';
 
 // --- constants (mirrors tools/run_state/__init__.py and schemas.py top) ---
 
-export const CURRENT_SCHEMA_VERSION = '1';
+// v1 -> v2: plan.json tasks[] gained an optional `bounds` field (declared
+// per-task execution bounds; see .prove/decisions/2026-05-31-declared-bounds-home.md).
+// Absent bounds = current behavior, so the migration is a pure version bump.
+export const CURRENT_SCHEMA_VERSION = '2';
 
 export const STEP_STATUSES = [
   'pending',
@@ -201,6 +204,77 @@ const TASK_PLAN_SPEC: FieldSpec = {
         },
       },
       description: 'Worktree assignment (full-mode parallel orchestration)',
+    },
+    bounds: {
+      type: 'dict',
+      required: false,
+      fields: {
+        read: {
+          type: 'list',
+          items: { type: 'str' },
+          required: false,
+          description:
+            'Path globs this task may read (advisory — rendered into the task prompt by prep-permissions; no native read-deny surface exists)',
+          default: [],
+        },
+        write: {
+          type: 'list',
+          items: { type: 'str' },
+          required: false,
+          description:
+            'Path globs this task may write. prep-permissions emits Edit/Write deny rules for paths OUTSIDE these globs; the git worktree wall is the primary write boundary',
+          default: [],
+        },
+        tools: {
+          type: 'dict',
+          required: false,
+          fields: {
+            allow: {
+              type: 'list',
+              items: { type: 'str' },
+              required: false,
+              description:
+                'Native permission patterns (e.g., "Bash(go test *)") merged into permissions.allow by prep-permissions',
+              default: [],
+            },
+            deny: {
+              type: 'list',
+              items: { type: 'str' },
+              required: false,
+              description:
+                'Native permission patterns (e.g., "Bash(git push *)") merged into permissions.deny by prep-permissions',
+              default: [],
+            },
+          },
+          description: 'Tool allow/deny patterns merged into native permissions',
+        },
+        budgets: {
+          type: 'dict',
+          required: false,
+          fields: {
+            tokens: {
+              type: 'int',
+              required: false,
+              description: 'Soft token ceiling (ADVISORY ONLY — no daemon enforces it)',
+            },
+            tool_calls: {
+              type: 'int',
+              required: false,
+              description: 'Soft tool-call ceiling (ADVISORY ONLY — no daemon enforces it)',
+            },
+            wall_clock_s: {
+              type: 'int',
+              required: false,
+              description:
+                'Soft wall-clock ceiling in seconds (ADVISORY ONLY — the native subagent timeout is the only hard floor)',
+            },
+          },
+          description:
+            'Soft resource ceilings. ADVISORY ONLY — claude-prove has no enforcement daemon; prep-permissions renders these into the task prompt as guidance, nothing blocks on them',
+        },
+      },
+      description:
+        'Declared per-task execution bounds, consumed by prep-permissions. All sub-fields optional; absent = unbounded (current behavior). tools/write map to native settings.local.json permission rules; read/budgets are advisory prompt-only. See .prove/decisions/2026-05-31-declared-bounds-home.md',
     },
     steps: {
       type: 'list',

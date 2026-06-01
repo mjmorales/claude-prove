@@ -25,8 +25,8 @@ import {
 } from './schemas';
 
 describe('CURRENT_SCHEMA_VERSION', () => {
-  test("matches tools/run_state/__init__.py literal ('1')", () => {
-    expect(CURRENT_SCHEMA_VERSION).toBe('1');
+  test("is the current run-state artifact version ('2')", () => {
+    expect(CURRENT_SCHEMA_VERSION).toBe('2');
   });
 
   test('each schema echoes the current version', () => {
