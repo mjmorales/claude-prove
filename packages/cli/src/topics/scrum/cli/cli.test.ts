@@ -1375,6 +1375,44 @@ describe('runDecisionCmd', () => {
     expect(res.stderr).toMatch(/\(\d+ bytes\)/);
   });
 
+  test('record --kind: persists a canonical Codex subtype, case-normalized', () => {
+    const rel = writeDecision('.prove/decisions/2026-06-01-kindly.md', '# Kindly\n\nBody\n');
+    const res = withCapture(() => runDecisionCmd('record', [rel, undefined], { kind: 'ADR' }));
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as { id: string; kind: string | null };
+    expect(row.kind).toBe('adr');
+  });
+
+  test('record --kind: unknown subtype → exit 1, no row recorded', () => {
+    const rel = writeDecision('.prove/decisions/2026-06-01-bogus.md', '# Bogus\n\nBody\n');
+    const res = withCapture(() => runDecisionCmd('record', [rel, undefined], { kind: 'lore' }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown --kind 'lore'");
+    expect(res.stderr).toContain('adr, glossary, pattern');
+    const list = withCapture(() => runDecisionCmd('list', [undefined, undefined], {}));
+    expect(JSON.parse(list.stdout.trim()) as unknown[]).toHaveLength(0);
+  });
+
+  test('record without --kind: kind stays null', () => {
+    const rel = writeDecision('.prove/decisions/2026-06-01-nokind.md', '# NoKind\n\nBody\n');
+    const res = withCapture(() => runDecisionCmd('record', [rel, undefined], {}));
+    expect(res.exit).toBe(0);
+    expect((JSON.parse(res.stdout.trim()) as { kind: string | null }).kind).toBeNull();
+  });
+
+  test('list --kind: filters to the matching Codex subtype', () => {
+    const a = writeDecision('.prove/decisions/2026-06-01-pat.md', '# Pat\n\nBody\n');
+    const b = writeDecision('.prove/decisions/2026-06-01-adr.md', '# Adr\n\nBody\n');
+    withCapture(() => runDecisionCmd('record', [a, undefined], { kind: 'pattern' }));
+    withCapture(() => runDecisionCmd('record', [b, undefined], { kind: 'adr' }));
+
+    const res = withCapture(() =>
+      runDecisionCmd('list', [undefined, undefined], { kind: 'pattern' }),
+    );
+    const rows = JSON.parse(res.stdout.trim()) as Array<{ id: string; kind: string }>;
+    expect(rows.map((r) => r.id)).toEqual(['2026-06-01-pat']);
+  });
+
   test('record: nonexistent file → exit 1, no row', () => {
     const res = withCapture(() =>
       runDecisionCmd('record', ['.prove/decisions/ghost.md', undefined], {}),

@@ -32,9 +32,9 @@
  *   claude-prove scrum tag add <task-id> <tag>
  *   claude-prove scrum tag remove <task-id> <tag>
  *   claude-prove scrum tag list                  [--task <id>] [--tag <tag>]
- *   claude-prove scrum decision record <path>
+ *   claude-prove scrum decision record <path>    [--kind adr|glossary|pattern]
  *   claude-prove scrum decision get <id>
- *   claude-prove scrum decision list             [--topic T] [--status S] [--human]
+ *   claude-prove scrum decision list             [--topic T] [--status S] [--kind K] [--human]
  *   claude-prove scrum decision review-stale     [--days N] [--human]
  *   claude-prove scrum decision recover          --from-git
  *   claude-prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
@@ -153,7 +153,7 @@ export function register(cli: CAC): void {
     .option('--unassign', 'Clear milestone_id (scrum task move)')
     .option(
       '--kind <k>',
-      'Dep-edge kind for scrum task add-dep/remove-dep (blocks | blocked_by; default: blocks)',
+      'Dep-edge kind for task add-dep/remove-dep (blocks | blocked_by); also decision record Codex subtype (adr | glossary | pattern)',
     )
     .option('--stalled-after-days <n>', 'Alerts: stalled WIP threshold in days (default: 7)')
     .option('--from-git', 'decision recover: scan git history for .prove/decisions/*.md blobs')
@@ -314,6 +314,7 @@ function dispatch(
         by: flags.by,
         reason: flags.reason,
         days: flags.days,
+        kind: flags.kind,
         workspaceRoot: flags.workspaceRoot,
       });
 

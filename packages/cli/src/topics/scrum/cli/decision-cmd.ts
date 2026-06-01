@@ -2,9 +2,11 @@
  * `claude-prove scrum decision <action> [args] [flags]`
  *
  * Action dispatch:
- *   record <path>              Read, parse, upsert decision row; prints JSON row.
+ *   record <path> [--kind K]   Read, parse, upsert decision row; prints JSON row.
+ *                              `--kind` (adr|glossary|pattern) sets the Codex
+ *                              subtype (v8) and overrides any kind in the file.
  *   get <id>                   Prints the decision's stored `content` to stdout.
- *   list                       [--topic T] [--status S] [--human]
+ *   list                       [--topic T] [--status S] [--kind K] [--human]
  *   recover --from-git         Backfill scrum_decisions from every .prove/decisions/*.md
  *                              version ever committed. Idempotent (upsert semantics).
  *   supersede <id> --by <new-id> --reason <text>
@@ -48,6 +50,8 @@ export interface DecisionCmdFlags {
   reason?: string;
   /** `review-stale`: staleness threshold in days (default 90). */
   days?: number | string;
+  /** `record`: Codex subtype (v8) — `adr | glossary | pattern`. */
+  kind?: string;
 }
 
 export type DecisionAction = 'record' | 'get' | 'list' | 'recover' | 'supersede' | 'review-stale';
@@ -63,6 +67,13 @@ const DECISION_ACTIONS: DecisionAction[] = [
 
 /** ADR default per `.prove/decisions/` convention. */
 const DEFAULT_DECISION_STATUS = 'accepted';
+
+/**
+ * Canonical closed Codex subtypes (v8, onleash §8.10). The CLI enforces this
+ * set on `--kind`; the column itself stays free TEXT so a future subtype lands
+ * via a schema-version bump (design-principles §4), not a CHECK constraint.
+ */
+const CANONICAL_DECISION_KINDS = ['adr', 'glossary', 'pattern'] as const;
 
 /** Default staleness threshold for `review-stale` (onleash §8.8). */
 const DEFAULT_STALE_DAYS = 90;
@@ -87,7 +98,7 @@ export function runDecisionCmd(
   try {
     switch (action) {
       case 'record':
-        return doRecord(store, positional[0]);
+        return doRecord(store, positional[0], flags);
       case 'get':
         return doGet(store, positional[0]);
       case 'list':
@@ -116,7 +127,7 @@ function isDecisionAction(value: string): value is DecisionAction {
 // record
 // ---------------------------------------------------------------------------
 
-function doRecord(store: ScrumStore, path: string | undefined): number {
+function doRecord(store: ScrumStore, path: string | undefined, flags: DecisionCmdFlags): number {
   if (path === undefined || path.length === 0) {
     process.stderr.write('scrum decision record: <path> positional argument required\n');
     return 1;
@@ -126,13 +137,41 @@ function doRecord(store: ScrumStore, path: string | undefined): number {
     process.stderr.write(`scrum decision record: file not found '${path}'\n`);
     return 1;
   }
+  // `--kind` (the curation skill's Journal→Codex promotion) overrides any kind
+  // parsed from the file. An unknown subtype is a usage error so a typo never
+  // silently persists an off-vocabulary kind.
+  const kind = normalizeKind(flags.kind);
+  if (kind === INVALID_KIND) return 1;
+
   const content = readFileSync(abs, 'utf8');
   const input = parseDecisionFile(content, path);
+  if (kind !== undefined) input.kind = kind;
   const row = store.recordDecision(input);
   const bytes = Buffer.byteLength(content, 'utf8');
   process.stdout.write(`${JSON.stringify(row)}\n`);
   process.stderr.write(`scrum decision record: ${row.id} (${bytes} bytes)\n`);
   return 0;
+}
+
+/** Sentinel distinguishing "invalid kind given" from "no kind given". */
+const INVALID_KIND = Symbol('invalid-kind');
+
+/**
+ * Validate `--kind` against the canonical Codex subtypes (case-insensitive,
+ * normalized to lowercase). Returns `undefined` when absent, the normalized
+ * value when valid, or the `INVALID_KIND` sentinel (after writing a usage
+ * error) when off-vocabulary.
+ */
+function normalizeKind(raw: string | undefined): string | undefined | typeof INVALID_KIND {
+  if (raw === undefined || raw.length === 0) return undefined;
+  const lower = raw.toLowerCase();
+  if (!(CANONICAL_DECISION_KINDS as readonly string[]).includes(lower)) {
+    process.stderr.write(
+      `scrum decision record: unknown --kind '${raw}'. expected one of: ${CANONICAL_DECISION_KINDS.join(', ')}\n`,
+    );
+    return INVALID_KIND;
+  }
+  return lower;
 }
 
 // ---------------------------------------------------------------------------
@@ -162,6 +201,7 @@ function doList(store: ScrumStore, flags: DecisionCmdFlags): number {
   const filter: ListDecisionsFilter = {};
   if (flags.topic !== undefined && flags.topic.length > 0) filter.topic = flags.topic;
   if (flags.status !== undefined && flags.status.length > 0) filter.status = flags.status;
+  if (flags.kind !== undefined && flags.kind.length > 0) filter.kind = flags.kind;
 
   const rows = store.listDecisions(filter);
   if (flags.human === true) {
