@@ -1127,9 +1127,12 @@ export class ScrumStore {
       reason: null,
     };
 
+    // All binds are named ($-prefixed) so the supersession-preserve flag
+    // ($assertsStatus) and every column value survive a future reorder of the
+    // INSERT column list — no positional `?N` to silently misalign.
     this.prep(
       `INSERT INTO scrum_decisions (id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES ($id, $title, $topic, $status, $content, $source_path, $content_sha, $recorded_at, $recorded_by_agent, $superseded_by, $reason)
        ON CONFLICT(id) DO UPDATE SET
          title = excluded.title,
          topic = excluded.topic,
@@ -1140,37 +1143,37 @@ export class ScrumStore {
          recorded_by_agent = excluded.recorded_by_agent,
          -- Preserve a terminal supersession across a bare re-record. When the
          -- existing row is 'superseded' and the incoming record asserts no
-         -- status (?12 = 0), keep status/superseded_by/reason intact; never
-         -- auto-resurrect. Otherwise adopt the incoming values.
+         -- status ($assertsStatus = 0), keep status/superseded_by/reason
+         -- intact; never auto-resurrect. Otherwise adopt the incoming values.
          status = CASE
-           WHEN scrum_decisions.status = 'superseded' AND ?12 = 0
+           WHEN scrum_decisions.status = 'superseded' AND $assertsStatus = 0
              THEN scrum_decisions.status
            ELSE excluded.status
          END,
          superseded_by = CASE
-           WHEN scrum_decisions.status = 'superseded' AND ?12 = 0
+           WHEN scrum_decisions.status = 'superseded' AND $assertsStatus = 0
              THEN scrum_decisions.superseded_by
            ELSE excluded.superseded_by
          END,
          reason = CASE
-           WHEN scrum_decisions.status = 'superseded' AND ?12 = 0
+           WHEN scrum_decisions.status = 'superseded' AND $assertsStatus = 0
              THEN scrum_decisions.reason
            ELSE excluded.reason
          END`,
-    ).run(
-      row.id,
-      row.title,
-      row.topic,
-      row.status,
-      row.content,
-      row.source_path,
-      row.content_sha,
-      row.recorded_at,
-      row.recorded_by_agent,
-      row.superseded_by,
-      row.reason,
-      assertsStatus,
-    );
+    ).run({
+      $id: row.id,
+      $title: row.title,
+      $topic: row.topic,
+      $status: row.status,
+      $content: row.content,
+      $source_path: row.source_path,
+      $content_sha: row.content_sha,
+      $recorded_at: row.recorded_at,
+      $recorded_by_agent: row.recorded_by_agent,
+      $superseded_by: row.superseded_by,
+      $reason: row.reason,
+      $assertsStatus: assertsStatus,
+    });
 
     // Re-fetch so the returned row reflects any preserved supersession rather
     // than the in-memory `row` (whose status/superseded_by/reason may have
