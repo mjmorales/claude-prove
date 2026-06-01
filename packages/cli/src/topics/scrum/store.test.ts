@@ -1349,3 +1349,137 @@ describe('ScrumStore — story synthesis floor', () => {
     }
   });
 });
+
+// ===========================================================================
+// Structured escalation typing (v7, onleash §11.2 / audit §6.1)
+// ===========================================================================
+
+describe('ScrumStore — escalation typing', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  test('appendEvent validates blocker_raised payload: accepts the four types, rejects unknown', () => {
+    seedTask('t1');
+    for (const type of ['blocked', 'ambiguous', 'conflict', 'missing_context'] as const) {
+      expect(() =>
+        store.appendEvent({
+          taskId: 't1',
+          kind: 'blocker_raised',
+          payload: { escalation_type: type, summary: 's' },
+        }),
+      ).not.toThrow();
+    }
+    expect(() =>
+      store.appendEvent({
+        taskId: 't1',
+        kind: 'blocker_raised',
+        payload: { escalation_type: 'bogus', summary: 's' },
+      }),
+    ).toThrow(/escalation_type must be one of/);
+  });
+
+  test('appendEvent rejects a blocker_raised payload missing summary (domain error, not opaque)', () => {
+    seedTask('t1');
+    expect(() =>
+      store.appendEvent({
+        taskId: 't1',
+        kind: 'blocker_raised',
+        payload: { escalation_type: 'blocked' },
+      }),
+    ).toThrow(/requires a non-empty 'summary'/);
+  });
+
+  test('blocker_raised escalation round-trips through listEventsForTask', () => {
+    seedTask('t1');
+    store.appendEvent({
+      taskId: 't1',
+      kind: 'blocker_raised',
+      payload: { escalation_type: 'ambiguous', summary: 'spec unclear', blocking_task_id: null },
+    });
+    const event = store.listEventsForTask('t1').find((e) => e.kind === 'blocker_raised');
+    const payload = event?.payload as { escalation_type: string; summary: string };
+    expect(payload.escalation_type).toBe('ambiguous');
+    expect(payload.summary).toBe('spec unclear');
+  });
+
+  test('nextReady ranks an open escalation above an otherwise-equal task with none', () => {
+    const now = Date.parse('2026-06-01T00:00:00Z');
+    seedTask('esc', { status: 'ready', createdAt: '2026-01-01T00:00:00Z' });
+    seedTask('plain', { status: 'ready', createdAt: '2026-01-01T00:00:00Z' });
+    store.appendEvent({
+      taskId: 'esc',
+      kind: 'blocker_raised',
+      payload: { escalation_type: 'blocked', summary: 'waiting on X' },
+      ts: new Date(now - 3 * DAY).toISOString(),
+    });
+
+    const rows = store.nextReady({ nowMs: now });
+    const escRow = rows.find((r) => r.task.id === 'esc');
+    const plainRow = rows.find((r) => r.task.id === 'plain');
+    expect(escRow?.rationale.escalation_boost).toBeGreaterThan(0);
+    expect(escRow?.rationale.escalation_type).toBe('blocked');
+    expect(plainRow?.rationale.escalation_boost).toBe(0);
+    expect(escRow?.score ?? 0).toBeGreaterThan(plainRow?.score ?? 0);
+  });
+
+  test('escalation_boost grows with the escalation age (staleness auto-bubble)', () => {
+    const now = Date.parse('2026-06-01T00:00:00Z');
+    seedTask('fresh', { status: 'ready' });
+    seedTask('old', { status: 'ready' });
+    store.appendEvent({
+      taskId: 'fresh',
+      kind: 'blocker_raised',
+      payload: { escalation_type: 'conflict', summary: 'c' },
+      ts: new Date(now - 1 * DAY).toISOString(),
+    });
+    store.appendEvent({
+      taskId: 'old',
+      kind: 'blocker_raised',
+      payload: { escalation_type: 'conflict', summary: 'c' },
+      ts: new Date(now - 20 * DAY).toISOString(),
+    });
+    const rows = store.nextReady({ nowMs: now });
+    const fresh = rows.find((r) => r.task.id === 'fresh')?.rationale.escalation_boost ?? 0;
+    const old = rows.find((r) => r.task.id === 'old')?.rationale.escalation_boost ?? 0;
+    expect(old).toBeGreaterThan(fresh);
+  });
+
+  test('listOpenEscalations returns the latest escalation per non-terminal task, newest-first', () => {
+    seedTask('a', { status: 'ready' });
+    seedTask('b', { status: 'ready' });
+    seedTask('done-task', { status: 'in_progress' });
+    store.appendEvent({
+      taskId: 'a',
+      kind: 'blocker_raised',
+      payload: { escalation_type: 'blocked', summary: 's1' },
+      ts: '2026-01-01T00:00:00Z',
+    });
+    store.appendEvent({
+      taskId: 'a',
+      kind: 'blocker_raised',
+      payload: { escalation_type: 'missing_context', summary: 's2' },
+      ts: '2026-02-01T00:00:00Z',
+    });
+    store.appendEvent({
+      taskId: 'b',
+      kind: 'blocker_raised',
+      payload: { escalation_type: 'ambiguous', summary: 's3' },
+      ts: '2026-03-01T00:00:00Z',
+    });
+
+    const open = store.listOpenEscalations();
+    // 'a' collapses to its latest (missing_context); 'b' is newest → first.
+    expect(open.map((e) => e.task_id)).toEqual(['b', 'a']);
+    expect(open.find((e) => e.task_id === 'a')?.escalation_type).toBe('missing_context');
+  });
+
+  test('listOpenEscalations excludes escalations on done/cancelled tasks', () => {
+    seedTask('gone', { status: 'in_progress' });
+    store.appendEvent({
+      taskId: 'gone',
+      kind: 'blocker_raised',
+      payload: { escalation_type: 'blocked', summary: 's' },
+    });
+    store.updateTaskStatus('gone', 'done');
+    expect(store.listOpenEscalations().some((e) => e.task_id === 'gone')).toBe(false);
+  });
+});
