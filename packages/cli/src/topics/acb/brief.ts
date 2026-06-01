@@ -1,21 +1,22 @@
 /**
  * Review Brief — the 7-section risk-forward brief synthesized from a run's
- * reasoning log (onleash 09 §10.5–10.6, audit §5.1). This module owns the
- * MECHANICAL half: the section model, the preservation-critical attention
- * ordering, the episode chunker for multipass synthesis, and the renderer.
+ * reasoning log. This module owns the MECHANICAL half: the section model, the
+ * preservation-critical attention ordering, the episode chunker for multipass
+ * synthesis, and the renderer.
  *
  * The PROSE of the two narrative sections (summary, changes) is the skill's
- * judgment (`skills/reasoning-brief`, ADR0015 classes brief synthesis as
- * Claude-owned). `buildBrief` seeds those from synthesis-entry outcomes so a
+ * judgment (`skills/reasoning-brief`): brief synthesis requires understanding,
+ * so it is Claude-owned, while the section model and preservation are
+ * mechanical. `buildBrief` seeds those from synthesis-entry outcomes so a
  * mechanical brief is always complete and preservation-safe even before the
  * skill refines it — the skill rewrites `summary`/`changes`, never the
  * attention/decision/bailout sections.
  *
- * Preservation rule (audit §5.1): a brief must never drop an attention-bearing
- * item — every `hack`, `risk`, `bailout`, open `assumption`, and every
- * `decision`'s `alternatives`. `renderBrief` embeds each such entry's id so the
- * Stage-1 validator (`brief-validate.ts`) can mechanically prove preservation
- * against the source log.
+ * Preservation rule: a brief must never drop an attention-bearing item — every
+ * `hack`, `risk`, `bailout`, open `assumption`, and every `decision`'s
+ * `alternatives`. `renderBrief` embeds each such entry's id so the Stage-1
+ * validator (`brief-validate.ts`) can mechanically prove preservation against
+ * the source log.
  */
 
 import type { Episode, LogEntry } from './reasoning-log';
@@ -25,9 +26,9 @@ import type { Episode, LogEntry } from './reasoning-log';
 // ---------------------------------------------------------------------------
 
 /**
- * The 7 brief sections in render order. `attention` (§2) is risk-forward — it
- * sits second, directly under the summary, so the reader sees what needs their
- * attention before the narrative.
+ * The 7 brief sections in render order. The attention section is risk-forward —
+ * it sits second, directly under the summary, so the reader sees what needs
+ * their attention before the narrative.
  */
 export const BRIEF_SECTIONS = [
   'summary',
@@ -40,12 +41,15 @@ export const BRIEF_SECTIONS = [
 ] as const;
 export type BriefSection = (typeof BRIEF_SECTIONS)[number];
 
-/** The three attention-bearing kinds §2 surfaces, in fixed precedence order. */
+/**
+ * The three attention-bearing kinds the attention section surfaces, in fixed
+ * precedence order.
+ */
 export type AttentionKind = 'hack' | 'risk' | 'assumption';
 
 const ATTENTION_PRECEDENCE: Record<AttentionKind, number> = { hack: 0, risk: 1, assumption: 2 };
 
-/** One §2 "Needs your attention" item. `detail` carries the kind-specific tail. */
+/** One "Needs your attention" item. `detail` carries the kind-specific tail. */
 export interface AttentionItem {
   kind: AttentionKind;
   entry_id: string;
@@ -56,7 +60,7 @@ export interface AttentionItem {
   detail: string;
 }
 
-/** §3 decision of record. `alternatives` are preservation-critical. */
+/** Decisions-section decision of record. `alternatives` are preservation-critical. */
 export interface BriefDecision {
   entry_id: string;
   ts: string;
@@ -66,7 +70,7 @@ export interface BriefDecision {
   selected_rationale: string;
 }
 
-/** §5 verification / review-feedback entry. */
+/** Verifications-section verification / review-feedback entry. */
 export interface BriefVerification {
   entry_id: string;
   ts: string;
@@ -75,7 +79,7 @@ export interface BriefVerification {
   kind: 'verification' | 'review_feedback';
 }
 
-/** §6 abandoned path — preserved so future work does not retry a dead end. */
+/** Abandoned-paths-section bailout — preserved so future work does not retry a dead end. */
 export interface BriefBailout {
   entry_id: string;
   ts: string;
@@ -85,7 +89,7 @@ export interface BriefBailout {
   reason_abandoned: string;
 }
 
-/** §7 provenance — one row per derived episode. */
+/** Provenance-section entry — one row per derived episode. */
 export interface BriefEpisode {
   decision_id: string;
   closed_by_id: string | null;
@@ -104,11 +108,11 @@ export interface ReviewBrief {
 }
 
 // ---------------------------------------------------------------------------
-// deriveAttentionItems — §2, mechanical and preservation-critical
+// deriveAttentionItems — the attention section, mechanical and preservation-critical
 // ---------------------------------------------------------------------------
 
 /**
- * Collect the §2 attention items from a log: every `hack` and `risk`, plus
+ * Collect the attention-section items from a log: every `hack` and `risk`, plus
  * UNRESOLVED `assumption`s (a resolved assumption is a settled fact, not a
  * standing concern — excluded). Ordered by fixed precedence `hack > risk >
  * assumption`, then reverse-chronological within a kind (newest first) so the

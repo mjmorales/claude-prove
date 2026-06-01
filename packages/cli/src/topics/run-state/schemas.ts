@@ -15,8 +15,8 @@ import type { FieldSpec, Schema } from './validator-engine';
 // --- constants (mirrors tools/run_state/__init__.py and schemas.py top) ---
 
 // v1 -> v2: plan.json tasks[] gained an optional `bounds` field (declared
-// per-task execution bounds; see .prove/decisions/2026-05-31-declared-bounds-home.md).
-// Absent bounds = current behavior, so the migration is a pure version bump.
+// per-task execution bounds). Absent bounds = unbounded, so the migration is
+// a pure version bump.
 //
 // v2 -> v3: plan.json tasks[]/steps[] `acceptance_criteria` items changed from
 // bare strings to a structured criterion dict mirroring scrum's
@@ -134,7 +134,7 @@ export const PRD_SCHEMA: Schema = {
 // --- plan.json ---
 
 // One structured acceptance criterion on a plan task/step. Mirrors scrum's
-// `AcceptanceCriterion` (topics/scrum/types.ts §5.2), but only `text` is
+// `AcceptanceCriterion` (topics/scrum/types.ts), but only `text` is
 // required here: `compile-plan` forwards the full scrum shape, while a
 // hand-authored or migrated plan may carry a bare `{ text }`. The extra scrum
 // fields (verifies_by/check/idempotent/status/...) are optional so a v2 plan
@@ -337,7 +337,7 @@ const TASK_PLAN_SPEC: FieldSpec = {
         },
       },
       description:
-        'Declared per-task execution bounds, consumed by prep-permissions. All sub-fields optional; absent = unbounded (current behavior). tools map to native settings.local.json permission rules; write/read/budgets are advisory prompt-only (the worktree is the write wall). See .prove/decisions/2026-05-31-declared-bounds-home.md',
+        'Declared per-task execution bounds, consumed by prep-permissions. All sub-fields optional; absent = unbounded. tools map to native settings.local.json permission rules; write/read/budgets are advisory prompt-only (the worktree is the write wall).',
     },
     steps: {
       type: 'list',

@@ -364,7 +364,7 @@ describe('ScrumStore — updateTaskMilestone', () => {
     expect(latest.payload).toEqual({ from: 'm1', to: null });
   });
 
-  test('records from: null when assigning to a previously unassigned task', () => {
+  test('records from: null when assigning to a task with no prior milestone', () => {
     seedMilestone('m1');
     seedTask('t1');
 
@@ -959,7 +959,7 @@ describe('ScrumStore — nextReady', () => {
 });
 
 // ===========================================================================
-// Acceptance criteria (v5, audit §5.2)
+// Acceptance criteria (v5)
 // ===========================================================================
 
 function ac(id: string, overrides: Partial<AcceptanceCriterion> = {}): AcceptanceCriterion {
@@ -1098,7 +1098,7 @@ describe('ScrumStore — acceptance criteria', () => {
 });
 
 // ===========================================================================
-// Declared bounds (v6, declared-bounds decision §2)
+// Declared bounds (v6)
 // ===========================================================================
 
 describe('ScrumStore — declared bounds', () => {
@@ -1159,7 +1159,7 @@ describe('ScrumStore — declared bounds', () => {
 });
 
 // ===========================================================================
-// Cancellation + terminal provenance (v7, onleash §14.4–14.6)
+// Cancellation + terminal provenance (v7)
 // ===========================================================================
 
 describe('ScrumStore — cancelTask + cancelTaskCascade', () => {
@@ -1222,7 +1222,7 @@ describe('ScrumStore — cancelTask + cancelTaskCascade', () => {
 });
 
 // ===========================================================================
-// Acceptance freeze guard (v7, onleash §14.13)
+// Acceptance freeze guard (v7)
 // ===========================================================================
 
 describe('ScrumStore — acceptance freeze guard', () => {
@@ -1247,7 +1247,7 @@ describe('ScrumStore — acceptance freeze guard', () => {
 });
 
 // ===========================================================================
-// Story-layer transition floors (v7, onleash §9.1 + §10.4/§3.3)
+// Story-layer transition floors (v7)
 // ===========================================================================
 
 describe('ScrumStore — story acceptance floor (≥1 active criterion)', () => {
@@ -1351,7 +1351,7 @@ describe('ScrumStore — story synthesis floor', () => {
 });
 
 // ===========================================================================
-// Structured escalation typing (v7, onleash §11.2 / audit §6.1)
+// Structured escalation typing (v7)
 // ===========================================================================
 
 describe('ScrumStore — escalation typing', () => {

@@ -1,7 +1,7 @@
 /**
  * `claude-prove acb brief <render|validate|chunk> [--run-dir D] [--file F] [--token-budget N]`
  *
- * The Review Brief surface (audit §5.1). Every sub-action reads the run's
+ * The Review Brief surface. Every sub-action reads the run's
  * reasoning log from `<run-dir>/log/<agent>/<id>.json`.
  *
  *   acb brief render   --run-dir D            mechanical 7-section brief → stdout (markdown)

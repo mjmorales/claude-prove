@@ -264,7 +264,7 @@ describe('ScrumStore — decisions: record + get', () => {
 });
 
 // ===========================================================================
-// 4b. supersedeDecision — append-only retire (audit §5.3)
+// 4b. supersedeDecision — append-only retire
 // ===========================================================================
 
 describe('ScrumStore — decisions: supersedeDecision', () => {

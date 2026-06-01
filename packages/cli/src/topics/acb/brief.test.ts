@@ -59,7 +59,7 @@ function synthesis(id: string, ts: string, outcome: string): LogEntry {
 }
 
 // ===========================================================================
-// deriveAttentionItems — §2 ordering + filtering
+// deriveAttentionItems — attention ordering + filtering
 // ===========================================================================
 
 describe('deriveAttentionItems', () => {

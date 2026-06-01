@@ -147,8 +147,8 @@ function doClose(store: ScrumStore, id: string | undefined, workspaceRoot: strin
   }
   // Capture prior status before the close so the curation trigger fires only
   // on a real planned/active → closed transition. Re-closing an already-closed
-  // milestone must not re-emit curation_proposed events (onleash §8.3, the
-  // Forced Bubble-Up is once-per-close).
+  // milestone must not re-emit curation_proposed events — the forced curation
+  // bubble-up fires once per close transition.
   const prior = store.getMilestone(id);
   const milestone = store.closeMilestone(id);
 

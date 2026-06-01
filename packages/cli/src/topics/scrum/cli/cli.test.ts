@@ -1555,7 +1555,7 @@ describe('runDecisionCmd', () => {
   });
 
   // -------------------------------------------------------------------------
-  // review-stale (v7, onleash §8.8)
+  // review-stale (v7)
   // -------------------------------------------------------------------------
 
   /** Record a decision then backdate its `recorded_at` to `daysAgo` days old. */
