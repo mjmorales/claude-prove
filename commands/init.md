@@ -13,15 +13,15 @@ Two halves run here:
 
 ## Invocation modes
 
-Read the slash-command arguments to pick the identity-bootstrap scope. When no flag is given, ask the operator which artifacts to bootstrap.
+Read the slash-command arguments to pick the identity-bootstrap scope. Flags map to the artifact set:
 
-- `--with-charter` → charter only
-- `--with-team` → team only
+- `--with-charter` → charter only (combinable with `--with-team`)
+- `--with-team` → team only (combinable with `--with-charter`)
 - `--full` → charter + team + contributor
-- `--form` → present the interview questions as one batched form (collect every answer up front), then author all artifacts in one pass
-- (no flag) → ask the operator, then proceed
+- `--form` → full set, but batch every interview question into one form (collect all answers up front), then author all artifacts in one pass
+- (no flag) → ask the operator which artifacts to bootstrap, then proceed
 
-The engine owns the mechanical work (pre-flight checks, skip-if-exists scaffolding); you own the interview and the authored content. Never overwrite an existing charter, team, or contributor — the CLI scaffolds only what is missing, and you author only into freshly-created skeletons.
+**Division of labor:** the CLI does the mechanical work — pre-flight checks and skip-if-exists scaffolding; you do the interview and write the prose. Author only into skeletons the CLI just created; never overwrite a `skipped` (already-existing) artifact, and never re-run or reimplement the pre-flight/scaffolding yourself — call the CLI for it.
 
 ## Step 0: Guard
 
@@ -69,14 +69,9 @@ On "Re-detect":
 
 ## Step 3.5: Project-identity bootstrap
 
-Bootstrap `charter.md`, `team.md`, and a contributor record. The CLI gates on pre-flight checks and scaffolds only missing artifacts; you run the interview and author the content.
+Bootstrap `charter.md`, `team.md`, and a contributor record. Scope comes from the flags mapped under [Invocation modes](#invocation-modes).
 
 ### Choose scope
-
-Map the slash-command flags to the artifact set:
-- `--full` → charter + team + contributor
-- `--with-charter` / `--with-team` → that artifact (combinable)
-- `--form` → batched-form interview (collect all answers up front), full artifact set
 
 If no flag was passed, `AskUserQuestion` (header: "Identity"):
 - "Full (Recommended)" — charter, team, and a contributor record
@@ -111,15 +106,13 @@ Each scaffolded file carries a YAML frontmatter `schema_version` + `provenance` 
 
 ### Interview + author
 
-For every artifact the CLI reports as `created`, run a short interview and write the answers into the skeleton body, leaving the frontmatter block intact.
+For every artifact the CLI reports as `created`, run a short interview and write the answers into the skeleton body. Ask one question per exchange (in `--form` mode, batch all questions into one form, then author every artifact in a single pass):
 
-- **charter.md** — ask for the project's vision (future state), mission (what it does, for whom, why), and outcome bet (the measurable result). One question per exchange; replace each `<!-- ... -->` prompt with the operator's answer.
-- **team.md** — ask for each team member's name, role, and responsibilities; fill the roster table.
-- **contributor** (`contributors/$CONTRIBUTOR_ID.md`) — ask for the operator's name, handle, role, and current focus.
+- **charter.md** — vision (future state), mission (what it does, for whom, why), outcome bet (the measurable result). Replace each `<!-- ... -->` prompt with the answer.
+- **team.md** — each team member's name, role, and responsibilities; fill the roster table.
+- **contributor** (`contributors/$CONTRIBUTOR_ID.md`) — the operator's name, handle, role, and current focus.
 
-In `--form` mode, batch every question into one prompt, collect all answers, then author all artifacts in a single pass.
-
-Do not edit the frontmatter `provenance` or `schema_version` values — they are engine-stamped. Do not author into a `skipped` artifact.
+Leave the frontmatter `provenance` and `schema_version` values untouched — the CLI stamps them. Author into `created` skeletons only; skip every `skipped` artifact.
 
 ## Step 4: Show sections
 
