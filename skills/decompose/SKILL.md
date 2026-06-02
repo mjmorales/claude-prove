@@ -186,13 +186,12 @@ claude-prove scrum task acceptance add <child-id> \
 ```
 
 Pass `--idempotent` only when the criterion's `idempotent` is true; omit `--check` when the
-criterion carries none. A `story` child is born already satisfying the close floor — a
-story with zero active criteria is rejected on `→ ready` (the accept gate below promotes to
-`ready`) and again at `→ done`, and B2 story-close reads these exact criteria to verify the
-story. Authoring them here is what bridges the two: the ladder that creates the story owns
-its criteria, so close never has to invent them. If a `story` child returned an empty
-`acceptance` array, re-run Phase L2 for that parent before promoting — never promote a story
-the close floor will reject.
+criterion carries none. Authoring criteria here is what makes a `story` born already
+satisfying the close floor: B2 story-close reads these exact criteria to verify the story,
+so the ladder that creates the story owns its criteria and close never has to invent them.
+If a `story` child returned an empty `acceptance` array, re-run Phase L2 for that parent
+before promoting — the accept gate below pushes children to `ready`, a state the floor
+rejects for a criteria-less story.
 
 **Accept gate** (`proposed→accepted`):
 
