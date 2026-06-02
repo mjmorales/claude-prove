@@ -66,6 +66,7 @@
  *   claude-prove scrum lore show <id>            (one Lore entry by id)
  *   claude-prove scrum annotation add            --target-kind task|team|decision --target REF --body TEXT --author ID   (append a per-artifact note; target is a soft reference, no authorship gate)
  *   claude-prove scrum annotation list           --target-kind K --target REF [--human]   (a target's notes, oldest-first)
+ *   claude-prove scrum manifest show             [--human]   (cross-team contracts: every team's active accepts[] + exposes[], both-teams-visible)
  *   claude-prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
  *   claude-prove scrum hook <event>              (event: session-start | subagent-stop | stop)
  *
@@ -92,6 +93,7 @@ import { runHookCmd } from './scrum/cli/hook-cmd';
 import { runInitCmd } from './scrum/cli/init-cmd';
 import { runLinkRunCmd } from './scrum/cli/link-run-cmd';
 import { runLoreCmd } from './scrum/cli/lore-cmd';
+import { runManifestCmd } from './scrum/cli/manifest-cmd';
 import { runMilestoneCmd } from './scrum/cli/milestone-cmd';
 import { runNextReadyCmd } from './scrum/cli/next-ready-cmd';
 import { runOperatorCmd } from './scrum/cli/operator-cmd';
@@ -116,6 +118,7 @@ type ScrumAction =
   | 'team'
   | 'lore'
   | 'annotation'
+  | 'manifest'
   | 'link-run'
   | 'hook';
 
@@ -135,6 +138,7 @@ const SCRUM_ACTIONS: ScrumAction[] = [
   'team',
   'lore',
   'annotation',
+  'manifest',
   'link-run',
   'hook',
 ];
@@ -588,6 +592,16 @@ function dispatch(
         target: flags.target,
         body: flags.body,
         author: flags.author,
+        human: flags.human,
+        workspaceRoot: flags.workspaceRoot,
+      });
+
+    case 'manifest':
+      if (arg1 === undefined) {
+        console.error('error: scrum manifest: sub-action required (one of: show)');
+        return 1;
+      }
+      return runManifestCmd(arg1, {
         human: flags.human,
         workspaceRoot: flags.workspaceRoot,
       });

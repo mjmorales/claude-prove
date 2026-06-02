@@ -2931,6 +2931,51 @@ describe('ScrumStore — team interface (v17)', () => {
 });
 
 // ===========================================================================
+// Manifest — cross-team contracts read surface
+// ===========================================================================
+
+describe('ScrumStore — getManifest (cross-team contracts)', () => {
+  test('aggregates every team in slug order, active accepts + exposes only', () => {
+    // Out-of-order creation; the Manifest must come back slug-ordered.
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.createTeam({ slug: 'identity', teamType: 'platform' });
+
+    store.addTeamAccept('payments', 'schema-change');
+    const retiredAccept = store.addTeamAccept('payments', 'legacy-ask');
+    store.supersedeTeamAccept(retiredAccept.id, 'consolidated');
+    store.addTeamExpose('payments', { name: 'PaymentEvent', schemaRef: 'pe.json' });
+
+    store.addTeamAccept('identity', 'api-review');
+
+    const manifest = store.getManifest();
+
+    // slug order: identity before payments.
+    expect(manifest.teams.map((t) => t.slug)).toEqual(['identity', 'payments']);
+
+    const payments = manifest.teams.find((t) => t.slug === 'payments');
+    // The superseded accept is filtered out — active interface only.
+    expect(payments?.accepts.map((a) => a.ask_type)).toEqual(['schema-change']);
+    expect(payments?.exposes.map((e) => e.name)).toEqual(['PaymentEvent']);
+
+    const identity = manifest.teams.find((t) => t.slug === 'identity');
+    expect(identity?.accepts.map((a) => a.ask_type)).toEqual(['api-review']);
+    expect(identity?.exposes).toEqual([]);
+  });
+
+  test('tolerates a registry with zero teams (empty manifest)', () => {
+    const manifest = store.getManifest();
+    expect(manifest.teams).toEqual([]);
+    expect(manifest.asks).toEqual([]);
+  });
+
+  test('the asks surface is always empty (awaiting an ask protocol)', () => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.addTeamAccept('payments', 'schema-change');
+    expect(store.getManifest().asks).toEqual([]);
+  });
+});
+
+// ===========================================================================
 // Team lifecycle — terminate + milestone-close trigger (v18)
 // ===========================================================================
 
