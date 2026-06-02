@@ -2303,7 +2303,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 17,
+      schema_version: 18,
     });
   });
 
@@ -2316,7 +2316,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(17);
+    expect(updated.provenance.schema_version).toBe(18);
   });
 });
 
@@ -2500,6 +2500,8 @@ describe('ScrumStore — team registry (v14)', () => {
       team_type: 'stream_aligned',
       charter: 'Own the checkout flow',
       lifetime: 'persistent',
+      terminates_on_milestone: null,
+      status: 'active',
       created_at: '2026-01-01T00:00:00Z',
     });
 
@@ -2507,13 +2509,16 @@ describe('ScrumStore — team registry (v14)', () => {
     expect(fetched).toEqual(row);
   });
 
-  test('createTeam honors an explicit lifetime and a null charter', () => {
+  test('createTeam honors an explicit lifetime + target and a null charter', () => {
     const row = store.createTeam({
       slug: 'migration-squad',
       teamType: 'enabling',
       lifetime: 'terminates_on_milestone',
+      terminatesOnMilestone: 'migrate-v2',
     });
     expect(row.lifetime).toBe('terminates_on_milestone');
+    expect(row.terminates_on_milestone).toBe('migrate-v2');
+    expect(row.status).toBe('active');
     expect(row.charter).toBeNull();
   });
 
@@ -2922,5 +2927,195 @@ describe('ScrumStore — team interface (v17)', () => {
       accepts: [],
       exposes: [],
     });
+  });
+});
+
+// ===========================================================================
+// Team lifecycle — terminate + milestone-close trigger (v18)
+// ===========================================================================
+
+describe('ScrumStore — team lifecycle consistency guard (v18)', () => {
+  test('createTeam rejects a terminates_on_milestone team with no target', () => {
+    expect(() =>
+      store.createTeam({
+        slug: 'squad',
+        teamType: 'enabling',
+        lifetime: 'terminates_on_milestone',
+      }),
+    ).toThrow(/'terminates_on_milestone' team requires a terminates_on_milestone target/);
+  });
+
+  test('createTeam rejects a persistent team carrying a target', () => {
+    expect(() =>
+      store.createTeam({
+        slug: 'core',
+        teamType: 'platform',
+        lifetime: 'persistent',
+        terminatesOnMilestone: 'm1',
+      }),
+    ).toThrow(/'persistent' team must not carry a terminates_on_milestone target/);
+  });
+
+  test('createTeam accepts a persistent team with no target (the default)', () => {
+    const row = store.createTeam({ slug: 'core', teamType: 'platform' });
+    expect(row.lifetime).toBe('persistent');
+    expect(row.terminates_on_milestone).toBeNull();
+    expect(row.status).toBe('active');
+  });
+
+  test('setTeamTerminatesOn attaches a target to a terminating-lifetime team', () => {
+    store.createTeam({
+      slug: 'squad',
+      teamType: 'enabling',
+      lifetime: 'terminates_on_milestone',
+      terminatesOnMilestone: 'placeholder',
+    });
+    const updated = store.setTeamTerminatesOn('squad', 'migrate-v2');
+    expect(updated.terminates_on_milestone).toBe('migrate-v2');
+    expect(store.getTeam('squad')?.terminates_on_milestone).toBe('migrate-v2');
+  });
+
+  test('setTeamTerminatesOn rejects attaching a target to a persistent team', () => {
+    store.createTeam({ slug: 'core', teamType: 'platform' });
+    expect(() => store.setTeamTerminatesOn('core', 'm1')).toThrow(
+      /'persistent' team must not carry a terminates_on_milestone target/,
+    );
+  });
+
+  test('setTeamTerminatesOn rejects clearing a terminating team target', () => {
+    store.createTeam({
+      slug: 'squad',
+      teamType: 'enabling',
+      lifetime: 'terminates_on_milestone',
+      terminatesOnMilestone: 'm1',
+    });
+    expect(() => store.setTeamTerminatesOn('squad', null)).toThrow(
+      /'terminates_on_milestone' team requires a terminates_on_milestone target/,
+    );
+  });
+
+  test('setTeamTerminatesOn rejects an unknown team', () => {
+    expect(() => store.setTeamTerminatesOn('ghost', 'm1')).toThrow(/unknown team 'ghost'/);
+  });
+});
+
+describe('ScrumStore — teamTerminate (v18)', () => {
+  beforeEach(() => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.setTeamScopes('payments', { read: ['src/shared/**'], write: ['src/payments/**'] });
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-jane' });
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'engineer', contributorId: 'ct-bob' });
+    store.addTeamAccept('payments', 'schema-change');
+    store.addTeamExpose('payments', { name: 'PaymentEvent', schemaRef: 'pe.json' });
+  });
+
+  test('disbands the team-local state atomically and reports the counts', () => {
+    const result = store.teamTerminate('payments', 'work complete');
+    expect(result).toEqual({
+      slug: 'payments',
+      exposesRetired: 1,
+      rosterVacated: 2,
+      scopesCleared: 2,
+    });
+
+    // 1. Scope released.
+    expect(store.getTeamScopes('payments')).toEqual({ read: [], write: [] });
+
+    // 2. Active exposes superseded with the disband reason; the row is retained.
+    expect(store.listTeamExposes('payments')).toEqual([]);
+    const retired = store.listTeamExposes('payments', { includeSuperseded: true });
+    expect(retired).toHaveLength(1);
+    expect(retired[0]?.status).toBe('superseded');
+    expect(retired[0]?.reason).toBe('work complete');
+    expect(retired[0]?.superseded_by).toBeNull();
+
+    // Accepts are deliberately left active — superseding accepts is a separate
+    // policy not part of the team-local disband.
+    expect(store.listTeamAccepts('payments').map((a) => a.ask_type)).toEqual(['schema-change']);
+
+    // 3. Roster vacated — every open slot closed with no successor.
+    const roster = store.getTeamRoster('payments', { includeHistory: true });
+    expect(roster.current.tech_lead).toBeNull();
+    expect(roster.current.engineer).toBeNull();
+    // The intervals are closed (to_ts stamped), not deleted — history survives.
+    expect(roster.history?.tech_lead).toHaveLength(1);
+    expect(roster.history?.tech_lead[0]?.to_ts).not.toBeNull();
+
+    // 4. Status flipped to inactive.
+    expect(store.getTeam('payments')?.status).toBe('inactive');
+  });
+
+  test('rejects an already-inactive team (no double-disband)', () => {
+    store.teamTerminate('payments', 'first');
+    expect(() => store.teamTerminate('payments', 'second')).toThrow(/already inactive/);
+  });
+
+  test('rejects an unknown team', () => {
+    expect(() => store.teamTerminate('ghost', 'gone')).toThrow(/unknown team 'ghost'/);
+  });
+
+  test('releasing scope frees a path for another team to claim', () => {
+    // A second team cannot claim the path while payments holds the write glob.
+    store.createTeam({ slug: 'identity', teamType: 'stream_aligned' });
+    expect(() => store.setTeamScopes('identity', { read: [], write: ['src/payments/**'] })).toThrow(
+      /write-scope overlap/,
+    );
+    // After the disband releases payments' scope, the path is claimable.
+    store.teamTerminate('payments', 'done');
+    const saved = store.setTeamScopes('identity', { read: [], write: ['src/payments/**'] });
+    expect(saved.write).toEqual(['src/payments/**']);
+  });
+});
+
+describe('ScrumStore — milestone-close termination trigger (v18)', () => {
+  test('closing a milestone disbands every active team pinned to it', () => {
+    store.createMilestone({ id: 'migrate-v2', title: 'Migrate v2' });
+    store.createTeam({
+      slug: 'squad',
+      teamType: 'enabling',
+      lifetime: 'terminates_on_milestone',
+      terminatesOnMilestone: 'migrate-v2',
+    });
+    store.rotateTeamMember({ teamSlug: 'squad', role: 'tech_lead', contributorId: 'ct-jane' });
+    store.addTeamExpose('squad', { name: 'Guide', schemaRef: 'g.json' });
+    // A persistent team and a team pinned to a DIFFERENT milestone are untouched.
+    store.createTeam({ slug: 'core', teamType: 'platform' });
+    store.createTeam({
+      slug: 'other-squad',
+      teamType: 'enabling',
+      lifetime: 'terminates_on_milestone',
+      terminatesOnMilestone: 'some-other',
+    });
+
+    store.closeMilestone('migrate-v2');
+
+    expect(store.getTeam('squad')?.status).toBe('inactive');
+    expect(store.getTeamRoster('squad').current.tech_lead).toBeNull();
+    expect(store.listTeamExposes('squad')).toEqual([]);
+    // Untouched teams stay active.
+    expect(store.getTeam('core')?.status).toBe('active');
+    expect(store.getTeam('other-squad')?.status).toBe('active');
+  });
+
+  test('re-closing a milestone is an idempotent no-op for already-inactive teams', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    store.createTeam({
+      slug: 'squad',
+      teamType: 'enabling',
+      lifetime: 'terminates_on_milestone',
+      terminatesOnMilestone: 'm1',
+    });
+    store.closeMilestone('m1');
+    expect(store.getTeam('squad')?.status).toBe('inactive');
+    // Closing again finds no active match — does not throw on the inactive team.
+    expect(() => store.closeMilestone('m1')).not.toThrow();
+    expect(store.getTeam('squad')?.status).toBe('inactive');
+  });
+
+  test('closing a milestone with no pinned teams leaves every team active', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    store.createTeam({ slug: 'core', teamType: 'platform' });
+    store.closeMilestone('m1');
+    expect(store.getTeam('core')?.status).toBe('active');
   });
 });

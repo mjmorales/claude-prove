@@ -66,6 +66,8 @@ import type {
   TeamRoster,
   TeamScopeKind,
   TeamScopes,
+  TeamStatus,
+  TeamTerminateResult,
   TeamType,
   TeamWriteScopeConflict,
   VerificationRecord,
@@ -285,8 +287,9 @@ const CONTRIBUTOR_COLUMNS =
 /** Canonical `scrum_operator_history` SELECT column list (v13); maps 1:1 to `OperatorHistoryRow`. */
 const OPERATOR_HISTORY_COLUMNS = 'id, contributor_id, from_ts, to_ts, created_at, created_by';
 
-/** Canonical `scrum_teams` SELECT column list (v14); maps 1:1 to `Team`. */
-const TEAM_COLUMNS = 'slug, team_type, charter, lifetime, created_at';
+/** Canonical `scrum_teams` SELECT column list (v14, +v18 lifecycle); maps 1:1 to `Team`. */
+const TEAM_COLUMNS =
+  'slug, team_type, charter, lifetime, terminates_on_milestone, status, created_at';
 
 /** Canonical `scrum_team_members` SELECT column list (v16); maps 1:1 to `TeamMemberRow`. */
 const TEAM_MEMBER_COLUMNS =
@@ -1546,16 +1549,37 @@ export class ScrumStore {
     return updated;
   }
 
-  /** Set status = 'closed' and stamp `closed_at = now()`. Throws on unknown id. */
+  /**
+   * Set status = 'closed', stamp `closed_at = now()`, and disband every active
+   * team pinned to this milestone (`terminates_on_milestone = id`). Throws on an
+   * unknown id.
+   *
+   * The milestone-close trigger for the team lifecycle: closing a milestone is
+   * the structural event that disbands the enabling/terminating-lifetime teams
+   * scoped to it, so the termination rides the close path rather than relying on
+   * an operator to remember it. The whole close — the milestone UPDATE plus
+   * every matching team's team-local disband — runs in ONE transaction, so a
+   * milestone is never observed closed with its teams left live (and a failure
+   * in any disband rolls the close back). Each `teamTerminate` opens a nested
+   * SAVEPOINT inside this transaction; the outer transaction is the atomic unit.
+   *
+   * Re-closing an already-closed milestone re-runs the trigger, but every
+   * matching team is already `inactive` by then, so `terminateTeamsForMilestone`
+   * finds no active matches and the close is an idempotent no-op for teams.
+   */
   closeMilestone(id: string): ScrumMilestone {
     const existing = this.getMilestone(id);
     if (!existing) throw new Error(`closeMilestone: unknown milestone '${id}'`);
     const closedAt = isoNow();
-    this.prep('UPDATE scrum_milestones SET status = ?, closed_at = ? WHERE id = ?').run(
-      'closed',
-      closedAt,
-      id,
-    );
+    const close = this.db.transaction(() => {
+      this.prep('UPDATE scrum_milestones SET status = ?, closed_at = ? WHERE id = ?').run(
+        'closed',
+        closedAt,
+        id,
+      );
+      this.terminateTeamsForMilestone(id, `milestone '${id}' closed`);
+    });
+    close();
     return { ...existing, status: 'closed', closed_at: closedAt };
   }
 
@@ -2269,7 +2293,14 @@ export class ScrumStore {
    * `teamType` and `lifetime` are guarded against their closed vocabularies at
    * this boundary (the columns carry no SQL CHECK), so an off-vocabulary value
    * throws here rather than landing as an unrecognized string. `lifetime`
-   * defaults to `'persistent'`; `charter` defaults to NULL.
+   * defaults to `'persistent'`; `charter` defaults to NULL. A fresh team is
+   * always `status = 'active'`.
+   *
+   * The lifetime↔target consistency rule is enforced here: a
+   * `terminates_on_milestone` team MUST carry a `terminatesOnMilestone`, and a
+   * `persistent` team MUST NOT. A target may instead be attached after creation
+   * with `setTeamTerminatesOn` (the create-then-set flow); creation with a
+   * mismatched pair throws rather than landing an inconsistent row.
    */
   createTeam(input: CreateTeamInput): Team {
     const lifetime = input.lifetime ?? 'persistent';
@@ -2283,18 +2314,24 @@ export class ScrumStore {
         `createTeam: invalid lifetime '${lifetime}'; expected one of: ${TEAM_LIFETIMES.join(', ')}`,
       );
     }
+    const target = input.terminatesOnMilestone ?? null;
+    assertLifetimeTargetConsistent('createTeam', lifetime as TeamLifetime, target);
     const row: Team = {
       slug: input.slug,
       team_type: input.teamType as TeamType,
       charter: input.charter ?? null,
       lifetime: lifetime as TeamLifetime,
+      terminates_on_milestone: target,
+      status: 'active',
       created_at: input.createdAt ?? isoNow(),
     };
-    this.prep(`INSERT INTO scrum_teams (${TEAM_COLUMNS}) VALUES (?, ?, ?, ?, ?)`).run(
+    this.prep(`INSERT INTO scrum_teams (${TEAM_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
       row.slug,
       row.team_type,
       row.charter,
       row.lifetime,
+      row.terminates_on_milestone,
+      row.status,
       row.created_at,
     );
     return row;
@@ -2311,6 +2348,29 @@ export class ScrumStore {
   /** List every team, ordered by slug. */
   listTeams(): Team[] {
     return this.prep(`SELECT ${TEAM_COLUMNS} FROM scrum_teams ORDER BY slug ASC`).all() as Team[];
+  }
+
+  /**
+   * Attach (or clear) a team's `terminates_on_milestone` target, enforcing the
+   * same lifetime↔target consistency rule as `createTeam`: a
+   * `terminates_on_milestone` team MUST carry a target, a `persistent` team MUST
+   * NOT. This is the create-then-set half of the ergonomics — a team registered
+   * as `terminates_on_milestone` without yet knowing its goal milestone can have
+   * the target attached once it is decided. Passing `null` clears the target,
+   * which is only valid for a `persistent` team. Throws on an unknown slug and on
+   * a rule violation. Returns the updated row.
+   */
+  setTeamTerminatesOn(slug: string, milestoneId: string | null): Team {
+    const existing = this.getTeam(slug);
+    if (existing === null) {
+      throw new Error(`setTeamTerminatesOn: unknown team '${slug}'`);
+    }
+    assertLifetimeTargetConsistent('setTeamTerminatesOn', existing.lifetime, milestoneId);
+    this.prep('UPDATE scrum_teams SET terminates_on_milestone = ? WHERE slug = ?').run(
+      milestoneId,
+      slug,
+    );
+    return { ...existing, terminates_on_milestone: milestoneId };
   }
 
   // ==========================================================================
@@ -2706,6 +2766,106 @@ export class ScrumStore {
   }
 
   // ==========================================================================
+  // Team lifecycle — terminate / disband (v18)
+  // ==========================================================================
+
+  /**
+   * Disband a team — the team-LOCAL terminate, all effects in ONE transaction so
+   * a half-disbanded team is never observable. The four team-local effects:
+   *
+   *   1. Release the team's scope: its read and write globs are cleared, so the
+   *      single-writer-per-path claim it held is freed for another team.
+   *   2. Supersede every ACTIVE expose with the disband `reason` (and no
+   *      replacement — `superseded_by` NULL): the team's published outputs are
+   *      retired, but the retired rows stay for audit (append-only with
+   *      supersession). ACCEPTS are deliberately left active: superseding the
+   *      ask types a team handled is a separate policy decision (whether a
+   *      disbanded team's accept history should read as retired or as a frozen
+   *      record of what it once handled) and is not part of the team-local
+   *      disband — leaving them active preserves the interface history without
+   *      asserting a retirement reason the disband does not carry.
+   *   3. Vacate the roster: every OPEN (team, role) interval is closed by
+   *      stamping its `to_ts` to the disband instant, WITHOUT appending a
+   *      successor — the slots are emptied, not handed to a new holder.
+   *   4. Flip `status` to `inactive` — the terminal lifecycle state.
+   *
+   * Idempotent guard: terminating an already-`inactive` team throws rather than
+   * re-running the effects, so a double-disband is a caught error, not a silent
+   * no-op that re-stamps timestamps. Throws on an unknown slug.
+   */
+  teamTerminate(slug: string, reason: string): TeamTerminateResult {
+    const existing = this.getTeam(slug);
+    if (existing === null) {
+      throw new Error(`teamTerminate: unknown team '${slug}'`);
+    }
+    if (existing.status === 'inactive') {
+      throw new Error(`teamTerminate: team '${slug}' is already inactive`);
+    }
+    const at = isoNow();
+    const priorScopes = this.getTeamScopes(slug);
+    const scopesCleared = priorScopes.read.length + priorScopes.write.length;
+    const activeExposes = this.listTeamExposes(slug);
+
+    const disband = this.db.transaction(() => {
+      // 1. Release scope — the seam setTeamScopes left for the disband path.
+      this.setTeamScopes(slug, { read: [], write: [] });
+
+      // 2. Supersede every active expose with the disband reason, no replacement.
+      for (const expose of activeExposes) {
+        this.supersedeTeamExpose(expose.id, reason, null);
+      }
+
+      // 3. Vacate every open roster slot — close to_ts without a successor.
+      const vacated = this.prep(
+        'UPDATE scrum_team_members SET to_ts = ? WHERE team_slug = ? AND to_ts IS NULL',
+      ).run(at, slug);
+
+      // 4. Flip status to the terminal inactive state.
+      this.prep('UPDATE scrum_teams SET status = ? WHERE slug = ?').run(
+        'inactive' satisfies TeamStatus,
+        slug,
+      );
+
+      // SEAM: promote generally-applicable Lore -> Codex here once the
+      // memory-layers Lore/Codex capability exists. A disbanding team's durable,
+      // generally-applicable learnings should be lifted into shared long-term
+      // memory before the team goes inactive; that promotion has no API in this
+      // codebase yet, so it is intentionally omitted from the disband.
+
+      // SEAM: cascade-cancel this team's in-flight epics once a task<->team
+      // ownership link exists. A disband should terminate the team's still-open
+      // work, but tasks carry no team-ownership column, so there is no edge to
+      // follow from a team to the epics it owns; this cascade is intentionally
+      // omitted until that link is added.
+
+      return Number(vacated.changes);
+    });
+    const rosterVacated = disband();
+
+    return {
+      slug,
+      exposesRetired: activeExposes.length,
+      rosterVacated,
+      scopesCleared,
+    };
+  }
+
+  /**
+   * Disband every `active` team whose `terminates_on_milestone` names
+   * `milestoneId`. The milestone-close trigger: a closing milestone drives the
+   * termination of the enabling/terminating-lifetime teams pinned to it. Runs
+   * `teamTerminate` per matching team (each its own transaction) and returns the
+   * per-team results, ordered by slug. A team already `inactive` is skipped (it
+   * was disbanded by an earlier path), so re-closing a milestone is safe.
+   */
+  terminateTeamsForMilestone(milestoneId: string, reason: string): TeamTerminateResult[] {
+    const matches = this.listTeams().filter(
+      (team) => team.status === 'active' && team.terminates_on_milestone === milestoneId,
+    );
+    return matches.map((team) => this.teamTerminate(team.slug, reason));
+  }
+
+  // ==========================================================================
   // Internals
   // ==========================================================================
 
@@ -3067,6 +3227,33 @@ function formatWriteScopeConflict(conflict: TeamWriteScopeConflict): string {
       ? `glob '${conflict.globA}'`
       : `globs '${conflict.globA}' and '${conflict.globB}'`;
   return `write-scope overlap: team '${conflict.teamA}' and team '${conflict.teamB}' both claim ${globs} — write scopes must be disjoint (single writer per path)`;
+}
+
+/**
+ * Enforce the team lifetime↔target consistency rule (v18): a
+ * `terminates_on_milestone` team MUST carry a `terminates_on_milestone` target,
+ * and a `persistent` team MUST NOT. The target is the concrete milestone a
+ * terminating-lifetime team disbands on, so a terminating team with no target
+ * can never be triggered (a dead lifetime), and a persistent team with a target
+ * would be silently disbanded by the milestone-close trigger despite declaring
+ * itself permanent. Both are rejected at the store boundary. Throws with a
+ * `${method}:`-prefixed message matching the surrounding enum-guard style.
+ */
+function assertLifetimeTargetConsistent(
+  method: string,
+  lifetime: TeamLifetime,
+  target: string | null,
+): void {
+  if (lifetime === 'terminates_on_milestone' && target === null) {
+    throw new Error(
+      `${method}: a 'terminates_on_milestone' team requires a terminates_on_milestone target`,
+    );
+  }
+  if (lifetime === 'persistent' && target !== null) {
+    throw new Error(
+      `${method}: a 'persistent' team must not carry a terminates_on_milestone target`,
+    );
+  }
 }
 
 /** Closed top-level key set for `TaskBounds`. */
