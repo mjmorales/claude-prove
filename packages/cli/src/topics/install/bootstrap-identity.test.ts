@@ -135,6 +135,10 @@ describe('bootstrapIdentity', () => {
       expect(charter).toContain('# Project Charter');
       expect(team).toContain('# Team');
       expect(contributor).toContain('jane-doe');
+      // The charter records the operator-of-record in its frontmatter, null at
+      // scaffold time (before any holder is set). Only the charter carries it.
+      expect(charter).toContain('operator_of_record: null');
+      expect(team).not.toContain('operator_of_record');
       expect(result.artifacts.every((a) => a.disposition === 'created')).toBe(true);
     } finally {
       rmSync(root, { recursive: true, force: true });

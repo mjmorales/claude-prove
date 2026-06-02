@@ -2303,7 +2303,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 12,
+      schema_version: 13,
     });
   });
 
@@ -2316,7 +2316,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(12);
+    expect(updated.provenance.schema_version).toBe(13);
   });
 });
 
@@ -2389,5 +2389,96 @@ describe('ScrumStore — contributor registry (v12)', () => {
     expect(store.resolveContributor({ github: 'ghost', email: 'ghost@x.com' })).toBeNull();
     expect(store.resolveContributor({})).toBeNull();
     expect(store.resolveContributor({ github: '', email: '' })).toBeNull();
+  });
+});
+
+// ===========================================================================
+// Operator-of-record position history (v13)
+// ===========================================================================
+
+describe('ScrumStore — operator-of-record position history (v13)', () => {
+  /** Register a contributor and return its minted CT-UUID. */
+  function contributor(slug: string): string {
+    return store.registerContributor({ slug }).id;
+  }
+
+  test('setOperatorOfRecord appends an open interval and validates the contributor', () => {
+    const jane = contributor('jane');
+    const row = store.setOperatorOfRecord({ contributorId: jane, fromTs: '2026-01-01T00:00:00Z' });
+    expect(row.contributor_id).toBe(jane);
+    expect(row.from_ts).toBe('2026-01-01T00:00:00Z');
+    expect(row.to_ts).toBeNull();
+
+    // An unregistered holder is rejected rather than recorded.
+    expect(() => store.setOperatorOfRecord({ contributorId: 'ct-ghost' })).toThrow(/unknown/);
+  });
+
+  test('transfer closes the prior interval at the new holder from_ts (one open row)', () => {
+    const jane = contributor('jane');
+    const bob = contributor('bob');
+    store.setOperatorOfRecord({ contributorId: jane, fromTs: '2026-01-01T00:00:00Z' });
+    store.setOperatorOfRecord({ contributorId: bob, fromTs: '2026-03-01T00:00:00Z' });
+
+    const history = store.operatorHistory();
+    expect(history).toHaveLength(2);
+    // Prior interval is closed exactly at the handoff instant; the half-open
+    // [from, to) intervals are contiguous and non-overlapping.
+    expect(history[0]?.contributor_id).toBe(jane);
+    expect(history[0]?.to_ts).toBe('2026-03-01T00:00:00Z');
+    expect(history[1]?.contributor_id).toBe(bob);
+    expect(history[1]?.to_ts).toBeNull();
+
+    // Exactly one open row after a transfer.
+    const open = history.filter((h) => h.to_ts === null);
+    expect(open).toHaveLength(1);
+  });
+
+  test('operatorOfRecordAt resolves the HISTORICAL holder, not the current one', () => {
+    const jane = contributor('jane');
+    const bob = contributor('bob');
+    store.setOperatorOfRecord({ contributorId: jane, fromTs: '2026-01-01T00:00:00Z' });
+    store.setOperatorOfRecord({ contributorId: bob, fromTs: '2026-03-01T00:00:00Z' });
+
+    // An action stamped before the handoff attributes to Jane, even though Bob
+    // is the CURRENT holder — the role-handoff case.
+    const past = store.operatorOfRecordAt('2026-02-01T00:00:00Z');
+    expect(past?.id).toBe(jane);
+    expect(past?.slug).toBe('jane');
+
+    // An action after the handoff attributes to Bob.
+    const present = store.operatorOfRecordAt('2026-04-01T00:00:00Z');
+    expect(present?.id).toBe(bob);
+  });
+
+  test('operatorOfRecordAt boundary: from_ts inclusive, to_ts exclusive', () => {
+    const jane = contributor('jane');
+    const bob = contributor('bob');
+    store.setOperatorOfRecord({ contributorId: jane, fromTs: '2026-01-01T00:00:00Z' });
+    store.setOperatorOfRecord({ contributorId: bob, fromTs: '2026-03-01T00:00:00Z' });
+
+    // Exactly at Jane's from_ts — inclusive lower bound, resolves to Jane.
+    expect(store.operatorOfRecordAt('2026-01-01T00:00:00Z')?.id).toBe(jane);
+    // Exactly at the handoff instant — exclusive upper bound for Jane's
+    // interval, inclusive lower bound for Bob's, so it resolves to Bob.
+    expect(store.operatorOfRecordAt('2026-03-01T00:00:00Z')?.id).toBe(bob);
+  });
+
+  test('operatorOfRecordAt returns null before the first holder and when never set', () => {
+    expect(store.operatorOfRecordAt('2026-01-01T00:00:00Z')).toBeNull();
+
+    const jane = contributor('jane');
+    store.setOperatorOfRecord({ contributorId: jane, fromTs: '2026-02-01T00:00:00Z' });
+    // An instant predating the first interval has no holder in effect.
+    expect(store.operatorOfRecordAt('2026-01-01T00:00:00Z')).toBeNull();
+  });
+
+  test('operatorHistory is empty before any holder is set, oldest-first after', () => {
+    expect(store.operatorHistory()).toEqual([]);
+
+    const jane = contributor('jane');
+    const bob = contributor('bob');
+    store.setOperatorOfRecord({ contributorId: jane, fromTs: '2026-01-01T00:00:00Z' });
+    store.setOperatorOfRecord({ contributorId: bob, fromTs: '2026-03-01T00:00:00Z' });
+    expect(store.operatorHistory().map((h) => h.contributor_id)).toEqual([jane, bob]);
   });
 });

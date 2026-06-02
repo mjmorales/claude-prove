@@ -39,6 +39,7 @@ import type {
   GateVerdict,
   MilestoneStatus,
   NextReadyRow,
+  OperatorHistoryRow,
   Provenance,
   ScrumContextBundle,
   ScrumDep,
@@ -47,6 +48,7 @@ import type {
   ScrumRunLink,
   ScrumTag,
   ScrumTask,
+  SetOperatorOfRecordInput,
   TaskBounds,
   TaskLayer,
   TaskStatus,
@@ -254,6 +256,9 @@ const MILESTONE_COLUMNS =
 /** Canonical `scrum_contributors` SELECT column list (v12); maps 1:1 to `Contributor`. */
 const CONTRIBUTOR_COLUMNS =
   'id, slug, status, display_name, github, email, created_by, created_at, last_modified_by, last_modified_at';
+
+/** Canonical `scrum_operator_history` SELECT column list (v13); maps 1:1 to `OperatorHistoryRow`. */
+const OPERATOR_HISTORY_COLUMNS = 'id, contributor_id, from_ts, to_ts, created_at, created_by';
 
 /**
  * Raw `scrum_tasks` SELECT shape — identical to `ScrumTask` except the v5
@@ -2127,6 +2132,80 @@ export class ScrumStore {
     }
 
     return null;
+  }
+
+  // ==========================================================================
+  // Operator-of-record position history (v13)
+  // ==========================================================================
+
+  /**
+   * Set (or transfer) the operator-of-record to `contributorId`, appending a new
+   * open interval to the position history. This is the single role slot — a
+   * degenerate one-row roster.
+   *
+   * Transfer is two writes in ONE transaction: the prior open row (`to_ts IS
+   * NULL`) is closed by stamping its `to_ts` to the new holder's `from_ts`, then
+   * the new open row is appended. The invariant "at most one open row" holds
+   * across the transaction; a reader never sees zero or two open rows. Setting
+   * the SAME contributor still appends a fresh interval (a re-affirmation is a
+   * new held interval, not a no-op).
+   *
+   * `contributorId` must be a registered contributor — an unknown id throws
+   * rather than recording an unresolvable holder.
+   */
+  setOperatorOfRecord(input: SetOperatorOfRecordInput): OperatorHistoryRow {
+    if (this.getContributor(input.contributorId) === null) {
+      throw new Error(`unknown contributor '${input.contributorId}' — register it first`);
+    }
+    const fromTs = input.fromTs ?? isoNow();
+    const createdBy = input.createdBy ?? process.env.PROVE_AGENT ?? null;
+
+    const append = this.db.transaction(() => {
+      // Close the current open interval (if any) at the new holder's from_ts.
+      this.prep('UPDATE scrum_operator_history SET to_ts = ? WHERE to_ts IS NULL').run(fromTs);
+      const result = this.prep(
+        'INSERT INTO scrum_operator_history (contributor_id, from_ts, to_ts, created_at, created_by) VALUES (?, ?, NULL, ?, ?)',
+      ).run(input.contributorId, fromTs, isoNow(), createdBy);
+      return Number(result.lastInsertRowid);
+    });
+    const id = append();
+
+    const row = this.prep(
+      `SELECT ${OPERATOR_HISTORY_COLUMNS} FROM scrum_operator_history WHERE id = ?`,
+    ).get(id) as OperatorHistoryRow;
+    return row;
+  }
+
+  /**
+   * Resolve the contributor who held operator-of-record AT `at` (an ISO-8601
+   * instant) — POINT-IN-TIME attribution, not the current holder. Returns the
+   * `scrum_contributors` row whose half-open interval `[from_ts, to_ts)` contains
+   * `at`, or null when no holder was in effect at that instant (e.g. `at`
+   * predates the first interval, or the role was never set).
+   *
+   * The historical holder can differ from the current holder — an action stamped
+   * before a handoff attributes to whoever held the role then, not now. Intervals
+   * never overlap (the set-then-append invariant), so at most one row matches.
+   * Ties on a shared boundary instant resolve to the LATER interval: the upper
+   * bound is exclusive (`at < to_ts`), the lower inclusive (`from_ts <= at`).
+   */
+  operatorOfRecordAt(at: string): Contributor | null {
+    const interval = this.prep(
+      'SELECT contributor_id FROM scrum_operator_history WHERE from_ts <= ? AND (to_ts IS NULL OR ? < to_ts) ORDER BY from_ts DESC LIMIT 1',
+    ).get(at, at) as { contributor_id: string } | null;
+    if (interval === null) return null;
+    return this.getContributor(interval.contributor_id);
+  }
+
+  /**
+   * The full operator-of-record position history, oldest interval first. The
+   * last row carries `to_ts: null` when a current holder is set. Empty when the
+   * role was never set.
+   */
+  operatorHistory(): OperatorHistoryRow[] {
+    return this.prep(
+      `SELECT ${OPERATOR_HISTORY_COLUMNS} FROM scrum_operator_history ORDER BY from_ts ASC, id ASC`,
+    ).all() as OperatorHistoryRow[];
   }
 
   // ==========================================================================

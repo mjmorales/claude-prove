@@ -29,6 +29,7 @@ import { runInitCmd } from './init-cmd';
 import { runLinkRunCmd } from './link-run-cmd';
 import { runMilestoneCmd } from './milestone-cmd';
 import { runNextReadyCmd } from './next-ready-cmd';
+import { runOperatorCmd } from './operator-cmd';
 import { runStatusCmd } from './status-cmd';
 import { runTagCmd } from './tag-cmd';
 import { runTaskCmd } from './task-cmd';
@@ -454,7 +455,7 @@ describe('runTaskCmd', () => {
       expect(shown.task.run_id).toBe('feat-prov');
       expect(shown.task.provenance.worker_id).toBe('worker-42');
       expect(shown.task.provenance.run_id).toBe('feat-prov');
-      expect(shown.task.provenance.schema_version).toBe(12);
+      expect(shown.task.provenance.schema_version).toBe(13);
     } finally {
       restoreEnv('PROVE_WORKER_ID', savedWorker);
       restoreEnv('PROVE_RUN_SLUG', savedSlug);
@@ -2266,5 +2267,137 @@ describe('runContributorCmd', () => {
     const res = withCapture(() => runContributorCmd('frobnicate', { workspaceRoot: workspace }));
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('unknown contributor action');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runOperatorCmd — operator-of-record set / resolve / history
+// ---------------------------------------------------------------------------
+
+interface OperatorRow {
+  id: number;
+  contributor_id: string;
+  from_ts: string;
+  to_ts: string | null;
+}
+
+/** Register a contributor through the CLI and return its minted CT-UUID. */
+function registerContributorCli(slug: string): string {
+  const reg = withCapture(() => runContributorCmd('register', { slug, workspaceRoot: workspace }));
+  return (JSON.parse(reg.stdout.trim()) as ContributorRow).id;
+}
+
+describe('runOperatorCmd', () => {
+  test('set appends an open interval and syncs charter.md operator_of_record', () => {
+    const jane = registerContributorCli('jane');
+    // A scaffolded charter carrying the null operator_of_record field.
+    writeFileSync(
+      join(workspace, 'charter.md'),
+      '---\nschema_version: 1\noperator_of_record: null\n---\n\n# Project Charter\n',
+      'utf8',
+    );
+
+    const res = withCapture(() =>
+      runOperatorCmd('set', {
+        contributor: jane,
+        fromTs: '2026-01-01T00:00:00Z',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as OperatorRow;
+    expect(row.contributor_id).toBe(jane);
+    expect(row.to_ts).toBeNull();
+
+    // The charter frontmatter now mirrors the current holder.
+    const charter = readFileSync(join(workspace, 'charter.md'), 'utf8');
+    expect(charter).toContain(`operator_of_record: ${jane}`);
+    expect(charter).not.toContain('operator_of_record: null');
+  });
+
+  test('set without --contributor exits 1', () => {
+    const res = withCapture(() => runOperatorCmd('set', { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--contributor');
+  });
+
+  test('set with an unknown contributor exits 1', () => {
+    const res = withCapture(() =>
+      runOperatorCmd('set', { contributor: 'ct-ghost', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('unknown contributor');
+  });
+
+  test('resolve returns the point-in-time holder, not the current one', () => {
+    const jane = registerContributorCli('jane');
+    const bob = registerContributorCli('bob');
+    withCapture(() =>
+      runOperatorCmd('set', {
+        contributor: jane,
+        fromTs: '2026-01-01T00:00:00Z',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runOperatorCmd('set', {
+        contributor: bob,
+        fromTs: '2026-03-01T00:00:00Z',
+        workspaceRoot: workspace,
+      }),
+    );
+
+    // Before the handoff → Jane (the historical holder), even though Bob is current.
+    const past = withCapture(() =>
+      runOperatorCmd('resolve', { at: '2026-02-01T00:00:00Z', workspaceRoot: workspace }),
+    );
+    expect(past.exit).toBe(0);
+    expect((JSON.parse(past.stdout.trim()) as ContributorRow).id).toBe(jane);
+
+    // After the handoff → Bob.
+    const present = withCapture(() =>
+      runOperatorCmd('resolve', { at: '2026-04-01T00:00:00Z', workspaceRoot: workspace }),
+    );
+    expect((JSON.parse(present.stdout.trim()) as ContributorRow).id).toBe(bob);
+  });
+
+  test('resolve before any holder exits 1 with null on stdout', () => {
+    const res = withCapture(() =>
+      runOperatorCmd('resolve', { at: '2026-01-01T00:00:00Z', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stdout.trim()).toBe('null');
+    expect(res.stderr).toContain('no holder in effect');
+  });
+
+  test('history lists intervals oldest-first', () => {
+    const jane = registerContributorCli('jane');
+    const bob = registerContributorCli('bob');
+    withCapture(() =>
+      runOperatorCmd('set', {
+        contributor: jane,
+        fromTs: '2026-01-01T00:00:00Z',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runOperatorCmd('set', {
+        contributor: bob,
+        fromTs: '2026-03-01T00:00:00Z',
+        workspaceRoot: workspace,
+      }),
+    );
+    const res = withCapture(() => runOperatorCmd('history', { workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const rows = JSON.parse(res.stdout.trim()) as OperatorRow[];
+    expect(rows.map((r) => r.contributor_id)).toEqual([jane, bob]);
+    expect(rows[0]?.to_ts).toBe('2026-03-01T00:00:00Z');
+    expect(rows[1]?.to_ts).toBeNull();
+  });
+
+  test('unknown sub-action exits 1', () => {
+    const res = withCapture(() => runOperatorCmd('frobnicate', { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('unknown operator action');
   });
 });
