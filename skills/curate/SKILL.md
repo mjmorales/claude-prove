@@ -24,6 +24,22 @@ the judgment half**: which findings become durable memory, and as what kind. Tha
 requires reading prose and weighing significance, so it is the model's, gated by
 a human.
 
+This is **milestone-scope** curation. The same promotion happens once per story at
+story-close (`skills/decompose/SKILL.md`, Phase C5), which lifts that one story's
+run decisions into the durable store. Milestone-close sweeps the whole milestone —
+every task's candidates, including the findings the per-story passes left in the
+log — so the two are the same move at two scopes, not duplicates. Both move
+knowledge between the same two tiers:
+
+- **The reasoning log** — each run's append-only journal under `<run_path>/log/`,
+  where findings (`decision`, `hack`, `risk`, `assumption`) land as they happen.
+  Run-scoped and exhaustive.
+- **The decision store** (`scrum_decisions`) — the project's durable, cross-run
+  memory; a row here is a standing fact a future session must not rediscover.
+
+The reasoning log is where a finding is *recorded*; the decision store is where one
+that outlives its run is *kept*. Curation is the bridge.
+
 Three invariants govern every phase below:
 
 - **Source of truth is `prove.db`.** A promotion is a row in `scrum_decisions`,
@@ -178,4 +194,4 @@ sees the milestone's curated outcome without re-reading every run log.
 |------|---------|
 | `references/design-principles.md` | Design principles: engine boundary, native primitives, append-only/supersession |
 | `references/interaction-patterns.md` | The `AskUserQuestion` promotion gate |
-| `skills/decompose/SKILL.md` | The reasoning-log entry shapes curation reads (the writer side) |
+| `skills/decompose/SKILL.md` | The reasoning-log entry shapes curation reads (the writer side), and Phase C5 — the per-story analogue of this milestone-close pass |
