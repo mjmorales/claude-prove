@@ -30,6 +30,9 @@ import type {
   Acceptance,
   AcceptanceCriterion,
   AcceptanceScope,
+  AddAnnotationInput,
+  AnnotationRow,
+  AnnotationTargetKind,
   Contributor,
   ContributorStatus,
   DecisionRow,
@@ -78,6 +81,7 @@ import type {
 import type { AddTeamExposeInput, CreateTeamInput } from './types';
 import {
   ACCEPTANCE_SCOPES,
+  ANNOTATION_TARGET_KINDS,
   ESCALATION_TYPES,
   GATE_VERDICTS,
   TEAM_LIFETIMES,
@@ -307,6 +311,9 @@ const TEAM_EXPOSE_COLUMNS =
 
 /** Canonical `scrum_lores` SELECT column list (v19); maps 1:1 to `LoreRow`. */
 const LORE_COLUMNS = 'id, team_slug, body, author_contributor_id, created_at';
+
+/** Canonical `scrum_annotations` SELECT column list (v20); maps 1:1 to `AnnotationRow`. */
+const ANNOTATION_COLUMNS = 'id, target_kind, target_ref, body, author, created_at';
 
 /**
  * Kebab-case ask-type format: one or more lowercase-alphanumeric segments
@@ -2938,6 +2945,52 @@ export class ScrumStore {
       id,
     ) as LoreRow | null;
     return row ?? null;
+  }
+
+  // ==========================================================================
+  // Annotation layer (v20) — per-artifact notes, append-only
+  // ==========================================================================
+
+  /**
+   * Append one Annotation — a per-artifact note, visible to anyone reading the
+   * target. The lightest memory layer: there is no authorship gate (any author
+   * may annotate any target) — `author` is recorded, not enforced.
+   *
+   * `targetKind` MUST be a member of the closed `AnnotationTargetKind` set
+   * (`task` | `team` | `decision`) — an unknown kind throws WITHOUT writing,
+   * the boundary guard matching `createTeam`'s team_type check. `targetRef` is a
+   * SOFT reference: the store does NOT verify the named task / team / decision
+   * exists (the ref spans multiple tables by kind, so it carries no FK), exactly
+   * as the roster and operator history hold their referents without one.
+   *
+   * Append-only: an entry is never updated or deleted — a correction is a fresh
+   * `addAnnotation`, not an edit, so the full history survives.
+   */
+  addAnnotation(input: AddAnnotationInput): AnnotationRow {
+    if (!(ANNOTATION_TARGET_KINDS as string[]).includes(input.targetKind)) {
+      throw new Error(
+        `addAnnotation: invalid target_kind '${input.targetKind}'; expected one of: ${ANNOTATION_TARGET_KINDS.join(', ')}`,
+      );
+    }
+    const result = this.prep(
+      'INSERT INTO scrum_annotations (target_kind, target_ref, body, author, created_at) VALUES (?, ?, ?, ?, ?)',
+    ).run(input.targetKind, input.targetRef, input.body, input.author, input.createdAt ?? isoNow());
+    return this.prep(`SELECT ${ANNOTATION_COLUMNS} FROM scrum_annotations WHERE id = ?`).get(
+      Number(result.lastInsertRowid),
+    ) as AnnotationRow;
+  }
+
+  /**
+   * A target's Annotations, oldest-first (the order they were recorded). The
+   * read surface anyone consults to see the notes attached to a task, team, or
+   * decision. Tolerates a target with no notes: returns an empty array (the
+   * absence reads as "no annotations" rather than an error, matching
+   * `listLores`).
+   */
+  listAnnotations(targetKind: AnnotationTargetKind, targetRef: string): AnnotationRow[] {
+    return this.prep(
+      `SELECT ${ANNOTATION_COLUMNS} FROM scrum_annotations WHERE target_kind = ? AND target_ref = ? ORDER BY id ASC`,
+    ).all(targetKind, targetRef) as AnnotationRow[];
   }
 
   // ==========================================================================

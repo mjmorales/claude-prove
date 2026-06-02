@@ -2303,7 +2303,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 19,
+      schema_version: 20,
     });
   });
 
@@ -2316,7 +2316,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(19);
+    expect(updated.provenance.schema_version).toBe(20);
   });
 });
 
@@ -3252,5 +3252,96 @@ describe('ScrumStore — team Lore layer (v19)', () => {
     });
     expect(store.getLore(row.id)?.body).toBe('pin the schema version');
     expect(store.getLore(999999)).toBeNull();
+  });
+});
+
+describe('ScrumStore — Annotation layer (v20)', () => {
+  test('addAnnotation appends a per-artifact note, recording the author', () => {
+    const row = store.addAnnotation({
+      targetKind: 'task',
+      targetRef: 't1',
+      body: 'watch the off-by-one',
+      author: 'CT-a',
+      createdAt: '2026-01-01T00:00:00Z',
+    });
+    expect(row.target_kind).toBe('task');
+    expect(row.target_ref).toBe('t1');
+    expect(row.body).toBe('watch the off-by-one');
+    expect(row.author).toBe('CT-a');
+    expect(row.created_at).toBe('2026-01-01T00:00:00Z');
+    expect(row.id).toBeGreaterThan(0);
+  });
+
+  test('addAnnotation rejects a target_kind outside the closed enum, naming the set', () => {
+    expect(() =>
+      // @ts-expect-error — exercising the runtime boundary guard with an off-enum kind.
+      store.addAnnotation({ targetKind: 'milestone', targetRef: 'm1', body: 'x', author: 'CT-a' }),
+    ).toThrow(/invalid target_kind 'milestone'; expected one of: task, team, decision/);
+    expect(store.listAnnotations('task', 'm1')).toEqual([]);
+  });
+
+  test('target_ref is a soft reference — the target row need not exist', () => {
+    // No task / team / decision named 'ghost' has been created.
+    const row = store.addAnnotation({
+      targetKind: 'decision',
+      targetRef: 'ghost',
+      body: 'note on a phantom decision',
+      author: 'CT-a',
+    });
+    expect(row.target_ref).toBe('ghost');
+    expect(store.listAnnotations('decision', 'ghost').map((a) => a.body)).toEqual([
+      'note on a phantom decision',
+    ]);
+  });
+
+  test('listAnnotations returns a target notes oldest-first; unknown target yields empty', () => {
+    store.addAnnotation({
+      targetKind: 'team',
+      targetRef: 'payments',
+      body: 'first',
+      author: 'CT-a',
+      createdAt: '2026-01-01T00:00:00Z',
+    });
+    store.addAnnotation({
+      targetKind: 'team',
+      targetRef: 'payments',
+      body: 'second',
+      author: 'CT-b',
+      createdAt: '2026-02-01T00:00:00Z',
+    });
+    expect(store.listAnnotations('team', 'payments').map((a) => a.body)).toEqual([
+      'first',
+      'second',
+    ]);
+    // An unknown target reads as "no annotations", not an error.
+    expect(store.listAnnotations('team', 'ghost')).toEqual([]);
+  });
+
+  test('listAnnotations scopes by (target_kind, target_ref) — same ref, different kind, no collision', () => {
+    store.addAnnotation({ targetKind: 'task', targetRef: 'x', body: 'task note', author: 'CT-a' });
+    store.addAnnotation({ targetKind: 'team', targetRef: 'x', body: 'team note', author: 'CT-b' });
+    expect(store.listAnnotations('task', 'x').map((a) => a.body)).toEqual(['task note']);
+    expect(store.listAnnotations('team', 'x').map((a) => a.body)).toEqual(['team note']);
+  });
+
+  test('Annotation is append-only: a correction is a new entry, not an edit', () => {
+    const first = store.addAnnotation({
+      targetKind: 'task',
+      targetRef: 't1',
+      body: 'use tabs',
+      author: 'CT-a',
+    });
+    const correction = store.addAnnotation({
+      targetKind: 'task',
+      targetRef: 't1',
+      body: 'correction: use spaces',
+      author: 'CT-a',
+    });
+    // Both entries survive — the original is never mutated or removed.
+    expect(correction.id).toBeGreaterThan(first.id);
+    expect(store.listAnnotations('task', 't1').map((a) => a.body)).toEqual([
+      'use tabs',
+      'correction: use spaces',
+    ]);
   });
 });

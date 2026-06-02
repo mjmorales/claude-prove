@@ -35,6 +35,7 @@ import {
   SCRUM_MIGRATION_V17_SQL,
   SCRUM_MIGRATION_V18_SQL,
   SCRUM_MIGRATION_V19_SQL,
+  SCRUM_MIGRATION_V20_SQL,
   SCRUM_SCHEMA_VERSION,
   ensureScrumSchemaRegistered,
 } from './schemas';
@@ -73,7 +74,7 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V2_SQL).toContain("DEFAULT 'accepted'");
   });
 
-  test('migration creates all 16 scrum_* tables (v1 + v2 + v12 + v13 + v14 + v15 + v16 + v17 + v19)', () => {
+  test('migration creates all 17 scrum_* tables (v1 + v2 + v12 + v13 + v14 + v15 + v16 + v17 + v19 + v20)', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -83,6 +84,7 @@ describe('scrum domain registration', () => {
         )
         .map((r) => r.name);
       expect(tables).toEqual([
+        'scrum_annotations',
         'scrum_context_bundles',
         'scrum_contributors',
         'scrum_decisions',
@@ -114,7 +116,7 @@ describe('scrum domain registration', () => {
     );
   });
 
-  test('migration creates all 17 scrum indexes (v1 + v2 + v3 + v12 + v13 + v14 + v15 + v16 + v17 + v19)', () => {
+  test('migration creates all 18 scrum indexes (v1 + v2 + v3 + v12 + v13 + v14 + v15 + v16 + v17 + v19 + v20)', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -124,6 +126,7 @@ describe('scrum domain registration', () => {
         )
         .map((r) => r.name);
       expect(indexes).toEqual([
+        'idx_scrum_annotations_target',
         'idx_scrum_contributors_email',
         'idx_scrum_contributors_github',
         'idx_scrum_decisions_status',
@@ -451,12 +454,12 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('full migration chain from v0 applies v1..v19 in order', () => {
+  test('full migration chain from v0 applies v1..v20 in order', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       const result = runMigrations(raw);
       expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
       ]);
     } finally {
       raw.close();
@@ -468,7 +471,7 @@ describe('scrum domain registration', () => {
     try {
       const first = runMigrations(raw);
       expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
       ]);
 
       const second = runMigrations(raw);
@@ -498,6 +501,7 @@ describe('scrum domain registration', () => {
         { version: 17 },
         { version: 18 },
         { version: 19 },
+        { version: 20 },
       ]);
     } finally {
       raw.close();
@@ -528,9 +532,29 @@ describe('scrum domain registration', () => {
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(log).toHaveLength(19);
-      const [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19] =
-        log;
+      expect(log).toHaveLength(20);
+      const [
+        v1,
+        v2,
+        v3,
+        v4,
+        v5,
+        v6,
+        v7,
+        v8,
+        v9,
+        v10,
+        v11,
+        v12,
+        v13,
+        v14,
+        v15,
+        v16,
+        v17,
+        v18,
+        v19,
+        v20,
+      ] = log;
       if (
         !v1 ||
         !v2 ||
@@ -550,9 +574,10 @@ describe('scrum domain registration', () => {
         !v16 ||
         !v17 ||
         !v18 ||
-        !v19
+        !v19 ||
+        !v20
       )
-        throw new Error('expected nineteen log entries');
+        throw new Error('expected twenty log entries');
       expect(v1.domain).toBe('scrum');
       expect(v1.version).toBe(1);
       expect(v1.description).toContain('scrum_tasks');
@@ -612,6 +637,9 @@ describe('scrum domain registration', () => {
       expect(v19.domain).toBe('scrum');
       expect(v19.version).toBe(19);
       expect(v19.description).toContain('scrum_lores');
+      expect(v20.domain).toBe('scrum');
+      expect(v20.version).toBe(20);
+      expect(v20.description).toContain('scrum_annotations');
     } finally {
       raw.close();
     }
@@ -643,8 +671,8 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V11_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN run_id');
   });
 
-  test('SCRUM_SCHEMA_VERSION tracks the top migration version (19)', () => {
-    expect(SCRUM_SCHEMA_VERSION).toBe(19);
+  test('SCRUM_SCHEMA_VERSION tracks the top migration version (20)', () => {
+    expect(SCRUM_SCHEMA_VERSION).toBe(20);
   });
 
   test('v11 ADD COLUMN defaults worker_id/run_id to NULL on existing rows', () => {
@@ -777,7 +805,7 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V14_SQL).toContain('idx_scrum_teams_type');
   });
 
-  test('a fresh store ends at version 19 with scrum_teams present', () => {
+  test('a fresh store ends at version 20 with scrum_teams present', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -786,7 +814,7 @@ describe('scrum domain registration', () => {
         'SELECT MAX(version) AS version FROM _migrations_log WHERE domain = ?',
         ['scrum'],
       );
-      expect(top).toEqual([{ version: 19 }]);
+      expect(top).toEqual([{ version: 20 }]);
 
       const tables = raw.all<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_teams'",
@@ -1095,6 +1123,60 @@ describe('scrum domain registration', () => {
       expect(rows).toEqual([
         { id: 1, body: 'prefer idempotent migrations', author_contributor_id: 'CT-lead' },
         { id: 2, body: 'pin the schema version', author_contributor_id: 'CT-lead' },
+      ]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('SCRUM_MIGRATION_V20_SQL creates scrum_annotations + a (target_kind, target_ref) index', () => {
+    expect(SCRUM_MIGRATION_V20_SQL).toContain('CREATE TABLE scrum_annotations');
+    expect(SCRUM_MIGRATION_V20_SQL).toContain('idx_scrum_annotations_target');
+    // target_ref is a SOFT reference — it spans multiple tables by target_kind,
+    // so it carries no foreign key.
+    expect(SCRUM_MIGRATION_V20_SQL).not.toContain('REFERENCES');
+  });
+
+  test('a fresh store has scrum_annotations with the v20 column shape', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      const tables = raw.all<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_annotations'",
+      );
+      expect(tables).toEqual([{ name: 'scrum_annotations' }]);
+      const cols = raw
+        .all<{ name: string }>('PRAGMA table_info(scrum_annotations)')
+        .map((c) => c.name);
+      expect(cols).toEqual(['id', 'target_kind', 'target_ref', 'body', 'author', 'created_at']);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('v20 Annotation rows round-trip per (target_kind, target_ref), oldest-first by id', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      // No team/task/decision row exists — target_ref is a soft reference, so a
+      // note attaches without the target's presence.
+      raw.exec(
+        "INSERT INTO scrum_annotations (target_kind, target_ref, body, author, created_at) VALUES ('task', 't1', 'watch the off-by-one', 'CT-a', '2026-01-01T00:00:00Z')",
+      );
+      raw.exec(
+        "INSERT INTO scrum_annotations (target_kind, target_ref, body, author, created_at) VALUES ('task', 't1', 'fixed in follow-up', 'CT-b', '2026-01-02T00:00:00Z')",
+      );
+      // A different target_kind sharing the same ref does NOT collide.
+      raw.exec(
+        "INSERT INTO scrum_annotations (target_kind, target_ref, body, author, created_at) VALUES ('team', 't1', 'team note', 'CT-c', '2026-01-03T00:00:00Z')",
+      );
+      const rows = raw.all<{ id: number; body: string; author: string }>(
+        'SELECT id, body, author FROM scrum_annotations WHERE target_kind = ? AND target_ref = ? ORDER BY id ASC',
+        ['task', 't1'],
+      );
+      expect(rows).toEqual([
+        { id: 1, body: 'watch the off-by-one', author: 'CT-a' },
+        { id: 2, body: 'fixed in follow-up', author: 'CT-b' },
       ]);
     } finally {
       raw.close();
