@@ -22,7 +22,7 @@
  *   claude-prove run-state report write <step_id> --status S [--commit SHA] [--json FILE] [--notes TEXT]
  *   claude-prove run-state migrate [--dry-run] [--overwrite]
  *   claude-prove run-state migrate-runs [--branch B] [--slug S]
- *   claude-prove run-state hook <guard|validate|session-start|stop|subagent-stop>
+ *   claude-prove run-state hook <guard|bounds|capture|validate|session-start|stop|subagent-stop>
  *
  * Exit codes:
  *   0  success
