@@ -319,10 +319,19 @@ export interface TaskBoundsTools {
 }
 
 /**
- * Soft resource ceilings inside `TaskBounds`. ADVISORY ONLY — claude-prove
- * has no enforcement daemon; `prep-permissions` renders these into the task
- * prompt as guidance and nothing blocks on them (the native subagent timeout
- * is the only hard floor).
+ * Resource ceilings inside `TaskBounds`. Each is enforced by a different native
+ * primitive — claude-prove has no enforcement daemon:
+ *
+ *   tool_calls   — ENFORCED by the PreToolUse bounds hook, which keeps a
+ *                  per-task tool-call counter, soft-warns as the count nears
+ *                  the limit, and hard-stops (canonical deny) at the limit.
+ *   wall_clock_s — bounded by the native subagent dispatch timeout; a
+ *                  PreToolUse hook cannot observe idle wall-clock.
+ *   tokens       — bounded by the workflow/run token budget; a hook has no view
+ *                  of the conversation's token accounting.
+ *
+ * `prep-permissions` additionally renders all three into the task prompt as
+ * guidance. All fields optional; absent = unbounded.
  */
 export interface TaskBoundsBudgets {
   tokens?: number;
@@ -341,8 +350,11 @@ export interface TaskBoundsBudgets {
  *   write   — advisory; the git worktree is the write wall. Native permission
  *             deny rules match a set, not its complement, so there is NO
  *             `Edit(!glob)`/`Write(!glob)` "writable only inside X" rule.
- *   tools   — the only NATIVE surface; allow/deny merge into permissions.
- *   budgets — ADVISORY ONLY; soft ceilings rendered into the prompt.
+ *   tools   — a NATIVE surface; allow/deny merge into permissions.
+ *   budgets — `tool_calls` is ENFORCED by the PreToolUse bounds hook's
+ *             per-task counter; `wall_clock_s`/`tokens` are bounded by the
+ *             subagent timeout and the workflow token budget respectively. All
+ *             three are also rendered into the prompt as guidance.
  *
  * All fields optional; absent = unbounded. The closed
  * top-level key set (`read | write | tools | budgets`) is enforced on write

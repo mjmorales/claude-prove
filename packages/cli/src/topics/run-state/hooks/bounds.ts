@@ -1,35 +1,47 @@
 /**
- * PreToolUse hook — enforces a task's declared read/write path globs as a hard
- * scope-check wall.
+ * PreToolUse hook — enforces a task's declared bounds as two native walls: a
+ * read/write path-scope wall and a per-task tool-call budget wall.
  *
  * A scrum task MAY declare `bounds` with `read[]` / `write[]` path globs
- * (project-root-relative, `**`-aware). Those globs are otherwise advisory: the
- * git worktree is the only structural write wall and nothing blocks a read or a
- * finer-grained write. This hook turns the declared globs into a native wall.
+ * (project-root-relative, `**`-aware) and/or a `budgets.tool_calls` ceiling.
+ * Those bounds are otherwise advisory: the git worktree is the only structural
+ * write wall and nothing meters tool calls. This hook turns them into native
+ * walls.
  *
- * On a `Write`/`Edit`/`MultiEdit` whose target path falls outside the declared
- * `write` globs (or a `Read` outside the declared `read` globs), or a `Bash`
- * command whose extracted write target falls outside the `write` globs, the
- * hook emits the canonical PreToolUse deny payload — `permissionDecision: deny`
- * on stdout with exit 0 — which denies the call and feeds the reason back to
- * the agent.
+ * Scope wall: on a `Write`/`Edit`/`MultiEdit` whose target path falls outside
+ * the declared `write` globs (or a `Read` outside the declared `read` globs),
+ * or a `Bash` command whose extracted write target falls outside the `write`
+ * globs, the hook emits the canonical PreToolUse deny payload —
+ * `permissionDecision: deny` on stdout with exit 0 — which denies the call and
+ * feeds the reason back to the agent.
+ *
+ * Budget wall: after the scope wall passes, the hook increments a per-task
+ * tool-call counter and soft-warns (non-blocking stderr note) as the count
+ * nears `budgets.tool_calls`, then hard-stops with the same canonical deny at
+ * or over the budget. A scope-denied call does NOT consume budget. The other
+ * two declarable budgets are enforced by native primitives outside this hook:
+ * `wall_clock_s` by the subagent dispatch timeout (a PreToolUse hook cannot
+ * observe idle wall-clock) and `tokens` by the workflow/run token budget (a
+ * hook has no view of the conversation's token accounting). See `budget.ts`.
  *
  * Permissive by construction. The hook NEVER false-blocks: absent or empty
- * bounds, an ambiguous active task, a tool with no checkable target, or any
- * resolution failure all pass silently (exit 0). The wall fires only on a
- * clear, declared out-of-bounds access.
+ * bounds, an ambiguous active task, a tool with no checkable target, a counter
+ * IO failure, or any resolution failure all pass silently (exit 0). A wall
+ * fires only on a clear, declared out-of-bounds access or a met budget.
  *
- * Active-task resolution: the single `in_progress` scrum task that carries
- * authored bounds. Zero such tasks, or more than one, is ambiguous and passes.
- * The scrum store lives at the enclosing git repository's main worktree
- * (`<main-root>/.prove/prove.db`); in a linked worktree the payload `cwd` is
- * resolved to that main root via the git common directory.
+ * Active-task resolution: the single `in_progress` scrum task that carries an
+ * enforceable bound (a path glob or a positive `tool_calls` budget). Zero such
+ * tasks, or more than one, is ambiguous and passes. The scrum store lives at
+ * the enclosing git repository's main worktree (`<main-root>/.prove/prove.db`);
+ * in a linked worktree the payload `cwd` is resolved to that main root via the
+ * git common directory.
  */
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { openScrumStore } from '../../scrum/store';
 import type { TaskBounds } from '../../scrum/types';
+import { checkToolCallBudget } from './budget';
 import { pyJsonDump } from './json-compat';
 import {
   EMPTY_HOOK_RESULT,
@@ -44,11 +56,13 @@ const READ_TOOL = 'Read';
 const BASH_TOOL = 'Bash';
 
 /**
- * The active task's declared bounds plus the project root its globs are
- * relative to. `projectRoot` is the main git worktree root — every glob in
- * `read`/`write` is resolved against it.
+ * The active task's identity, declared bounds, and the project root its globs
+ * are relative to. `taskId` keys the per-task tool-call budget counter;
+ * `projectRoot` is the main git worktree root — every glob in `read`/`write`
+ * and the budget counter directory are resolved against it.
  */
 export interface ActiveBounds {
+  taskId: string;
   bounds: TaskBounds;
   projectRoot: string;
 }
@@ -91,12 +105,35 @@ export function runBoundsHook(
   }
   if (!active) return EMPTY_HOOK_RESULT;
 
-  const { bounds, projectRoot } = active;
+  const { taskId, bounds, projectRoot } = active;
 
-  if (isRead) {
+  // Scope wall first: a path-scope violation denies the call outright and must
+  // NOT consume the tool-call budget (a blocked call did no work). Only when
+  // the scope check passes do we count the call against the budget.
+  const scope = checkScope(toolName, payload, bounds, projectRoot);
+  if (scope.stdout !== '') return scope;
+
+  // Budget wall: increment the per-task tool-call counter and soft-warn /
+  // hard-stop on the declared `tool_calls` budget. Wrapped so a counter IO
+  // failure passes permissively rather than walling off the call.
+  try {
+    return checkToolCallBudget(taskId, bounds.budgets, projectRoot);
+  } catch {
+    return EMPTY_HOOK_RESULT;
+  }
+}
+
+/** Dispatch the path-scope wall for the matched tool. */
+function checkScope(
+  toolName: string,
+  payload: Record<string, unknown>,
+  bounds: TaskBounds,
+  projectRoot: string,
+): HookResult {
+  if (toolName === READ_TOOL) {
     return checkRead(payload, bounds, projectRoot);
   }
-  if (isWrite) {
+  if (WRITE_TOOLS.has(toolName)) {
     return checkWrite(readFilePathField(payload), bounds, projectRoot);
   }
   return checkBash(payload, bounds, projectRoot);
@@ -315,12 +352,13 @@ function block(reason: string): HookResult {
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve the active task's bounds from the on-disk scrum store.
+ * Resolve the active task's identity and bounds from the on-disk scrum store.
  *
- * The active task is the single `in_progress` scrum task carrying authored
- * bounds. Zero such tasks, or more than one (ambiguous), yields `null` — the
- * permissive path. The store path is the enclosing main worktree's
- * `<main-root>/.prove/prove.db`; a missing store yields `null`.
+ * The active task is the single `in_progress` scrum task carrying an
+ * enforceable bound — at least one read/write path glob OR a positive
+ * `tool_calls` budget. Zero such tasks, or more than one (ambiguous), yields
+ * `null` — the permissive path. The store path is the enclosing main
+ * worktree's `<main-root>/.prove/prove.db`; a missing store yields `null`.
  */
 export function resolveActiveBoundsFromStore(cwd: string): ActiveBounds | null {
   const projectRoot = mainWorktreeRoot(cwd);
@@ -337,19 +375,35 @@ export function resolveActiveBoundsFromStore(cwd: string): ActiveBounds | null {
   try {
     const bounded = store
       .listTasks({ status: 'in_progress' })
-      .filter((t) => t.bounds !== null && hasPathGlobs(t.bounds));
+      .filter((t) => t.bounds !== null && hasEnforceableBound(t.bounds));
     if (bounded.length !== 1) return null;
-    const bounds = bounded[0]?.bounds;
-    if (!bounds) return null;
-    return { bounds, projectRoot };
+    const task = bounded[0];
+    if (!task || !task.bounds) return null;
+    return { taskId: task.id, bounds: task.bounds, projectRoot };
   } finally {
     store.close();
   }
 }
 
+/**
+ * True when the bounds declare at least one enforceable wall: a read/write
+ * path glob (the scope wall) or a positive `tool_calls` budget (the budget
+ * wall). A budget-only task carries no path globs but is still the active
+ * bounded task for counter purposes.
+ */
+function hasEnforceableBound(bounds: TaskBounds): boolean {
+  return hasPathGlobs(bounds) || hasToolCallBudget(bounds);
+}
+
 /** True when the bounds declare at least one read or write path glob. */
 function hasPathGlobs(bounds: TaskBounds): boolean {
   return (bounds.read?.length ?? 0) > 0 || (bounds.write?.length ?? 0) > 0;
+}
+
+/** True when the bounds declare a positive `tool_calls` budget. */
+function hasToolCallBudget(bounds: TaskBounds): boolean {
+  const limit = bounds.budgets?.tool_calls;
+  return typeof limit === 'number' && limit > 0;
 }
 
 /**
