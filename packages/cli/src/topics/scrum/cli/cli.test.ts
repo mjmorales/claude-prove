@@ -27,6 +27,7 @@ import { runGateCmd } from './gate-cmd';
 import { runHookCmd } from './hook-cmd';
 import { runInitCmd } from './init-cmd';
 import { runLinkRunCmd } from './link-run-cmd';
+import { runLoreCmd } from './lore-cmd';
 import { runMilestoneCmd } from './milestone-cmd';
 import { runNextReadyCmd } from './next-ready-cmd';
 import { runOperatorCmd } from './operator-cmd';
@@ -456,7 +457,7 @@ describe('runTaskCmd', () => {
       expect(shown.task.run_id).toBe('feat-prov');
       expect(shown.task.provenance.worker_id).toBe('worker-42');
       expect(shown.task.provenance.run_id).toBe('feat-prov');
-      expect(shown.task.provenance.schema_version).toBe(18);
+      expect(shown.task.provenance.schema_version).toBe(19);
     } finally {
       restoreEnv('PROVE_WORKER_ID', savedWorker);
       restoreEnv('PROVE_RUN_SLUG', savedSlug);
@@ -2487,7 +2488,7 @@ describe('runTeamCmd', () => {
     const artifact = join(workspace, 'teams', 'payments.md');
     expect(existsSync(artifact)).toBe(true);
     const content = readFileSync(artifact, 'utf8');
-    expect(content).toContain('schema_version: 18');
+    expect(content).toContain('schema_version: 19');
     expect(content).toContain('team:');
     expect(content).toContain('slug: payments');
     expect(content).toContain('team_type: stream_aligned');
@@ -2508,6 +2509,9 @@ describe('runTeamCmd', () => {
     expect(content).toContain('interface:');
     expect(content).toContain('accepts: []');
     expect(content).toContain('exposes:');
+    // v19 lore block mirrors the (empty) Lore of a freshly-created team.
+    expect(content).toContain('lore:');
+    expect(content).toContain('count: 0');
   });
 
   test('create honors an explicit --lifetime + --terminates-on', () => {
@@ -3162,5 +3166,176 @@ describe('runTeamCmd', () => {
 
     const shown = withCapture(() => runTeamCmd('show', ['squad'], { workspaceRoot: workspace }));
     expect((JSON.parse(shown.stdout.trim()) as TeamRow).status).toBe('inactive');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runLoreCmd — team Lore layer record / list / show (v19)
+// ---------------------------------------------------------------------------
+
+interface LoreRow {
+  id: number;
+  team_slug: string;
+  body: string;
+  author_contributor_id: string;
+  created_at: string;
+}
+
+describe('runLoreCmd', () => {
+  function createTeam(slug: string): void {
+    withCapture(() =>
+      runTeamCmd('create', [undefined], {
+        slug,
+        teamType: 'stream_aligned',
+        workspaceRoot: workspace,
+      }),
+    );
+  }
+
+  function seatTechLead(slug: string, contributor: string): void {
+    withCapture(() =>
+      runTeamCmd('rotate', [slug], {
+        role: 'tech_lead',
+        contributor,
+        workspaceRoot: workspace,
+      }),
+    );
+  }
+
+  test('record by the seated tech_lead appends an entry and reflects into the artifact', () => {
+    createTeam('payments');
+    seatTechLead('payments', 'CT-lead');
+    const res = withCapture(() =>
+      runLoreCmd('record', ['payments'], {
+        body: 'prefer idempotent migrations',
+        author: 'CT-lead',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as LoreRow;
+    expect(row.team_slug).toBe('payments');
+    expect(row.body).toBe('prefer idempotent migrations');
+    expect(row.author_contributor_id).toBe('CT-lead');
+
+    // The lore block in the artifact carries the new entry.
+    const content = readFileSync(join(workspace, 'teams', 'payments.md'), 'utf8');
+    expect(content).toContain('lore:');
+    expect(content).toContain('count: 1');
+    expect(content).toContain('prefer idempotent migrations');
+  });
+
+  test('record by a non-tech_lead author exits 1, naming the expected tech_lead', () => {
+    createTeam('payments');
+    seatTechLead('payments', 'CT-lead');
+    const res = withCapture(() =>
+      runLoreCmd('record', ['payments'], {
+        body: 'sneaky note',
+        author: 'CT-impostor',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('not the current tech_lead');
+    expect(res.stderr).toContain('CT-lead');
+    // The rejected write left no entry.
+    const list = withCapture(() => runLoreCmd('list', ['payments'], { workspaceRoot: workspace }));
+    expect(JSON.parse(list.stdout.trim())).toEqual([]);
+  });
+
+  test('record with no tech_lead seated WARNS on stderr but exits 0 (bootstrapping)', () => {
+    createTeam('payments');
+    const res = withCapture(() =>
+      runLoreCmd('record', ['payments'], {
+        body: 'first convention',
+        author: 'CT-solo',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    expect(res.stderr).toContain('WARNING');
+    expect(res.stderr).toContain('no current tech_lead');
+    const row = JSON.parse(res.stdout.trim()) as LoreRow;
+    expect(row.body).toBe('first convention');
+  });
+
+  test('record on an unknown team exits 1', () => {
+    const res = withCapture(() =>
+      runLoreCmd('record', ['ghost'], { body: 'x', author: 'CT-lead', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown team 'ghost'");
+  });
+
+  test('record requires --body and --author', () => {
+    createTeam('payments');
+    const noBody = withCapture(() =>
+      runLoreCmd('record', ['payments'], { author: 'CT-lead', workspaceRoot: workspace }),
+    );
+    expect(noBody.exit).toBe(1);
+    expect(noBody.stderr).toContain('--body');
+    const noAuthor = withCapture(() =>
+      runLoreCmd('record', ['payments'], { body: 'x', workspaceRoot: workspace }),
+    );
+    expect(noAuthor.exit).toBe(1);
+    expect(noAuthor.stderr).toContain('--author');
+  });
+
+  test('list returns the team entries oldest-first as JSON', () => {
+    createTeam('payments');
+    seatTechLead('payments', 'CT-lead');
+    withCapture(() =>
+      runLoreCmd('record', ['payments'], {
+        body: 'first',
+        author: 'CT-lead',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runLoreCmd('record', ['payments'], {
+        body: 'second',
+        author: 'CT-lead',
+        workspaceRoot: workspace,
+      }),
+    );
+    const res = withCapture(() => runLoreCmd('list', ['payments'], { workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const rows = JSON.parse(res.stdout.trim()) as LoreRow[];
+    expect(rows.map((r) => r.body)).toEqual(['first', 'second']);
+  });
+
+  test('list on an unknown team returns an empty array, exit 0', () => {
+    const res = withCapture(() => runLoreCmd('list', ['ghost'], { workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    expect(JSON.parse(res.stdout.trim())).toEqual([]);
+  });
+
+  test('show returns one entry by id, exit 0', () => {
+    createTeam('payments');
+    seatTechLead('payments', 'CT-lead');
+    const recorded = withCapture(() =>
+      runLoreCmd('record', ['payments'], {
+        body: 'pin the schema version',
+        author: 'CT-lead',
+        workspaceRoot: workspace,
+      }),
+    );
+    const id = (JSON.parse(recorded.stdout.trim()) as LoreRow).id;
+    const res = withCapture(() => runLoreCmd('show', [String(id)], { workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    expect((JSON.parse(res.stdout.trim()) as LoreRow).body).toBe('pin the schema version');
+  });
+
+  test('show on an unknown id exits 1 with null on stdout', () => {
+    const res = withCapture(() => runLoreCmd('show', ['999999'], { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    expect(res.stdout.trim()).toBe('null');
+    expect(res.stderr).toContain("no entry '999999'");
+  });
+
+  test('an unknown lore action exits 1', () => {
+    const res = withCapture(() => runLoreCmd('bogus', ['payments'], { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('unknown lore action');
   });
 });

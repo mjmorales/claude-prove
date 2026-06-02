@@ -2303,7 +2303,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 18,
+      schema_version: 19,
     });
   });
 
@@ -2316,7 +2316,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(18);
+    expect(updated.provenance.schema_version).toBe(19);
   });
 });
 
@@ -3117,5 +3117,140 @@ describe('ScrumStore — milestone-close termination trigger (v18)', () => {
     store.createTeam({ slug: 'core', teamType: 'platform' });
     store.closeMilestone('m1');
     expect(store.getTeam('core')?.status).toBe('active');
+  });
+});
+
+describe('ScrumStore — team Lore layer (v19)', () => {
+  beforeEach(() => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+  });
+
+  test('recordLore appends an entry authored by the seated tech_lead', () => {
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
+    const { row, warning } = store.recordLore({
+      teamSlug: 'payments',
+      body: 'prefer idempotent migrations',
+      authorContributorId: 'ct-lead',
+      createdAt: '2026-01-01T00:00:00Z',
+    });
+    expect(row.team_slug).toBe('payments');
+    expect(row.body).toBe('prefer idempotent migrations');
+    expect(row.author_contributor_id).toBe('ct-lead');
+    expect(row.created_at).toBe('2026-01-01T00:00:00Z');
+    expect(row.id).toBeGreaterThan(0);
+    // A seated tech_lead authoring their own team's Lore raises no warning.
+    expect(warning).toBeNull();
+  });
+
+  test('recordLore rejects a non-tech_lead author, naming the expected tech_lead', () => {
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
+    expect(() =>
+      store.recordLore({
+        teamSlug: 'payments',
+        body: 'sneaky note',
+        authorContributorId: 'ct-impostor',
+      }),
+    ).toThrow(/not the current tech_lead.*only ct-lead may author/);
+    // The rejected write is never persisted.
+    expect(store.listLores('payments')).toEqual([]);
+  });
+
+  test('recordLore WARNS but allows when no tech_lead is seated (bootstrapping)', () => {
+    const { row, warning } = store.recordLore({
+      teamSlug: 'payments',
+      body: 'first convention, team-of-one',
+      authorContributorId: 'ct-solo',
+    });
+    expect(row.body).toBe('first convention, team-of-one');
+    expect(row.author_contributor_id).toBe('ct-solo');
+    expect(warning).toMatch(/no current tech_lead/);
+    // The entry IS recorded despite the missing tech_lead.
+    expect(store.listLores('payments')).toHaveLength(1);
+  });
+
+  test('an engineer/implementer holder is still not allowed to author Lore', () => {
+    // Only the tech_lead slot authorizes; another seated role does not.
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'engineer', contributorId: 'ct-eng' });
+    expect(() =>
+      store.recordLore({
+        teamSlug: 'payments',
+        body: 'engineer cannot author',
+        authorContributorId: 'ct-eng',
+      }),
+    ).toThrow(/not the current tech_lead/);
+  });
+
+  test('authorship guard follows tech_lead rotation (only the CURRENT holder may write)', () => {
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-old' });
+    store.recordLore({ teamSlug: 'payments', body: 'old wisdom', authorContributorId: 'ct-old' });
+    // Rotate the lead. The prior holder may no longer author; the new one may.
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-new' });
+    expect(() =>
+      store.recordLore({ teamSlug: 'payments', body: 'stale', authorContributorId: 'ct-old' }),
+    ).toThrow(/only ct-new may author/);
+    const { row } = store.recordLore({
+      teamSlug: 'payments',
+      body: 'new wisdom',
+      authorContributorId: 'ct-new',
+    });
+    expect(row.author_contributor_id).toBe('ct-new');
+  });
+
+  test('recordLore rejects an unknown team', () => {
+    expect(() =>
+      store.recordLore({ teamSlug: 'ghost', body: 'x', authorContributorId: 'ct-lead' }),
+    ).toThrow(/unknown team 'ghost'/);
+  });
+
+  test('listLores returns a team entries oldest-first; unknown team yields empty', () => {
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
+    store.recordLore({
+      teamSlug: 'payments',
+      body: 'first',
+      authorContributorId: 'ct-lead',
+      createdAt: '2026-01-01T00:00:00Z',
+    });
+    store.recordLore({
+      teamSlug: 'payments',
+      body: 'second',
+      authorContributorId: 'ct-lead',
+      createdAt: '2026-02-01T00:00:00Z',
+    });
+    const bodies = store.listLores('payments').map((l) => l.body);
+    expect(bodies).toEqual(['first', 'second']);
+    // An unknown team reads as "no Lore", not an error.
+    expect(store.listLores('ghost')).toEqual([]);
+  });
+
+  test('Lore is append-only: a correction is a new entry, not an edit', () => {
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
+    const first = store.recordLore({
+      teamSlug: 'payments',
+      body: 'use tabs',
+      authorContributorId: 'ct-lead',
+    });
+    const correction = store.recordLore({
+      teamSlug: 'payments',
+      body: 'correction: use spaces',
+      authorContributorId: 'ct-lead',
+    });
+    // Both entries survive — the original is never mutated or removed.
+    expect(correction.row.id).toBeGreaterThan(first.row.id);
+    expect(store.listLores('payments').map((l) => l.body)).toEqual([
+      'use tabs',
+      'correction: use spaces',
+    ]);
+  });
+
+  test('getLore fetches one entry by id, or null when unknown', () => {
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
+    const { row } = store.recordLore({
+      teamSlug: 'payments',
+      body: 'pin the schema version',
+      authorContributorId: 'ct-lead',
+    });
+    expect(store.getLore(row.id)?.body).toBe('pin the schema version');
+    expect(store.getLore(999999)).toBeNull();
   });
 });
