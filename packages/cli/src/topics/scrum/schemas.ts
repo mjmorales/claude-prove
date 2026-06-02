@@ -483,6 +483,47 @@ CREATE TABLE scrum_operator_history (
 CREATE INDEX idx_scrum_operator_history_interval ON scrum_operator_history(from_ts, to_ts);
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v14 — team registry (scrum_teams)
+// ---------------------------------------------------------------------------
+
+/**
+ * v14: a team registry — one row per team, the unit a body of work and the
+ * artifacts it owns are organized around. A new table (not a column on an
+ * existing one) because a team is its own entity, referenced from many rows
+ * rather than owned by one:
+ *
+ *   scrum_teams — `slug` is the human-friendly handle and primary key, unique
+ *                 across the registry. `team_type` is the team's interaction
+ *                 archetype (`stream_aligned`/`platform`/`enabling`/
+ *                 `complicated_subsystem`). `charter` is a one-line mission
+ *                 statement. `lifetime` is the team's expected longevity
+ *                 (`persistent` — stands indefinitely; `terminates_on_milestone`
+ *                 — disbands when its goal milestone closes).
+ *
+ * No CHECK on `team_type` or `lifetime` — the columns stay forward-compatible
+ * TEXT, matching the v2–v13 convention; the closed `team_type` and `lifetime`
+ * vocabularies are documented on the `TeamType`/`TeamLifetime` types in
+ * `types.ts` and enforced at the store boundary in `store.ts::createTeam`.
+ *
+ * The registry is the minimal foundation: scope globs, a roster, accept/expose
+ * contracts, and the concrete terminating-milestone target are appended by
+ * later additive migrations (own columns or own tables) on top of this base —
+ * the table and index names carry the `scrum_` / `idx_scrum_` prefix per the
+ * domain-namespacing contract established in v1.
+ */
+export const SCRUM_MIGRATION_V14_SQL = `
+CREATE TABLE scrum_teams (
+    slug TEXT PRIMARY KEY,
+    team_type TEXT NOT NULL,
+    charter TEXT,
+    lifetime TEXT NOT NULL DEFAULT 'persistent',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_scrum_teams_type ON scrum_teams(team_type);
+`;
+
 /**
  * Current scrum-domain store version — the highest migration version this
  * module registers. Stamped as the per-artifact `schema_version` on the
@@ -490,12 +531,12 @@ CREATE INDEX idx_scrum_operator_history_interval ON scrum_operator_history(from_
  * scrum row reports the schema it was read under. Bump in lockstep with the
  * top migration version on every additive hop.
  */
-export const SCRUM_SCHEMA_VERSION = 13;
+export const SCRUM_SCHEMA_VERSION = 14;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that have hit `clearRegistry()` — both
- * paths land a single scrum/{v1..v13} entry set. Matches
+ * paths land a single scrum/{v1..v14} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -605,6 +646,13 @@ export function ensureScrumSchemaRegistered(): void {
           'create scrum_operator_history (operator-of-record position history) + idx_scrum_operator_history_interval',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V13_SQL);
+        },
+      },
+      {
+        version: 14,
+        description: 'create scrum_teams (team registry) + idx_scrum_teams_type',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V14_SQL);
         },
       },
     ],

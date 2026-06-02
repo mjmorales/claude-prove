@@ -52,9 +52,20 @@ import type {
   TaskBounds,
   TaskLayer,
   TaskStatus,
+  Team,
+  TeamLifetime,
+  TeamType,
   VerificationRecord,
 } from './types';
-import { ACCEPTANCE_SCOPES, ESCALATION_TYPES, GATE_VERDICTS, VERIFICATION_VERDICTS } from './types';
+import type { CreateTeamInput } from './types';
+import {
+  ACCEPTANCE_SCOPES,
+  ESCALATION_TYPES,
+  GATE_VERDICTS,
+  TEAM_LIFETIMES,
+  TEAM_TYPES,
+  VERIFICATION_VERDICTS,
+} from './types';
 
 // ---------------------------------------------------------------------------
 // Public openers
@@ -259,6 +270,9 @@ const CONTRIBUTOR_COLUMNS =
 
 /** Canonical `scrum_operator_history` SELECT column list (v13); maps 1:1 to `OperatorHistoryRow`. */
 const OPERATOR_HISTORY_COLUMNS = 'id, contributor_id, from_ts, to_ts, created_at, created_by';
+
+/** Canonical `scrum_teams` SELECT column list (v14); maps 1:1 to `Team`. */
+const TEAM_COLUMNS = 'slug, team_type, charter, lifetime, created_at';
 
 /**
  * Raw `scrum_tasks` SELECT shape — identical to `ScrumTask` except the v5
@@ -2206,6 +2220,64 @@ export class ScrumStore {
     return this.prep(
       `SELECT ${OPERATOR_HISTORY_COLUMNS} FROM scrum_operator_history ORDER BY from_ts ASC, id ASC`,
     ).all() as OperatorHistoryRow[];
+  }
+
+  // ==========================================================================
+  // Teams (v14)
+  // ==========================================================================
+
+  /**
+   * Create a team — one row in the registry, the unit a body of work and the
+   * artifacts it owns are organized around. `slug` is the primary key and is
+   * UNIQUE — re-registering the same slug throws a UNIQUE-constraint error rather
+   * than silently overwriting (a team's fields are edited deliberately, not
+   * clobbered by a re-create).
+   *
+   * `teamType` and `lifetime` are guarded against their closed vocabularies at
+   * this boundary (the columns carry no SQL CHECK), so an off-vocabulary value
+   * throws here rather than landing as an unrecognized string. `lifetime`
+   * defaults to `'persistent'`; `charter` defaults to NULL.
+   */
+  createTeam(input: CreateTeamInput): Team {
+    const lifetime = input.lifetime ?? 'persistent';
+    if (!(TEAM_TYPES as string[]).includes(input.teamType)) {
+      throw new Error(
+        `createTeam: invalid team_type '${input.teamType}'; expected one of: ${TEAM_TYPES.join(', ')}`,
+      );
+    }
+    if (!(TEAM_LIFETIMES as string[]).includes(lifetime)) {
+      throw new Error(
+        `createTeam: invalid lifetime '${lifetime}'; expected one of: ${TEAM_LIFETIMES.join(', ')}`,
+      );
+    }
+    const row: Team = {
+      slug: input.slug,
+      team_type: input.teamType as TeamType,
+      charter: input.charter ?? null,
+      lifetime: lifetime as TeamLifetime,
+      created_at: input.createdAt ?? isoNow(),
+    };
+    this.prep(`INSERT INTO scrum_teams (${TEAM_COLUMNS}) VALUES (?, ?, ?, ?, ?)`).run(
+      row.slug,
+      row.team_type,
+      row.charter,
+      row.lifetime,
+      row.created_at,
+    );
+    return row;
+  }
+
+  /** Fetch one team by slug, or null if missing. */
+  getTeam(slug: string): Team | null {
+    const row = this.prep(`SELECT ${TEAM_COLUMNS} FROM scrum_teams WHERE slug = ?`).get(
+      slug,
+    ) as Team | null;
+    return row ?? null;
+  }
+
+  /** List every team, ordered by slug. */
+  listTeams(): Team[] {
+    return this.prep(`SELECT ${TEAM_COLUMNS} FROM scrum_teams ORDER BY slug ASC`).all() as Team[];
   }
 
   // ==========================================================================

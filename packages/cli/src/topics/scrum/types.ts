@@ -653,6 +653,86 @@ export interface SetOperatorOfRecordInput {
   createdBy?: string | null;
 }
 
+/**
+ * A team's interaction archetype. Matches `scrum_teams.team_type`; the column
+ * has no CHECK constraint, so this union documents the canonical closed set
+ * without pinning the schema — a future type lands via a schema-version bump,
+ * not a silent value. Enforced at the store boundary in `createTeam`.
+ *
+ *   stream_aligned        — a team aligned to a single flow of work (a product,
+ *                           feature stream, or user journey).
+ *   platform              — a team providing an internal product (a platform)
+ *                           that reduces cognitive load for stream-aligned teams.
+ *   enabling              — a team that helps other teams adopt a capability,
+ *                           then steps back; transient by intent.
+ *   complicated_subsystem — a team owning a part requiring deep specialist
+ *                           knowledge, kept separate to concentrate expertise.
+ */
+export type TeamType = 'stream_aligned' | 'platform' | 'enabling' | 'complicated_subsystem';
+
+/** Runtime-checkable list of the closed `TeamType` set. */
+export const TEAM_TYPES: TeamType[] = [
+  'stream_aligned',
+  'platform',
+  'enabling',
+  'complicated_subsystem',
+];
+
+/**
+ * A team's expected longevity. Matches `scrum_teams.lifetime`; the column has
+ * no CHECK constraint, so this union documents the canonical closed set without
+ * pinning the schema. Enforced at the store boundary in `createTeam`.
+ *
+ *   persistent              — the team stands indefinitely; the default a fresh
+ *                             team carries.
+ *   terminates_on_milestone — the team disbands when its goal milestone closes.
+ *                             The concrete target milestone is recorded by a
+ *                             later additive column, not on the base registry.
+ */
+export type TeamLifetime = 'persistent' | 'terminates_on_milestone';
+
+/** Runtime-checkable list of the closed `TeamLifetime` set. */
+export const TEAM_LIFETIMES: TeamLifetime[] = ['persistent', 'terminates_on_milestone'];
+
+/**
+ * One row of the `scrum_teams` table (v14) — a team, the unit a body of work and
+ * the artifacts it owns are organized around.
+ *
+ *   slug      — human-friendly handle, unique across the registry and the
+ *               primary key. The operator-facing name a team is referenced by.
+ *   team_type — the team's interaction archetype (see `TeamType`).
+ *   charter   — a one-line mission statement, or NULL when unset.
+ *   lifetime  — the team's expected longevity (see `TeamLifetime`).
+ *
+ * Scope globs, a roster, accept/expose contracts, and the concrete terminating
+ * milestone target are NOT on this base row — later additive migrations append
+ * them (own columns or own tables). The column names are snake_case to match the
+ * on-disk columns one-to-one (SELECT results cast directly).
+ */
+export interface Team {
+  slug: string;
+  team_type: TeamType;
+  charter: string | null;
+  lifetime: TeamLifetime;
+  created_at: string;
+}
+
+/**
+ * Input to `createTeam` (v14). `slug` is the unique handle (primary key);
+ * re-registering the same slug throws rather than silently overwriting.
+ * `lifetime` defaults to `'persistent'`. `charter` defaults to NULL. Both
+ * `teamType` and `lifetime` are validated against their closed vocabularies at
+ * the store boundary.
+ */
+export interface CreateTeamInput {
+  slug: string;
+  teamType: TeamType;
+  charter?: string | null;
+  lifetime?: TeamLifetime;
+  /** ISO-8601 timestamp; defaults to now(). */
+  createdAt?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Derived views
 // ---------------------------------------------------------------------------
