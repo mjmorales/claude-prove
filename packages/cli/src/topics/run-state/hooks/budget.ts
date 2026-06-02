@@ -37,7 +37,7 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import type { TaskBoundsBudgets } from '../../scrum/types';
 import { pyJsonDump } from './json-compat';
 import { EMPTY_HOOK_RESULT, type HookResult } from './types';
