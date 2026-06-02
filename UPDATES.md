@@ -6,6 +6,28 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.6.0 — User-level config: project-root → default contributor
+
+A per-user (home-directory) config that maps a project root to a default contributor CT-UUID, so the active contributor is **implicit per project** — callers resolve "who am I driving as here?" without passing it on every invocation.
+
+- **No schema change, no store table.** This is a home-dir dotfile, not project DB state. It carries no migration and `/prove:update` does not touch it.
+
+**Config file.** `${XDG_CONFIG_HOME:-~/.config}/claude-prove/config.json` (XDG-honored, else `~/.config`). Shape:
+
+```json
+{ "default_contributors": { "<absolute-project-root>": "<CT-UUID>" } }
+```
+
+Reads tolerate an absent file (treated as an empty mapping) and raise a clear, path-anchored error on a malformed file. Writes create the directory if missing, preserve unrelated top-level keys, and write atomically.
+
+**CLI — `scrum contributor default set|show`.**
+- `scrum contributor default set [--project-root P] --id <CT-UUID>` — record the mapping for project root `P` (default: cwd). `--id` is required.
+- `scrum contributor default show [--project-root P]` — print the resolved CT-UUID for `P`, or `null` when the root is unmapped (a sane fallback, never an error).
+
+The mapping is **store-independent**: this verb never opens `.prove/prove.db`. The CT-UUID is stored verbatim and is **not** validated against any single project's registry — the config spans every project on the machine, so a CT-UUID minted in one project is meaningless to another's store. The caller resolves the returned CT-UUID against the relevant project's registry.
+
+**Auto-adoption.** None required — the config is created the first time you run `scrum contributor default set`. Until then, `default show` resolves to `null` everywhere (the implicit-default mechanism is simply inactive).
+
 ## v3.5.0 — Operator-of-record: point-in-time (historical) attribution
 
 The single role slot that exists today — **operator-of-record** — recorded as a position history, so an action attributes to whoever held the role **at the action's timestamp**, not merely the current holder.

@@ -2268,6 +2268,56 @@ describe('runContributorCmd', () => {
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('unknown contributor action');
   });
+
+  // `default <set|show>` is store-independent: it reads/writes the home-dir
+  // config, never `.prove/prove.db`. Every test pins `configBase` to a tmp dir
+  // (the workspace) so the developer's real ~/.config is never touched.
+  describe('default <set|show>', () => {
+    test('set then show round-trips the mapped CT-UUID', () => {
+      const setRes = withCapture(() =>
+        runContributorCmd(
+          'default',
+          { projectRoot: workspace, id: 'ct-jane-doe-abc', configBase: workspace },
+          'set',
+        ),
+      );
+      expect(setRes.exit).toBe(0);
+
+      const showRes = withCapture(() =>
+        runContributorCmd('default', { projectRoot: workspace, configBase: workspace }, 'show'),
+      );
+      expect(showRes.exit).toBe(0);
+      expect(JSON.parse(showRes.stdout.trim())).toBe('ct-jane-doe-abc');
+    });
+
+    test('show on an unmapped root prints null, exit 0', () => {
+      const res = withCapture(() =>
+        runContributorCmd(
+          'default',
+          { projectRoot: join(workspace, 'unmapped'), configBase: workspace },
+          'show',
+        ),
+      );
+      expect(res.exit).toBe(0);
+      expect(res.stdout.trim()).toBe('null');
+    });
+
+    test('set without --id exits 1', () => {
+      const res = withCapture(() =>
+        runContributorCmd('default', { projectRoot: workspace, configBase: workspace }, 'set'),
+      );
+      expect(res.exit).toBe(1);
+      expect(res.stderr).toContain('--id');
+    });
+
+    test('missing sub-action exits 1', () => {
+      const res = withCapture(() =>
+        runContributorCmd('default', { configBase: workspace }, undefined),
+      );
+      expect(res.exit).toBe(1);
+      expect(res.stderr).toContain('sub-action required');
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

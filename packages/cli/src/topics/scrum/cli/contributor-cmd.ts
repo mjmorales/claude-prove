@@ -13,6 +13,18 @@
  *                              Map a worker / event author to a contributor —
  *                              github match first, then email fallback. Prints the
  *                              matched JSON row, or exits 1 on a miss.
+ *   default <set|show> [--project-root P] [--id CT-UUID]
+ *                              Per-user (home-dir) project-root → default
+ *                              contributor mapping — the "active contributor is
+ *                              implicit per project" mechanism. `set` records the
+ *                              mapping (requires --id); `show` prints the resolved
+ *                              CT-UUID, or `null` when the root is unmapped. This
+ *                              verb is store-INDEPENDENT: it reads/writes the
+ *                              home-dir config (`~/.config/claude-prove/config.json`,
+ *                              XDG-honored) and never opens `.prove/prove.db`. The
+ *                              CT-UUID is stored verbatim and is NOT validated
+ *                              against any single project's registry, since the
+ *                              config spans every project on the machine.
  *
  * Stdout contract: JSON result per action on stdout; one-line human summary on
  * stderr. `list` returns a JSON array (or a table with `--human`).
@@ -36,6 +48,7 @@ import { renderProvenanceFrontmatter } from '../../install/bootstrap-identity';
 import { type ScrumStore, openScrumStore } from '../store';
 import type { Contributor, ContributorStatus } from '../types';
 import { CONTRIBUTOR_STATUSES } from '../types';
+import { resolveDefaultContributor, setDefaultContributor } from '../user-config';
 
 export interface ContributorCmdFlags {
   slug?: string;
@@ -46,18 +59,34 @@ export interface ContributorCmdFlags {
   email?: string;
   human?: boolean;
   workspaceRoot?: string;
+  // `default <set|show>` project-root → default-contributor mapping.
+  projectRoot?: string;
+  // Test seam for `default`: an explicit config base dir so tests never touch
+  // the developer's real `~/.config`. Unset in production.
+  configBase?: string;
 }
 
-export type ContributorAction = 'register' | 'list' | 'resolve';
+export type ContributorAction = 'register' | 'list' | 'resolve' | 'default';
 
-const CONTRIBUTOR_ACTIONS: ContributorAction[] = ['register', 'list', 'resolve'];
+const CONTRIBUTOR_ACTIONS: ContributorAction[] = ['register', 'list', 'resolve', 'default'];
 
-export function runContributorCmd(action: string, flags: ContributorCmdFlags): number {
+export function runContributorCmd(
+  action: string,
+  flags: ContributorCmdFlags,
+  subAction?: string,
+): number {
   if (!isContributorAction(action)) {
     process.stderr.write(
       `error: unknown contributor action '${action}'. expected one of: ${CONTRIBUTOR_ACTIONS.join(', ')}\n`,
     );
     return 1;
+  }
+
+  // `default` is store-INDEPENDENT: it reads/writes the home-dir config and
+  // never opens `.prove/prove.db`, so it is dispatched before the store is
+  // opened. The config spans every project on the machine.
+  if (action === 'default') {
+    return runDefaultCmd(subAction, flags);
   }
 
   const workspaceRoot =
@@ -264,4 +293,70 @@ function doResolve(store: ScrumStore, flags: ContributorCmdFlags): number {
 /** Case-insensitive equality treating a null left side as non-matching. */
 function lowerEq(a: string | null, b: string): boolean {
   return a !== null && a.toLowerCase() === b.toLowerCase();
+}
+
+// ---------------------------------------------------------------------------
+// default — per-user project-root → default contributor mapping (home-dir)
+// ---------------------------------------------------------------------------
+
+type DefaultSubAction = 'set' | 'show';
+
+const DEFAULT_SUB_ACTIONS: DefaultSubAction[] = ['set', 'show'];
+
+/**
+ * Dispatch `contributor default <set|show>`. Store-independent — the mapping
+ * lives in the home-dir config, not `.prove/prove.db`. `--project-root`
+ * defaults to the current working directory (the git worktree / repo root the
+ * operator is driving from).
+ */
+function runDefaultCmd(subAction: string | undefined, flags: ContributorCmdFlags): number {
+  if (subAction === undefined || !isDefaultSubAction(subAction)) {
+    process.stderr.write(
+      `error: scrum contributor default: sub-action required (one of: ${DEFAULT_SUB_ACTIONS.join(' | ')})\n`,
+    );
+    return 1;
+  }
+
+  const projectRoot =
+    flags.projectRoot !== undefined && flags.projectRoot.length > 0
+      ? flags.projectRoot
+      : process.cwd();
+
+  try {
+    switch (subAction) {
+      case 'set':
+        return doDefaultSet(projectRoot, flags);
+      case 'show':
+        return doDefaultShow(projectRoot, flags);
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`scrum contributor default ${subAction}: ${msg}\n`);
+    return 1;
+  }
+}
+
+function isDefaultSubAction(value: string): value is DefaultSubAction {
+  return (DEFAULT_SUB_ACTIONS as string[]).includes(value);
+}
+
+function doDefaultSet(projectRoot: string, flags: ContributorCmdFlags): number {
+  const id = emptyToNull(flags.id);
+  if (id === null) {
+    process.stderr.write('scrum contributor default set: --id <CT-UUID> is required\n');
+    return 1;
+  }
+
+  const key = setDefaultContributor(projectRoot, id, flags.configBase);
+  process.stdout.write(`${JSON.stringify({ project_root: key, contributor_id: id })}\n`);
+  process.stderr.write(`scrum contributor default set: ${key} -> ${id}\n`);
+  return 0;
+}
+
+function doDefaultShow(projectRoot: string, flags: ContributorCmdFlags): number {
+  const id = resolveDefaultContributor(projectRoot, flags.configBase);
+  process.stdout.write(`${id === null ? 'null' : JSON.stringify(id)}\n`);
+  const where = id === null ? '(unmapped)' : id;
+  process.stderr.write(`scrum contributor default show: ${projectRoot} -> ${where}\n`);
+  return 0;
 }
