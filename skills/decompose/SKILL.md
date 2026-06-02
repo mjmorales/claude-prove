@@ -111,12 +111,30 @@ never prose you have to parse.
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["title", "description", "blocked_by"],
+        "required": ["title", "description", "blocked_by", "acceptance"],
         "properties": {
           "title":       { "type": "string" },
           "description": { "type": "string" },
           "blocked_by":  { "type": "array", "items": { "type": "string" },
-                           "description": "titles of sibling children that must finish first" }
+                           "description": "titles of sibling children that must finish first" },
+          "acceptance":  {
+            "type": "array",
+            "description": "verifiable close criteria for this child; REQUIRED non-empty for a `story` child, since a story cannot reach ready/in_progress/done with zero active criteria",
+            "items": {
+              "type": "object",
+              "required": ["text", "verifies_by"],
+              "properties": {
+                "text":       { "type": "string",
+                                "description": "what must hold for the child to be done" },
+                "verifies_by":{ "type": "string", "enum": ["bash", "assert", "gate", "agent"],
+                                "description": "how the close floor checks it" },
+                "check":      { "type": "string",
+                                "description": "kind-specific payload — shell command (bash), boolean expr (assert), operator prompt (gate), or agent prompt (agent)" },
+                "idempotent": { "type": "boolean",
+                                "description": "true if the check is safe to re-run; required true for the parallel close path" }
+              }
+            }
+          }
         }
       }
     },
@@ -133,6 +151,16 @@ personas* above — `epic → pm@milestone`, `story → tech_lead@epic`, `task �
 as the opening role frame, the parent artifact (title + description, or VISION text), the
 target child `layer`, and any relevant decisions (`claude-prove scrum decision list`).
 
+**Each `story` child must return a non-empty `acceptance` array.** A story is the unit
+story-close verifies, and the store rejects a `layer: story` task on `→ ready|in_progress|
+done` with zero active criteria — so the planning subagent authors each story's criteria
+here, at the same moment it proposes the story. The persona writes the criteria as the
+engineer who will verify them: prefer `bash` checks with a runnable `check` command, fall
+back to `assert`/`agent` when no command captures the intent, and reserve `gate` for
+judgment a human must make. Mark a criterion `idempotent: true` when its check is safe to
+re-run. `epic` and `task` children may carry `acceptance` when the planner has a concrete
+check in mind, but only `story` children are obligated to.
+
 ### Phase L3: Write children + accept gate
 
 For each returned child, create a layered scrum task (status defaults to `backlog`, the
@@ -147,6 +175,24 @@ claude-prove scrum task create \
 Capture each new id. After all children of a parent exist, record sibling ordering with
 `claude-prove scrum task add-dep <child> <blocked-child> --kind blocked_by` for every
 `blocked_by` edge the schema returned.
+
+**Author acceptance criteria at creation.** For each criterion in a child's `acceptance`
+array, attach it to the new task:
+
+```bash
+claude-prove scrum task acceptance add <child-id> \
+  --text "<criterion.text>" --verifies-by <bash|assert|gate|agent> \
+  --check "<criterion.check>" [--idempotent]
+```
+
+Pass `--idempotent` only when the criterion's `idempotent` is true; omit `--check` when the
+criterion carries none. A `story` child is born already satisfying the close floor — a
+story with zero active criteria is rejected on `→ ready` (the accept gate below promotes to
+`ready`) and again at `→ done`, and B2 story-close reads these exact criteria to verify the
+story. Authoring them here is what bridges the two: the ladder that creates the story owns
+its criteria, so close never has to invent them. If a `story` child returned an empty
+`acceptance` array, re-run Phase L2 for that parent before promoting — never promote a story
+the close floor will reject.
 
 **Accept gate** (`proposed→accepted`):
 
@@ -318,11 +364,26 @@ const childrenSchema = {
       type: "array",
       items: {
         type: "object",
-        required: ["title", "description", "blocked_by"],
+        required: ["title", "description", "blocked_by", "acceptance"],
         properties: {
           title:       { type: "string" },
           description: { type: "string" },
           blocked_by:  { type: "array", items: { type: "string" } },
+          // Verifiable close criteria; non-empty REQUIRED for a `story` child — a story
+          // cannot reach ready/in_progress/done with zero active criteria.
+          acceptance: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["text", "verifies_by"],
+              properties: {
+                text:        { type: "string" },
+                verifies_by: { type: "string", enum: ["bash", "assert", "gate", "agent"] },
+                check:       { type: "string" },
+                idempotent:  { type: "boolean" },
+              },
+            },
+          },
         },
       },
     },
@@ -369,12 +430,36 @@ async function decompose(parent, tierIndex, { milestone, autoAcceptThrough, maxF
       `--parent ${parent.id} --layer ${layer} ` +
       `--title ${q(c.title)} --description ${q(c.description)}`,
     );
-    created.push({ ...JSON.parse(out.stdout), blocked_by: c.blocked_by, srcTitle: c.title });
+    created.push({
+      ...JSON.parse(out.stdout),
+      blocked_by: c.blocked_by,
+      acceptance: c.acceptance ?? [],
+      srcTitle: c.title,
+    });
   }
   for (const child of created) {
     for (const depTitle of child.blocked_by) {
       const dep = created.find((x) => x.srcTitle === depTitle);
       if (dep) await sh(`claude-prove scrum task add-dep ${child.id} ${dep.id} --kind blocked_by`);
+    }
+  }
+
+  // Author each child's acceptance criteria at creation, so a `story` is born satisfying
+  // the close floor (a story with zero active criteria is rejected on →ready/done) and B2
+  // story-close reads these exact criteria. A `story` with no criteria must be re-planned,
+  // not promoted — the accept gate below would push it to a state the floor rejects.
+  for (const child of created) {
+    if (layer === "story" && child.acceptance.length === 0) {
+      parent.description += `\n\nDISCOVERY (re-plan): story "${child.srcTitle}" returned no acceptance criteria.`;
+      return decompose(parent, tierIndex, { milestone, autoAcceptThrough, maxFanout });
+    }
+    for (const ac of child.acceptance) {
+      const idemFlag = ac.idempotent ? " --idempotent" : "";
+      const checkFlag = ac.check ? ` --check ${q(ac.check)}` : "";
+      await sh(
+        `claude-prove scrum task acceptance add ${child.id} ` +
+        `--text ${q(ac.text)} --verifies-by ${ac.verifies_by}${checkFlag}${idemFlag}`,
+      );
     }
   }
 
