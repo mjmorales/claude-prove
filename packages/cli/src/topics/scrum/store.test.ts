@@ -2303,7 +2303,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 11,
+      schema_version: 12,
     });
   });
 
@@ -2316,6 +2316,78 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(11);
+    expect(updated.provenance.schema_version).toBe(12);
+  });
+});
+
+// ===========================================================================
+// Contributors (v12)
+// ===========================================================================
+
+describe('ScrumStore — contributor registry (v12)', () => {
+  test('registerContributor mints a CT-prefixed id and round-trips through SELECT', () => {
+    const row = store.registerContributor({
+      slug: 'jane-doe',
+      displayName: 'Jane Doe',
+      github: 'janedoe',
+      email: 'jane@example.com',
+      createdBy: 'alice',
+      createdAt: '2026-01-01T00:00:00Z',
+    });
+    expect(row.id).toMatch(/^ct-jane-doe-[0-9a-f-]+$/);
+    expect(row.status).toBe('active');
+    expect(row.created_by).toBe('alice');
+    // Provenance pair is seeded identically at registration.
+    expect(row.last_modified_by).toBe('alice');
+    expect(row.last_modified_at).toBe('2026-01-01T00:00:00Z');
+
+    const fetched = store.getContributor(row.id);
+    expect(fetched).toEqual(row);
+  });
+
+  test('registerContributor honors an explicit id and rejects a duplicate slug', () => {
+    store.registerContributor({ slug: 'jane', id: 'ct-fixed' });
+    expect(store.getContributor('ct-fixed')?.slug).toBe('jane');
+    expect(() => store.registerContributor({ slug: 'jane', id: 'ct-other' })).toThrow();
+  });
+
+  test('listContributors orders by slug and filters by status', () => {
+    store.registerContributor({ slug: 'zed' });
+    store.registerContributor({ slug: 'amy' });
+    store.registerContributor({ slug: 'bob', status: 'inactive' });
+
+    expect(store.listContributors().map((c) => c.slug)).toEqual(['amy', 'bob', 'zed']);
+    expect(store.listContributors('active').map((c) => c.slug)).toEqual(['amy', 'zed']);
+    expect(store.listContributors('inactive').map((c) => c.slug)).toEqual(['bob']);
+  });
+
+  test('resolveContributor matches github first', () => {
+    const jane = store.registerContributor({
+      slug: 'jane',
+      github: 'janedoe',
+      email: 'jane@example.com',
+    });
+    const match = store.resolveContributor({ github: 'JaneDoe', email: 'someone-else@x.com' });
+    expect(match?.id).toBe(jane.id);
+  });
+
+  test('resolveContributor falls back to email when github does not match', () => {
+    const jane = store.registerContributor({
+      slug: 'jane',
+      github: 'janedoe',
+      email: 'jane@example.com',
+    });
+    // github absent / non-matching, email matches case-insensitively.
+    expect(store.resolveContributor({ email: 'JANE@example.com' })?.id).toBe(jane.id);
+    expect(store.resolveContributor({ github: 'nobody', email: 'jane@example.com' })?.id).toBe(
+      jane.id,
+    );
+  });
+
+  test('resolveContributor returns null on a miss and on an empty key', () => {
+    store.registerContributor({ slug: 'jane', github: 'janedoe', email: 'jane@example.com' });
+    expect(store.resolveContributor({ github: 'ghost', email: 'ghost@x.com' })).toBeNull();
+    expect(store.resolveContributor({})).toBeNull();
+    expect(store.resolveContributor({ github: '', email: '' })).toBeNull();
   });
 });

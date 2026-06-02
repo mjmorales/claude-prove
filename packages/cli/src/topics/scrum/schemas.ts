@@ -387,6 +387,54 @@ ALTER TABLE scrum_tasks ADD COLUMN worker_id TEXT;
 ALTER TABLE scrum_tasks ADD COLUMN run_id TEXT;
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v12 — contributor registry (scrum_contributors)
+// ---------------------------------------------------------------------------
+
+/**
+ * v12: a contributor registry — one row per stable contributor identity, the
+ * backing for role rosters, attribution, and PR-comment author matching. A new
+ * table (not a column on an existing one) because a contributor is its own
+ * entity, referenced from many task rows rather than owned by one:
+ *
+ *   scrum_contributors — `id` is a CT-prefixed stable contributor id (a
+ *                        CT-UUID, e.g. `ct-jane-doe-…`) that never changes once
+ *                        minted, so attribution survives a renamed handle or
+ *                        email. `slug` is the human-friendly handle; `status`
+ *                        is the registry lifecycle (`active`/`inactive`).
+ *                        `github` and `email` are the two resolution keys —
+ *                        `resolve` matches an executing worker / event author
+ *                        by github first, then falls back to email.
+ *
+ * The row carries the same provenance columns as the on-disk `contributor.md`
+ * identity artifact (`created_by`/`created_at`/`last_modified_by`/
+ * `last_modified_at`) so the table and the file mirror one shape. No CHECK on
+ * `status` — the column stays forward-compatible TEXT, matching the v2–v11
+ * convention; the closed `active | inactive` vocabulary is documented on the
+ * `Contributor` type in `types.ts`.
+ *
+ * Indexes back the two resolution lookups (`github`, `email`) plus the
+ * `slug` uniqueness probe. Table and index names carry the `scrum_` /
+ * `idx_scrum_` prefix per the domain-namespacing contract established in v1.
+ */
+export const SCRUM_MIGRATION_V12_SQL = `
+CREATE TABLE scrum_contributors (
+    id TEXT PRIMARY KEY,
+    slug TEXT NOT NULL UNIQUE,
+    status TEXT NOT NULL DEFAULT 'active',
+    display_name TEXT,
+    github TEXT,
+    email TEXT,
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    last_modified_by TEXT,
+    last_modified_at TEXT
+);
+
+CREATE INDEX idx_scrum_contributors_github ON scrum_contributors(github);
+CREATE INDEX idx_scrum_contributors_email ON scrum_contributors(email);
+`;
+
 /**
  * Current scrum-domain store version — the highest migration version this
  * module registers. Stamped as the per-artifact `schema_version` on the
@@ -394,7 +442,7 @@ ALTER TABLE scrum_tasks ADD COLUMN run_id TEXT;
  * scrum row reports the schema it was read under. Bump in lockstep with the
  * top migration version on every additive hop.
  */
-export const SCRUM_SCHEMA_VERSION = 11;
+export const SCRUM_SCHEMA_VERSION = 12;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
@@ -493,6 +541,14 @@ export function ensureScrumSchemaRegistered(): void {
           'add scrum_tasks.worker_id + scrum_tasks.run_id for executing-worker/run attribution',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V11_SQL);
+        },
+      },
+      {
+        version: 12,
+        description:
+          'create scrum_contributors (CT-UUID registry) + idx_scrum_contributors_github + idx_scrum_contributors_email',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V12_SQL);
         },
       },
     ],

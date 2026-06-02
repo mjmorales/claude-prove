@@ -38,6 +38,9 @@
  *   claude-prove scrum decision list             [--topic T] [--status S] [--kind K] [--human]
  *   claude-prove scrum decision review-stale     [--days N] [--human]
  *   claude-prove scrum decision recover          --from-git
+ *   claude-prove scrum contributor register      --slug S [--display-name N] [--github G] [--email E] [--id CT-UUID] [--status active|inactive]
+ *   claude-prove scrum contributor list          [--status active|inactive] [--human]
+ *   claude-prove scrum contributor resolve       [--github G] [--email E]   (github match first, then email fallback)
  *   claude-prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
  *   claude-prove scrum hook <event>              (event: session-start | subagent-stop | stop)
  *
@@ -56,6 +59,7 @@
 import type { CAC } from 'cac';
 import { runAlertsCmd } from './scrum/cli/alerts-cmd';
 import { runCompilePlanCmd } from './scrum/cli/compile-plan-cmd';
+import { runContributorCmd } from './scrum/cli/contributor-cmd';
 import { runDecisionCmd } from './scrum/cli/decision-cmd';
 import { runGateCmd } from './scrum/cli/gate-cmd';
 import { runHookCmd } from './scrum/cli/hook-cmd';
@@ -78,6 +82,7 @@ type ScrumAction =
   | 'milestone'
   | 'tag'
   | 'decision'
+  | 'contributor'
   | 'link-run'
   | 'hook';
 
@@ -92,6 +97,7 @@ const SCRUM_ACTIONS: ScrumAction[] = [
   'milestone',
   'tag',
   'decision',
+  'contributor',
   'link-run',
   'hook',
 ];
@@ -138,6 +144,11 @@ interface ScrumFlags {
   detail?: string;
   // `decision review-stale` threshold in days (v7).
   days?: number | string;
+  // `contributor` registry fields (v12). `slug` is shared with link-run's
+  // run-slug flag above — distinct actions, so the value is correct per call.
+  displayName?: string;
+  github?: string;
+  email?: string;
 }
 
 export function register(cli: CAC): void {
@@ -193,6 +204,10 @@ export function register(cli: CAC): void {
     )
     .option('--detail <text>', 'task cancel: free-text elaboration recorded as terminal_detail')
     .option('--days <n>', 'decision review-stale: staleness threshold in days (default: 90)')
+    .option('--slug <s>', 'contributor register: human-friendly handle (the CT-UUID is derived)')
+    .option('--display-name <n>', 'contributor register: display name')
+    .option('--github <g>', 'contributor register/resolve: GitHub handle (primary resolution key)')
+    .option('--email <e>', 'contributor register/resolve: email (fallback resolution key)')
     .option(
       '--workspace-root <w>',
       'Main worktree root; pins store to <root>/.prove/prove.db (default: git common-dir)',
@@ -346,6 +361,24 @@ function dispatch(
         reason: flags.reason,
         days: flags.days,
         kind: flags.kind,
+        workspaceRoot: flags.workspaceRoot,
+      });
+
+    case 'contributor':
+      if (arg1 === undefined) {
+        console.error(
+          'error: scrum contributor: sub-action required (one of: register | list | resolve)',
+        );
+        return 1;
+      }
+      return runContributorCmd(arg1, {
+        slug: flags.slug,
+        id: flags.id,
+        status: flags.status,
+        displayName: flags.displayName,
+        github: flags.github,
+        email: flags.email,
+        human: flags.human,
         workspaceRoot: flags.workspaceRoot,
       });
 

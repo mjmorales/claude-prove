@@ -6,6 +6,19 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.4.0 — Contributor registry: stable CT-UUIDs + github/email resolution
+
+A contributor registry that resolves an executing worker or event author to a stable contributor identity — the backing for role rosters, attribution, and PR-comment author matching.
+
+- **Scrum store** (`.prove/prove.db`): advances to **v12** (new `scrum_contributors` table) — **auto-migrates** on the next `claude-prove scrum …` command (or `claude-prove store migrate`); no manual step.
+
+**Registry table + stable CT-UUIDs.** A new `scrum_contributors` table holds one row per contributor: `id` (a CT-prefixed stable id, e.g. `ct-jane-doe-<uuid>`, minted once and never changed so attribution survives a renamed handle or email), `slug` (unique handle), `status` (`active | inactive`), `display_name`, `github`, `email`, plus the same `created_by`/`created_at`/`last_modified_by`/`last_modified_at` provenance columns the other scrum tables carry.
+
+**CLI — `scrum contributor register|list|resolve`.**
+- `scrum contributor register --slug <s> [--display-name N] [--github G] [--email E] [--id CT-UUID] [--status active|inactive]` — mints a CT-UUID (or accepts an explicit `--id`), inserts the row, and scaffolds an on-disk `contributors/<slug>.md` identity artifact whose frontmatter mirrors the row (`schema_version` + `provenance` block + the `{id, slug, status, display_name, github, email}` registry fields). This extends — does not compete with — the `contributor` artifact `claude-prove install bootstrap-identity` scaffolds.
+- `scrum contributor list [--status active|inactive] [--human]` — lists the registry, ordered by slug.
+- `scrum contributor resolve [--github G] [--email E]` — maps a worker / event author to a contributor by **github match first, then email fallback** (both case-insensitive); exits 1 on a miss. This is how a task row's `created_by` / `last_modified_by` / `worker_id` provenance resolves to a contributor identity.
+
 ## v3.3.0 — Methodology parity: reasoning Brief, milestone-close curation, escalation typing, initiative tier
 
 A feature batch raising the structured-agent methodology on prove machinery to parity: a trustworthy reasoning **Review Brief** with a mechanical preservation gate, a milestone-close **curation** pass that lifts findings into durable memory, typed escalations that auto-rank into the ready queue, a milestone-grouping **initiative** tier, and a set of integrity floors on the story-close lifecycle. Two distinct schema versions advance — they migrate by **separate** paths, so do not conflate them:
