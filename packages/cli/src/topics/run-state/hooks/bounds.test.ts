@@ -39,13 +39,13 @@ function readBounds(read: string[]): ActiveBounds {
 }
 
 describe('runBoundsHook — write wall', () => {
-  test('blocks a Write outside the declared write globs (exit 2 + reason)', () => {
+  test('denies a Write outside the declared write globs (deny + reason)', () => {
     const result = runBoundsHook(
       { tool_name: 'Write', tool_input: { file_path: '/repo/docs/readme.md' } },
       stubDeps(writeBounds(['src/**'])),
     );
-    expect(result.exitCode).toBe(2);
-    expect(result.stdout).toContain('"decision": "block"');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('"permissionDecision": "deny"');
     expect(result.stdout).toContain('docs/readme.md');
     expect(result.stdout).toContain('src/**');
   });
@@ -64,8 +64,8 @@ describe('runBoundsHook — write wall', () => {
         { tool_name: tool, tool_input: { file_path: '/repo/other/x.ts' } },
         stubDeps(writeBounds(['src/**'])),
       );
-      expect(result.exitCode).toBe(2);
-      expect(result.stdout).toContain('"decision": "block"');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('"permissionDecision": "deny"');
     }
   });
 
@@ -74,7 +74,7 @@ describe('runBoundsHook — write wall', () => {
       { tool_name: 'Write', tool_input: { file_path: 'docs/x.md' }, cwd: PROJECT_ROOT },
       stubDeps(writeBounds(['src/**'])),
     );
-    expect(blocked.exitCode).toBe(2);
+    expect(blocked.exitCode).toBe(0);
     const allowed = runBoundsHook(
       { tool_name: 'Write', tool_input: { file_path: 'src/x.ts' }, cwd: PROJECT_ROOT },
       stubDeps(writeBounds(['src/**'])),
@@ -89,8 +89,8 @@ describe('runBoundsHook — read wall', () => {
       { tool_name: 'Read', tool_input: { file_path: '/repo/secrets/key.pem' } },
       stubDeps(readBounds(['src/**'])),
     );
-    expect(result.exitCode).toBe(2);
-    expect(result.stdout).toContain('"decision": "block"');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('"permissionDecision": "deny"');
     expect(result.stdout).toContain('secrets/key.pem');
   });
 
@@ -121,8 +121,8 @@ describe('runBoundsHook — Bash wall', () => {
       },
       stubDeps(writeBounds(['src/**'])),
     );
-    expect(result.exitCode).toBe(2);
-    expect(result.stdout).toContain('"decision": "block"');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('"permissionDecision": "deny"');
     expect(result.stdout).toContain('docs/out.txt');
   });
 
@@ -131,7 +131,7 @@ describe('runBoundsHook — Bash wall', () => {
       { tool_name: 'Bash', tool_input: { command: 'rm -rf config/prod.yaml' }, cwd: PROJECT_ROOT },
       stubDeps(writeBounds(['src/**'])),
     );
-    expect(result.exitCode).toBe(2);
+    expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('config/prod.yaml');
   });
 

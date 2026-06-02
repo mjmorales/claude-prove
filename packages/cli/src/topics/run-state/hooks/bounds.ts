@@ -10,8 +10,9 @@
  * On a `Write`/`Edit`/`MultiEdit` whose target path falls outside the declared
  * `write` globs (or a `Read` outside the declared `read` globs), or a `Bash`
  * command whose extracted write target falls outside the `write` globs, the
- * hook emits a `{decision: "block", reason}` payload and exits 2 — the Claude
- * Code PreToolUse block contract that feeds the reason back to the agent.
+ * hook emits the canonical PreToolUse deny payload — `permissionDecision: deny`
+ * on stdout with exit 0 — which denies the call and feeds the reason back to
+ * the agent.
  *
  * Permissive by construction. The hook NEVER false-blocks: absent or empty
  * bounds, an ambiguous active task, a tool with no checkable target, or any
@@ -292,10 +293,21 @@ function globToRegExp(glob: string): RegExp {
   return new RegExp(re);
 }
 
-/** Emit the PreToolUse block payload + exit 2. */
+/**
+ * Emit the canonical PreToolUse deny payload — `permissionDecision: deny` on
+ * stdout with exit 0 (matching the state-guard hook). This both stops the tool
+ * call and surfaces `reason` back to the agent; an exit-2 path would block but
+ * leave the reason on empty stderr, so the agent would see no explanation.
+ */
 function block(reason: string): HookResult {
-  const body = pyJsonDump({ decision: 'block', reason });
-  return { exitCode: 2, stdout: body, stderr: '' };
+  const body = pyJsonDump({
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: reason,
+    },
+  });
+  return { exitCode: 0, stdout: body, stderr: '' };
 }
 
 // ---------------------------------------------------------------------------

@@ -128,15 +128,15 @@ describe('run-state hook bounds CLI — against a seeded store', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  test('blocks an out-of-bounds write with exit 2 + decision:block', () => {
+  test('denies an out-of-bounds write (permissionDecision:deny + exit 0)', () => {
     const payload = JSON.stringify({
       tool_name: 'Write',
       tool_input: { file_path: join(dir, 'docs/readme.md') },
       cwd: dir,
     });
     const result = runHookCli('bounds', payload);
-    expect(result.exitCode).toBe(2);
-    expect(result.stdout).toContain('"decision": "block"');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('"permissionDecision": "deny"');
     expect(result.stdout).toContain('docs/readme.md');
   });
 
