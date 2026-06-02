@@ -1,7 +1,7 @@
 /**
  * Reasoning Log — typed, append-only reasoning capture for a run.
  *
- * Defines the 10 typed log entries + episode derivation that back the
+ * Defines the typed log entries + episode derivation that back the
  * reasoning journal. This module is the DATA + INGEST foundation: the entry
  * union, a strict validator, and the filesystem read/merge + episode-derivation
  * primitives the `acb log` subcommand exposes.
@@ -25,11 +25,14 @@
 // ---------------------------------------------------------------------------
 
 /**
- * The 10 closed entry types. `decision`..`synthesis` are agent-authored
+ * The closed entry types. `decision`..`synthesis` are agent-authored
  * (`context` records context the agent proactively loaded before acting);
  * `review_feedback` and `verification` are engine-written (validators /
- * principal-architect / verification dispatch). Extending this set is
- * extension-gated — add the literal here AND the per-type field spec below.
+ * principal-architect / verification dispatch). `capture` is engine-written
+ * too — a mechanical what-happened record (tool name + edited/read/run target)
+ * appended by the PostToolUse hook so agents author only the why. Extending
+ * this set is extension-gated — add the literal here AND the per-type field
+ * spec below.
  */
 export const ENTRY_TYPES = [
   'decision',
@@ -42,6 +45,7 @@ export const ENTRY_TYPES = [
   'synthesis',
   'review_feedback',
   'verification',
+  'capture',
 ] as const;
 
 export type EntryType = (typeof ENTRY_TYPES)[number];
@@ -127,6 +131,15 @@ export interface VerificationEntry extends EntryEnvelope {
   type: 'verification';
 }
 
+export interface CaptureEntry extends EntryEnvelope {
+  type: 'capture';
+  /** The tool whose call produced this record (e.g. `Write`, `Bash`, `Read`). */
+  tool: string;
+  /** The edited/read/run target: a file path, a shell command, or absent when
+   *  the tool exposed no single checkable target. */
+  target?: string;
+}
+
 /** The closed union of every reasoning-log entry. */
 export type LogEntry =
   | DecisionEntry
@@ -138,7 +151,8 @@ export type LogEntry =
   | AssumptionEntry
   | SynthesisEntry
   | ReviewFeedbackEntry
-  | VerificationEntry;
+  | VerificationEntry
+  | CaptureEntry;
 
 // ---------------------------------------------------------------------------
 // Field specification — drives strict validation
@@ -150,6 +164,12 @@ const ENVELOPE_FIELDS = ['id', 'ts', 'type', 'agent', 'run_path', 'body'] as con
 interface FieldSpec {
   /** Required type-specific fields and how to validate each value. */
   fields: Record<string, (value: unknown) => boolean>;
+  /**
+   * Optional type-specific fields: an absent key is fine, but a present key
+   * still has its value type-checked and is added to the allowed-key set so it
+   * does not trip the unknown-field rejection.
+   */
+  optional?: Record<string, (value: unknown) => boolean>;
 }
 
 const isStr = (v: unknown): v is string => typeof v === 'string';
@@ -175,6 +195,7 @@ const TYPE_SPECS: Record<EntryType, FieldSpec> = {
   synthesis: { fields: { outcome: isStr } },
   review_feedback: { fields: {} },
   verification: { fields: {} },
+  capture: { fields: { tool: isStr }, optional: { target: isStr } },
 };
 
 // ---------------------------------------------------------------------------
@@ -217,7 +238,12 @@ export function validateLogEntry(data: unknown): string[] {
   }
 
   const spec = TYPE_SPECS[type];
-  const allowedKeys = new Set<string>([...ENVELOPE_FIELDS, ...Object.keys(spec.fields)]);
+  const optionalFields = spec.optional ?? {};
+  const allowedKeys = new Set<string>([
+    ...ENVELOPE_FIELDS,
+    ...Object.keys(spec.fields),
+    ...Object.keys(optionalFields),
+  ]);
 
   for (const [field, check] of Object.entries(spec.fields)) {
     if (!(field in data)) {
@@ -225,6 +251,13 @@ export function validateLogEntry(data: unknown): string[] {
       continue;
     }
     if (!check(data[field])) {
+      errors.push(`Invalid value for '${field}' on type '${type}'`);
+    }
+  }
+
+  // Optional fields: absence is fine, but a present value is still type-checked.
+  for (const [field, check] of Object.entries(optionalFields)) {
+    if (field in data && !check(data[field])) {
       errors.push(`Invalid value for '${field}' on type '${type}'`);
     }
   }
