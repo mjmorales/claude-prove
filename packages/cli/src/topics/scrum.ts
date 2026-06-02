@@ -41,6 +41,8 @@
  *   claude-prove scrum contributor register      --slug S [--display-name N] [--github G] [--email E] [--id CT-UUID] [--status active|inactive]
  *   claude-prove scrum contributor list          [--status active|inactive] [--human]
  *   claude-prove scrum contributor resolve       [--github G] [--email E]   (github match first, then email fallback)
+ *   claude-prove scrum contributor default set   [--project-root P] --id CT-UUID   (home-dir map: project root → default contributor)
+ *   claude-prove scrum contributor default show  [--project-root P]   (prints the resolved CT-UUID, or null when unmapped)
  *   claude-prove scrum operator set              --contributor CT-UUID [--from-ts ISO]   (transfer the operator-of-record + sync charter.md)
  *   claude-prove scrum operator resolve          --at ISO   (point-in-time holder — the interval containing the instant, NOT the current holder)
  *   claude-prove scrum operator history          [--human]
@@ -155,6 +157,9 @@ interface ScrumFlags {
   displayName?: string;
   github?: string;
   email?: string;
+  // `contributor default <set|show>`: the project root keyed in the home-dir
+  // config (default: cwd). Store-independent — never touches .prove/prove.db.
+  projectRoot?: string;
   // `operator` position-history fields (v13). `contributor` is the new holder's
   // CT-UUID for `set`; `fromTs` backdates the handoff; `at` is the resolve instant.
   contributor?: string;
@@ -219,6 +224,10 @@ export function register(cli: CAC): void {
     .option('--display-name <n>', 'contributor register: display name')
     .option('--github <g>', 'contributor register/resolve: GitHub handle (primary resolution key)')
     .option('--email <e>', 'contributor register/resolve: email (fallback resolution key)')
+    .option(
+      '--project-root <p>',
+      'contributor default set/show: project root keyed in the home-dir config (default: cwd)',
+    )
     .option(
       '--contributor <id>',
       'operator set: new operator-of-record holder (a contributor CT-UUID)',
@@ -390,20 +399,25 @@ function dispatch(
     case 'contributor':
       if (arg1 === undefined) {
         console.error(
-          'error: scrum contributor: sub-action required (one of: register | list | resolve)',
+          'error: scrum contributor: sub-action required (one of: register | list | resolve | default)',
         );
         return 1;
       }
-      return runContributorCmd(arg1, {
-        slug: flags.slug,
-        id: flags.id,
-        status: flags.status,
-        displayName: flags.displayName,
-        github: flags.github,
-        email: flags.email,
-        human: flags.human,
-        workspaceRoot: flags.workspaceRoot,
-      });
+      return runContributorCmd(
+        arg1,
+        {
+          slug: flags.slug,
+          id: flags.id,
+          status: flags.status,
+          displayName: flags.displayName,
+          github: flags.github,
+          email: flags.email,
+          human: flags.human,
+          projectRoot: flags.projectRoot,
+          workspaceRoot: flags.workspaceRoot,
+        },
+        arg2,
+      );
 
     case 'operator':
       if (arg1 === undefined) {
