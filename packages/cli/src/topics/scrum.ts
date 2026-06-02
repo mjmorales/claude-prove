@@ -122,6 +122,7 @@ interface ScrumFlags {
   verifiesBy?: string;
   check?: string;
   idempotent?: boolean;
+  scope?: string;
   timeout?: string;
   criterion?: string;
   // `task create` + `task bounds set` declared-bounds JSON blob (v6).
@@ -169,6 +170,10 @@ export function register(cli: CAC): void {
     .option('--verifies-by <k>', 'task acceptance add: bash | assert | gate | agent')
     .option('--check <c>', 'task acceptance add: kind-specific check payload (command/expr/prompt)')
     .option('--idempotent', 'task acceptance add: mark the criterion safe to re-run')
+    .option(
+      '--scope <s>',
+      'task acceptance add: copy-down scope (descendants | self | both); absent defaults to both',
+    )
     .option('--timeout <t>', 'task acceptance add: optional wall-clock budget (e.g. 30s)')
     .option('--criterion <id>', 'task acceptance: explicit criterion id (default: generated)')
     .option(
@@ -267,6 +272,7 @@ function dispatch(
         verifiesBy: flags.verifiesBy,
         check: flags.check,
         idempotent: flags.idempotent,
+        scope: flags.scope,
         timeout: flags.timeout,
         criterion: flags.criterion,
         reason: flags.reason,

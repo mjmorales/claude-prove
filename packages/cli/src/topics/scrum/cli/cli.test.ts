@@ -891,6 +891,37 @@ describe('runTaskCmd acceptance', () => {
     expect(res.stderr).toContain('--verifies-by must be one of');
   });
 
+  test('add threads --scope onto the criterion', () => {
+    seedAcTask();
+    const add = withCapture(() =>
+      runTaskCmd('acceptance', ['add', 'at'], {
+        text: 'parent-only gate',
+        verifiesBy: 'bash',
+        check: 'x',
+        scope: 'self',
+        criterion: 'c1',
+      }),
+    );
+    expect(add.exit).toBe(0);
+    const list = withCapture(() => runTaskCmd('acceptance', ['list', 'at'], {}));
+    const criteria = JSON.parse(list.stdout.trim()) as Array<{ id: string; scope?: string }>;
+    expect(criteria[0]?.scope).toBe('self');
+  });
+
+  test('add rejects an invalid --scope', () => {
+    seedAcTask();
+    const res = withCapture(() =>
+      runTaskCmd('acceptance', ['add', 'at'], {
+        text: 't',
+        verifiesBy: 'bash',
+        check: 'x',
+        scope: 'children',
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--scope must be one of');
+  });
+
   test('add requires --text and --check', () => {
     seedAcTask();
     const noText = withCapture(() =>
