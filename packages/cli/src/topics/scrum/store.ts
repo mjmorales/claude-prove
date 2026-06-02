@@ -49,7 +49,6 @@ import type {
   TaskLayer,
   TaskStatus,
   VerificationRecord,
-  VerificationVerdict,
 } from './types';
 import { ACCEPTANCE_SCOPES, ESCALATION_TYPES, GATE_VERDICTS, VERIFICATION_VERDICTS } from './types';
 
