@@ -49,7 +49,8 @@ export type EventKind =
   | 'blocker_raised'
   | 'note'
   | 'unlinked_run_detected'
-  | 'curation_proposed';
+  | 'curation_proposed'
+  | 'gate_responded';
 
 /**
  * Dependency direction. Pinned by a CHECK constraint on `scrum_deps.kind`;
@@ -138,6 +139,47 @@ export type AcceptanceScope = 'descendants' | 'self' | 'both';
 export const ACCEPTANCE_SCOPES: AcceptanceScope[] = ['descendants', 'self', 'both'];
 
 /**
+ * Persisted verdict of a `gate`-kind criterion — a HUMAN decision recorded as
+ * standing state on the criterion, never a process that blocks waiting for it.
+ * Closed vocabulary documented here, not pinned by a SQL CHECK — the value
+ * lives inside `acceptance_json`, so the schema stays forward-compatible.
+ *
+ *   gate_pending — the default a fresh gate-kind criterion carries: a human
+ *                  has not yet decided. NOT satisfied; NOT a failure either.
+ *   approved     — a human approved the gate. The criterion counts as satisfied.
+ *   rejected     — a human rejected the gate. A verification failure.
+ *
+ * The decision is resolved PULL-based — an interactive `AskUserQuestion` turn,
+ * the `scrum gate respond` CLI, or a session-start surfacing of pending gates.
+ * There is NEVER a daemon or loop that blocks the engine waiting for the human;
+ * "deferred" means recorded-state-that-persists, not a waiting process.
+ */
+export type GateVerdict = 'gate_pending' | 'approved' | 'rejected';
+
+/** Runtime-checkable list of the closed `GateVerdict` set. */
+export const GATE_VERDICTS: GateVerdict[] = ['gate_pending', 'approved', 'rejected'];
+
+/**
+ * Persisted decision state for a `gate`-kind criterion, carried inside the
+ * criterion's `gate` field in `acceptance_json` (no DB migration). A fresh
+ * gate-kind criterion starts `{ verdict: 'gate_pending' }`; `scrum gate respond`
+ * transitions it to `approved`/`rejected` and stamps the human responder.
+ *
+ *   verdict      — the current persisted decision (see `GateVerdict`).
+ *   responder    — the human (or agent acting on a human's behalf) who resolved
+ *                  the gate; NULL while `gate_pending`. The verification
+ *                  contributor of record.
+ *   comment      — optional free-text rationale recorded at respond time.
+ *   responded_at — ISO-8601 timestamp of the resolving write; NULL while pending.
+ */
+export interface GateState {
+  verdict: GateVerdict;
+  responder?: string | null;
+  comment?: string | null;
+  responded_at?: string | null;
+}
+
+/**
  * One acceptance criterion on a task. Criteria are append-only:
  * a retired criterion flips `status` to `'superseded'` with a `reason` (and
  * optional `superseded_by` pointer) rather than being removed — mirrors the
@@ -171,6 +213,14 @@ export interface AcceptanceCriterion {
    */
   scope?: AcceptanceScope;
   timeout?: string;
+  /**
+   * Persisted gate-decision state for a `verifies_by: 'gate'` criterion. A
+   * fresh gate-kind criterion is seeded `{ verdict: 'gate_pending' }`; resolved
+   * via `scrum gate respond` (or an in-turn `AskUserQuestion`). Absent on
+   * non-gate criteria. A gate criterion counts as satisfied only when
+   * `gate.verdict === 'approved'`; `rejected` is a verification failure.
+   */
+  gate?: GateState;
   /** Set on supersession to the replacement criterion id. NULL = current. */
   superseded_by?: string | null;
   /** Rationale recorded at supersession time. NULL until superseded. */

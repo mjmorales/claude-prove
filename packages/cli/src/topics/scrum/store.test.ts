@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendEntry } from '../acb/reasoning-log-store';
-import { type ScrumStore, openScrumStore } from './store';
+import { type ScrumStore, criterionSatisfied, openScrumStore } from './store';
 import type { Acceptance, AcceptanceCriterion, TaskBounds } from './types';
 
 let store: ScrumStore;
@@ -1181,6 +1181,128 @@ describe('ScrumStore — acceptance criteria', () => {
       policy: { eval_order: 'fifo', rerun_policy: 'all' },
     };
     expect(() => store.createTask({ id: 't1', title: 'T1', acceptance: seq })).not.toThrow();
+  });
+});
+
+// ===========================================================================
+// gate-kind respond flow
+// ===========================================================================
+
+/** A gate-kind criterion fixture: `verifies_by: 'gate'`, no explicit gate state. */
+function gateAc(id: string, overrides: Partial<AcceptanceCriterion> = {}): AcceptanceCriterion {
+  return ac(id, { verifies_by: 'gate', check: 'operator approves the design', ...overrides });
+}
+
+describe('ScrumStore — gate-kind respond flow', () => {
+  test('a fresh gate-kind criterion is seeded gate_pending on create', () => {
+    seedTask('t1', { acceptance: { criteria: [gateAc('g1')] } });
+    const reloaded = store.getTask('t1');
+    expect(reloaded?.acceptance?.criteria[0]?.gate).toEqual({ verdict: 'gate_pending' });
+  });
+
+  test('addCriterion seeds gate_pending on a gate-kind criterion', () => {
+    seedTask('t1');
+    const task = store.addCriterion('t1', gateAc('g1'));
+    expect(task.acceptance?.criteria[0]?.gate?.verdict).toBe('gate_pending');
+  });
+
+  test('non-gate criteria never carry a gate state', () => {
+    seedTask('t1', { acceptance: { criteria: [ac('c1')] } });
+    expect(store.getTask('t1')?.acceptance?.criteria[0]?.gate).toBeUndefined();
+  });
+
+  test('respond approve persists the verdict + responder + comment and round-trips', () => {
+    seedTask('t1', { acceptance: { criteria: [gateAc('g1')] } });
+    store.respondGate('t1', 'g1', 'approved', { responder: 'alice', comment: 'design LGTM' });
+    // Re-fetch from the store so we assert the persisted round-trip, not the
+    // in-memory return value.
+    const gate = store.getTask('t1')?.acceptance?.criteria.find((c) => c.id === 'g1')?.gate;
+    expect(gate?.verdict).toBe('approved');
+    expect(gate?.responder).toBe('alice');
+    expect(gate?.comment).toBe('design LGTM');
+    expect(typeof gate?.responded_at).toBe('string');
+  });
+
+  test('respond reject persists rejected and counts as a verification failure', () => {
+    seedTask('t1', { acceptance: { criteria: [gateAc('g1')] } });
+    const task = store.respondGate('t1', 'g1', 'rejected', { responder: 'bob' });
+    const criterion = task.acceptance?.criteria.find((c) => c.id === 'g1');
+    expect(criterion?.gate?.verdict).toBe('rejected');
+    expect(criterionSatisfied(criterion as AcceptanceCriterion)).toBe(false);
+  });
+
+  test('respond records the human responder as a gate_responded event contributor', () => {
+    seedTask('t1', { acceptance: { criteria: [gateAc('g1')] } });
+    store.respondGate('t1', 'g1', 'approved', { responder: 'carol' });
+    const events = store.listEventsForTask('t1');
+    const gateEvent = events.find((e) => e.kind === 'gate_responded');
+    expect(gateEvent).toBeDefined();
+    expect(gateEvent?.agent).toBe('carol');
+    expect(gateEvent?.payload).toMatchObject({
+      criterion_id: 'g1',
+      verdict: 'approved',
+      responder: 'carol',
+    });
+  });
+
+  test('criterionSatisfied: only an approved gate counts as satisfied', () => {
+    expect(criterionSatisfied(gateAc('g', { gate: { verdict: 'gate_pending' } }))).toBe(false);
+    expect(criterionSatisfied(gateAc('g', { gate: { verdict: 'approved' } }))).toBe(true);
+    expect(criterionSatisfied(gateAc('g', { gate: { verdict: 'rejected' } }))).toBe(false);
+    // Non-gate kinds are decided downstream, so the store never reports them satisfied.
+    expect(criterionSatisfied(ac('c1'))).toBe(false);
+  });
+
+  test('respond rejects an unknown task id', () => {
+    expect(() => store.respondGate('nope', 'g1', 'approved', { responder: 'x' })).toThrow(
+      /unknown task 'nope'/,
+    );
+  });
+
+  test('respond rejects an unknown criterion id', () => {
+    seedTask('t1', { acceptance: { criteria: [gateAc('g1')] } });
+    expect(() => store.respondGate('t1', 'nope', 'approved', { responder: 'x' })).toThrow(
+      /unknown criterion 'nope'/,
+    );
+  });
+
+  test('respond rejects a non-gate criterion', () => {
+    seedTask('t1', { acceptance: { criteria: [ac('c1')] } });
+    expect(() => store.respondGate('t1', 'c1', 'approved', { responder: 'x' })).toThrow(
+      /is verifies_by 'bash', not 'gate'/,
+    );
+  });
+
+  test('respond rejects an already-resolved gate', () => {
+    seedTask('t1', { acceptance: { criteria: [gateAc('g1')] } });
+    store.respondGate('t1', 'g1', 'approved', { responder: 'x' });
+    expect(() => store.respondGate('t1', 'g1', 'rejected', { responder: 'y' })).toThrow(
+      /already resolved \('approved'\)/,
+    );
+  });
+
+  test('respond rejects an off-enum verdict (closed set)', () => {
+    seedTask('t1', { acceptance: { criteria: [gateAc('g1')] } });
+    expect(() => store.respondGate('t1', 'g1', 'maybe' as never, { responder: 'x' })).toThrow(
+      /invalid verdict 'maybe'/,
+    );
+  });
+
+  test('an off-enum gate verdict is rejected at the acceptance write boundary', () => {
+    seedTask('t1');
+    expect(() =>
+      store.addCriterion('t1', gateAc('g1', { gate: { verdict: 'pending' as never } })),
+    ).toThrow(/invalid gate verdict 'pending'/);
+  });
+
+  test('an inherited gate criterion starts a fresh pending gate, not the parent verdict', () => {
+    seedTask('parent', { acceptance: { criteria: [gateAc('g1', { scope: 'descendants' })] } });
+    store.respondGate('parent', 'g1', 'approved', { responder: 'alice' });
+    const child = store.createTask({ id: 'child', title: 'Child', parentId: 'parent' });
+    const inherited = child.acceptance?.criteria.find((c) => c.id === 'g1');
+    expect(inherited?.inherited_from).toBe('parent');
+    expect(inherited?.gate?.verdict).toBe('gate_pending');
+    expect(inherited?.gate?.responder).toBeUndefined();
   });
 });
 
