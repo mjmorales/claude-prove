@@ -866,6 +866,32 @@ ALTER TABLE scrum_decisions ADD COLUMN gate_responder TEXT;
 ALTER TABLE scrum_decisions ADD COLUMN gate_responded_at TEXT;
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v22 — Lore→Codex promotion provenance on scrum_decisions
+// ---------------------------------------------------------------------------
+
+/**
+ * v22: a single nullable provenance column linking a Codex decision back to the
+ * team Lore entry it was promoted FROM. When a generally-applicable Lore entry
+ * is lifted into the Codex (`scrum_decisions`), the resulting decision carries
+ * the source `scrum_lores.id` so the promotion is traceable both ways: the Lore
+ * entry survives append-only in `scrum_lores`, and the decision points back at
+ * its origin. NULL for a decision authored directly (the common case) — every
+ * existing decision predates promotion, so the backfill default is NULL.
+ *
+ *   source_lore_id — the `scrum_lores.id` this decision was promoted from, or
+ *                    NULL when the decision was authored directly. An INTEGER
+ *                    REFERENCES the Lore row; the Lore is never hard-deleted, so
+ *                    the back-pointer always resolves.
+ *
+ * `ADD COLUMN` with a NULL default is safe on a populated table. No new table —
+ * provenance is one additive column, matching the v4/v8/v21 in-place extensions
+ * of `scrum_decisions` rather than a side table.
+ */
+export const SCRUM_MIGRATION_V22_SQL = `
+ALTER TABLE scrum_decisions ADD COLUMN source_lore_id INTEGER REFERENCES scrum_lores(id);
+`;
+
 /**
  * Current scrum-domain store version — the highest migration version this
  * module registers. Stamped as the per-artifact `schema_version` on the
@@ -873,7 +899,7 @@ ALTER TABLE scrum_decisions ADD COLUMN gate_responded_at TEXT;
  * scrum row reports the schema it was read under. Bump in lockstep with the
  * top migration version on every additive hop.
  */
-export const SCRUM_SCHEMA_VERSION = 21;
+export const SCRUM_SCHEMA_VERSION = 22;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
@@ -1051,6 +1077,14 @@ export function ensureScrumSchemaRegistered(): void {
           'add scrum_decisions.write_status (draft|approved|rejected) + gate_responder + gate_responded_at for the gated Codex write protocol',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V21_SQL);
+        },
+      },
+      {
+        version: 22,
+        description:
+          'add scrum_decisions.source_lore_id (nullable self-FK to scrum_lores) for Lore→Codex promotion provenance',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V22_SQL);
         },
       },
     ],

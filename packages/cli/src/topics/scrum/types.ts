@@ -614,6 +614,16 @@ export interface DecisionRow {
   gate_responder: string | null;
   /** ISO-8601 timestamp of the gate-resolving write (v21). NULL until resolved. */
   gate_responded_at: string | null;
+  /**
+   * Provenance back-pointer (v22): the `scrum_lores.id` this decision was
+   * promoted FROM, or NULL when the decision was authored directly (the common
+   * case). Set ONLY by `promoteLoreToCodex`, which lifts a generally-applicable
+   * team Lore entry into the Codex as a gated DRAFT carrying this back-pointer.
+   * The Lore row is append-only and never hard-deleted, so the pointer always
+   * resolves. INTEGER column — not pinned by a CHECK, matching the
+   * forward-compatible convention on `status`/`kind`/`write_status`.
+   */
+  source_lore_id: number | null;
 }
 
 /**
@@ -1157,6 +1167,35 @@ export interface RecordLoreResult {
   row: LoreRow;
   /** Set when the team had no seated tech_lead to author-check against. */
   warning: string | null;
+}
+
+/**
+ * Input to `promoteLoreToCodex` (v22). Lifts one generally-applicable team Lore
+ * entry into the Codex (`scrum_decisions`) as a gated DRAFT — a PROPOSAL, not an
+ * acceptance. The promotion always routes through the gated write protocol: the
+ * resulting decision lands `write_status = 'draft'` and becomes `accepted` only
+ * when its write-gate is later approved (a separate human / tech_lead step). The
+ * promotion never auto-approves.
+ *
+ *   loreId        — the `scrum_lores.id` to promote. Must exist (the FK target);
+ *                   an unknown id throws.
+ *   decisionId    — the id of the Codex decision to write. Deterministic ids let
+ *                   a re-promotion upsert the same row rather than duplicating;
+ *                   defaults to `lore-promotion-<team_slug>-<loreId>`.
+ *   kind          — the Codex subtype to record under. A generalized team
+ *                   convention defaults to `pattern` (a gated kind). Any value in
+ *                   `GATED_DECISION_KINDS` keeps the draft gate; a non-gated kind
+ *                   would bypass the gate, so the default stays gated.
+ *   title         — the decision title. Defaults to a derived
+ *                   `Promoted Lore from team <team_slug>`.
+ *   recordedByAgent — provenance for who promoted; threaded to `recordDecision`.
+ */
+export interface PromoteLoreToCodexInput {
+  loreId: number;
+  decisionId?: string;
+  kind?: string;
+  title?: string;
+  recordedByAgent?: string | null;
 }
 
 /**

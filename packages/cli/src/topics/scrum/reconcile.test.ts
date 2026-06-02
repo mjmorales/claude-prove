@@ -592,3 +592,126 @@ describe('reconcileMilestoneClosed', () => {
     expect(result.skippedNoFindings).toBe(1); // m7-bad yielded zero candidates
   });
 });
+
+// ===========================================================================
+// reconcileMilestoneClosed — milestone-close journal compaction (v22)
+//
+// On a milestone close, the milestone journal is rolled up into one Lore summary
+// per team TERMINATING on that milestone. These tests create the terminating team
+// WITHOUT a seated tech_lead, mirroring the real flow where closeMilestone vacates
+// the roster before reconcile runs — so the engine-authored compaction Lore lands
+// via recordLore's warn-allow (no-tech_lead) branch.
+// ===========================================================================
+
+describe('reconcileMilestoneClosed — journal compaction', () => {
+  test('rolls the journal into one Lore per terminating team', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    store.createTeam({
+      slug: 'squad',
+      teamType: 'enabling',
+      lifetime: 'terminates_on_milestone',
+      terminatesOnMilestone: 'm1',
+    });
+    store.createTask({ id: 'task-a', title: 'A', milestoneId: 'm1' });
+    const runDir = linkRunDir('task-a', 'a');
+    writeLogEntry(runDir, 'h1', 'hack');
+    writeLogEntry(runDir, 'r1', 'risk');
+
+    const result = reconcileMilestoneClosed('m1', store);
+
+    expect(result.compactedTeams).toHaveLength(1);
+    expect(result.compactedTeams[0]?.teamSlug).toBe('squad');
+    expect(result.compactedTeams[0]?.candidateCount).toBe(2);
+
+    const lores = store.listLores('squad');
+    expect(lores).toHaveLength(1);
+    // The summary opens with the idempotency marker and folds in each finding.
+    expect(lores[0]?.body).toContain('[milestone-close-summary:m1]');
+    expect(lores[0]?.body).toContain('[hack]');
+    expect(lores[0]?.body).toContain('[risk]');
+  });
+
+  test('no terminating team is a no-op (per-task curation unchanged)', () => {
+    store.createMilestone({ id: 'm2', title: 'M2' });
+    // A persistent team and a team pinned to a DIFFERENT milestone — neither terminates here.
+    store.createTeam({ slug: 'core', teamType: 'platform' });
+    store.createTeam({
+      slug: 'elsewhere',
+      teamType: 'enabling',
+      lifetime: 'terminates_on_milestone',
+      terminatesOnMilestone: 'other',
+    });
+    store.createTask({ id: 'task-b', title: 'B', milestoneId: 'm2' });
+    writeLogEntry(linkRunDir('task-b', 'b'), 'h1', 'hack');
+
+    const result = reconcileMilestoneClosed('m2', store);
+
+    // No compaction; the per-task curation still fired.
+    expect(result.compactedTeams).toHaveLength(0);
+    expect(result.emitted.map((e) => e.taskId)).toEqual(['task-b']);
+    expect(store.listLores('core')).toHaveLength(0);
+    expect(store.listLores('elsewhere')).toHaveLength(0);
+  });
+
+  test('idempotent: a re-close does not double-write the compaction Lore', () => {
+    store.createMilestone({ id: 'm3', title: 'M3' });
+    store.createTeam({
+      slug: 'squad',
+      teamType: 'enabling',
+      lifetime: 'terminates_on_milestone',
+      terminatesOnMilestone: 'm3',
+    });
+    store.createTask({ id: 'task-c', title: 'C', milestoneId: 'm3' });
+    writeLogEntry(linkRunDir('task-c', 'c'), 'h1', 'hack');
+
+    const first = reconcileMilestoneClosed('m3', store);
+    expect(first.compactedTeams).toHaveLength(1);
+
+    const second = reconcileMilestoneClosed('m3', store);
+    expect(second.compactedTeams).toHaveLength(0);
+    expect(second.skippedAlreadyCompacted).toBe(1);
+    // Exactly one compaction Lore exists.
+    expect(store.listLores('squad')).toHaveLength(1);
+  });
+
+  test('an empty journal still records a compaction Lore for the terminating team', () => {
+    store.createMilestone({ id: 'm4', title: 'M4' });
+    store.createTeam({
+      slug: 'squad',
+      teamType: 'enabling',
+      lifetime: 'terminates_on_milestone',
+      terminatesOnMilestone: 'm4',
+    });
+    // A task with only non-curation findings — the journal is empty.
+    store.createTask({ id: 'task-d', title: 'D', milestoneId: 'm4' });
+    writeLogEntry(linkRunDir('task-d', 'd'), 'disc', 'discovery');
+
+    const result = reconcileMilestoneClosed('m4', store);
+
+    expect(result.compactedTeams).toHaveLength(1);
+    const lores = store.listLores('squad');
+    expect(lores).toHaveLength(1);
+    expect(lores[0]?.body).toContain('[milestone-close-summary:m4]');
+    expect(lores[0]?.body).toContain('no curation-relevant findings');
+  });
+
+  test('two terminating teams each get the same milestone journal rolled up', () => {
+    store.createMilestone({ id: 'm5', title: 'M5' });
+    for (const slug of ['squad-a', 'squad-b']) {
+      store.createTeam({
+        slug,
+        teamType: 'enabling',
+        lifetime: 'terminates_on_milestone',
+        terminatesOnMilestone: 'm5',
+      });
+    }
+    store.createTask({ id: 'task-e', title: 'E', milestoneId: 'm5' });
+    writeLogEntry(linkRunDir('task-e', 'e'), 'd1', 'decision');
+
+    const result = reconcileMilestoneClosed('m5', store);
+
+    expect(result.compactedTeams.map((c) => c.teamSlug).sort()).toEqual(['squad-a', 'squad-b']);
+    expect(store.listLores('squad-a')[0]?.body).toContain('[decision]');
+    expect(store.listLores('squad-b')[0]?.body).toContain('[decision]');
+  });
+});

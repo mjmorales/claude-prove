@@ -37,6 +37,7 @@ import {
   SCRUM_MIGRATION_V19_SQL,
   SCRUM_MIGRATION_V20_SQL,
   SCRUM_MIGRATION_V21_SQL,
+  SCRUM_MIGRATION_V22_SQL,
   SCRUM_SCHEMA_VERSION,
   ensureScrumSchemaRegistered,
 } from './schemas';
@@ -260,7 +261,7 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V4_SQL).toContain('ALTER TABLE scrum_decisions ADD COLUMN reason');
   });
 
-  test('scrum_decisions column shape gains v4 superseded_by + reason + v8 kind + v21 gate cols', () => {
+  test('scrum_decisions column shape gains v4 superseded_by + reason + v8 kind + v21 gate cols + v22 source_lore_id', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -288,6 +289,8 @@ describe('scrum domain registration', () => {
         'write_status:TEXT:0',
         'gate_responder:TEXT:0',
         'gate_responded_at:TEXT:0',
+        // v22 appends the Lore→Codex promotion provenance, NULL default.
+        'source_lore_id:INTEGER:0',
       ]);
     } finally {
       raw.close();
@@ -459,12 +462,12 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('full migration chain from v0 applies v1..v21 in order', () => {
+  test('full migration chain from v0 applies v1..v22 in order', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       const result = runMigrations(raw);
       expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
       ]);
     } finally {
       raw.close();
@@ -476,7 +479,7 @@ describe('scrum domain registration', () => {
     try {
       const first = runMigrations(raw);
       expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
       ]);
 
       const second = runMigrations(raw);
@@ -508,6 +511,7 @@ describe('scrum domain registration', () => {
         { version: 19 },
         { version: 20 },
         { version: 21 },
+        { version: 22 },
       ]);
     } finally {
       raw.close();
@@ -538,7 +542,7 @@ describe('scrum domain registration', () => {
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(log).toHaveLength(21);
+      expect(log).toHaveLength(22);
       const [
         v1,
         v2,
@@ -561,6 +565,7 @@ describe('scrum domain registration', () => {
         v19,
         v20,
         v21,
+        v22,
       ] = log;
       if (
         !v1 ||
@@ -583,9 +588,10 @@ describe('scrum domain registration', () => {
         !v18 ||
         !v19 ||
         !v20 ||
-        !v21
+        !v21 ||
+        !v22
       )
-        throw new Error('expected twenty-one log entries');
+        throw new Error('expected twenty-two log entries');
       expect(v1.domain).toBe('scrum');
       expect(v1.version).toBe(1);
       expect(v1.description).toContain('scrum_tasks');
@@ -651,6 +657,9 @@ describe('scrum domain registration', () => {
       expect(v21.domain).toBe('scrum');
       expect(v21.version).toBe(21);
       expect(v21.description).toContain('write_status');
+      expect(v22.domain).toBe('scrum');
+      expect(v22.version).toBe(22);
+      expect(v22.description).toContain('source_lore_id');
     } finally {
       raw.close();
     }
@@ -682,8 +691,8 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V11_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN run_id');
   });
 
-  test('SCRUM_SCHEMA_VERSION tracks the top migration version (21)', () => {
-    expect(SCRUM_SCHEMA_VERSION).toBe(21);
+  test('SCRUM_SCHEMA_VERSION tracks the top migration version (22)', () => {
+    expect(SCRUM_SCHEMA_VERSION).toBe(22);
   });
 
   test('v11 ADD COLUMN defaults worker_id/run_id to NULL on existing rows', () => {
@@ -816,7 +825,7 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V14_SQL).toContain('idx_scrum_teams_type');
   });
 
-  test('a fresh store ends at version 21 with scrum_teams present', () => {
+  test('a fresh store ends at version 22 with scrum_teams present', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -825,7 +834,7 @@ describe('scrum domain registration', () => {
         'SELECT MAX(version) AS version FROM _migrations_log WHERE domain = ?',
         ['scrum'],
       );
-      expect(top).toEqual([{ version: 21 }]);
+      expect(top).toEqual([{ version: 22 }]);
 
       const tables = raw.all<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_teams'",
@@ -1232,6 +1241,8 @@ describe('scrum domain registration', () => {
         'write_status:TEXT:0',
         'gate_responder:TEXT:0',
         'gate_responded_at:TEXT:0',
+        // v22 Lore→Codex promotion provenance appends, NULL default.
+        'source_lore_id:INTEGER:0',
       ]);
     } finally {
       raw.close();
@@ -1256,6 +1267,32 @@ describe('scrum domain registration', () => {
         ['d1'],
       );
       expect(row).toEqual([{ write_status: null, gate_responder: null, gate_responded_at: null }]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('SCRUM_MIGRATION_V22_SQL adds source_lore_id referencing scrum_lores', () => {
+    expect(SCRUM_MIGRATION_V22_SQL).toContain(
+      'ALTER TABLE scrum_decisions ADD COLUMN source_lore_id',
+    );
+    expect(SCRUM_MIGRATION_V22_SQL).toContain('REFERENCES scrum_lores(id)');
+  });
+
+  test('v22 ADD COLUMN defaults source_lore_id to NULL on existing rows', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      // A decision inserted without the v22 column — simulates a pre-v22 row
+      // carried through the upgrade. The new column must read NULL.
+      raw.exec(
+        "INSERT INTO scrum_decisions (id, title, status, content, content_sha, recorded_at) VALUES ('d1', 'D1', 'accepted', 'body', 'sha', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ source_lore_id: number | null }>(
+        'SELECT source_lore_id FROM scrum_decisions WHERE id = ?',
+        ['d1'],
+      );
+      expect(row).toEqual([{ source_lore_id: null }]);
     } finally {
       raw.close();
     }

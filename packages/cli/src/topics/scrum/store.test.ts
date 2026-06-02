@@ -2303,7 +2303,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 21,
+      schema_version: 22,
     });
   });
 
@@ -2316,7 +2316,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(21);
+    expect(updated.provenance.schema_version).toBe(22);
   });
 });
 
@@ -3481,5 +3481,180 @@ describe('ScrumStore — gated Codex write protocol (v21)', () => {
     expect(reRecorded.superseded_by).toBe('a2');
     expect(reRecorded.write_status).toBe('approved');
     expect(reRecorded.gate_responder).toBe('ct-anyone');
+  });
+
+  test('a bare record carries a null source_lore_id (direct authorship)', () => {
+    const row = store.recordDecision({ id: 'plain', title: 'Plain', content: 'body' });
+    expect(row.source_lore_id).toBeNull();
+  });
+});
+
+describe('ScrumStore — promoteLoreToCodex (v22)', () => {
+  beforeEach(() => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
+  });
+
+  /** Append one Lore entry to `payments` and return its row. */
+  function seedLore(body: string) {
+    return store.recordLore({ teamSlug: 'payments', body, authorContributorId: 'ct-lead' }).row;
+  }
+
+  test('promotes a Lore entry to a Codex DRAFT with provenance, NOT accepted', () => {
+    const lore = seedLore('prefer idempotent migrations');
+    const decision = store.promoteLoreToCodex({ loreId: lore.id });
+
+    // It lands as a gated draft — proposed, not accepted.
+    expect(decision.kind).toBe('pattern');
+    expect(decision.status).toBe('draft');
+    expect(decision.write_status).toBe('draft');
+    expect(decision.gate_responder).toBeNull();
+    // Provenance points back at the source Lore.
+    expect(decision.source_lore_id).toBe(lore.id);
+    // The body carries the origin and the Lore's content.
+    expect(decision.content).toContain("team 'payments'");
+    expect(decision.content).toContain('prefer idempotent migrations');
+    // It is NOT in the accepted set yet.
+    expect(store.listDecisions({ status: 'accepted' }).map((d) => d.id)).not.toContain(decision.id);
+  });
+
+  test('the source Lore survives the promotion untouched (append-only)', () => {
+    const lore = seedLore('a durable convention');
+    store.promoteLoreToCodex({ loreId: lore.id });
+    expect(store.getLore(lore.id)?.body).toBe('a durable convention');
+    expect(store.listLores('payments')).toHaveLength(1);
+  });
+
+  test('a promoted draft is accepted only by a subsequent approveDecision', () => {
+    const lore = seedLore('promote me');
+    const draft = store.promoteLoreToCodex({ loreId: lore.id });
+    // pattern is a plain human gate — any responder may approve.
+    const approved = store.approveDecision(draft.id, 'ct-anyone');
+    expect(approved.status).toBe('accepted');
+    expect(approved.write_status).toBe('approved');
+    expect(approved.gate_responder).toBe('ct-anyone');
+    // Provenance is preserved through the approval.
+    expect(approved.source_lore_id).toBe(lore.id);
+  });
+
+  test('a glossary-kind promotion needs a tech_lead approver (gate respected)', () => {
+    const lore = seedLore('canonical term');
+    const draft = store.promoteLoreToCodex({ loreId: lore.id, kind: 'glossary' });
+    expect(draft.write_status).toBe('draft');
+    // A non-tech_lead cannot approve a glossary; the seated tech_lead can.
+    expect(() => store.approveDecision(draft.id, 'ct-nobody')).toThrow(
+      /requires a tech_lead review/,
+    );
+    expect(store.approveDecision(draft.id, 'ct-lead').status).toBe('accepted');
+  });
+
+  test('a custom decisionId + kind + title is honored', () => {
+    const lore = seedLore('x');
+    const decision = store.promoteLoreToCodex({
+      loreId: lore.id,
+      decisionId: 'adr-promoted',
+      kind: 'adr',
+      title: 'A custom title',
+    });
+    expect(decision.id).toBe('adr-promoted');
+    expect(decision.kind).toBe('adr');
+    expect(decision.title).toBe('A custom title');
+    expect(decision.source_lore_id).toBe(lore.id);
+  });
+
+  test('re-promoting the same Lore upserts the same draft (deterministic id)', () => {
+    const lore = seedLore('once');
+    const first = store.promoteLoreToCodex({ loreId: lore.id });
+    const second = store.promoteLoreToCodex({ loreId: lore.id });
+    expect(second.id).toBe(first.id);
+    // Exactly one promotion decision exists for this Lore.
+    const promos = store.listDecisions().filter((d) => d.source_lore_id === lore.id);
+    expect(promos).toHaveLength(1);
+  });
+
+  test('a bare re-record of a promoted decision keeps its provenance', () => {
+    const lore = seedLore('keep my origin');
+    const draft = store.promoteLoreToCodex({ loreId: lore.id });
+    // Re-recording the decision body with no source Lore must not erase the
+    // back-pointer to its origin.
+    const reRecorded = store.recordDecision({
+      id: draft.id,
+      title: draft.title,
+      content: 'edited body',
+    });
+    expect(reRecorded.source_lore_id).toBe(lore.id);
+  });
+
+  test('rejects an unknown lore id', () => {
+    expect(() => store.promoteLoreToCodex({ loreId: 99999 })).toThrow(/unknown lore id '99999'/);
+  });
+});
+
+describe('ScrumStore — teamTerminate Lore→Codex promotion (v22)', () => {
+  beforeEach(() => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
+  });
+
+  test('disbanding a team promotes its Lore to Codex DRAFTS before going inactive', () => {
+    const l1 = store.recordLore({
+      teamSlug: 'payments',
+      body: 'lore one',
+      authorContributorId: 'ct-lead',
+    }).row;
+    const l2 = store.recordLore({
+      teamSlug: 'payments',
+      body: 'lore two',
+      authorContributorId: 'ct-lead',
+    }).row;
+
+    store.teamTerminate('payments', 'work complete');
+
+    // Both Lore entries became Codex drafts with provenance.
+    const promos = store.listDecisions().filter((d) => d.source_lore_id !== null);
+    expect(promos.map((d) => d.source_lore_id).sort()).toEqual([l1.id, l2.id].sort());
+    for (const d of promos) {
+      expect(d.write_status).toBe('draft');
+      expect(d.status).toBe('draft');
+    }
+    // The team is inactive and its Lore survives (append-only).
+    expect(store.getTeam('payments')?.status).toBe('inactive');
+    expect(store.listLores('payments')).toHaveLength(2);
+  });
+
+  test('a team with no Lore disbands cleanly (no promotion)', () => {
+    store.teamTerminate('payments', 'nothing to promote');
+    expect(store.listDecisions().filter((d) => d.source_lore_id !== null)).toHaveLength(0);
+    expect(store.getTeam('payments')?.status).toBe('inactive');
+  });
+
+  test('re-disband cannot double-promote (terminate throws on an inactive team)', () => {
+    store.recordLore({ teamSlug: 'payments', body: 'lore', authorContributorId: 'ct-lead' });
+    store.teamTerminate('payments', 'first');
+    const afterFirst = store.listDecisions().filter((d) => d.source_lore_id !== null).length;
+    expect(afterFirst).toBe(1);
+    // A second disband throws — the promotion never runs twice.
+    expect(() => store.teamTerminate('payments', 'second')).toThrow(/already inactive/);
+    expect(store.listDecisions().filter((d) => d.source_lore_id !== null)).toHaveLength(1);
+  });
+
+  test('closeMilestone disbands a pinned team and promotes its Lore atomically', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    store.createTeam({
+      slug: 'squad',
+      teamType: 'enabling',
+      lifetime: 'terminates_on_milestone',
+      terminatesOnMilestone: 'm1',
+    });
+    store.rotateTeamMember({ teamSlug: 'squad', role: 'tech_lead', contributorId: 'ct-sq' });
+    store.recordLore({ teamSlug: 'squad', body: 'squad wisdom', authorContributorId: 'ct-sq' });
+
+    store.closeMilestone('m1');
+
+    expect(store.getTeam('squad')?.status).toBe('inactive');
+    const promos = store.listDecisions().filter((d) => d.source_lore_id !== null);
+    expect(promos).toHaveLength(1);
+    expect(promos[0]?.write_status).toBe('draft');
+    expect(promos[0]?.content).toContain('squad wisdom');
   });
 });
