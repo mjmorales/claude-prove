@@ -160,6 +160,47 @@ export type GateVerdict = 'gate_pending' | 'approved' | 'rejected';
 export const GATE_VERDICTS: GateVerdict[] = ['gate_pending', 'approved', 'rejected'];
 
 /**
+ * Recorded outcome of verifying a `bash`/`agent` (or in-process `assert`)
+ * criterion at the orchestrator validation gate. The gate has the two resources
+ * a store-level close floor lacks — git (to cut an isolation worktree for a
+ * `bash` check) and the run/plan context (for an `assert` expression) — so it
+ * RUNS the heavy verification and STAMPS the result here. The close floor then
+ * READS this standing verdict instead of re-running the worktree it cannot run.
+ * Closed vocabulary documented here, not pinned by a SQL CHECK — the value lives
+ * inside `acceptance_json`, so the schema stays forward-compatible.
+ *
+ *   pending  — the default a fresh criterion carries: the gate has not recorded
+ *              an outcome yet. NOT satisfied; NOT a failure either.
+ *   verified — the gate ran the check and it passed (bash exit 0 / assert true /
+ *              agent judged satisfied). The criterion counts as satisfied.
+ *   failed   — the gate ran the check and it failed. A verification failure.
+ */
+export type VerificationVerdict = 'pending' | 'verified' | 'failed';
+
+/** Runtime-checkable list of the closed `VerificationVerdict` set. */
+export const VERIFICATION_VERDICTS: VerificationVerdict[] = ['pending', 'verified', 'failed'];
+
+/**
+ * Recorded verification state for a criterion whose verdict the orchestrator
+ * validation gate decides and the close floor reads. Carried inside the
+ * criterion's `verification` field in `acceptance_json` (no DB migration).
+ *
+ *   verdict     — the current recorded outcome (see `VerificationVerdict`).
+ *   reason      — short detail of the outcome: the offending sub-expression on a
+ *                 failed `assert`, a transcript pointer on a failed `bash`, etc.
+ *                 NULL while `pending`.
+ *   verified_by — the executing unit that recorded the verdict (the orchestrator
+ *                 validation gate / leaf worker), or NULL when none was in scope.
+ *   verified_at — ISO-8601 timestamp of the recording write; NULL while pending.
+ */
+export interface VerificationRecord {
+  verdict: VerificationVerdict;
+  reason?: string | null;
+  verified_by?: string | null;
+  verified_at?: string | null;
+}
+
+/**
  * Persisted decision state for a `gate`-kind criterion, carried inside the
  * criterion's `gate` field in `acceptance_json` (no DB migration). A fresh
  * gate-kind criterion starts `{ verdict: 'gate_pending' }`; `scrum gate respond`
@@ -221,6 +262,15 @@ export interface AcceptanceCriterion {
    * `gate.verdict === 'approved'`; `rejected` is a verification failure.
    */
   gate?: GateState;
+  /**
+   * Recorded verification verdict for a `bash`/`agent`/`assert` criterion,
+   * stamped by the orchestrator validation gate (which has the git + run
+   * context the store-level close floor lacks). The close floor READS this
+   * standing verdict rather than re-running the worktree. Absent = never
+   * verified (treated as `pending`). A `gate`-kind criterion does NOT use this
+   * field — its decision lives in `gate.verdict`.
+   */
+  verification?: VerificationRecord;
   /** Set on supersession to the replacement criterion id. NULL = current. */
   superseded_by?: string | null;
   /** Rationale recorded at supersession time. NULL until superseded. */
