@@ -1307,6 +1307,70 @@ describe('ScrumStore — gate-kind respond flow', () => {
 });
 
 // ===========================================================================
+// Pending-gate surfacing (out-of-turn pull path)
+// ===========================================================================
+
+describe('ScrumStore — listPendingGates', () => {
+  test('no gate criteria: clean empty result', () => {
+    seedTask('t1', { acceptance: { criteria: [ac('c1')] } });
+    expect(store.listPendingGates()).toHaveLength(0);
+  });
+
+  test('a fresh gate-kind criterion surfaces with task + criterion id + text', () => {
+    seedTask('t1', { acceptance: { criteria: [gateAc('g1', { text: 'operator approves' })] } });
+    const pending = store.listPendingGates();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toEqual({
+      task_id: 't1',
+      title: 'Task t1',
+      criterion_id: 'g1',
+      criterion_text: 'operator approves',
+    });
+  });
+
+  test('a resolved gate (approved or rejected) is excluded', () => {
+    seedTask('t1', { acceptance: { criteria: [gateAc('g1')] } });
+    seedTask('t2', { acceptance: { criteria: [gateAc('g2')] } });
+    store.respondGate('t1', 'g1', 'approved', { responder: 'alice' });
+    store.respondGate('t2', 'g2', 'rejected', { responder: 'bob' });
+    expect(store.listPendingGates()).toHaveLength(0);
+  });
+
+  test('a superseded gate criterion is excluded even while pending', () => {
+    seedTask('t1', { acceptance: { criteria: [gateAc('g1')] } });
+    store.supersedeCriterion('t1', 'g1', 'no longer required');
+    expect(store.listPendingGates()).toHaveLength(0);
+  });
+
+  test('gates on done/cancelled tasks are excluded (terminal-status filter)', () => {
+    seedTask('done-task', { acceptance: { criteria: [gateAc('g1')] } });
+    store.updateTaskStatus('done-task', 'ready');
+    store.updateTaskStatus('done-task', 'in_progress');
+    store.updateTaskStatus('done-task', 'done');
+    seedTask('cancelled-task', { acceptance: { criteria: [gateAc('g2')] } });
+    store.updateTaskStatus('cancelled-task', 'cancelled');
+    expect(store.listPendingGates()).toHaveLength(0);
+  });
+
+  test('non-gate criteria never surface as pending gates', () => {
+    seedTask('t1', { acceptance: { criteria: [ac('c1'), gateAc('g1')] } });
+    const pending = store.listPendingGates();
+    expect(pending.map((g) => g.criterion_id)).toEqual(['g1']);
+  });
+
+  test('result is ordered by task id then criterion id', () => {
+    seedTask('t2', { acceptance: { criteria: [gateAc('gz'), gateAc('ga')] } });
+    seedTask('t1', { acceptance: { criteria: [gateAc('g1')] } });
+    const pending = store.listPendingGates();
+    expect(pending.map((g) => `${g.task_id}/${g.criterion_id}`)).toEqual([
+      't1/g1',
+      't2/ga',
+      't2/gz',
+    ]);
+  });
+});
+
+// ===========================================================================
 // Declared bounds (v6)
 // ===========================================================================
 
