@@ -1045,6 +1045,64 @@ export interface TeamInterface {
   exposes: TeamExposeRow[];
 }
 
+/**
+ * One row of the `scrum_lores` table (v19) — a single Lore entry, the
+ * accumulated convention or wisdom a team writes down for itself. Readable by
+ * all, written only by the team's current `tech_lead`. Append-only: a
+ * correction is a NEW entry, never an edit to an existing one, so the full
+ * history of what a team believed at each point survives.
+ *
+ *   id                    — AUTOINCREMENT surrogate.
+ *   team_slug             — the owning team, a `scrum_teams.slug`.
+ *   body                  — the entry's free-text content (a convention, a
+ *                           lesson, a standing note).
+ *   author_contributor_id — the writer's CT-UUID. A soft reference: it is NOT
+ *                           enforced by a foreign key, matching how the roster
+ *                           and operator history store their holders. The
+ *                           authorship rule (this must be the team's current
+ *                           tech_lead when one is seated) is enforced at the
+ *                           store boundary in `recordLore`, not by a SQL
+ *                           constraint.
+ *   created_at            — when the entry was appended (ISO-8601).
+ */
+export interface LoreRow {
+  id: number;
+  team_slug: string;
+  body: string;
+  author_contributor_id: string;
+  created_at: string;
+}
+
+/**
+ * Input to `recordLore` (v19). `teamSlug` must be a registered team (guarded at
+ * the store boundary). `authorContributorId` is the writer's CT-UUID — when the
+ * team has a seated `tech_lead`, it MUST match that holder's contributor id, or
+ * the write is rejected; when the slot is empty (team-of-one / bootstrapping),
+ * the write is allowed with a warning. `createdAt` defaults to now().
+ */
+export interface RecordLoreInput {
+  teamSlug: string;
+  body: string;
+  authorContributorId: string;
+  /** ISO-8601 timestamp; defaults to now(). */
+  createdAt?: string;
+}
+
+/**
+ * The result of `recordLore` (v19): the newly-appended Lore entry plus an
+ * optional bootstrapping warning. A WARNING (never a rejection) is emitted when
+ * the team has NO current `tech_lead` seated — the team-of-one / bootstrapping
+ * tolerance where the authorship guard cannot be checked. The write always
+ * completes; the caller surfaces `warning` on stderr. When a tech_lead IS
+ * seated and the author does not match, `recordLore` throws instead (the row is
+ * never written).
+ */
+export interface RecordLoreResult {
+  row: LoreRow;
+  /** Set when the team had no seated tech_lead to author-check against. */
+  warning: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Derived views
 // ---------------------------------------------------------------------------

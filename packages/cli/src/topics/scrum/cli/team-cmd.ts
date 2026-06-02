@@ -96,6 +96,7 @@ import { mainWorktreeRoot } from '@claude-prove/shared';
 import { SCRUM_SCHEMA_VERSION } from '../schemas';
 import { type ScrumStore, openScrumStore } from '../store';
 import type {
+  LoreRow,
   Team,
   TeamInterface,
   TeamLifetime,
@@ -303,40 +304,52 @@ function emptyToNull(raw: string | undefined): string | null {
 
 /**
  * Reconcile the on-disk `teams/<slug>.md` artifact against the current store
- * state: fetch the team's scope globs, role roster, and ACTIVE accept/expose
- * interface, then write the artifact mirroring all four (registry row + scopes +
- * current roster + active interface). The single reconciliation point every
- * mutating action (`create`/`scope-set`/`rotate`/`accept-*`/`expose-*`) routes
- * through, so the file always carries the latest of every block. Returns the
- * written path.
+ * state: fetch the team's scope globs, role roster, ACTIVE accept/expose
+ * interface, and recorded Lore, then write the artifact mirroring all five
+ * (registry row + scopes + current roster + active interface + recent Lore). The
+ * single reconciliation point every mutating action
+ * (`create`/`scope-set`/`rotate`/`accept-*`/`expose-*`/`lore record`) routes
+ * through, so the file always carries the latest of every block. Exported so the
+ * `lore record` action (a sibling memory-layer command) can reflect a new Lore
+ * entry into the same artifact. Returns the written path.
  */
-function reconcileTeamArtifact(store: ScrumStore, workspaceRoot: string, row: Team): string {
+export function reconcileTeamArtifact(store: ScrumStore, workspaceRoot: string, row: Team): string {
   const scopes = store.getTeamScopes(row.slug);
   const roster = store.getTeamRoster(row.slug);
   const iface = store.getTeamInterface(row.slug);
+  const lores = store.listLores(row.slug);
   const dir = join(workspaceRoot, 'teams');
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${row.slug}.md`);
-  writeFileSync(path, renderTeamArtifact(row, scopes, roster, iface), 'utf8');
+  writeFileSync(path, renderTeamArtifact(row, scopes, roster, iface, lores), 'utf8');
   return path;
 }
 
+/** Most recent Lore entries surfaced in the team artifact (newest-first). */
+const LORE_ARTIFACT_LIMIT = 10;
+
 /**
  * Render the team artifact: a YAML frontmatter `team:` + `scope:` + `roster:` +
- * `interface:` block mirroring the row, its scope globs, the current holder per
- * role, and its ACTIVE accept/expose interface, plus a human skeleton body. The
- * frontmatter is the file's mirror of the `scrum_teams` row, its
- * `scrum_team_scopes` rows, its open `scrum_team_members` rows, and its active
- * `scrum_team_accepts` / `scrum_team_exposes` rows.
+ * `interface:` + `lore:` block mirroring the row, its scope globs, the current
+ * holder per role, its ACTIVE accept/expose interface, and its recorded Lore,
+ * plus a human skeleton body. The frontmatter is the file's mirror of the
+ * `scrum_teams` row, its `scrum_team_scopes` rows, its open `scrum_team_members`
+ * rows, its active `scrum_team_accepts` / `scrum_team_exposes` rows, and its
+ * `scrum_lores` rows. The `lore:` block carries the total entry count plus the
+ * most recent entries (newest-first, capped) — the aggregate the team and any
+ * promotion/compaction step reads.
  */
 function renderTeamArtifact(
   row: Team,
   scopes: TeamScopes,
   roster: TeamRoster,
   iface: TeamInterface,
+  lores: LoreRow[],
 ): string {
   const acceptList = iface.accepts.map((a) => a.ask_type);
   const exposeList = iface.exposes.map((e) => `${e.name}=${e.schema_ref}`);
+  // listLores returns oldest-first; the artifact surfaces the newest entries.
+  const recentLore = [...lores].reverse().slice(0, LORE_ARTIFACT_LIMIT);
   const frontmatter = [
     '---',
     `schema_version: ${SCRUM_SCHEMA_VERSION}`,
@@ -363,6 +376,15 @@ function renderTeamArtifact(
       : iface.exposes.map(
           (e) =>
             `    - { name: ${JSON.stringify(e.name)}, schema_ref: ${JSON.stringify(e.schema_ref)} }`,
+        )),
+    'lore:',
+    `  count: ${lores.length}`,
+    '  recent:',
+    ...(recentLore.length === 0
+      ? ['    []']
+      : recentLore.map(
+          (l) =>
+            `    - { id: ${l.id}, author: ${JSON.stringify(l.author_contributor_id)}, created_at: ${JSON.stringify(l.created_at)}, body: ${JSON.stringify(l.body)} }`,
         )),
     '---',
   ].join('\n');
@@ -395,6 +417,13 @@ function renderTeamArtifact(
     '',
     `- Accepts: ${acceptList.length > 0 ? acceptList.join(', ') : '<!-- none -->'}`,
     `- Exposes: ${exposeList.length > 0 ? exposeList.join(', ') : '<!-- none -->'}`,
+    '',
+    '## Lore',
+    '',
+    `- Entries: ${lores.length}`,
+    ...(recentLore.length === 0
+      ? ['- <!-- no Lore recorded -->']
+      : recentLore.map((l) => `- [${l.id}] ${l.author_contributor_id}: ${l.body}`)),
     '',
   ].join('\n');
   return `${frontmatter}\n\n${body}`;

@@ -38,10 +38,13 @@ import type {
   EscalationType,
   EventKind,
   GateVerdict,
+  LoreRow,
   MilestoneStatus,
   NextReadyRow,
   OperatorHistoryRow,
   Provenance,
+  RecordLoreInput,
+  RecordLoreResult,
   RotateTeamMemberInput,
   RotateTeamMemberResult,
   ScrumContextBundle,
@@ -301,6 +304,9 @@ const TEAM_ACCEPT_COLUMNS = 'id, team_slug, ask_type, status, superseded_by, rea
 /** Canonical `scrum_team_exposes` SELECT column list (v17); maps 1:1 to `TeamExposeRow`. */
 const TEAM_EXPOSE_COLUMNS =
   'id, team_slug, name, schema_ref, status, superseded_by, reason, created_at';
+
+/** Canonical `scrum_lores` SELECT column list (v19); maps 1:1 to `LoreRow`. */
+const LORE_COLUMNS = 'id, team_slug, body, author_contributor_id, created_at';
 
 /**
  * Kebab-case ask-type format: one or more lowercase-alphanumeric segments
@@ -2863,6 +2869,75 @@ export class ScrumStore {
       (team) => team.status === 'active' && team.terminates_on_milestone === milestoneId,
     );
     return matches.map((team) => this.teamTerminate(team.slug, reason));
+  }
+
+  // ==========================================================================
+  // Team Lore — append-only team-scoped wisdom, tech_lead-authored (v19)
+  // ==========================================================================
+
+  /**
+   * Record one Lore entry for a team — the append-only memory layer carrying a
+   * team's accumulated conventions and wisdom. Readable by all; written ONLY by
+   * the team's current `tech_lead`. The team must exist (the FK target) — an
+   * unknown slug throws (the boundary guard, matching `setTeamScopes`).
+   *
+   * Authorship guard, read from the team's open `tech_lead` roster slot:
+   *   - SEATED tech_lead: `authorContributorId` MUST equal that holder's
+   *     `contributor_id`. A mismatch throws WITHOUT writing — the error names the
+   *     expected tech_lead so the caller knows who may author.
+   *   - NO tech_lead (the slot has never been filled or is currently vacant):
+   *     the write is ALLOWED and a `warning` is returned (never a rejection) —
+   *     the team-of-one / bootstrapping tolerance, mirroring how a vacant slot is
+   *     a warn-not-reject case elsewhere.
+   *
+   * Append-only: an entry is never updated or deleted — a correction is a fresh
+   * `recordLore`, not an edit, so the full history survives.
+   */
+  recordLore(input: RecordLoreInput): RecordLoreResult {
+    if (this.getTeam(input.teamSlug) === null) {
+      throw new Error(`recordLore: unknown team '${input.teamSlug}'`);
+    }
+
+    // The current tech_lead is the open (to_ts IS NULL) holder of that role
+    // slot — null when the slot has never been filled or is currently vacant.
+    const techLead = this.getTeamRoster(input.teamSlug).current.tech_lead;
+    let warning: string | null = null;
+    if (techLead === null) {
+      warning = `team '${input.teamSlug}' has no current tech_lead; recording Lore by ${input.authorContributorId} without an authorship check`;
+    } else if (techLead.contributor_id !== input.authorContributorId) {
+      throw new Error(
+        `recordLore: '${input.authorContributorId}' is not the current tech_lead of team '${input.teamSlug}'; only ${techLead.contributor_id} may author Lore`,
+      );
+    }
+
+    const result = this.prep(
+      'INSERT INTO scrum_lores (team_slug, body, author_contributor_id, created_at) VALUES (?, ?, ?, ?)',
+    ).run(input.teamSlug, input.body, input.authorContributorId, input.createdAt ?? isoNow());
+    const row = this.prep(`SELECT ${LORE_COLUMNS} FROM scrum_lores WHERE id = ?`).get(
+      Number(result.lastInsertRowid),
+    ) as LoreRow;
+    return { row, warning };
+  }
+
+  /**
+   * A team's Lore entries, oldest-first (the order they were recorded). The
+   * read surface promotion and milestone-close compaction consume to lift a
+   * team's wisdom into shared long-term memory. Tolerates an unknown slug:
+   * returns an empty array (the absence reads as "no Lore" rather than an error,
+   * matching `getTeamScopes`).
+   */
+  listLores(teamSlug: string): LoreRow[] {
+    return this.prep(
+      `SELECT ${LORE_COLUMNS} FROM scrum_lores WHERE team_slug = ? ORDER BY id ASC`,
+    ).all(teamSlug) as LoreRow[];
+  }
+
+  /** Fetch a single Lore entry by id, or null when no such entry exists. */
+  getLore(id: number): LoreRow | null {
+    const row = this.prep(`SELECT ${LORE_COLUMNS} FROM scrum_lores WHERE id = ?`).get(
+      id,
+    ) as LoreRow | null;
+    return row ?? null;
   }
 
   // ==========================================================================

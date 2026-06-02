@@ -59,6 +59,9 @@
  *   claude-prove scrum team expose-supersede <slug> --id ID --reason R [--by NEW-ID]   (retire an expose entry in place; never deletes)
  *   claude-prove scrum team interface <slug>     (active accepts[] + exposes[])
  *   claude-prove scrum team terminate <slug>     [--reason text]   (manual team-local disband: release scope, supersede exposes, vacate roster, flip status to inactive)
+ *   claude-prove scrum lore record <slug>        --body TEXT --author CT-UUID   (append a team-scoped Lore entry; rejects a non-tech_lead author, warns when no tech_lead seated)
+ *   claude-prove scrum lore list <slug>          [--human]   (team Lore entries, oldest-first)
+ *   claude-prove scrum lore show <id>            (one Lore entry by id)
  *   claude-prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
  *   claude-prove scrum hook <event>              (event: session-start | subagent-stop | stop)
  *
@@ -83,6 +86,7 @@ import { runGateCmd } from './scrum/cli/gate-cmd';
 import { runHookCmd } from './scrum/cli/hook-cmd';
 import { runInitCmd } from './scrum/cli/init-cmd';
 import { runLinkRunCmd } from './scrum/cli/link-run-cmd';
+import { runLoreCmd } from './scrum/cli/lore-cmd';
 import { runMilestoneCmd } from './scrum/cli/milestone-cmd';
 import { runNextReadyCmd } from './scrum/cli/next-ready-cmd';
 import { runOperatorCmd } from './scrum/cli/operator-cmd';
@@ -105,6 +109,7 @@ type ScrumAction =
   | 'contributor'
   | 'operator'
   | 'team'
+  | 'lore'
   | 'link-run'
   | 'hook';
 
@@ -122,6 +127,7 @@ const SCRUM_ACTIONS: ScrumAction[] = [
   'contributor',
   'operator',
   'team',
+  'lore',
   'link-run',
   'hook',
 ];
@@ -203,6 +209,10 @@ interface ScrumFlags {
   askType?: string;
   name?: string;
   schemaRef?: string;
+  // `lore record` (v19). `body` is the Lore entry's free text; `author` is the
+  // writer's CT-UUID (must be the team's current tech_lead when one is seated).
+  body?: string;
+  author?: string;
 }
 
 export function register(cli: CAC): void {
@@ -306,6 +316,11 @@ export function register(cli: CAC): void {
     )
     .option('--name <n>', 'team expose-add: handle of the exposed output')
     .option('--schema-ref <r>', "team expose-add: pointer to the exposed output's shape")
+    .option('--body <text>', 'lore record: the Lore entry body (team-scoped wisdom)')
+    .option(
+      '--author <id>',
+      'lore record: the entry author (a contributor CT-UUID; must be the team current tech_lead when one is seated)',
+    )
     .option(
       '--workspace-root <w>',
       'Main worktree root; pins store to <root>/.prove/prove.db (default: git common-dir)',
@@ -523,6 +538,18 @@ function dispatch(
         schemaRef: flags.schemaRef,
         id: flags.id,
         by: flags.by,
+        human: flags.human,
+        workspaceRoot: flags.workspaceRoot,
+      });
+
+    case 'lore':
+      if (arg1 === undefined) {
+        console.error('error: scrum lore: sub-action required (one of: record | list | show)');
+        return 1;
+      }
+      return runLoreCmd(arg1, [arg2], {
+        body: flags.body,
+        author: flags.author,
         human: flags.human,
         workspaceRoot: flags.workspaceRoot,
       });

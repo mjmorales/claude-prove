@@ -728,6 +728,55 @@ ALTER TABLE scrum_teams ADD COLUMN terminates_on_milestone TEXT;
 ALTER TABLE scrum_teams ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v19 — per-team Lore memory layer (scrum_lores)
+// ---------------------------------------------------------------------------
+
+/**
+ * v19: a per-team Lore layer — the accumulated team conventions and wisdom a
+ * team writes down for itself. A new table (not columns on `scrum_teams`)
+ * because Lore is one-to-many: a team accrues an arbitrary number of entries
+ * over its lifetime, so each is its own row rather than a column on the
+ * registry. Mirrors how the scope globs and the accept/expose interface landed
+ * as their own tables.
+ *
+ *   scrum_lores — one row per Lore entry a team has recorded. `team_slug` is an
+ *                 FK to `scrum_teams.slug` — the owning team. `body` is the
+ *                 entry's free-text content (a convention, a lesson, a standing
+ *                 note). `author_contributor_id` is the CT-UUID of the
+ *                 contributor who wrote it — a SOFT reference (no foreign key),
+ *                 stored exactly as the roster and operator history store their
+ *                 holders. `created_at` records when the entry was appended.
+ *
+ * APPEND-ONLY, no supersession column: Lore is never updated or deleted in
+ * place — a correction is a NEW entry, not an edit, so the full history of what
+ * a team believed at each point survives. This mirrors the position-history
+ * idiom (intervals are appended, never rewritten) rather than the
+ * accept/expose supersession idiom (which carries a `status`/`superseded_by`
+ * pointer); a Lore entry has no lifecycle state to flip, so it carries neither.
+ *
+ * Readable by ALL, but written ONLY by the team's current `tech_lead`. The
+ * authorship guard is enforced at the store boundary in `recordLore` (reading
+ * the team's open `tech_lead` roster slot), NOT by a SQL constraint — the rule
+ * spans two tables (the entry's author vs the team's current tech_lead) and is
+ * not expressible as a column CHECK.
+ *
+ * `id` is an AUTOINCREMENT surrogate. Index backs the per-team Lore fetch
+ * (`team_slug`). Table and index names carry the `scrum_` / `idx_scrum_` prefix
+ * per the domain-namespacing contract established in v1.
+ */
+export const SCRUM_MIGRATION_V19_SQL = `
+CREATE TABLE scrum_lores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_slug TEXT NOT NULL REFERENCES scrum_teams(slug),
+    body TEXT NOT NULL,
+    author_contributor_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_scrum_lores_team ON scrum_lores(team_slug);
+`;
+
 /**
  * Current scrum-domain store version — the highest migration version this
  * module registers. Stamped as the per-artifact `schema_version` on the
@@ -735,12 +784,12 @@ ALTER TABLE scrum_teams ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
  * scrum row reports the schema it was read under. Bump in lockstep with the
  * top migration version on every additive hop.
  */
-export const SCRUM_SCHEMA_VERSION = 18;
+export const SCRUM_SCHEMA_VERSION = 19;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that have hit `clearRegistry()` — both
- * paths land a single scrum/{v1..v18} entry set. Matches
+ * paths land a single scrum/{v1..v19} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -889,6 +938,14 @@ export function ensureScrumSchemaRegistered(): void {
           'add scrum_teams.terminates_on_milestone (nullable target) + scrum_teams.status (active|inactive) for the team lifecycle',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V18_SQL);
+        },
+      },
+      {
+        version: 19,
+        description:
+          'create scrum_lores (per-team append-only Lore memory layer, tech_lead-authored) + idx_scrum_lores_team',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V19_SQL);
         },
       },
     ],
