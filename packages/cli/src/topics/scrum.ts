@@ -41,6 +41,9 @@
  *   claude-prove scrum contributor register      --slug S [--display-name N] [--github G] [--email E] [--id CT-UUID] [--status active|inactive]
  *   claude-prove scrum contributor list          [--status active|inactive] [--human]
  *   claude-prove scrum contributor resolve       [--github G] [--email E]   (github match first, then email fallback)
+ *   claude-prove scrum operator set              --contributor CT-UUID [--from-ts ISO]   (transfer the operator-of-record + sync charter.md)
+ *   claude-prove scrum operator resolve          --at ISO   (point-in-time holder — the interval containing the instant, NOT the current holder)
+ *   claude-prove scrum operator history          [--human]
  *   claude-prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
  *   claude-prove scrum hook <event>              (event: session-start | subagent-stop | stop)
  *
@@ -67,6 +70,7 @@ import { runInitCmd } from './scrum/cli/init-cmd';
 import { runLinkRunCmd } from './scrum/cli/link-run-cmd';
 import { runMilestoneCmd } from './scrum/cli/milestone-cmd';
 import { runNextReadyCmd } from './scrum/cli/next-ready-cmd';
+import { runOperatorCmd } from './scrum/cli/operator-cmd';
 import { runStatusCmd } from './scrum/cli/status-cmd';
 import { runTagCmd } from './scrum/cli/tag-cmd';
 import { runTaskCmd } from './scrum/cli/task-cmd';
@@ -83,6 +87,7 @@ type ScrumAction =
   | 'tag'
   | 'decision'
   | 'contributor'
+  | 'operator'
   | 'link-run'
   | 'hook';
 
@@ -98,6 +103,7 @@ const SCRUM_ACTIONS: ScrumAction[] = [
   'tag',
   'decision',
   'contributor',
+  'operator',
   'link-run',
   'hook',
 ];
@@ -149,6 +155,11 @@ interface ScrumFlags {
   displayName?: string;
   github?: string;
   email?: string;
+  // `operator` position-history fields (v13). `contributor` is the new holder's
+  // CT-UUID for `set`; `fromTs` backdates the handoff; `at` is the resolve instant.
+  contributor?: string;
+  fromTs?: string;
+  at?: string;
 }
 
 export function register(cli: CAC): void {
@@ -208,6 +219,18 @@ export function register(cli: CAC): void {
     .option('--display-name <n>', 'contributor register: display name')
     .option('--github <g>', 'contributor register/resolve: GitHub handle (primary resolution key)')
     .option('--email <e>', 'contributor register/resolve: email (fallback resolution key)')
+    .option(
+      '--contributor <id>',
+      'operator set: new operator-of-record holder (a contributor CT-UUID)',
+    )
+    .option(
+      '--from-ts <iso>',
+      'operator set: ISO-8601 effective instant of the handoff (default: now)',
+    )
+    .option(
+      '--at <iso>',
+      'operator resolve: ISO-8601 instant to attribute — resolves the holder at that point in time',
+    )
     .option(
       '--workspace-root <w>',
       'Main worktree root; pins store to <root>/.prove/prove.db (default: git common-dir)',
@@ -378,6 +401,21 @@ function dispatch(
         displayName: flags.displayName,
         github: flags.github,
         email: flags.email,
+        human: flags.human,
+        workspaceRoot: flags.workspaceRoot,
+      });
+
+    case 'operator':
+      if (arg1 === undefined) {
+        console.error(
+          'error: scrum operator: sub-action required (one of: set | resolve | history)',
+        );
+        return 1;
+      }
+      return runOperatorCmd(arg1, {
+        contributor: flags.contributor,
+        fromTs: flags.fromTs,
+        at: flags.at,
         human: flags.human,
         workspaceRoot: flags.workspaceRoot,
       });

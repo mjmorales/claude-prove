@@ -6,6 +6,23 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.5.0 — Operator-of-record: point-in-time (historical) attribution
+
+The single role slot that exists today — **operator-of-record** — recorded as a position history, so an action attributes to whoever held the role **at the action's timestamp**, not merely the current holder.
+
+- **Scrum store** (`.prove/prove.db`): advances to **v13** (new `scrum_operator_history` table) — **auto-migrates** on the next `claude-prove scrum …` command (or `claude-prove store migrate`); no manual step.
+
+**Position-history table + point-in-time resolution.** A new `scrum_operator_history` table holds one row per held interval: `contributor_id` (a `scrum_contributors` CT-UUID — the holder), `from_ts` (when they took the role), and `to_ts` (when they handed it off, or `NULL` for the current holder). At most one open (`to_ts IS NULL`) row exists at a time — setting a new holder closes the prior row's `to_ts` to the new `from_ts`, then appends a fresh open row, all in one transaction. Resolving at an instant `t` returns the holder whose half-open interval `[from_ts, to_ts)` contains `t` — so an action stamped before a handoff attributes to the historical holder, not the current one.
+
+**Charter records the current holder.** The `charter.md` identity artifact scaffolded by `claude-prove install bootstrap-identity` gains an `operator_of_record` frontmatter field (a contributor CT-UUID, `null` until a holder is set). `scrum operator set` keeps it in sync with the open interval. The canonical history lives in the table; the field is the file-side mirror of the current holder.
+
+**CLI — `scrum operator set|resolve|history`.**
+- `scrum operator set --contributor <CT-UUID> [--from-ts <ISO>]` — set / transfer the operator-of-record, appending a new open interval (closing the prior one) and syncing `charter.md`. `--from-ts` backdates the handoff (default: now). The contributor must be registered.
+- `scrum operator resolve --at <ISO>` — resolve the contributor who held the role at that instant (the interval containing it), **not** the current holder; exits 1 when no holder was in effect.
+- `scrum operator history [--human]` — print the full position history, oldest interval first.
+
+**Auto-adoption.** The schema migrates automatically; the charter field and the CLI surface are opt-in (used when you set an operator-of-record). Re-running `claude-prove install bootstrap-identity` on a project whose `charter.md` predates this version leaves the existing file untouched (upgrade-preserve) — add the `operator_of_record: null` frontmatter line by hand, or it is written the first time `scrum operator set` runs.
+
 ## v3.4.0 — Contributor registry: stable CT-UUIDs + github/email resolution
 
 A contributor registry that resolves an executing worker or event author to a stable contributor identity — the backing for role rosters, attribution, and PR-comment author matching.

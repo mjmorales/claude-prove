@@ -609,6 +609,50 @@ export interface Contributor {
   last_modified_at: string | null;
 }
 
+/**
+ * One row of `scrum_operator_history` (v13) — a single interval during which one
+ * contributor held the operator-of-record role.
+ *
+ *   contributor_id — the holder, a `scrum_contributors.id` (CT-UUID).
+ *   from_ts        — when the holder took the role (ISO-8601). May be backdated
+ *                    to the real handoff instant, distinct from `created_at`.
+ *   to_ts          — when they handed it off, or NULL for the CURRENT (open)
+ *                    holder. The interval is half-open `[from_ts, to_ts)`: a
+ *                    point-in-time resolve at `t` returns the row where
+ *                    `from_ts <= t AND (to_ts IS NULL OR t < to_ts)`.
+ *
+ * At most one open row (`to_ts IS NULL`) exists at a time — setting a new holder
+ * closes the prior open row before appending. History is append-only: an
+ * interval is never mutated except to stamp its `to_ts` once on handoff.
+ *
+ * This is the single role slot that exists — a degenerate one-row roster that a
+ * later multi-role roster generalizes.
+ */
+export interface OperatorHistoryRow {
+  id: number;
+  contributor_id: string;
+  from_ts: string;
+  to_ts: string | null;
+  created_at: string;
+  created_by: string | null;
+}
+
+/**
+ * Input to `setOperatorOfRecord` (v13). `contributorId` is the new holder's
+ * CT-UUID; it must be a registered contributor (validated by the store).
+ * `fromTs` defaults to now() — the instant the handoff takes effect, used both
+ * as the new interval's `from_ts` and as the prior open interval's `to_ts`.
+ * Provenance is sourced from the run env (`PROVE_AGENT`) when `createdBy` is
+ * omitted.
+ */
+export interface SetOperatorOfRecordInput {
+  contributorId: string;
+  /** ISO-8601 effective instant of the handoff; defaults to now(). */
+  fromTs?: string;
+  /** Agent that authored the transfer; defaults to `PROVE_AGENT` else NULL. */
+  createdBy?: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Derived views
 // ---------------------------------------------------------------------------

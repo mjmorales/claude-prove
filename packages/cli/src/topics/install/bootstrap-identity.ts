@@ -184,6 +184,23 @@ export function renderProvenanceFrontmatter(now: string = new Date().toISOString
   ].join('\n');
 }
 
+/**
+ * Splice a charter-specific field block into the provenance frontmatter, just
+ * before its closing `---`, so the file stays one YAML block.
+ *
+ * The charter records `operator_of_record` — the CURRENT operator-of-record, a
+ * contributor CT-UUID (`null` at scaffold time, before any holder is set). The
+ * canonical holder history lives in the `scrum_operator_history` table; this
+ * frontmatter field is the file-side mirror of the current (open) interval's
+ * holder, kept in sync when the holder is transferred.
+ */
+function spliceCharterFrontmatter(frontmatter: string, operatorOfRecord: string | null): string {
+  const closing = frontmatter.lastIndexOf('---');
+  const head = frontmatter.slice(0, closing);
+  const value = operatorOfRecord === null ? 'null' : operatorOfRecord;
+  return `${head}operator_of_record: ${value}\n---`;
+}
+
 /** Skeleton body the slash command fills in with authored content. */
 function skeletonBody(kind: IdentityArtifactKind, contributorId?: string): string {
   switch (kind) {
@@ -271,7 +288,10 @@ export function bootstrapIdentity(opts: BootstrapIdentityOptions): BootstrapIden
 
     if (!opts.dryRun) {
       mkdirSync(join(path, '..'), { recursive: true });
-      const content = `${frontmatter}\n\n${skeletonBody(kind, contributorId)}`;
+      // The charter carries an extra `operator_of_record` frontmatter field
+      // (null until a holder is set); other artifacts use the bare provenance.
+      const head = kind === 'charter' ? spliceCharterFrontmatter(frontmatter, null) : frontmatter;
+      const content = `${head}\n\n${skeletonBody(kind, contributorId)}`;
       writeFileSync(path, content, 'utf8');
     }
     artifacts.push({ kind, path, disposition: 'created' });

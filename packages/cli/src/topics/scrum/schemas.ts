@@ -435,6 +435,54 @@ CREATE INDEX idx_scrum_contributors_github ON scrum_contributors(github);
 CREATE INDEX idx_scrum_contributors_email ON scrum_contributors(email);
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v13 — operator-of-record position history (scrum_operator_history)
+// ---------------------------------------------------------------------------
+
+/**
+ * v13: an append-only position-history table for the operator-of-record role —
+ * who held it over time, so attribution can be POINT-IN-TIME rather than
+ * current-holder-only. A new table (not a column) because the role's holder is
+ * a time-series of intervals, not a single value:
+ *
+ *   scrum_operator_history — one row per held interval. `contributor_id` is a
+ *                            CT-UUID (a `scrum_contributors.id`) — the holder.
+ *                            `from_ts` is when the holder took the role;
+ *                            `to_ts` is when they handed it off, or NULL for the
+ *                            CURRENT (open) holder. Resolving an action at
+ *                            timestamp `t` returns the row whose half-open
+ *                            interval `[from_ts, to_ts)` contains `t` — i.e.
+ *                            `from_ts <= t AND (to_ts IS NULL OR t < to_ts)`.
+ *
+ * Invariant: at most one open row (`to_ts IS NULL`) at a time — setting a new
+ * holder first closes the prior open row's `to_ts` to the new `from_ts`, then
+ * appends the new open row. Enforced in `store.ts::setOperatorOfRecord`, not by
+ * a partial unique index, so the closing-then-appending sequence stays one
+ * transaction. History is append-only: a prior interval is never mutated except
+ * to stamp its `to_ts` once on handoff.
+ *
+ * This is the single role slot that exists — a degenerate one-row roster. A
+ * later multi-role roster generalizes it (more roles, each a parallel interval
+ * series); this table is the strict subset that widens, not a throwaway.
+ *
+ * `id` is an AUTOINCREMENT surrogate (the row has no natural key — a contributor
+ * may hold the role across several disjoint intervals). `created_at` records
+ * when the row was appended (distinct from `from_ts`, which can be backdated to
+ * the real handoff instant). Index backs the point-in-time resolve scan.
+ */
+export const SCRUM_MIGRATION_V13_SQL = `
+CREATE TABLE scrum_operator_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    contributor_id TEXT NOT NULL REFERENCES scrum_contributors(id),
+    from_ts TEXT NOT NULL,
+    to_ts TEXT,
+    created_at TEXT NOT NULL,
+    created_by TEXT
+);
+
+CREATE INDEX idx_scrum_operator_history_interval ON scrum_operator_history(from_ts, to_ts);
+`;
+
 /**
  * Current scrum-domain store version — the highest migration version this
  * module registers. Stamped as the per-artifact `schema_version` on the
@@ -442,12 +490,12 @@ CREATE INDEX idx_scrum_contributors_email ON scrum_contributors(email);
  * scrum row reports the schema it was read under. Bump in lockstep with the
  * top migration version on every additive hop.
  */
-export const SCRUM_SCHEMA_VERSION = 12;
+export const SCRUM_SCHEMA_VERSION = 13;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that have hit `clearRegistry()` — both
- * paths land a single scrum/{v1..v11} entry set. Matches
+ * paths land a single scrum/{v1..v13} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -549,6 +597,14 @@ export function ensureScrumSchemaRegistered(): void {
           'create scrum_contributors (CT-UUID registry) + idx_scrum_contributors_github + idx_scrum_contributors_email',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V12_SQL);
+        },
+      },
+      {
+        version: 13,
+        description:
+          'create scrum_operator_history (operator-of-record position history) + idx_scrum_operator_history_interval',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V13_SQL);
         },
       },
     ],
