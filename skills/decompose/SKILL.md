@@ -260,18 +260,16 @@ summarizing the close — it also closes the open reasoning episode:
 
 ### Phase C4: Synthesize the Review Brief
 
-Read the entry stream back with `claude-prove acb log list --run-dir <run-dir>` and
-synthesize a risk-forward brief from that flat stream — every entry in `ts` order, the
-`verification` entries plus the closing `synthesis`.
-
 **Draw the story-close brief from the flat `acb log list` stream, never from
-`acb log episodes` alone.** An episode opens only on a `decision` entry; a story-close
-that passes its criteria logs `verification` entries and one closing `synthesis` and
-records no `decision`, so `acb log episodes` returns an empty set for it and would yield
-a degenerate brief. The flat stream carries every entry regardless of episode boundaries,
-so it is the correct source whenever a close has no decisions to anchor episodes on. Use
-`acb log episodes` only as a supplementary lens when decisions exist (decompose/impl
-runs) — and treat an empty result as expected, not an error.
+`acb log episodes` alone.** Read the stream with `claude-prove acb log list --run-dir
+<run-dir>` and synthesize a risk-forward brief over every entry in `ts` order — the
+`verification` entries plus the closing `synthesis`. An episode opens only on a `decision`
+entry; a story-close that passes its criteria logs `verification` entries and one closing
+`synthesis` and records no `decision`, so `acb log episodes` returns an empty set for it
+and would yield a degenerate brief. The flat stream carries every entry regardless of
+episode boundaries, so it is the correct source whenever a close has no decisions to anchor
+episodes on. Use `acb log episodes` only as a supplementary lens when decisions exist
+(decompose/impl runs); an empty result there is expected, not an error.
 
 > `TODO(reasoning-brief):` the multipass chunk → fragment → merge **synthesizer is a
 > future task** — it is Claude-owned (the synthesis is model judgment), not yet a CLI
