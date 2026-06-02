@@ -41,9 +41,9 @@
  * # Engine/model boundary
  *
  * Worktree lifecycle, shell exec, timeout, capture, and cleanup are mechanical
- * — they live here in the CLI. The runner and clock are injected so the harness
- * is deterministic under test; production wiring uses the real Bun spawn runner
- * and `Date.now`.
+ * — they live here in the CLI. The shell runner is injected so the harness is
+ * deterministic under test; production wiring uses the real Bun spawn runner,
+ * which enforces the wall-clock timeout natively.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
