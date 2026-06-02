@@ -826,10 +826,12 @@ export class ScrumStore {
   // ==========================================================================
   // Acceptance criteria (v5) — append-only, never hard-delete
   //
-  // TODO(story-close): the story-close workflow consumes these criteria and
-  // dispatches by `verifies_by` (bash→validators, assert→expression,
-  // gate→AskUserQuestion, agent→validation-agent). This module lands the
-  // data model + authoring surface only; no evaluation happens here.
+  // This module lands the data model + authoring surface. Verification
+  // dispatches by `verifies_by` via `verifyCriterion` in `./assert-grammar`:
+  // bash→validators, assert→in-process expression evaluator, gate→AskUserQuestion,
+  // agent→validation-agent. Only `assert` is decided in-process (the engine owns
+  // the closed grammar); the other three delegate to channels the driver session
+  // owns.
   // ==========================================================================
 
   /**
