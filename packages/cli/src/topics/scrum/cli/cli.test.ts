@@ -15,12 +15,13 @@
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { appendEntry } from '../../acb/reasoning-log-store';
 import { runAlertsCmd } from './alerts-cmd';
+import { runContributorCmd } from './contributor-cmd';
 import { parseDecisionFile, runDecisionCmd } from './decision-cmd';
 import { runGateCmd } from './gate-cmd';
 import { runHookCmd } from './hook-cmd';
@@ -453,7 +454,7 @@ describe('runTaskCmd', () => {
       expect(shown.task.run_id).toBe('feat-prov');
       expect(shown.task.provenance.worker_id).toBe('worker-42');
       expect(shown.task.provenance.run_id).toBe('feat-prov');
-      expect(shown.task.provenance.schema_version).toBe(11);
+      expect(shown.task.provenance.schema_version).toBe(12);
     } finally {
       restoreEnv('PROVE_WORKER_ID', savedWorker);
       restoreEnv('PROVE_RUN_SLUG', savedSlug);
@@ -2139,5 +2140,131 @@ describe('runDecisionCmd recover', () => {
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runContributorCmd
+// ---------------------------------------------------------------------------
+
+interface ContributorRow {
+  id: string;
+  slug: string;
+  status: string;
+  display_name: string | null;
+  github: string | null;
+  email: string | null;
+}
+
+describe('runContributorCmd', () => {
+  test('register mints a CT-UUID, prints the row, and scaffolds contributors/<slug>.md', () => {
+    const res = withCapture(() =>
+      runContributorCmd('register', {
+        slug: 'jane-doe',
+        displayName: 'Jane Doe',
+        github: 'janedoe',
+        email: 'jane@example.com',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as ContributorRow;
+    expect(row.id).toMatch(/^ct-jane-doe-/);
+    expect(row.slug).toBe('jane-doe');
+    expect(row.github).toBe('janedoe');
+
+    // The on-disk identity artifact mirrors the row in its frontmatter.
+    const artifact = join(workspace, 'contributors', 'jane-doe.md');
+    expect(existsSync(artifact)).toBe(true);
+    const content = readFileSync(artifact, 'utf8');
+    expect(content).toContain('schema_version: 1');
+    expect(content).toContain('contributor:');
+    expect(content).toContain(`id: ${row.id}`);
+    expect(content).toContain('github: janedoe');
+  });
+
+  test('register without --slug exits 1', () => {
+    const res = withCapture(() => runContributorCmd('register', { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--slug');
+  });
+
+  test('register rejects an off-vocabulary --status', () => {
+    const res = withCapture(() =>
+      runContributorCmd('register', { slug: 'jane', status: 'retired', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('unknown --status');
+  });
+
+  test('list returns the registered contributors as JSON', () => {
+    withCapture(() => runContributorCmd('register', { slug: 'amy', workspaceRoot: workspace }));
+    withCapture(() => runContributorCmd('register', { slug: 'zed', workspaceRoot: workspace }));
+    const res = withCapture(() => runContributorCmd('list', { workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const rows = JSON.parse(res.stdout.trim()) as ContributorRow[];
+    expect(rows.map((r) => r.slug)).toEqual(['amy', 'zed']);
+  });
+
+  test('resolve matches by github first, then email', () => {
+    const reg = withCapture(() =>
+      runContributorCmd('register', {
+        slug: 'jane',
+        github: 'janedoe',
+        email: 'jane@example.com',
+        workspaceRoot: workspace,
+      }),
+    );
+    const id = (JSON.parse(reg.stdout.trim()) as ContributorRow).id;
+
+    const byGithub = withCapture(() =>
+      runContributorCmd('resolve', { github: 'JaneDoe', workspaceRoot: workspace }),
+    );
+    expect(byGithub.exit).toBe(0);
+    expect((JSON.parse(byGithub.stdout.trim()) as ContributorRow).id).toBe(id);
+    expect(byGithub.stderr).toContain('via github');
+
+    const byEmail = withCapture(() =>
+      runContributorCmd('resolve', {
+        github: 'nobody',
+        email: 'jane@example.com',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(byEmail.exit).toBe(0);
+    expect((JSON.parse(byEmail.stdout.trim()) as ContributorRow).id).toBe(id);
+    expect(byEmail.stderr).toContain('via email');
+  });
+
+  test('resolve miss exits 1 with null on stdout', () => {
+    withCapture(() =>
+      runContributorCmd('register', {
+        slug: 'jane',
+        github: 'janedoe',
+        workspaceRoot: workspace,
+      }),
+    );
+    const res = withCapture(() =>
+      runContributorCmd('resolve', {
+        github: 'ghost',
+        email: 'ghost@x.com',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stdout.trim()).toBe('null');
+    expect(res.stderr).toContain('no match');
+  });
+
+  test('resolve without --github or --email exits 1', () => {
+    const res = withCapture(() => runContributorCmd('resolve', { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('at least one of --github or --email');
+  });
+
+  test('unknown sub-action exits 1', () => {
+    const res = withCapture(() => runContributorCmd('frobnicate', { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('unknown contributor action');
   });
 });

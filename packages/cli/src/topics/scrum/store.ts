@@ -14,7 +14,7 @@
  */
 
 import type { Database, Statement } from 'bun:sqlite';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join } from 'node:path';
 import { type Store, type StoreOptions, openStore, runMigrations } from '@claude-prove/store';
 import { listEntries } from '../acb/reasoning-log-store';
@@ -29,6 +29,8 @@ import type {
   Acceptance,
   AcceptanceCriterion,
   AcceptanceScope,
+  Contributor,
+  ContributorStatus,
   DecisionRow,
   DepKind,
   EscalationPayload,
@@ -183,6 +185,38 @@ export interface ListDecisionsFilter {
   kind?: string;
 }
 
+/**
+ * Input to `registerContributor` (v12). `id` is derived (a CT-UUID minted from
+ * `slug`) when omitted, so callers normally pass only `slug` plus the optional
+ * resolution keys. Status defaults to `'active'`. Provenance is sourced from the
+ * run env (`PROVE_AGENT`) when `createdBy` is omitted.
+ */
+export interface RegisterContributorInput {
+  slug: string;
+  /** Explicit CT-UUID; defaults to one derived from `slug`. */
+  id?: string;
+  status?: ContributorStatus;
+  displayName?: string | null;
+  /** GitHub handle — the primary resolution key. */
+  github?: string | null;
+  /** Email — the fallback resolution key. */
+  email?: string | null;
+  /** Agent that authored the registration; defaults to `PROVE_AGENT` else NULL. */
+  createdBy?: string | null;
+  /** ISO-8601 timestamp; defaults to now(). */
+  createdAt?: string;
+}
+
+/**
+ * Lookup key for `resolveContributor` (v12) — the executing worker / event
+ * author to map onto a contributor. Resolution tries `github` first, then falls
+ * back to `email`. At least one must be present; both absent resolves to null.
+ */
+export interface ResolveContributorKey {
+  github?: string | null;
+  email?: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Allowed status transitions — rejected at runtime by updateTaskStatus
 // ---------------------------------------------------------------------------
@@ -216,6 +250,10 @@ const TASK_COLUMNS =
 /** Canonical `scrum_milestones` SELECT column list; includes the v10 `initiative` grouping. */
 const MILESTONE_COLUMNS =
   'id, title, description, target_state, status, initiative, created_at, closed_at';
+
+/** Canonical `scrum_contributors` SELECT column list (v12); maps 1:1 to `Contributor`. */
+const CONTRIBUTOR_COLUMNS =
+  'id, slug, status, display_name, github, email, created_by, created_at, last_modified_by, last_modified_at';
 
 /**
  * Raw `scrum_tasks` SELECT shape — identical to `ScrumTask` except the v5
@@ -1990,6 +2028,108 @@ export class ScrumStore {
   }
 
   // ==========================================================================
+  // Contributors (v12)
+  // ==========================================================================
+
+  /**
+   * Register a contributor — one row in the registry that backs role rosters,
+   * attribution, and PR-comment author matching. The `id` is a CT-UUID minted
+   * from `slug` when omitted (see `mintContributorId`); minted once and never
+   * changed, so attribution survives a renamed handle or email. `slug` is
+   * UNIQUE — re-registering the same slug throws a UNIQUE-constraint error
+   * rather than silently overwriting (a contributor's keys are edited
+   * deliberately, not clobbered by a re-register).
+   *
+   * `created_by`/`last_modified_by` are seeded to the same agent and
+   * `created_at`/`last_modified_at` to the same instant, mirroring how the
+   * on-disk `contributor.md` identity artifact seeds its provenance block.
+   */
+  registerContributor(input: RegisterContributorInput): Contributor {
+    const createdAt = input.createdAt ?? isoNow();
+    const createdBy = input.createdBy ?? process.env.PROVE_AGENT ?? null;
+    const row: Contributor = {
+      id: input.id && input.id.length > 0 ? input.id : mintContributorId(input.slug),
+      slug: input.slug,
+      status: input.status ?? 'active',
+      display_name: input.displayName ?? null,
+      github: input.github ?? null,
+      email: input.email ?? null,
+      created_by: createdBy,
+      created_at: createdAt,
+      last_modified_by: createdBy,
+      last_modified_at: createdAt,
+    };
+    this.prep(
+      `INSERT INTO scrum_contributors (${CONTRIBUTOR_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      row.id,
+      row.slug,
+      row.status,
+      row.display_name,
+      row.github,
+      row.email,
+      row.created_by,
+      row.created_at,
+      row.last_modified_by,
+      row.last_modified_at,
+    );
+    return row;
+  }
+
+  /** Fetch one contributor by CT-UUID, or null if missing. */
+  getContributor(id: string): Contributor | null {
+    const row = this.prep(`SELECT ${CONTRIBUTOR_COLUMNS} FROM scrum_contributors WHERE id = ?`).get(
+      id,
+    ) as Contributor | null;
+    return row ?? null;
+  }
+
+  /**
+   * List contributors, optionally filtered by `status`, ordered by slug. Empty
+   * filter returns all rows (active and inactive) — a retired contributor stays
+   * in the registry so past attribution still resolves.
+   */
+  listContributors(status?: ContributorStatus): Contributor[] {
+    if (status !== undefined) {
+      return this.prep(
+        `SELECT ${CONTRIBUTOR_COLUMNS} FROM scrum_contributors WHERE status = ? ORDER BY slug ASC`,
+      ).all(status) as Contributor[];
+    }
+    return this.prep(
+      `SELECT ${CONTRIBUTOR_COLUMNS} FROM scrum_contributors ORDER BY slug ASC`,
+    ).all() as Contributor[];
+  }
+
+  /**
+   * Resolve a worker / event author to a contributor. Tries the `github` key
+   * first, then falls back to `email` — github is the stronger identity signal
+   * (one handle per account), email is the fallback for authors that carry no
+   * handle. Both matches are case-insensitive, since handles and addresses are
+   * case-folded in practice. Returns null when neither key matches (or when the
+   * key carries neither field). An inactive contributor still resolves — a
+   * worker dispatched under a since-retired identity must still attribute.
+   */
+  resolveContributor(key: ResolveContributorKey): Contributor | null {
+    const github = key.github && key.github.length > 0 ? key.github : null;
+    if (github !== null) {
+      const byGithub = this.prep(
+        `SELECT ${CONTRIBUTOR_COLUMNS} FROM scrum_contributors WHERE lower(github) = lower(?) LIMIT 1`,
+      ).get(github) as Contributor | null;
+      if (byGithub) return byGithub;
+    }
+
+    const email = key.email && key.email.length > 0 ? key.email : null;
+    if (email !== null) {
+      const byEmail = this.prep(
+        `SELECT ${CONTRIBUTOR_COLUMNS} FROM scrum_contributors WHERE lower(email) = lower(?) LIMIT 1`,
+      ).get(email) as Contributor | null;
+      if (byEmail) return byEmail;
+    }
+
+    return null;
+  }
+
+  // ==========================================================================
   // Internals
   // ==========================================================================
 
@@ -2193,6 +2333,25 @@ export class ScrumStore {
 
 function isoNow(): string {
   return new Date().toISOString();
+}
+
+/**
+ * Mint a CT-UUID for a contributor — a stable, prefixed id minted once at
+ * registration and never changed, so attribution survives a renamed handle or
+ * email. The shape is `ct-<slug>-<uuid>`: the `ct-` prefix namespaces it as a
+ * contributor id, the slugified handle keeps it human-legible at a glance, and
+ * a `crypto.randomUUID()` tail guarantees global uniqueness even across
+ * identical slugs. When the slug carries no alphanumerics, the prefix stands in
+ * so the id is still well-formed.
+ */
+function mintContributorId(slug: string): string {
+  const normalized = slug
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 30);
+  const uuid = randomUUID();
+  return normalized.length > 0 ? `ct-${normalized}-${uuid}` : `ct-${uuid}`;
 }
 
 /**

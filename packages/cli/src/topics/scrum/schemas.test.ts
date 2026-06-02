@@ -27,6 +27,7 @@ import {
   SCRUM_MIGRATION_V9_SQL,
   SCRUM_MIGRATION_V10_SQL,
   SCRUM_MIGRATION_V11_SQL,
+  SCRUM_MIGRATION_V12_SQL,
   SCRUM_SCHEMA_VERSION,
   ensureScrumSchemaRegistered,
 } from './schemas';
@@ -65,7 +66,7 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V2_SQL).toContain("DEFAULT 'accepted'");
   });
 
-  test('migration creates all 8 scrum_* tables (v1 + v2)', () => {
+  test('migration creates all 9 scrum_* tables (v1 + v2 + v12)', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -76,6 +77,7 @@ describe('scrum domain registration', () => {
         .map((r) => r.name);
       expect(tables).toEqual([
         'scrum_context_bundles',
+        'scrum_contributors',
         'scrum_decisions',
         'scrum_deps',
         'scrum_events',
@@ -98,7 +100,7 @@ describe('scrum domain registration', () => {
     );
   });
 
-  test('migration creates all 8 scrum indexes (v1 + v2 + v3)', () => {
+  test('migration creates all 10 scrum indexes (v1 + v2 + v3 + v12)', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -108,6 +110,8 @@ describe('scrum domain registration', () => {
         )
         .map((r) => r.name);
       expect(indexes).toEqual([
+        'idx_scrum_contributors_email',
+        'idx_scrum_contributors_github',
         'idx_scrum_decisions_status',
         'idx_scrum_decisions_topic',
         'idx_scrum_deps_to_task',
@@ -426,12 +430,12 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('full migration chain from v0 applies v1..v11 in order', () => {
+  test('full migration chain from v0 applies v1..v12 in order', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       const result = runMigrations(raw);
       expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
       ]);
     } finally {
       raw.close();
@@ -443,7 +447,7 @@ describe('scrum domain registration', () => {
     try {
       const first = runMigrations(raw);
       expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12,
       ]);
 
       const second = runMigrations(raw);
@@ -465,6 +469,7 @@ describe('scrum domain registration', () => {
         { version: 9 },
         { version: 10 },
         { version: 11 },
+        { version: 12 },
       ]);
     } finally {
       raw.close();
@@ -495,10 +500,10 @@ describe('scrum domain registration', () => {
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(log).toHaveLength(11);
-      const [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11] = log;
-      if (!v1 || !v2 || !v3 || !v4 || !v5 || !v6 || !v7 || !v8 || !v9 || !v10 || !v11)
-        throw new Error('expected eleven log entries');
+      expect(log).toHaveLength(12);
+      const [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12] = log;
+      if (!v1 || !v2 || !v3 || !v4 || !v5 || !v6 || !v7 || !v8 || !v9 || !v10 || !v11 || !v12)
+        throw new Error('expected twelve log entries');
       expect(v1.domain).toBe('scrum');
       expect(v1.version).toBe(1);
       expect(v1.description).toContain('scrum_tasks');
@@ -532,6 +537,9 @@ describe('scrum domain registration', () => {
       expect(v11.domain).toBe('scrum');
       expect(v11.version).toBe(11);
       expect(v11.description).toContain('worker_id');
+      expect(v12.domain).toBe('scrum');
+      expect(v12.version).toBe(12);
+      expect(v12.description).toContain('scrum_contributors');
     } finally {
       raw.close();
     }
@@ -563,8 +571,8 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V11_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN run_id');
   });
 
-  test('SCRUM_SCHEMA_VERSION tracks the top migration version (11)', () => {
-    expect(SCRUM_SCHEMA_VERSION).toBe(11);
+  test('SCRUM_SCHEMA_VERSION tracks the top migration version (12)', () => {
+    expect(SCRUM_SCHEMA_VERSION).toBe(12);
   });
 
   test('v11 ADD COLUMN defaults worker_id/run_id to NULL on existing rows', () => {
@@ -581,6 +589,66 @@ describe('scrum domain registration', () => {
         ['t1'],
       );
       expect(row).toEqual([{ worker_id: null, run_id: null }]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('SCRUM_MIGRATION_V12_SQL creates scrum_contributors + resolution indexes', () => {
+    expect(SCRUM_MIGRATION_V12_SQL).toContain('CREATE TABLE scrum_contributors');
+    expect(SCRUM_MIGRATION_V12_SQL).toContain('idx_scrum_contributors_github');
+    expect(SCRUM_MIGRATION_V12_SQL).toContain('idx_scrum_contributors_email');
+  });
+
+  test('a fresh store ends at version 12 with scrum_contributors present', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+
+      const top = raw.all<{ version: number }>(
+        'SELECT MAX(version) AS version FROM _migrations_log WHERE domain = ?',
+        ['scrum'],
+      );
+      expect(top).toEqual([{ version: 12 }]);
+
+      const tables = raw.all<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_contributors'",
+      );
+      expect(tables).toEqual([{ name: 'scrum_contributors' }]);
+
+      // Column shape matches the on-disk contributor.md schema + provenance.
+      const cols = raw
+        .all<{ name: string }>('PRAGMA table_info(scrum_contributors)')
+        .map((c) => c.name);
+      expect(cols).toEqual([
+        'id',
+        'slug',
+        'status',
+        'display_name',
+        'github',
+        'email',
+        'created_by',
+        'created_at',
+        'last_modified_by',
+        'last_modified_at',
+      ]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('v12 enforces slug uniqueness on scrum_contributors', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      raw.exec(
+        "INSERT INTO scrum_contributors (id, slug, status, created_at) VALUES ('ct-a', 'jane', 'active', '2026-01-01T00:00:00Z')",
+      );
+      expect(() =>
+        raw.exec(
+          "INSERT INTO scrum_contributors (id, slug, status, created_at) VALUES ('ct-b', 'jane', 'active', '2026-01-02T00:00:00Z')",
+        ),
+      ).toThrow();
     } finally {
       raw.close();
     }

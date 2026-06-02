@@ -560,6 +560,55 @@ export interface DecisionRow {
   kind: string | null;
 }
 
+/**
+ * Contributor lifecycle. Matches `scrum_contributors.status`; the column has
+ * no CHECK constraint, so this union documents the canonical closed set
+ * (`active | inactive`) without pinning the schema — a future status lands via
+ * a schema-version bump, not a silent value.
+ *
+ *   active   — a current contributor; the default a fresh registration carries.
+ *   inactive — a retired contributor kept for attribution history. Never
+ *              hard-deleted, so past task rows referencing it still resolve.
+ */
+export type ContributorStatus = 'active' | 'inactive';
+
+/** Runtime-checkable list of the closed `ContributorStatus` set. */
+export const CONTRIBUTOR_STATUSES: ContributorStatus[] = ['active', 'inactive'];
+
+/**
+ * One row of the `scrum_contributors` table (v12) — a stable contributor
+ * identity that backs role rosters, attribution, and PR-comment author
+ * matching.
+ *
+ *   id    — a CT-prefixed stable contributor id (a CT-UUID, e.g.
+ *           `ct-jane-doe-…`). Minted once at registration and NEVER changed, so
+ *           attribution survives a renamed handle or a changed email. This is
+ *           what task provenance columns (`created_by`/`last_modified_by`/
+ *           `worker_id`) resolve TO.
+ *   slug  — human-friendly handle, unique across the registry. The
+ *           operator-facing name; the `id` is the durable key.
+ *   github / email — the two resolution keys. `resolve` matches an executing
+ *           worker / event author against `github` first, then falls back to
+ *           `email`. Either may be NULL when unknown.
+ *
+ * `created_by`/`created_at`/`last_modified_by`/`last_modified_at` mirror the
+ * provenance block the on-disk `contributor.md` identity artifact carries, so
+ * the row and the file are one shape. The column names are snake_case to match
+ * the on-disk columns one-to-one (SELECT results cast directly).
+ */
+export interface Contributor {
+  id: string;
+  slug: string;
+  status: ContributorStatus;
+  display_name: string | null;
+  github: string | null;
+  email: string | null;
+  created_by: string | null;
+  created_at: string;
+  last_modified_by: string | null;
+  last_modified_at: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Derived views
 // ---------------------------------------------------------------------------
