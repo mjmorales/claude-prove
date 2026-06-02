@@ -106,6 +106,24 @@ describe('run-state hook <event> CLI', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('');
   });
+
+  test('capture event passes silently with no active run', () => {
+    const payload = JSON.stringify({
+      tool_name: 'Write',
+      tool_input: { file_path: '/tmp/no-such-project/x.ts' },
+      cwd: '/tmp/no-such-project',
+    });
+    const result = runHookCli('capture', payload);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe('');
+  });
+
+  test('capture event passes empty stdin without crash', () => {
+    const result = runHookCli('capture', '');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('');
+  });
 });
 
 describe('run-state hook bounds CLI — against a seeded store', () => {

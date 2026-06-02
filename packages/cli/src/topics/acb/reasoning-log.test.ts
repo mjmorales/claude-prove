@@ -50,6 +50,11 @@ function validEntries(): Record<string, Record<string, unknown>> {
     },
     review_feedback: envelope('review_feedback', 'rf1', '2026-05-31T10:07:00Z'),
     verification: envelope('verification', 'v1', '2026-05-31T10:08:00Z'),
+    capture: {
+      ...envelope('capture', 'cap1', '2026-05-31T10:09:00Z'),
+      tool: 'Write',
+      target: 'packages/x.ts',
+    },
   };
 }
 
@@ -74,6 +79,21 @@ describe('validateLogEntry — round-trip', () => {
       resolution_ref: 'd1',
     };
     expect(validateLogEntry(e)).toEqual([]);
+  });
+
+  test('capture accepts an entry with the optional target omitted', () => {
+    const e = { ...envelope('capture', 'cap2', '2026-05-31T11:01:00Z'), tool: 'TodoWrite' };
+    expect(validateLogEntry(e)).toEqual([]);
+  });
+
+  test('capture requires the tool field', () => {
+    const { tool, ...e } = validEntries().capture;
+    expect(validateLogEntry(e)).toContain("Missing required field for type 'capture': tool");
+  });
+
+  test('capture rejects a non-string target when present', () => {
+    const e = { ...validEntries().capture, target: 42 };
+    expect(validateLogEntry(e)).toContain("Invalid value for 'target' on type 'capture'");
   });
 });
 

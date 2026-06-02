@@ -93,6 +93,13 @@ export const PROVE_HOOK_BLOCKS: readonly ProveHookSpec[] = [
     timeout: 5000,
   },
   {
+    event: 'PostToolUse',
+    matcher: '*',
+    tool: 'run_state',
+    commandSuffix: 'run-state hook capture',
+    timeout: 5000,
+  },
+  {
     event: 'PreToolUse',
     matcher: 'Glob|Grep',
     tool: 'cafi',
