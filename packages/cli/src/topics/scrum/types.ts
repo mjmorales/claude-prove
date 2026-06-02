@@ -684,10 +684,13 @@ export const TEAM_TYPES: TeamType[] = [
  * pinning the schema. Enforced at the store boundary in `createTeam`.
  *
  *   persistent              — the team stands indefinitely; the default a fresh
- *                             team carries.
+ *                             team carries. Carries no `terminates_on_milestone`
+ *                             target.
  *   terminates_on_milestone — the team disbands when its goal milestone closes.
- *                             The concrete target milestone is recorded by a
- *                             later additive column, not on the base registry.
+ *                             The concrete target milestone is the team's
+ *                             `terminates_on_milestone` column; a team with this
+ *                             lifetime MUST carry a target, enforced at the store
+ *                             boundary in `createTeam`/`setTeamTerminatesOn`.
  */
 export type TeamLifetime = 'persistent' | 'terminates_on_milestone';
 
@@ -695,42 +698,94 @@ export type TeamLifetime = 'persistent' | 'terminates_on_milestone';
 export const TEAM_LIFETIMES: TeamLifetime[] = ['persistent', 'terminates_on_milestone'];
 
 /**
+ * A team's lifecycle state. Matches `scrum_teams.status`; the column has no
+ * CHECK constraint, so this union documents the closed set without pinning the
+ * schema. Enforced at the store boundary.
+ *
+ *   active   — the team is live and operable; the default a fresh team carries.
+ *   inactive — the team has been disbanded (its scope released, exposes
+ *              superseded, roster vacated). Terminal: `teamTerminate` flips a
+ *              team here and nothing flips it back.
+ */
+export type TeamStatus = 'active' | 'inactive';
+
+/** Runtime-checkable list of the closed `TeamStatus` set. */
+export const TEAM_STATUSES: TeamStatus[] = ['active', 'inactive'];
+
+/**
  * One row of the `scrum_teams` table (v14) — a team, the unit a body of work and
  * the artifacts it owns are organized around.
  *
- *   slug      — human-friendly handle, unique across the registry and the
- *               primary key. The operator-facing name a team is referenced by.
- *   team_type — the team's interaction archetype (see `TeamType`).
- *   charter   — a one-line mission statement, or NULL when unset.
- *   lifetime  — the team's expected longevity (see `TeamLifetime`).
+ *   slug                    — human-friendly handle, unique across the registry
+ *                             and the primary key. The operator-facing name a
+ *                             team is referenced by.
+ *   team_type               — the team's interaction archetype (see `TeamType`).
+ *   charter                 — a one-line mission statement, or NULL when unset.
+ *   lifetime                — the team's expected longevity (see `TeamLifetime`).
+ *   terminates_on_milestone — the concrete milestone id the team disbands on for
+ *                             a `terminates_on_milestone` lifetime, or NULL for a
+ *                             `persistent` team (v18). A soft reference — not an
+ *                             FK to `scrum_milestones` — so a team may name a
+ *                             milestone created later.
+ *   status                  — the team's lifecycle state (see `TeamStatus`); a
+ *                             live team is `active`, a disbanded team `inactive`
+ *                             (v18).
  *
- * Scope globs, a roster, accept/expose contracts, and the concrete terminating
- * milestone target are NOT on this base row — later additive migrations append
- * them (own columns or own tables). The column names are snake_case to match the
- * on-disk columns one-to-one (SELECT results cast directly).
+ * Scope globs, a roster, and accept/expose contracts are NOT on this base row —
+ * additive migrations append them as their own tables. The column names are
+ * snake_case to match the on-disk columns one-to-one (SELECT results cast
+ * directly).
  */
 export interface Team {
   slug: string;
   team_type: TeamType;
   charter: string | null;
   lifetime: TeamLifetime;
+  terminates_on_milestone: string | null;
+  status: TeamStatus;
   created_at: string;
 }
 
 /**
- * Input to `createTeam` (v14). `slug` is the unique handle (primary key);
- * re-registering the same slug throws rather than silently overwriting.
- * `lifetime` defaults to `'persistent'`. `charter` defaults to NULL. Both
- * `teamType` and `lifetime` are validated against their closed vocabularies at
- * the store boundary.
+ * Input to `createTeam` (v14, extended v18). `slug` is the unique handle
+ * (primary key); re-registering the same slug throws rather than silently
+ * overwriting. `lifetime` defaults to `'persistent'`. `charter` defaults to
+ * NULL. A fresh team is always `status = 'active'`.
+ *
+ * `terminatesOnMilestone` is the concrete target a `terminates_on_milestone`
+ * team disbands on. The lifetime↔target consistency rule is enforced at the
+ * store boundary: a `terminates_on_milestone` lifetime REQUIRES a target, and a
+ * `persistent` lifetime FORBIDS one. Both `teamType` and `lifetime` are validated
+ * against their closed vocabularies at the same boundary.
  */
 export interface CreateTeamInput {
   slug: string;
   teamType: TeamType;
   charter?: string | null;
   lifetime?: TeamLifetime;
+  /** Target milestone id for a `terminates_on_milestone` team; omit for a persistent team. */
+  terminatesOnMilestone?: string | null;
   /** ISO-8601 timestamp; defaults to now(). */
   createdAt?: string;
+}
+
+/**
+ * The result of `teamTerminate` (v18) — the team-local disband. Every effect is
+ * applied in one transaction: the team's scope is released, every active expose
+ * is superseded with the disband reason, every open roster slot is vacated, and
+ * the team's `status` flips to `inactive`. The result reports the counts so the
+ * caller can summarize the disband without re-querying.
+ *
+ *   slug             — the disbanded team.
+ *   exposesRetired   — how many active expose entries were superseded.
+ *   rosterVacated    — how many open (team, role) roster rows were closed.
+ *   scopesCleared    — total read + write globs released (the prior scope size).
+ */
+export interface TeamTerminateResult {
+  slug: string;
+  exposesRetired: number;
+  rosterVacated: number;
+  scopesCleared: number;
 }
 
 /**

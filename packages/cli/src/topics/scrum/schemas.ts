@@ -684,6 +684,50 @@ CREATE INDEX idx_scrum_team_accepts_team ON scrum_team_accepts(team_slug);
 CREATE INDEX idx_scrum_team_exposes_team ON scrum_team_exposes(team_slug);
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v18 — team lifecycle: terminating-milestone target + active/inactive
+//                 status (additive columns on scrum_teams)
+// ---------------------------------------------------------------------------
+
+/**
+ * v18: two additive columns on `scrum_teams` completing the team lifecycle.
+ * Both are `ALTER TABLE ... ADD COLUMN` so the migration is forward-only and
+ * preserves every existing row — pre-v18 teams read `terminates_on_milestone`
+ * NULL and `status` 'active', exactly the persistent-and-live default.
+ *
+ *   terminates_on_milestone — the concrete milestone id this team disbands on,
+ *                             for a `lifetime = 'terminates_on_milestone'` team;
+ *                             NULL for a `persistent` team. The base registry
+ *                             (v14) carries only the `lifetime` archetype; this
+ *                             column is the concrete target the archetype names.
+ *                             A team carrying a target is disbanded when that
+ *                             milestone closes (the milestone-close trigger).
+ *                             The lifetime↔target consistency rule (a
+ *                             terminates_on_milestone team must carry a target; a
+ *                             persistent team must not) is enforced at the store
+ *                             boundary, not by a SQL constraint — it spans two
+ *                             columns and tolerates the gradual create-then-set
+ *                             flow only at the boundary.
+ *   status                  — the team's lifecycle state, a closed
+ *                             `active | inactive` enum. `active` is the default a
+ *                             live team carries; `inactive` is the terminal state
+ *                             a disbanded team is flipped to (its scope released,
+ *                             exposes superseded, roster vacated). The column
+ *                             carries no CHECK, so the closed set is documented on
+ *                             the `TeamStatus` type and guarded at the store
+ *                             boundary, matching the v2–v17 forward-compatible-
+ *                             TEXT convention.
+ *
+ * `terminates_on_milestone` is NOT a foreign key to `scrum_milestones`: a team
+ * may name a target milestone that is created later, and the soft reference
+ * mirrors how the roster's `contributor_id` and the operator history hold their
+ * referents without an FK.
+ */
+export const SCRUM_MIGRATION_V18_SQL = `
+ALTER TABLE scrum_teams ADD COLUMN terminates_on_milestone TEXT;
+ALTER TABLE scrum_teams ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
+`;
+
 /**
  * Current scrum-domain store version — the highest migration version this
  * module registers. Stamped as the per-artifact `schema_version` on the
@@ -691,12 +735,12 @@ CREATE INDEX idx_scrum_team_exposes_team ON scrum_team_exposes(team_slug);
  * scrum row reports the schema it was read under. Bump in lockstep with the
  * top migration version on every additive hop.
  */
-export const SCRUM_SCHEMA_VERSION = 17;
+export const SCRUM_SCHEMA_VERSION = 18;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that have hit `clearRegistry()` — both
- * paths land a single scrum/{v1..v17} entry set. Matches
+ * paths land a single scrum/{v1..v18} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -837,6 +881,14 @@ export function ensureScrumSchemaRegistered(): void {
           'create scrum_team_accepts + scrum_team_exposes (per-team accept/expose interface, append-only with supersession) + idx_scrum_team_accepts_team + idx_scrum_team_exposes_team',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V17_SQL);
+        },
+      },
+      {
+        version: 18,
+        description:
+          'add scrum_teams.terminates_on_milestone (nullable target) + scrum_teams.status (active|inactive) for the team lifecycle',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V18_SQL);
         },
       },
     ],

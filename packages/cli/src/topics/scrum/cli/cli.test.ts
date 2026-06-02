@@ -456,7 +456,7 @@ describe('runTaskCmd', () => {
       expect(shown.task.run_id).toBe('feat-prov');
       expect(shown.task.provenance.worker_id).toBe('worker-42');
       expect(shown.task.provenance.run_id).toBe('feat-prov');
-      expect(shown.task.provenance.schema_version).toBe(17);
+      expect(shown.task.provenance.schema_version).toBe(18);
     } finally {
       restoreEnv('PROVE_WORKER_ID', savedWorker);
       restoreEnv('PROVE_RUN_SLUG', savedSlug);
@@ -2462,6 +2462,8 @@ interface TeamRow {
   team_type: string;
   charter: string | null;
   lifetime: string;
+  terminates_on_milestone: string | null;
+  status: string;
   created_at: string;
 }
 
@@ -2485,11 +2487,14 @@ describe('runTeamCmd', () => {
     const artifact = join(workspace, 'teams', 'payments.md');
     expect(existsSync(artifact)).toBe(true);
     const content = readFileSync(artifact, 'utf8');
-    expect(content).toContain('schema_version: 17');
+    expect(content).toContain('schema_version: 18');
     expect(content).toContain('team:');
     expect(content).toContain('slug: payments');
     expect(content).toContain('team_type: stream_aligned');
     expect(content).toContain('lifetime: persistent');
+    // v18 lifecycle fields mirror a freshly-created (persistent, active) team.
+    expect(content).toContain('terminates_on_milestone: null');
+    expect(content).toContain('status: active');
     // v15 scope block mirrors the (empty) scope rows of a freshly-created team.
     expect(content).toContain('scope:');
     expect(content).toContain('read: []');
@@ -2505,17 +2510,20 @@ describe('runTeamCmd', () => {
     expect(content).toContain('exposes:');
   });
 
-  test('create honors an explicit --lifetime', () => {
+  test('create honors an explicit --lifetime + --terminates-on', () => {
     const res = withCapture(() =>
       runTeamCmd('create', [undefined], {
         slug: 'migration-squad',
         teamType: 'enabling',
         lifetime: 'terminates_on_milestone',
+        terminatesOn: 'migrate-v2',
         workspaceRoot: workspace,
       }),
     );
     expect(res.exit).toBe(0);
-    expect((JSON.parse(res.stdout.trim()) as TeamRow).lifetime).toBe('terminates_on_milestone');
+    const row = JSON.parse(res.stdout.trim()) as TeamRow;
+    expect(row.lifetime).toBe('terminates_on_milestone');
+    expect(row.terminates_on_milestone).toBe('migrate-v2');
   });
 
   test('create without --slug exits 1', () => {
@@ -3035,5 +3043,124 @@ describe('runTeamCmd', () => {
     expect(res.exit).toBe(1);
     expect(res.stdout.trim()).toBe('null');
     expect(res.stderr).toContain("no team 'ghost'");
+  });
+
+  // --- create --terminates-on consistency guard + terminate (v18) ---
+
+  interface TerminateResult {
+    slug: string;
+    exposesRetired: number;
+    rosterVacated: number;
+    scopesCleared: number;
+  }
+
+  test('create with --lifetime terminates_on_milestone but no --terminates-on exits 1', () => {
+    const res = withCapture(() =>
+      runTeamCmd('create', [undefined], {
+        slug: 'squad',
+        teamType: 'enabling',
+        lifetime: 'terminates_on_milestone',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('requires a terminates_on_milestone target');
+  });
+
+  test('create --terminates-on reflects the target into the artifact', () => {
+    const res = withCapture(() =>
+      runTeamCmd('create', [undefined], {
+        slug: 'squad',
+        teamType: 'enabling',
+        lifetime: 'terminates_on_milestone',
+        terminatesOn: 'migrate-v2',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const content = readFileSync(join(workspace, 'teams', 'squad.md'), 'utf8');
+    expect(content).toContain('terminates_on_milestone: migrate-v2');
+    expect(content).toContain('status: active');
+  });
+
+  test('terminate disbands the team, prints counts, flips the artifact to inactive', () => {
+    createTeamFixture('payments');
+    withCapture(() =>
+      runTeamCmd('scope-set', ['payments'], { write: 'src/payments/**', workspaceRoot: workspace }),
+    );
+    withCapture(() =>
+      runTeamCmd('rotate', ['payments'], {
+        role: 'tech_lead',
+        contributor: 'ct-jane',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runTeamCmd('expose-add', ['payments'], {
+        name: 'PaymentEvent',
+        schemaRef: 'pe.json',
+        workspaceRoot: workspace,
+      }),
+    );
+
+    const res = withCapture(() =>
+      runTeamCmd('terminate', ['payments'], { reason: 'work complete', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+    const result = JSON.parse(res.stdout.trim()) as TerminateResult;
+    expect(result).toEqual({
+      slug: 'payments',
+      exposesRetired: 1,
+      rosterVacated: 1,
+      scopesCleared: 1,
+    });
+
+    const content = readFileSync(join(workspace, 'teams', 'payments.md'), 'utf8');
+    expect(content).toContain('status: inactive');
+    expect(content).toContain('write: []');
+    expect(content).toContain('tech_lead: null');
+  });
+
+  test('terminate on an unknown team exits 1', () => {
+    const res = withCapture(() => runTeamCmd('terminate', ['ghost'], { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown team 'ghost'");
+  });
+
+  test('terminate on an already-inactive team exits 1', () => {
+    createTeamFixture('payments');
+    withCapture(() => runTeamCmd('terminate', ['payments'], { workspaceRoot: workspace }));
+    const res = withCapture(() =>
+      runTeamCmd('terminate', ['payments'], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('already inactive');
+  });
+
+  test('milestone close disbands a pinned team end-to-end through the CLI', () => {
+    withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], {
+        title: 'Migrate v2',
+        id: 'migrate-v2',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runTeamCmd('create', [undefined], {
+        slug: 'squad',
+        teamType: 'enabling',
+        lifetime: 'terminates_on_milestone',
+        terminatesOn: 'migrate-v2',
+        workspaceRoot: workspace,
+      }),
+    );
+
+    const cl = withCapture(() =>
+      runMilestoneCmd('close', ['migrate-v2', undefined], { workspaceRoot: workspace }),
+    );
+    expect(cl.exit).toBe(0);
+
+    const shown = withCapture(() => runTeamCmd('show', ['squad'], { workspaceRoot: workspace }));
+    expect((JSON.parse(shown.stdout.trim()) as TeamRow).status).toBe('inactive');
   });
 });

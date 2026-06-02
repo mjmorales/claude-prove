@@ -2,10 +2,13 @@
  * `claude-prove scrum team <action> [args] [flags]`
  *
  * Action dispatch:
- *   create --slug S --team-type T [--charter C] [--lifetime persistent|terminates_on_milestone]
+ *   create --slug S --team-type T [--charter C] [--lifetime persistent|terminates_on_milestone] [--terminates-on M]
  *                              Insert the team registry row and scaffold/sync the
  *                              on-disk `teams/<slug>.md` artifact mirroring the
- *                              row. Prints the JSON row.
+ *                              row. Prints the JSON row. A `terminates_on_milestone`
+ *                              lifetime REQUIRES `--terminates-on <milestone>`; a
+ *                              `persistent` lifetime FORBIDS it (the store rejects
+ *                              a mismatched pair with exit 1).
  *   show <slug>                Fetch one team by slug. Prints the JSON row, or
  *                              exits 1 when the slug is unknown.
  *   list                       [--human]
@@ -54,6 +57,14 @@
  *   interface <slug>           Print the team's ACTIVE accepts[] + exposes[] as
  *                              `{ slug, accepts, exposes }`, or exit 1 with null
  *                              when the slug is unknown.
+ *   terminate <slug>           [--reason <text>]
+ *                              Manually disband a team — the team-local terminate.
+ *                              Releases the team's scope, supersedes every active
+ *                              expose with the reason, vacates the roster, and
+ *                              flips status to inactive, all atomically. Prints
+ *                              the disband result (counts) as JSON. Rejects an
+ *                              unknown team and an already-inactive team. Reflects
+ *                              the inactive status into the artifact.
  *
  * Stdout contract: JSON result per action on stdout; one-line human summary on
  * stderr. `list` returns a JSON array (or a table with `--human`).
@@ -63,17 +74,20 @@
  *   1  usage error, unknown action, invalid enum value, duplicate slug, a
  *      `show`/`scope-show`/`roster`/`interface` miss, a write-scope overlap on
  *      `scope-set`, an unknown team / invalid role on `rotate`, a non-kebab
- *      ask type on `accept-add`, or an unknown / already-superseded interface id
- *      on `accept-supersede`/`expose-supersede`
+ *      ask type on `accept-add`, an unknown / already-superseded interface id
+ *      on `accept-supersede`/`expose-supersede`, or an unknown / already-inactive
+ *      team on `terminate`
  *
  * On-disk reconciliation: `create` writes a `teams/<slug>.md` artifact carrying
  * a YAML frontmatter `schema_version` + `team:` block that embeds the
- * `{slug, team_type, charter, lifetime}` registry fields, so the file mirrors
- * the row. `scope-set` rewrites the same artifact with a `scope:` block carrying
- * the team's `read`/`write` glob arrays. `rotate` rewrites it with a `roster:`
- * block carrying the current holder per role. The accept/expose actions rewrite
- * it with an `interface:` block carrying the team's ACTIVE accepts + exposes
- * (superseded entries are omitted from the artifact, retained in the store).
+ * `{slug, team_type, charter, lifetime, terminates_on_milestone, status}`
+ * registry fields, so the file mirrors the row. `scope-set` rewrites the same
+ * artifact with a `scope:` block carrying the team's `read`/`write` glob arrays.
+ * `rotate` rewrites it with a `roster:` block carrying the current holder per
+ * role. The accept/expose actions rewrite it with an `interface:` block carrying
+ * the team's ACTIVE accepts + exposes (superseded entries are omitted from the
+ * artifact, retained in the store). `terminate` rewrites it with the team's
+ * `status: inactive`, cleared scope, and emptied roster.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -97,6 +111,9 @@ export interface TeamCmdFlags {
   teamType?: string;
   charter?: string;
   lifetime?: string;
+  // `create` (v18): the concrete milestone a `terminates_on_milestone` team
+  // disbands on. Required for that lifetime, forbidden for `persistent`.
+  terminatesOn?: string;
   read?: string;
   write?: string;
   role?: string;
@@ -124,7 +141,8 @@ export type TeamAction =
   | 'accept-supersede'
   | 'expose-add'
   | 'expose-supersede'
-  | 'interface';
+  | 'interface'
+  | 'terminate';
 
 const TEAM_ACTIONS: TeamAction[] = [
   'create',
@@ -139,6 +157,7 @@ const TEAM_ACTIONS: TeamAction[] = [
   'expose-add',
   'expose-supersede',
   'interface',
+  'terminate',
 ];
 
 export function runTeamCmd(
@@ -184,6 +203,8 @@ export function runTeamCmd(
         return doExposeSupersede(store, workspaceRoot, args[0], flags);
       case 'interface':
         return doInterface(store, args[0]);
+      case 'terminate':
+        return doTerminate(store, workspaceRoot, args[0], flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -218,11 +239,15 @@ function doCreate(store: ScrumStore, workspaceRoot: string, flags: TeamCmdFlags)
   const lifetime = normalizeLifetime(flags.lifetime);
   if (lifetime === INVALID_ENUM) return 1;
 
+  // createTeam enforces the lifetime↔target consistency rule (a
+  // terminates_on_milestone team requires --terminates-on; a persistent team
+  // forbids it); a violation throws and surfaces as exit 1 via the catch.
   const row = store.createTeam({
     slug: flags.slug,
     teamType,
     charter: emptyToNull(flags.charter),
     lifetime,
+    terminatesOnMilestone: emptyToNull(flags.terminatesOn),
   });
 
   const artifactPath = reconcileTeamArtifact(store, workspaceRoot, row);
@@ -320,6 +345,8 @@ function renderTeamArtifact(
     `  team_type: ${row.team_type}`,
     `  charter: ${yamlValue(row.charter)}`,
     `  lifetime: ${row.lifetime}`,
+    `  terminates_on_milestone: ${yamlValue(row.terminates_on_milestone)}`,
+    `  status: ${row.status}`,
     `  created_at: ${row.created_at}`,
     'scope:',
     `  read: ${yamlGlobList(scopes.read)}`,
@@ -350,6 +377,8 @@ function renderTeamArtifact(
     '',
     `- Interaction archetype: ${row.team_type}`,
     `- Lifetime: ${row.lifetime}`,
+    `- Terminates on milestone: ${row.terminates_on_milestone ?? '<!-- none -->'}`,
+    `- Status: ${row.status}`,
     '',
     '## Scope',
     '',
@@ -417,8 +446,8 @@ function doList(store: ScrumStore, flags: TeamCmdFlags): number {
 }
 
 function renderHumanTable(rows: Team[]): string {
-  const header = ['SLUG', 'TYPE', 'LIFETIME', 'CHARTER'];
-  const body = rows.map((r) => [r.slug, r.team_type, r.lifetime, r.charter ?? '']);
+  const header = ['SLUG', 'TYPE', 'LIFETIME', 'STATUS', 'CHARTER'];
+  const body = rows.map((r) => [r.slug, r.team_type, r.lifetime, r.status, r.charter ?? '']);
   const widths = header.map((h, i) =>
     Math.max(h.length, ...body.map((cells) => cells[i]?.length ?? 0)),
   );
@@ -722,6 +751,39 @@ function doInterface(store: ScrumStore, slug: string | undefined): number {
   process.stdout.write(`${JSON.stringify(iface)}\n`);
   process.stderr.write(
     `scrum team interface: ${slug} accepts=${iface.accepts.length} exposes=${iface.exposes.length}\n`,
+  );
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// terminate (v18)
+// ---------------------------------------------------------------------------
+
+/** Default disband rationale recorded on a manual `terminate` with no --reason. */
+const DEFAULT_TERMINATE_REASON = 'team disbanded';
+
+function doTerminate(
+  store: ScrumStore,
+  workspaceRoot: string,
+  slug: string | undefined,
+  flags: TeamCmdFlags,
+): number {
+  if (slug === undefined || slug.length === 0) {
+    process.stderr.write('scrum team terminate: <slug> is required\n');
+    return 1;
+  }
+  const reason = emptyToNull(flags.reason) ?? DEFAULT_TERMINATE_REASON;
+
+  // teamTerminate throws on an unknown team and on an already-inactive team;
+  // both surface as exit 1 via the runTeamCmd catch.
+  const result = store.teamTerminate(slug, reason);
+
+  const team = store.getTeam(slug);
+  const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+  process.stdout.write(`${JSON.stringify(result)}\n`);
+  const where = artifactPath !== null ? ` -> ${artifactPath}` : '';
+  process.stderr.write(
+    `scrum team terminate: ${slug} disbanded (scopes cleared=${result.scopesCleared}, exposes retired=${result.exposesRetired}, roster vacated=${result.rosterVacated})${where}\n`,
   );
   return 0;
 }

@@ -33,6 +33,7 @@ import {
   SCRUM_MIGRATION_V15_SQL,
   SCRUM_MIGRATION_V16_SQL,
   SCRUM_MIGRATION_V17_SQL,
+  SCRUM_MIGRATION_V18_SQL,
   SCRUM_SCHEMA_VERSION,
   ensureScrumSchemaRegistered,
 } from './schemas';
@@ -447,12 +448,12 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('full migration chain from v0 applies v1..v17 in order', () => {
+  test('full migration chain from v0 applies v1..v18 in order', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       const result = runMigrations(raw);
       expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
       ]);
     } finally {
       raw.close();
@@ -464,7 +465,7 @@ describe('scrum domain registration', () => {
     try {
       const first = runMigrations(raw);
       expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
       ]);
 
       const second = runMigrations(raw);
@@ -492,6 +493,7 @@ describe('scrum domain registration', () => {
         { version: 15 },
         { version: 16 },
         { version: 17 },
+        { version: 18 },
       ]);
     } finally {
       raw.close();
@@ -522,8 +524,8 @@ describe('scrum domain registration', () => {
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(log).toHaveLength(17);
-      const [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17] = log;
+      expect(log).toHaveLength(18);
+      const [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16, v17, v18] = log;
       if (
         !v1 ||
         !v2 ||
@@ -541,9 +543,10 @@ describe('scrum domain registration', () => {
         !v14 ||
         !v15 ||
         !v16 ||
-        !v17
+        !v17 ||
+        !v18
       )
-        throw new Error('expected seventeen log entries');
+        throw new Error('expected eighteen log entries');
       expect(v1.domain).toBe('scrum');
       expect(v1.version).toBe(1);
       expect(v1.description).toContain('scrum_tasks');
@@ -596,6 +599,10 @@ describe('scrum domain registration', () => {
       expect(v17.version).toBe(17);
       expect(v17.description).toContain('scrum_team_accepts');
       expect(v17.description).toContain('scrum_team_exposes');
+      expect(v18.domain).toBe('scrum');
+      expect(v18.version).toBe(18);
+      expect(v18.description).toContain('terminates_on_milestone');
+      expect(v18.description).toContain('status');
     } finally {
       raw.close();
     }
@@ -627,8 +634,8 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V11_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN run_id');
   });
 
-  test('SCRUM_SCHEMA_VERSION tracks the top migration version (17)', () => {
-    expect(SCRUM_SCHEMA_VERSION).toBe(17);
+  test('SCRUM_SCHEMA_VERSION tracks the top migration version (18)', () => {
+    expect(SCRUM_SCHEMA_VERSION).toBe(18);
   });
 
   test('v11 ADD COLUMN defaults worker_id/run_id to NULL on existing rows', () => {
@@ -761,7 +768,7 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V14_SQL).toContain('idx_scrum_teams_type');
   });
 
-  test('a fresh store ends at version 17 with scrum_teams present', () => {
+  test('a fresh store ends at version 18 with scrum_teams present', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -770,15 +777,25 @@ describe('scrum domain registration', () => {
         'SELECT MAX(version) AS version FROM _migrations_log WHERE domain = ?',
         ['scrum'],
       );
-      expect(top).toEqual([{ version: 17 }]);
+      expect(top).toEqual([{ version: 18 }]);
 
       const tables = raw.all<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_teams'",
       );
       expect(tables).toEqual([{ name: 'scrum_teams' }]);
 
+      // v18 appends terminates_on_milestone + status after the v14 base columns
+      // (ADD COLUMN lands them at the end), NULL/'active' defaults respectively.
       const cols = raw.all<{ name: string }>('PRAGMA table_info(scrum_teams)').map((c) => c.name);
-      expect(cols).toEqual(['slug', 'team_type', 'charter', 'lifetime', 'created_at']);
+      expect(cols).toEqual([
+        'slug',
+        'team_type',
+        'charter',
+        'lifetime',
+        'created_at',
+        'terminates_on_milestone',
+        'status',
+      ]);
     } finally {
       raw.close();
     }
@@ -996,6 +1013,33 @@ describe('scrum domain registration', () => {
       expect(exposes).toEqual([
         { name: 'PaymentEvent', schema_ref: 'schemas/payment-event.json', status: 'active' },
       ]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('SCRUM_MIGRATION_V18_SQL adds scrum_teams.terminates_on_milestone + status', () => {
+    expect(SCRUM_MIGRATION_V18_SQL).toContain(
+      'ALTER TABLE scrum_teams ADD COLUMN terminates_on_milestone',
+    );
+    expect(SCRUM_MIGRATION_V18_SQL).toContain('ALTER TABLE scrum_teams ADD COLUMN status');
+    expect(SCRUM_MIGRATION_V18_SQL).toContain("DEFAULT 'active'");
+  });
+
+  test('v18 ADD COLUMN defaults terminates_on_milestone NULL + status active on existing teams', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      // Insert without the v18 columns — simulates a pre-v18 team carried through
+      // the upgrade. terminates_on_milestone reads NULL, status reads 'active'.
+      raw.exec(
+        "INSERT INTO scrum_teams (slug, team_type, lifetime, created_at) VALUES ('legacy', 'platform', 'persistent', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ terminates_on_milestone: string | null; status: string }>(
+        'SELECT terminates_on_milestone, status FROM scrum_teams WHERE slug = ?',
+        ['legacy'],
+      );
+      expect(row).toEqual([{ terminates_on_milestone: null, status: 'active' }]);
     } finally {
       raw.close();
     }

@@ -58,6 +58,7 @@
  *   claude-prove scrum team expose-add <slug>    --name N --schema-ref R   (append an exposed output other teams consume)
  *   claude-prove scrum team expose-supersede <slug> --id ID --reason R [--by NEW-ID]   (retire an expose entry in place; never deletes)
  *   claude-prove scrum team interface <slug>     (active accepts[] + exposes[])
+ *   claude-prove scrum team terminate <slug>     [--reason text]   (manual team-local disband: release scope, supersede exposes, vacate roster, flip status to inactive)
  *   claude-prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
  *   claude-prove scrum hook <event>              (event: session-start | subagent-stop | stop)
  *
@@ -185,6 +186,8 @@ interface ScrumFlags {
   teamType?: string;
   charter?: string;
   lifetime?: string;
+  // `team create` (v18): the terminating-lifetime team's target milestone.
+  terminatesOn?: string;
   // `team scope-set` read/write glob CSVs (v15).
   read?: string;
   write?: string;
@@ -283,6 +286,10 @@ export function register(cli: CAC): void {
     .option(
       '--lifetime <l>',
       'team create: expected longevity (persistent | terminates_on_milestone); default persistent',
+    )
+    .option(
+      '--terminates-on <m>',
+      'team create: target milestone a terminates_on_milestone team disbands on (required for that lifetime, forbidden for persistent)',
     )
     .option(
       '--read <csv>',
@@ -496,7 +503,7 @@ function dispatch(
     case 'team':
       if (arg1 === undefined) {
         console.error(
-          'error: scrum team: sub-action required (one of: create | show | list | scope-set | scope-show | rotate | roster | accept-add | accept-supersede | expose-add | expose-supersede | interface)',
+          'error: scrum team: sub-action required (one of: create | show | list | scope-set | scope-show | rotate | roster | accept-add | accept-supersede | expose-add | expose-supersede | interface | terminate)',
         );
         return 1;
       }
@@ -505,6 +512,7 @@ function dispatch(
         teamType: flags.teamType,
         charter: flags.charter,
         lifetime: flags.lifetime,
+        terminatesOn: flags.terminatesOn,
         read: flags.read,
         write: flags.write,
         role: flags.role,
