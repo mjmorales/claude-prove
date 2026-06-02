@@ -2303,7 +2303,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 15,
+      schema_version: 16,
     });
   });
 
@@ -2316,7 +2316,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(15);
+    expect(updated.provenance.schema_version).toBe(16);
   });
 });
 
@@ -2669,5 +2669,146 @@ describe('ScrumStore — team scope globs (v15)', () => {
     // identity team writes a disjoint path — no conflict yet.
     const conflict = store.validateTeamWriteScopes();
     expect(conflict).toBeNull();
+  });
+});
+
+// ===========================================================================
+// Team roster — three-role position history (v16)
+// ===========================================================================
+
+describe('ScrumStore — team roster (v16)', () => {
+  beforeEach(() => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+  });
+
+  test('rotateTeamMember appends an open interval and validates the team + role', () => {
+    const { row, warning } = store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-jane',
+      fromTs: '2026-01-01T00:00:00Z',
+      reason: 'founding lead',
+    });
+    expect(row.team_slug).toBe('payments');
+    expect(row.role).toBe('tech_lead');
+    expect(row.contributor_id).toBe('ct-jane');
+    expect(row.from_ts).toBe('2026-01-01T00:00:00Z');
+    expect(row.to_ts).toBeNull();
+    expect(row.reason).toBe('founding lead');
+    expect(warning).toBeNull();
+
+    // An unknown team is rejected rather than recorded.
+    expect(() =>
+      store.rotateTeamMember({ teamSlug: 'ghost', role: 'engineer', contributorId: 'ct-bob' }),
+    ).toThrow(/unknown team 'ghost'/);
+    // An off-vocabulary role is rejected at the boundary.
+    expect(() =>
+      // @ts-expect-error — exercising the runtime closed-enum guard with a bad value.
+      store.rotateTeamMember({ teamSlug: 'payments', role: 'overlord', contributorId: 'ct-bob' }),
+    ).toThrow(/invalid role 'overlord'/);
+  });
+
+  test('rotate closes the prior interval at the new holder from_ts (one open row per slot)', () => {
+    store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'engineer',
+      contributorId: 'ct-jane',
+      fromTs: '2026-01-01T00:00:00Z',
+    });
+    store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'engineer',
+      contributorId: 'ct-bob',
+      fromTs: '2026-03-01T00:00:00Z',
+    });
+
+    const roster = store.getTeamRoster('payments', { includeHistory: true });
+    const engineerHistory = roster.history?.engineer ?? [];
+    expect(engineerHistory).toHaveLength(2);
+    // Prior interval is closed exactly at the handoff instant; the half-open
+    // [from, to) intervals are contiguous and non-overlapping.
+    expect(engineerHistory[0]?.contributor_id).toBe('ct-jane');
+    expect(engineerHistory[0]?.to_ts).toBe('2026-03-01T00:00:00Z');
+    expect(engineerHistory[1]?.contributor_id).toBe('ct-bob');
+    expect(engineerHistory[1]?.to_ts).toBeNull();
+    // Exactly one open row for the slot after a rotation.
+    const open = engineerHistory.filter((m) => m.to_ts === null);
+    expect(open).toHaveLength(1);
+    expect(roster.current.engineer?.contributor_id).toBe('ct-bob');
+  });
+
+  test('rotating different roles does not close each other (slots are independent)', () => {
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-jane' });
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'engineer', contributorId: 'ct-bob' });
+
+    const roster = store.getTeamRoster('payments');
+    expect(roster.current.tech_lead?.contributor_id).toBe('ct-jane');
+    expect(roster.current.engineer?.contributor_id).toBe('ct-bob');
+    expect(roster.current.implementer).toBeNull();
+  });
+
+  test('multi-slot WARNS but completes (team-of-one fills more than one slot)', () => {
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-solo' });
+    const second = store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'engineer',
+      contributorId: 'ct-solo',
+    });
+    // The rotation completes — the contributor now holds both slots.
+    expect(second.row.contributor_id).toBe('ct-solo');
+    expect(second.warning).not.toBeNull();
+    expect(second.warning).toContain('ct-solo');
+    expect(second.warning).toContain('payments');
+    expect(second.warning).toContain('engineer');
+    expect(second.warning).toContain('tech_lead');
+
+    const roster = store.getTeamRoster('payments');
+    expect(roster.current.tech_lead?.contributor_id).toBe('ct-solo');
+    expect(roster.current.engineer?.contributor_id).toBe('ct-solo');
+  });
+
+  test('re-affirming the SAME slot with the same holder does not self-trigger the warning', () => {
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-jane' });
+    const again = store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-jane',
+    });
+    // Holding only one slot (tech_lead) before and after — no multi-slot warning.
+    expect(again.warning).toBeNull();
+  });
+
+  test('getTeamRoster tolerates an unknown slug (every role null, no history)', () => {
+    const roster = store.getTeamRoster('ghost');
+    expect(roster).toEqual({
+      slug: 'ghost',
+      current: { tech_lead: null, engineer: null, implementer: null },
+    });
+  });
+
+  test('getTeamRoster current-only view omits history', () => {
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'implementer', contributorId: 'ct-ann' });
+    const roster = store.getTeamRoster('payments');
+    expect(roster.history).toBeUndefined();
+    expect(roster.current.implementer?.contributor_id).toBe('ct-ann');
+  });
+
+  test('getTeamRoster history groups every interval per role, oldest-first', () => {
+    store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-jane',
+      fromTs: '2026-01-01T00:00:00Z',
+    });
+    store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-bob',
+      fromTs: '2026-02-01T00:00:00Z',
+    });
+    const roster = store.getTeamRoster('payments', { includeHistory: true });
+    expect(roster.history?.tech_lead.map((m) => m.contributor_id)).toEqual(['ct-jane', 'ct-bob']);
+    expect(roster.history?.engineer).toEqual([]);
+    expect(roster.history?.implementer).toEqual([]);
   });
 });

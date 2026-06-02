@@ -456,7 +456,7 @@ describe('runTaskCmd', () => {
       expect(shown.task.run_id).toBe('feat-prov');
       expect(shown.task.provenance.worker_id).toBe('worker-42');
       expect(shown.task.provenance.run_id).toBe('feat-prov');
-      expect(shown.task.provenance.schema_version).toBe(15);
+      expect(shown.task.provenance.schema_version).toBe(16);
     } finally {
       restoreEnv('PROVE_WORKER_ID', savedWorker);
       restoreEnv('PROVE_RUN_SLUG', savedSlug);
@@ -2485,7 +2485,7 @@ describe('runTeamCmd', () => {
     const artifact = join(workspace, 'teams', 'payments.md');
     expect(existsSync(artifact)).toBe(true);
     const content = readFileSync(artifact, 'utf8');
-    expect(content).toContain('schema_version: 15');
+    expect(content).toContain('schema_version: 16');
     expect(content).toContain('team:');
     expect(content).toContain('slug: payments');
     expect(content).toContain('team_type: stream_aligned');
@@ -2494,6 +2494,11 @@ describe('runTeamCmd', () => {
     expect(content).toContain('scope:');
     expect(content).toContain('read: []');
     expect(content).toContain('write: []');
+    // v16 roster block mirrors the (vacant) role slots of a freshly-created team.
+    expect(content).toContain('roster:');
+    expect(content).toContain('tech_lead: null');
+    expect(content).toContain('engineer: null');
+    expect(content).toContain('implementer: null');
   });
 
   test('create honors an explicit --lifetime', () => {
@@ -2695,5 +2700,134 @@ describe('runTeamCmd', () => {
     );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain("unknown team 'ghost'");
+  });
+
+  // --- rotate / roster (v16) ---
+
+  interface MemberRow {
+    id: number;
+    team_slug: string;
+    role: string;
+    contributor_id: string;
+    from_ts: string;
+    to_ts: string | null;
+    reason: string | null;
+  }
+
+  interface RosterResult {
+    slug: string;
+    current: Record<string, MemberRow | null>;
+  }
+
+  test('rotate appends an open interval, prints the row, reflects the artifact', () => {
+    createTeamFixture('payments');
+    const res = withCapture(() =>
+      runTeamCmd('rotate', ['payments'], {
+        role: 'tech_lead',
+        contributor: 'ct-jane',
+        reason: 'founding lead',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as MemberRow;
+    expect(row.role).toBe('tech_lead');
+    expect(row.contributor_id).toBe('ct-jane');
+    expect(row.to_ts).toBeNull();
+    expect(row.reason).toBe('founding lead');
+
+    const content = readFileSync(join(workspace, 'teams', 'payments.md'), 'utf8');
+    expect(content).toContain('roster:');
+    expect(content).toContain('tech_lead: ct-jane');
+  });
+
+  test('rotate without --role exits 1', () => {
+    createTeamFixture('payments');
+    const res = withCapture(() =>
+      runTeamCmd('rotate', ['payments'], { contributor: 'ct-jane', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--role');
+  });
+
+  test('rotate without --contributor exits 1', () => {
+    createTeamFixture('payments');
+    const res = withCapture(() =>
+      runTeamCmd('rotate', ['payments'], { role: 'engineer', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--contributor');
+  });
+
+  test('rotate rejects an off-vocabulary --role', () => {
+    createTeamFixture('payments');
+    const res = withCapture(() =>
+      runTeamCmd('rotate', ['payments'], {
+        role: 'overlord',
+        contributor: 'ct-jane',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('unknown --role');
+  });
+
+  test('rotate on an unknown team exits 1', () => {
+    const res = withCapture(() =>
+      runTeamCmd('rotate', ['ghost'], {
+        role: 'engineer',
+        contributor: 'ct-jane',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown team 'ghost'");
+  });
+
+  test('rotate warns (exit 0) when one contributor fills a second slot', () => {
+    createTeamFixture('payments');
+    withCapture(() =>
+      runTeamCmd('rotate', ['payments'], {
+        role: 'tech_lead',
+        contributor: 'ct-solo',
+        workspaceRoot: workspace,
+      }),
+    );
+    const res = withCapture(() =>
+      runTeamCmd('rotate', ['payments'], {
+        role: 'engineer',
+        contributor: 'ct-solo',
+        workspaceRoot: workspace,
+      }),
+    );
+    // The rotation still completes — multi-slot WARNS, never rejects.
+    expect(res.exit).toBe(0);
+    expect(res.stderr).toContain('WARNING');
+    expect(res.stderr).toContain('ct-solo');
+  });
+
+  test('roster prints the current holder per role, exit 0', () => {
+    createTeamFixture('payments');
+    withCapture(() =>
+      runTeamCmd('rotate', ['payments'], {
+        role: 'engineer',
+        contributor: 'ct-bob',
+        workspaceRoot: workspace,
+      }),
+    );
+    const res = withCapture(() => runTeamCmd('roster', ['payments'], { workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const roster = JSON.parse(res.stdout.trim()) as RosterResult;
+    expect(roster.slug).toBe('payments');
+    expect(roster.current.engineer?.contributor_id).toBe('ct-bob');
+    expect(roster.current.tech_lead).toBeNull();
+    expect(roster.current.implementer).toBeNull();
+  });
+
+  test('roster on an unknown slug exits 1 with null on stdout', () => {
+    const res = withCapture(() => runTeamCmd('roster', ['ghost'], { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    expect(res.stdout.trim()).toBe('null');
+    expect(res.stderr).toContain("no team 'ghost'");
   });
 });

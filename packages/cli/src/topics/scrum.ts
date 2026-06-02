@@ -51,6 +51,8 @@
  *   claude-prove scrum team list                 [--human]
  *   claude-prove scrum team scope-set <slug>     [--read csv] [--write csv]   (REPLACE read/write globs; rejects cross-team write overlap)
  *   claude-prove scrum team scope-show <slug>
+ *   claude-prove scrum team rotate <slug>        --role tech_lead|engineer|implementer --contributor CT-UUID [--reason text]   (rotate a role slot; warns on multi-slot, never rejects)
+ *   claude-prove scrum team roster <slug>        (current holder per role)
  *   claude-prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
  *   claude-prove scrum hook <event>              (event: session-start | subagent-stop | stop)
  *
@@ -181,6 +183,10 @@ interface ScrumFlags {
   // `team scope-set` read/write glob CSVs (v15).
   read?: string;
   write?: string;
+  // `team rotate` role-roster fields (v16). `role` is the slot being rotated;
+  // `contributor` (shared with operator above) is the new holder; `reason`
+  // (shared with decision supersede above) is the rotation rationale.
+  role?: string;
 }
 
 export function register(cli: CAC): void {
@@ -273,6 +279,7 @@ export function register(cli: CAC): void {
       '--write <csv>',
       'team scope-set: comma-separated write globs (REPLACE; omit to clear). Write scopes must be disjoint across teams (single writer per path)',
     )
+    .option('--role <r>', 'team rotate: role slot to rotate (tech_lead | engineer | implementer)')
     .option(
       '--workspace-root <w>',
       'Main worktree root; pins store to <root>/.prove/prove.db (default: git common-dir)',
@@ -470,7 +477,7 @@ function dispatch(
     case 'team':
       if (arg1 === undefined) {
         console.error(
-          'error: scrum team: sub-action required (one of: create | show | list | scope-set | scope-show)',
+          'error: scrum team: sub-action required (one of: create | show | list | scope-set | scope-show | rotate | roster)',
         );
         return 1;
       }
@@ -481,6 +488,9 @@ function dispatch(
         lifetime: flags.lifetime,
         read: flags.read,
         write: flags.write,
+        role: flags.role,
+        contributor: flags.contributor,
+        reason: flags.reason,
         human: flags.human,
         workspaceRoot: flags.workspaceRoot,
       });

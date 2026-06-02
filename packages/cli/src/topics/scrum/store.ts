@@ -42,6 +42,8 @@ import type {
   NextReadyRow,
   OperatorHistoryRow,
   Provenance,
+  RotateTeamMemberInput,
+  RotateTeamMemberResult,
   ScrumContextBundle,
   ScrumDep,
   ScrumEvent,
@@ -55,6 +57,9 @@ import type {
   TaskStatus,
   Team,
   TeamLifetime,
+  TeamMemberRow,
+  TeamRole,
+  TeamRoster,
   TeamScopeKind,
   TeamScopes,
   TeamType,
@@ -67,6 +72,7 @@ import {
   ESCALATION_TYPES,
   GATE_VERDICTS,
   TEAM_LIFETIMES,
+  TEAM_ROLES,
   TEAM_TYPES,
   VERIFICATION_VERDICTS,
 } from './types';
@@ -277,6 +283,10 @@ const OPERATOR_HISTORY_COLUMNS = 'id, contributor_id, from_ts, to_ts, created_at
 
 /** Canonical `scrum_teams` SELECT column list (v14); maps 1:1 to `Team`. */
 const TEAM_COLUMNS = 'slug, team_type, charter, lifetime, created_at';
+
+/** Canonical `scrum_team_members` SELECT column list (v16); maps 1:1 to `TeamMemberRow`. */
+const TEAM_MEMBER_COLUMNS =
+  'id, team_slug, role, contributor_id, from_ts, to_ts, reason, created_at';
 
 /**
  * Raw `scrum_tasks` SELECT shape — identical to `ScrumTask` except the v5
@@ -2402,6 +2412,133 @@ export class ScrumStore {
       if (conflict !== null) return conflict;
     }
     return null;
+  }
+
+  // ==========================================================================
+  // Team roster — three-role position history (v16)
+  // ==========================================================================
+
+  /**
+   * Rotate a team's role slot to `contributorId`, appending a new open interval
+   * to that (team, role) position history. The per-(team, role) generalization
+   * of `setOperatorOfRecord`.
+   *
+   * Rotation is two writes in ONE transaction: the prior open row for THAT
+   * (team_slug, role) (`to_ts IS NULL`) is closed by stamping its `to_ts` to the
+   * new holder's `from_ts`, then the new open row is appended. The invariant
+   * "at most one open row per (team, role)" holds across the transaction; a
+   * reader never sees zero or two open rows for a slot. Rotating in the SAME
+   * contributor still appends a fresh interval (a re-affirmation is a new held
+   * interval, not a no-op).
+   *
+   * `teamSlug` must be a registered team and `role` must be one of the closed
+   * `TeamRole` set — both guarded at this boundary (the columns carry no SQL
+   * CHECK / foreign key on `role`). `contributorId` is a soft reference and is
+   * NOT validated against the contributor registry, mirroring the operator
+   * history.
+   *
+   * Multi-slot is PERMITTED: when the rotated-in contributor already holds
+   * ANOTHER open role on the SAME team, the rotation still completes and a
+   * `warning` is returned (never a rejection) — the team-of-one case where one
+   * person fills multiple slots. The open-slot check reads the state BEFORE the
+   * rotation so re-affirming the same role does not self-trigger the warning.
+   */
+  rotateTeamMember(input: RotateTeamMemberInput): RotateTeamMemberResult {
+    if (this.getTeam(input.teamSlug) === null) {
+      throw new Error(`rotateTeamMember: unknown team '${input.teamSlug}'`);
+    }
+    if (!(TEAM_ROLES as string[]).includes(input.role)) {
+      throw new Error(
+        `rotateTeamMember: invalid role '${input.role}'; expected one of: ${TEAM_ROLES.join(', ')}`,
+      );
+    }
+    const fromTs = input.fromTs ?? isoNow();
+    const reason = input.reason ?? null;
+
+    // Read the multi-slot state BEFORE mutating, so re-affirming the same role
+    // is never mistaken for occupying a second slot.
+    const otherOpenRoles = this.openRolesHeldBy(input.teamSlug, input.contributorId).filter(
+      (role) => role !== input.role,
+    );
+
+    const append = this.db.transaction(() => {
+      // Close the current open interval for THIS (team, role) at the new
+      // holder's from_ts.
+      this.prep(
+        'UPDATE scrum_team_members SET to_ts = ? WHERE team_slug = ? AND role = ? AND to_ts IS NULL',
+      ).run(fromTs, input.teamSlug, input.role);
+      const result = this.prep(
+        'INSERT INTO scrum_team_members (team_slug, role, contributor_id, from_ts, to_ts, reason, created_at) VALUES (?, ?, ?, ?, NULL, ?, ?)',
+      ).run(input.teamSlug, input.role, input.contributorId, fromTs, reason, isoNow());
+      return Number(result.lastInsertRowid);
+    });
+    const id = append();
+
+    const row = this.prep(`SELECT ${TEAM_MEMBER_COLUMNS} FROM scrum_team_members WHERE id = ?`).get(
+      id,
+    ) as TeamMemberRow;
+
+    const warning =
+      otherOpenRoles.length > 0
+        ? `${input.contributorId} now holds multiple roles on '${input.teamSlug}': ${[
+            input.role,
+            ...otherOpenRoles,
+          ]
+            .sort()
+            .join(', ')}`
+        : null;
+    return { row, warning };
+  }
+
+  /**
+   * The role slots `contributorId` currently holds open on `teamSlug` — every
+   * (team, role) whose open row (`to_ts IS NULL`) names this contributor.
+   * Backs the multi-slot warning in `rotateTeamMember`.
+   */
+  private openRolesHeldBy(teamSlug: string, contributorId: string): TeamRole[] {
+    const rows = this.prep(
+      'SELECT role FROM scrum_team_members WHERE team_slug = ? AND contributor_id = ? AND to_ts IS NULL',
+    ).all(teamSlug, contributorId) as Array<{ role: string }>;
+    return rows.map((r) => r.role as TeamRole);
+  }
+
+  /**
+   * A team's roster — the open (current) holder of each of the three role slots,
+   * and optionally the full per-role position history. Tolerates an unknown slug:
+   * the returned `current` simply maps every role to null (the absence reads as
+   * "no holders" rather than an error, matching `getTeamScopes`).
+   *
+   * Each role in `current` maps to its single open `TeamMemberRow` (`to_ts IS
+   * NULL`) or null when that slot has never been filled. With
+   * `includeHistory: true`, `history` carries every interval for the team,
+   * oldest-first, grouped by role.
+   */
+  getTeamRoster(slug: string, opts: { includeHistory?: boolean } = {}): TeamRoster {
+    const current = this.emptyRoleMap<TeamMemberRow | null>(null);
+    const openRows = this.prep(
+      `SELECT ${TEAM_MEMBER_COLUMNS} FROM scrum_team_members WHERE team_slug = ? AND to_ts IS NULL`,
+    ).all(slug) as TeamMemberRow[];
+    for (const row of openRows) current[row.role] = row;
+
+    if (opts.includeHistory !== true) {
+      return { slug, current };
+    }
+
+    const history = this.emptyRoleMap<TeamMemberRow[]>([]);
+    const allRows = this.prep(
+      `SELECT ${TEAM_MEMBER_COLUMNS} FROM scrum_team_members WHERE team_slug = ? ORDER BY from_ts ASC, id ASC`,
+    ).all(slug) as TeamMemberRow[];
+    for (const row of allRows) history[row.role].push(row);
+    return { slug, current, history };
+  }
+
+  /** Build a fresh `Record<TeamRole, V>` seeded with `seed` for every role. */
+  private emptyRoleMap<V>(seed: V): Record<TeamRole, V> {
+    const map = {} as Record<TeamRole, V>;
+    for (const role of TEAM_ROLES) {
+      map[role] = Array.isArray(seed) ? ([...seed] as V) : seed;
+    }
+    return map;
   }
 
   // ==========================================================================

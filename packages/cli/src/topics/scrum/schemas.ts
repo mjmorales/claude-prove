@@ -563,6 +563,62 @@ CREATE TABLE scrum_team_scopes (
 CREATE INDEX idx_scrum_team_scopes_team ON scrum_team_scopes(team_slug);
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v16 — per-team three-role roster + position history
+//                 (scrum_team_members)
+// ---------------------------------------------------------------------------
+
+/**
+ * v16: a per-team role roster with position history. Every team has exactly
+ * three role slots (`tech_lead`/`engineer`/`implementer`), and each slot is an
+ * append-only series of held intervals — who filled it over time, so a slot's
+ * holder is POINT-IN-TIME, not current-holder-only. This is the per-(team, role)
+ * generalization of the single-slot operator position history: the same
+ * close-then-append rotation, parallelized across (team, role) pairs.
+ *
+ *   scrum_team_members — one row per held interval of one (team, role) slot.
+ *                        `team_slug` is the owning team (a `scrum_teams.slug`).
+ *                        `role` is which of the three slots the interval fills;
+ *                        the column carries no CHECK, so the closed `TeamRole`
+ *                        vocabulary is documented on the type and enforced at the
+ *                        store boundary, matching the v2–v15 forward-compatible-
+ *                        TEXT convention. `contributor_id` is a CT-UUID — a SOFT
+ *                        reference (no foreign key), stored exactly as the
+ *                        operator history stores its holder. `from_ts` is when
+ *                        the holder took the slot; `to_ts` is when they vacated
+ *                        it, or NULL for the CURRENT (open) holder. `reason` is a
+ *                        free-text rotation rationale, or NULL.
+ *
+ * Invariant: at most one open row (`to_ts IS NULL`) per (team_slug, role) —
+ * rotating a slot first closes its prior open row's `to_ts` to the new holder's
+ * `from_ts`, then appends the new open row. Enforced in
+ * `store.ts::rotateTeamMember`, not by a partial unique index, so the
+ * close-then-append sequence stays one transaction. The same contributor MAY
+ * fill multiple slots on a team — that is the team-of-one case and is permitted
+ * (the store warns but never rejects).
+ *
+ * `id` is an AUTOINCREMENT surrogate (a contributor may hold a slot across
+ * several disjoint intervals). `created_at` records when the row was appended
+ * (distinct from `from_ts`, which can be backdated to the real rotation instant).
+ * Index backs the per-(team, role) interval scan. Table and index names carry
+ * the `scrum_` / `idx_scrum_` prefix per the domain-namespacing contract
+ * established in v1.
+ */
+export const SCRUM_MIGRATION_V16_SQL = `
+CREATE TABLE scrum_team_members (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_slug TEXT NOT NULL REFERENCES scrum_teams(slug),
+    role TEXT NOT NULL,
+    contributor_id TEXT NOT NULL,
+    from_ts TEXT NOT NULL,
+    to_ts TEXT,
+    reason TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_scrum_team_members_team_role ON scrum_team_members(team_slug, role);
+`;
+
 /**
  * Current scrum-domain store version — the highest migration version this
  * module registers. Stamped as the per-artifact `schema_version` on the
@@ -570,12 +626,12 @@ CREATE INDEX idx_scrum_team_scopes_team ON scrum_team_scopes(team_slug);
  * scrum row reports the schema it was read under. Bump in lockstep with the
  * top migration version on every additive hop.
  */
-export const SCRUM_SCHEMA_VERSION = 15;
+export const SCRUM_SCHEMA_VERSION = 16;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that have hit `clearRegistry()` — both
- * paths land a single scrum/{v1..v15} entry set. Matches
+ * paths land a single scrum/{v1..v16} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -700,6 +756,14 @@ export function ensureScrumSchemaRegistered(): void {
           'create scrum_team_scopes (per-team read/write scope globs) + idx_scrum_team_scopes_team',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V15_SQL);
+        },
+      },
+      {
+        version: 16,
+        description:
+          'create scrum_team_members (per-team three-role roster + position history) + idx_scrum_team_members_team_role',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V16_SQL);
         },
       },
     ],

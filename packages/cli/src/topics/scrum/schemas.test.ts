@@ -31,6 +31,7 @@ import {
   SCRUM_MIGRATION_V13_SQL,
   SCRUM_MIGRATION_V14_SQL,
   SCRUM_MIGRATION_V15_SQL,
+  SCRUM_MIGRATION_V16_SQL,
   SCRUM_SCHEMA_VERSION,
   ensureScrumSchemaRegistered,
 } from './schemas';
@@ -69,7 +70,7 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V2_SQL).toContain("DEFAULT 'accepted'");
   });
 
-  test('migration creates all 12 scrum_* tables (v1 + v2 + v12 + v13 + v14 + v15)', () => {
+  test('migration creates all 13 scrum_* tables (v1 + v2 + v12 + v13 + v14 + v15 + v16)', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -89,6 +90,7 @@ describe('scrum domain registration', () => {
         'scrum_run_links',
         'scrum_tags',
         'scrum_tasks',
+        'scrum_team_members',
         'scrum_team_scopes',
         'scrum_teams',
       ]);
@@ -106,7 +108,7 @@ describe('scrum domain registration', () => {
     );
   });
 
-  test('migration creates all 13 scrum indexes (v1 + v2 + v3 + v12 + v13 + v14 + v15)', () => {
+  test('migration creates all 14 scrum indexes (v1 + v2 + v3 + v12 + v13 + v14 + v15 + v16)', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -127,6 +129,7 @@ describe('scrum domain registration', () => {
         'idx_scrum_tags_tag',
         'idx_scrum_tasks_parent',
         'idx_scrum_tasks_status_event',
+        'idx_scrum_team_members_team_role',
         'idx_scrum_team_scopes_team',
         'idx_scrum_teams_type',
       ]);
@@ -439,12 +442,12 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('full migration chain from v0 applies v1..v15 in order', () => {
+  test('full migration chain from v0 applies v1..v16 in order', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       const result = runMigrations(raw);
       expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
       ]);
     } finally {
       raw.close();
@@ -456,7 +459,7 @@ describe('scrum domain registration', () => {
     try {
       const first = runMigrations(raw);
       expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
       ]);
 
       const second = runMigrations(raw);
@@ -482,6 +485,7 @@ describe('scrum domain registration', () => {
         { version: 13 },
         { version: 14 },
         { version: 15 },
+        { version: 16 },
       ]);
     } finally {
       raw.close();
@@ -512,8 +516,8 @@ describe('scrum domain registration', () => {
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(log).toHaveLength(15);
-      const [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15] = log;
+      expect(log).toHaveLength(16);
+      const [v1, v2, v3, v4, v5, v6, v7, v8, v9, v10, v11, v12, v13, v14, v15, v16] = log;
       if (
         !v1 ||
         !v2 ||
@@ -529,9 +533,10 @@ describe('scrum domain registration', () => {
         !v12 ||
         !v13 ||
         !v14 ||
-        !v15
+        !v15 ||
+        !v16
       )
-        throw new Error('expected fifteen log entries');
+        throw new Error('expected sixteen log entries');
       expect(v1.domain).toBe('scrum');
       expect(v1.version).toBe(1);
       expect(v1.description).toContain('scrum_tasks');
@@ -577,6 +582,9 @@ describe('scrum domain registration', () => {
       expect(v15.domain).toBe('scrum');
       expect(v15.version).toBe(15);
       expect(v15.description).toContain('scrum_team_scopes');
+      expect(v16.domain).toBe('scrum');
+      expect(v16.version).toBe(16);
+      expect(v16.description).toContain('scrum_team_members');
     } finally {
       raw.close();
     }
@@ -608,8 +616,8 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V11_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN run_id');
   });
 
-  test('SCRUM_SCHEMA_VERSION tracks the top migration version (15)', () => {
-    expect(SCRUM_SCHEMA_VERSION).toBe(15);
+  test('SCRUM_SCHEMA_VERSION tracks the top migration version (16)', () => {
+    expect(SCRUM_SCHEMA_VERSION).toBe(16);
   });
 
   test('v11 ADD COLUMN defaults worker_id/run_id to NULL on existing rows', () => {
@@ -742,7 +750,7 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V14_SQL).toContain('idx_scrum_teams_type');
   });
 
-  test('a fresh store ends at version 15 with scrum_teams present', () => {
+  test('a fresh store ends at version 16 with scrum_teams present', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -751,7 +759,7 @@ describe('scrum domain registration', () => {
         'SELECT MAX(version) AS version FROM _migrations_log WHERE domain = ?',
         ['scrum'],
       );
-      expect(top).toEqual([{ version: 15 }]);
+      expect(top).toEqual([{ version: 16 }]);
 
       const tables = raw.all<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_teams'",
@@ -845,6 +853,60 @@ describe('scrum domain registration', () => {
         { kind: 'read', glob: 'src/shared/**' },
         { kind: 'write', glob: 'src/payments/**' },
       ]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('SCRUM_MIGRATION_V16_SQL creates scrum_team_members + (team, role) index', () => {
+    expect(SCRUM_MIGRATION_V16_SQL).toContain('CREATE TABLE scrum_team_members');
+    expect(SCRUM_MIGRATION_V16_SQL).toContain('idx_scrum_team_members_team_role');
+    expect(SCRUM_MIGRATION_V16_SQL).toContain('REFERENCES scrum_teams(slug)');
+  });
+
+  test('a fresh store has scrum_team_members with the v16 column shape', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+
+      const tables = raw.all<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_team_members'",
+      );
+      expect(tables).toEqual([{ name: 'scrum_team_members' }]);
+
+      const cols = raw
+        .all<{ name: string }>('PRAGMA table_info(scrum_team_members)')
+        .map((c) => c.name);
+      expect(cols).toEqual([
+        'id',
+        'team_slug',
+        'role',
+        'contributor_id',
+        'from_ts',
+        'to_ts',
+        'reason',
+        'created_at',
+      ]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('v16 member rows round-trip against an existing team', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      raw.exec(
+        "INSERT INTO scrum_teams (slug, team_type, created_at) VALUES ('payments', 'stream_aligned', '2026-01-01T00:00:00Z')",
+      );
+      raw.exec(
+        "INSERT INTO scrum_team_members (team_slug, role, contributor_id, from_ts, to_ts, reason, created_at) VALUES ('payments', 'tech_lead', 'ct-jane', '2026-01-01T00:00:00Z', NULL, 'founding lead', '2026-01-01T00:00:00Z')",
+      );
+      const rows = raw.all<{ role: string; contributor_id: string; to_ts: string | null }>(
+        'SELECT role, contributor_id, to_ts FROM scrum_team_members WHERE team_slug = ?',
+        ['payments'],
+      );
+      expect(rows).toEqual([{ role: 'tech_lead', contributor_id: 'ct-jane', to_ts: null }]);
     } finally {
       raw.close();
     }
