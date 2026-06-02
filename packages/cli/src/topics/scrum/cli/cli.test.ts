@@ -456,7 +456,7 @@ describe('runTaskCmd', () => {
       expect(shown.task.run_id).toBe('feat-prov');
       expect(shown.task.provenance.worker_id).toBe('worker-42');
       expect(shown.task.provenance.run_id).toBe('feat-prov');
-      expect(shown.task.provenance.schema_version).toBe(14);
+      expect(shown.task.provenance.schema_version).toBe(15);
     } finally {
       restoreEnv('PROVE_WORKER_ID', savedWorker);
       restoreEnv('PROVE_RUN_SLUG', savedSlug);
@@ -2485,11 +2485,15 @@ describe('runTeamCmd', () => {
     const artifact = join(workspace, 'teams', 'payments.md');
     expect(existsSync(artifact)).toBe(true);
     const content = readFileSync(artifact, 'utf8');
-    expect(content).toContain('schema_version: 14');
+    expect(content).toContain('schema_version: 15');
     expect(content).toContain('team:');
     expect(content).toContain('slug: payments');
     expect(content).toContain('team_type: stream_aligned');
     expect(content).toContain('lifetime: persistent');
+    // v15 scope block mirrors the (empty) scope rows of a freshly-created team.
+    expect(content).toContain('scope:');
+    expect(content).toContain('read: []');
+    expect(content).toContain('write: []');
   });
 
   test('create honors an explicit --lifetime', () => {
@@ -2593,5 +2597,103 @@ describe('runTeamCmd', () => {
     );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('unknown team action');
+  });
+
+  // --- scope-set / scope-show (v15) ---
+
+  interface ScopeRow {
+    read: string[];
+    write: string[];
+  }
+
+  function createTeamFixture(slug: string, teamType = 'stream_aligned'): void {
+    withCapture(() =>
+      runTeamCmd('create', [undefined], { slug, teamType, workspaceRoot: workspace }),
+    );
+  }
+
+  test('scope-set replaces read/write globs, reflects into the artifact', () => {
+    createTeamFixture('payments');
+    const res = withCapture(() =>
+      runTeamCmd('scope-set', ['payments'], {
+        read: 'src/shared/**',
+        write: 'src/payments/**',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const scopes = JSON.parse(res.stdout.trim()) as ScopeRow;
+    expect(scopes).toEqual({ read: ['src/shared/**'], write: ['src/payments/**'] });
+
+    const content = readFileSync(join(workspace, 'teams', 'payments.md'), 'utf8');
+    expect(content).toContain('scope:');
+    expect(content).toContain('"src/payments/**"');
+    expect(content).toContain('"src/shared/**"');
+  });
+
+  test('scope-set accepts disjoint writes + overlapping reads across teams', () => {
+    createTeamFixture('payments');
+    createTeamFixture('identity');
+    const a = withCapture(() =>
+      runTeamCmd('scope-set', ['payments'], {
+        read: 'src/shared/**',
+        write: 'src/payments/**',
+        workspaceRoot: workspace,
+      }),
+    );
+    const b = withCapture(() =>
+      runTeamCmd('scope-set', ['identity'], {
+        read: 'src/shared/**',
+        write: 'src/identity/**',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(a.exit).toBe(0);
+    expect(b.exit).toBe(0);
+  });
+
+  test('scope-set rejects a write overlap, naming both teams + the glob', () => {
+    createTeamFixture('payments');
+    createTeamFixture('identity');
+    withCapture(() =>
+      runTeamCmd('scope-set', ['payments'], { write: 'src/shared/**', workspaceRoot: workspace }),
+    );
+    const res = withCapture(() =>
+      runTeamCmd('scope-set', ['identity'], { write: 'src/shared/**', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('write-scope overlap');
+    expect(res.stderr).toContain("'identity'");
+    expect(res.stderr).toContain("'payments'");
+    expect(res.stderr).toContain('src/shared/**');
+  });
+
+  test('scope-show prints the scope JSON, exit 0', () => {
+    createTeamFixture('payments');
+    withCapture(() =>
+      runTeamCmd('scope-set', ['payments'], { write: 'src/payments/**', workspaceRoot: workspace }),
+    );
+    const res = withCapture(() =>
+      runTeamCmd('scope-show', ['payments'], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+    expect((JSON.parse(res.stdout.trim()) as ScopeRow).write).toEqual(['src/payments/**']);
+  });
+
+  test('scope-show on an unknown slug exits 1 with null on stdout', () => {
+    const res = withCapture(() =>
+      runTeamCmd('scope-show', ['ghost'], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stdout.trim()).toBe('null');
+    expect(res.stderr).toContain("no team 'ghost'");
+  });
+
+  test('scope-set on an unknown slug exits 1', () => {
+    const res = withCapture(() =>
+      runTeamCmd('scope-set', ['ghost'], { write: 'src/x/**', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown team 'ghost'");
   });
 });

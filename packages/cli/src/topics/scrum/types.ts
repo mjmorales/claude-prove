@@ -733,6 +733,59 @@ export interface CreateTeamInput {
   createdAt?: string;
 }
 
+/**
+ * Which side of a team's scope a glob belongs to. Matches
+ * `scrum_team_scopes.kind`; the column has no CHECK constraint, so this union
+ * documents the closed set without pinning the schema. Enforced at the store
+ * boundary in `setTeamScopes`.
+ *
+ *   read  — a path glob the team reads from. READ globs MAY overlap across
+ *           teams — many teams can read the same shared code.
+ *   write — a path glob the team writes to. WRITE globs MUST NOT overlap across
+ *           teams: a single writer owns each path (the single-writer-per-path
+ *           rule), the team-level analog of the per-task write-wall a sub-task
+ *           git worktree enforces. The cross-team write-disjointness is checked
+ *           by `validateTeamWriteScopes`.
+ */
+export type TeamScopeKind = 'read' | 'write';
+
+/** Runtime-checkable list of the closed `TeamScopeKind` set. */
+export const TEAM_SCOPE_KINDS: TeamScopeKind[] = ['read', 'write'];
+
+/**
+ * A team's scope globs (v15), grouped by side. The decoded view of the
+ * `scrum_team_scopes` rows for one team: every `read` row collected into
+ * `read`, every `write` row into `write`. Both arrays are deduped and sorted at
+ * the store boundary, so the shape is canonical regardless of insert order.
+ * Empty arrays mean the team declares no globs on that side (the unscoped
+ * default a freshly-created team carries).
+ */
+export interface TeamScopes {
+  read: string[];
+  write: string[];
+}
+
+/**
+ * A write-scope overlap between two teams — the conflict `validateTeamWriteScopes`
+ * returns when the single-writer-per-path rule is violated. Identifies BOTH
+ * conflicting teams and the specific pair of globs whose path sets could
+ * intersect, so the caller can name the conflict precisely rather than failing
+ * with a bare "overlap detected".
+ *
+ *   teamA / teamB — the two team slugs whose write scopes collide, ordered so
+ *                   `teamA <= teamB` (stable, slug-sorted) for deterministic
+ *                   reporting.
+ *   globA / globB — the offending write glob from `teamA` and from `teamB`
+ *                   respectively. Equal strings when the exact-same glob is
+ *                   declared by both teams.
+ */
+export interface TeamWriteScopeConflict {
+  teamA: string;
+  teamB: string;
+  globA: string;
+  globB: string;
+}
+
 // ---------------------------------------------------------------------------
 // Derived views
 // ---------------------------------------------------------------------------
