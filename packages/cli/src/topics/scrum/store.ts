@@ -2129,6 +2129,51 @@ export class ScrumStore {
   }
 
   /**
+   * Open gate-kind acceptance criteria awaiting a human verdict, across all
+   * non-terminal, non-deleted tasks. A pending gate is an `active`,
+   * `verifies_by: 'gate'` criterion whose persisted verdict is `gate_pending`
+   * (the seed state; `approved`/`rejected` are resolved and excluded). Backs
+   * the `alerts` pending-gate surface so an out-of-turn driver sees gates the
+   * in-turn `AskUserQuestion` path and the `scrum gate respond` CLI would
+   * otherwise be the only way to discover. A `done`/`cancelled` task's gates
+   * are no longer actionable and are excluded — same terminal-status filter as
+   * `listOpenEscalations`. Ordered by task id then criterion id for a stable
+   * report.
+   */
+  listPendingGates(): Array<{
+    task_id: string;
+    title: string;
+    criterion_id: string;
+    criterion_text: string;
+  }> {
+    const tasks = this.listTasks().filter((t) => t.status !== 'done' && t.status !== 'cancelled');
+    const pending: Array<{
+      task_id: string;
+      title: string;
+      criterion_id: string;
+      criterion_text: string;
+    }> = [];
+    for (const task of tasks) {
+      for (const criterion of task.acceptance?.criteria ?? []) {
+        if (criterion.verifies_by !== 'gate') continue;
+        if (criterion.status !== 'active') continue;
+        const verdict = criterion.gate?.verdict ?? 'gate_pending';
+        if (verdict !== 'gate_pending') continue;
+        pending.push({
+          task_id: task.id,
+          title: task.title,
+          criterion_id: criterion.id,
+          criterion_text: criterion.text,
+        });
+      }
+    }
+    pending.sort(
+      (a, b) => a.task_id.localeCompare(b.task_id) || a.criterion_id.localeCompare(b.criterion_id),
+    );
+    return pending;
+  }
+
+  /**
    * Lazily-cached prepared statement. Caching by SQL text matches bun's own
    * internal prepared-statement cache semantics and avoids re-parsing on
    * every hot-path call (nextReady walks the graph N times).

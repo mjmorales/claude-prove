@@ -1282,7 +1282,63 @@ describe('runAlertsCmd', () => {
     expect(payload.orphan_runs).toHaveLength(0);
     expect(payload.stalled_after_days).toBe(7);
     expect(res.stderr).toContain('0 stalled WIP');
+    expect(res.stderr).toContain('0 pending gates');
     expect(res.stderr).toContain('0 orphan runs');
+  });
+
+  test('pending gate surfaces with task + criterion id + resolution command; resolved one does not', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'G', id: 'g' }));
+    // biome-ignore lint/suspicious/noExplicitAny: test-only store reach-in to seed a gate criterion.
+    const { openScrumStore } = require('../store') as any;
+    const s = openScrumStore({ override: join(workspace, '.prove', 'prove.db') });
+    try {
+      s.addCriterion('g', {
+        id: 'gate-1',
+        text: 'operator approves the design',
+        verifies_by: 'gate',
+        check: 'operator approves the design',
+        status: 'active',
+        idempotent: false,
+        superseded_by: null,
+        reason: null,
+        inherited_from: null,
+      });
+    } finally {
+      s.close();
+    }
+
+    const json = withCapture(() => runAlertsCmd({ workspaceRoot: workspace }));
+    expect(json.exit).toBe(0);
+    const payload = JSON.parse(json.stdout.trim()) as {
+      pending_gates: Array<{
+        task_id: string;
+        criterion_id: string;
+        criterion_text: string;
+        resolve: string;
+      }>;
+    };
+    expect(payload.pending_gates).toHaveLength(1);
+    const gate = payload.pending_gates[0];
+    expect(gate?.task_id).toBe('g');
+    expect(gate?.criterion_id).toBe('gate-1');
+    expect(gate?.criterion_text).toBe('operator approves the design');
+    expect(gate?.resolve).toBe('scrum gate respond gate-1 approve|reject --task g');
+    expect(json.stderr).toContain('1 pending gates');
+
+    const human = withCapture(() => runAlertsCmd({ workspaceRoot: workspace, human: true }));
+    expect(human.stdout).toContain('Pending gates (1)');
+    expect(human.stdout).toContain('g / gate-1');
+    expect(human.stdout).toContain('scrum gate respond gate-1');
+
+    // Resolving the gate removes it from the next alerts report.
+    const resolved = withCapture(() =>
+      runGateCmd('respond', ['gate-1', 'approve'], { task: 'g', by: 'alice' }),
+    );
+    expect(resolved.exit).toBe(0);
+    const after = withCapture(() => runAlertsCmd({ workspaceRoot: workspace }));
+    const afterPayload = JSON.parse(after.stdout.trim()) as { pending_gates: unknown[] };
+    expect(afterPayload.pending_gates).toHaveLength(0);
+    expect(after.stderr).toContain('0 pending gates');
   });
 
   test('stalled WIP: in_progress task with an old last_event_at surfaces', () => {
