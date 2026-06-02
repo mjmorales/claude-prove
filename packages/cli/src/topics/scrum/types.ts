@@ -1112,6 +1112,64 @@ export interface TeamInterface {
 }
 
 /**
+ * One team's contribution to the cross-team Manifest — a team's slug paired with
+ * its ACTIVE interface contracts (the ask types it accepts and the outputs it
+ * exposes). The flattened decode of one team's `TeamInterface`: same `accepts` /
+ * `exposes` rows, carried without the redundant per-row `slug` echo (the entry's
+ * own `slug` field is the owner).
+ *
+ *   slug    — the team this entry describes.
+ *   accepts — the team's ACTIVE accept entries, ordered by id.
+ *   exposes — the team's ACTIVE expose entries, ordered by id.
+ */
+export interface ManifestTeamEntry {
+  slug: string;
+  accepts: TeamAcceptRow[];
+  exposes: TeamExposeRow[];
+}
+
+/**
+ * The cross-team Manifest — the single both-teams-visible surface that
+ * aggregates every team's published interface contracts (its accepts and
+ * exposes) into one view, so any team can read what every other team handles and
+ * publishes without walking the registry itself. A pure read aggregation over
+ * the team-interface tables: no Manifest state is persisted, and building it
+ * never mutates.
+ *
+ *   teams — one `ManifestTeamEntry` per registered team, ordered by slug
+ *           (mirroring `listTeams`). Empty when no teams exist.
+ *   asks  — the cross-team asks surface. Always empty until an inter-agent ask
+ *           protocol (a capability that lets one team file a request against
+ *           another's accepted ask types) exists to source it; the field is the
+ *           declared shape that surface will fill, kept present so a Manifest
+ *           reader sees the full contract from the start. Each ask, once
+ *           sourced, will name a requesting team, a target team, and an ask type
+ *           drawn from the target's accepts.
+ */
+export interface Manifest {
+  teams: ManifestTeamEntry[];
+  asks: ManifestAsk[];
+}
+
+/**
+ * One cross-team ask — a request one team files against another team's accepted
+ * ask types. The declared shape of the Manifest's `asks` surface; no instances
+ * are produced until an inter-agent ask protocol exists to source them, so the
+ * Manifest's `asks` array is always empty at present. Defined here so the
+ * Manifest contract is complete and a future ask source has a fixed target type.
+ *
+ *   from_team — the requesting team's slug.
+ *   to_team   — the target team's slug (the team that accepts the ask type).
+ *   ask_type  — the kebab-case ask type requested, drawn from the target team's
+ *               `accepts`.
+ */
+export interface ManifestAsk {
+  from_team: string;
+  to_team: string;
+  ask_type: string;
+}
+
+/**
  * One row of the `scrum_lores` table (v19) — a single Lore entry, the
  * accumulated convention or wisdom a team writes down for itself. Readable by
  * all, written only by the team's current `tech_lead`. Append-only: a

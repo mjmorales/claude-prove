@@ -43,6 +43,8 @@ import type {
   EventKind,
   GateVerdict,
   LoreRow,
+  Manifest,
+  ManifestTeamEntry,
   MilestoneStatus,
   NextReadyRow,
   OperatorHistoryRow,
@@ -2952,6 +2954,35 @@ export class ScrumStore {
     return this.prep(
       `SELECT ${TEAM_EXPOSE_COLUMNS} FROM scrum_team_exposes WHERE ${where} ORDER BY id ASC`,
     ).all(slug) as TeamExposeRow[];
+  }
+
+  // ==========================================================================
+  // Manifest — cross-team contracts read surface
+  // ==========================================================================
+
+  /**
+   * The cross-team Manifest — the single both-teams-visible aggregation of every
+   * team's published interface contracts. Walks `listTeams()` (slug order) and,
+   * per team, reads its ACTIVE accept/expose interface via `getTeamInterface`,
+   * collecting one `ManifestTeamEntry` per team into `teams`. A pure read: no
+   * Manifest state is persisted and this method never mutates. Tolerates a
+   * registry with zero teams — the `teams` array is then empty.
+   *
+   * The Manifest is the surface a team reads to learn what every OTHER team
+   * accepts (the ask types it handles) and exposes (the outputs it publishes),
+   * without each team walking the registry itself.
+   */
+  getManifest(): Manifest {
+    const teams: ManifestTeamEntry[] = this.listTeams().map((team) => {
+      const iface = this.getTeamInterface(team.slug);
+      return { slug: iface.slug, accepts: iface.accepts, exposes: iface.exposes };
+    });
+    // SEAM: incorporate cross-team asks here once an inter-agent ask protocol
+    // (a capability that lets one team file a request against another team's
+    // accepted ask types) exists to source them. Until then there is no ask
+    // source to read, so `asks` is the empty declared placeholder, not a
+    // fabricated list — the Manifest reader still sees the full contract shape.
+    return { teams, asks: [] };
   }
 
   // ==========================================================================

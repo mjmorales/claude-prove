@@ -29,6 +29,7 @@ import { runHookCmd } from './hook-cmd';
 import { runInitCmd } from './init-cmd';
 import { runLinkRunCmd } from './link-run-cmd';
 import { runLoreCmd } from './lore-cmd';
+import { runManifestCmd } from './manifest-cmd';
 import { runMilestoneCmd } from './milestone-cmd';
 import { runNextReadyCmd } from './next-ready-cmd';
 import { runOperatorCmd } from './operator-cmd';
@@ -3635,5 +3636,87 @@ describe('runAnnotationCmd', () => {
     );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('unknown annotation action');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runManifestCmd — cross-team contracts read surface
+// ---------------------------------------------------------------------------
+
+interface ManifestJson {
+  teams: { slug: string; accepts: { ask_type: string }[]; exposes: { name: string }[] }[];
+  asks: unknown[];
+}
+
+describe('runManifestCmd', () => {
+  function seedTeam(slug: string, teamType: string): void {
+    withCapture(() =>
+      runTeamCmd('create', [undefined], { slug, teamType, workspaceRoot: workspace }),
+    );
+  }
+
+  test('show prints the cross-team JSON: every team, active accepts + exposes, slug-ordered', () => {
+    seedTeam('payments', 'stream_aligned');
+    seedTeam('identity', 'platform');
+    withCapture(() =>
+      runTeamCmd('accept-add', ['payments'], {
+        askType: 'schema-change',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runTeamCmd('expose-add', ['payments'], {
+        name: 'PaymentEvent',
+        schemaRef: 'pe.json',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runTeamCmd('accept-add', ['identity'], { askType: 'api-review', workspaceRoot: workspace }),
+    );
+
+    const res = withCapture(() => runManifestCmd('show', { workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const manifest = JSON.parse(res.stdout.trim()) as ManifestJson;
+    expect(manifest.teams.map((t) => t.slug)).toEqual(['identity', 'payments']);
+    const payments = manifest.teams.find((t) => t.slug === 'payments');
+    expect(payments?.accepts.map((a) => a.ask_type)).toEqual(['schema-change']);
+    expect(payments?.exposes.map((e) => e.name)).toEqual(['PaymentEvent']);
+    // The asks surface is always empty until an ask protocol sources it.
+    expect(manifest.asks).toEqual([]);
+    expect(res.stderr).toContain('2 teams, 0 asks');
+  });
+
+  test('show tolerates zero teams (empty manifest)', () => {
+    const res = withCapture(() => runManifestCmd('show', { workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const manifest = JSON.parse(res.stdout.trim()) as ManifestJson;
+    expect(manifest.teams).toEqual([]);
+    expect(manifest.asks).toEqual([]);
+  });
+
+  test('show --human renders a per-team table', () => {
+    seedTeam('payments', 'stream_aligned');
+    withCapture(() =>
+      runTeamCmd('accept-add', ['payments'], {
+        askType: 'schema-change',
+        workspaceRoot: workspace,
+      }),
+    );
+    const res = withCapture(() =>
+      runManifestCmd('show', { human: true, workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+    expect(res.stdout).toContain('TEAM');
+    expect(res.stdout).toContain('ACCEPTS');
+    expect(res.stdout).toContain('EXPOSES');
+    expect(res.stdout).toContain('payments');
+    expect(res.stdout).toContain('schema-change');
+  });
+
+  test('an unknown manifest action exits 1', () => {
+    const res = withCapture(() => runManifestCmd('bogus', { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('unknown manifest action');
   });
 });
