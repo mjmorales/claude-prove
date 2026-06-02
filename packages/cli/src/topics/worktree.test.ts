@@ -12,7 +12,12 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { type WorktreeOpts, runWorktree } from './worktree/manage';
+import {
+  type WorktreeOpts,
+  createEphemeralWorktree,
+  removeEphemeralWorktree,
+  runWorktree,
+} from './worktree/manage';
 
 let base: string;
 let repo: string;
@@ -178,5 +183,60 @@ describe('worktree — reset (auto-rebound mechanic)', () => {
     );
     expect(existsSync(join(wt, 'other.txt'))).toBe(true); // picked up merged work
     expect(existsSync(join(wt, 'task.txt'))).toBe(false); // stale commit discarded
+  });
+});
+
+describe('worktree — ephemeral (detached, short-lived)', () => {
+  test('cuts a detached worktree at the requested ref and removes it', () => {
+    const headSha = git(['rev-parse', 'HEAD']);
+    const wt = createEphemeralWorktree(repo, 'HEAD');
+    expect(wt.sha).toBe(headSha);
+    expect(existsSync(wt.path)).toBe(true);
+    expect(existsSync(join(wt.path, 'f.txt'))).toBe(true); // checked out at HEAD
+    // detached: `symbolic-ref HEAD` exits non-zero (no branch) on a detached checkout
+    let onBranch = true;
+    try {
+      execFileSync('git', ['-C', wt.path, 'symbolic-ref', '-q', 'HEAD'], { encoding: 'utf8' });
+    } catch {
+      onBranch = false;
+    }
+    expect(onBranch).toBe(false);
+    removeEphemeralWorktree(repo, wt.path);
+    expect(existsSync(wt.path)).toBe(false);
+  });
+
+  test('resolves a specific commit ref, not just HEAD', () => {
+    const firstSha = git(['rev-parse', 'HEAD']);
+    writeFileSync(join(repo, 'second.txt'), 'second\n');
+    git(['add', 'second.txt']);
+    git(['commit', '-qm', 'second']);
+
+    const wt = createEphemeralWorktree(repo, firstSha);
+    expect(wt.sha).toBe(firstSha);
+    // worktree reflects the older commit, not the new HEAD
+    expect(existsSync(join(wt.path, 'second.txt'))).toBe(false);
+    removeEphemeralWorktree(repo, wt.path);
+  });
+
+  test('throws on an unresolvable ref', () => {
+    expect(() => createEphemeralWorktree(repo, 'no-such-ref')).toThrow(/does not resolve/);
+  });
+
+  test('parallel ephemeral worktrees do not collide', () => {
+    const a = createEphemeralWorktree(repo, 'HEAD');
+    const b = createEphemeralWorktree(repo, 'HEAD');
+    expect(a.path).not.toBe(b.path);
+    // a write in one is invisible to the other (and to the real tree)
+    writeFileSync(join(a.path, 'only-a.txt'), 'a\n');
+    expect(existsSync(join(b.path, 'only-a.txt'))).toBe(false);
+    expect(existsSync(join(repo, 'only-a.txt'))).toBe(false);
+    removeEphemeralWorktree(repo, a.path);
+    removeEphemeralWorktree(repo, b.path);
+  });
+
+  test('removeEphemeralWorktree is best-effort on a missing path', () => {
+    expect(() =>
+      removeEphemeralWorktree(repo, join(repo, '.claude', 'worktrees', 'gone')),
+    ).not.toThrow();
   });
 });

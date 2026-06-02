@@ -14,7 +14,7 @@
  *   add-dep <from> <to>     [--kind blocks|blocked_by]   (default: blocks)
  *   remove-dep <from> <to>  [--kind blocks|blocked_by]   (default: blocks)
  *   acceptance add <id>     --text T --verifies-by K --check C [--idempotent]
- *                                                     [--timeout 30s] [--criterion ID]
+ *                              [--scope descendants|self|both] [--timeout 30s] [--criterion ID]
  *   acceptance list <id>
  *   acceptance supersede <id> --criterion ID --reason R [--by NEW-ID]
  *   bounds set <id>          --bounds JSON   (pass --bounds '' to clear)
@@ -37,12 +37,14 @@ import type { ListTasksOptions, ScrumStore } from '../store';
 import { openScrumStore } from '../store';
 import type {
   AcceptanceCriterion,
+  AcceptanceScope,
   AcceptanceVerifiesBy,
   DepKind,
   TaskBounds,
   TaskLayer,
   TaskStatus,
 } from '../types';
+import { ACCEPTANCE_SCOPES } from '../types';
 import { parseDecisionFile } from './decision-cmd';
 import { generateId } from './scrum-utils';
 
@@ -63,6 +65,7 @@ export interface TaskCmdFlags {
   verifiesBy?: string;
   check?: string;
   idempotent?: boolean;
+  scope?: string;
   timeout?: string;
   criterion?: string;
   reason?: string;
@@ -108,6 +111,8 @@ const TASK_ACTIONS: TaskAction[] = [
 const VALID_DEP_KINDS: DepKind[] = ['blocks', 'blocked_by'];
 
 const VALID_VERIFIES_BY: AcceptanceVerifiesBy[] = ['bash', 'assert', 'gate', 'agent'];
+
+const VALID_SCOPES: AcceptanceScope[] = ACCEPTANCE_SCOPES;
 
 const VALID_LAYERS: TaskLayer[] = ['epic', 'story', 'task'];
 
@@ -537,7 +542,8 @@ function resolveDepKind(raw: string | undefined, action: 'add-dep' | 'remove-dep
 // acceptance — author/list/supersede acceptance criteria (v5)
 //
 //   task acceptance add <task-id> --text T --verifies-by K --check C
-//                                 [--idempotent] [--timeout 30s] [--criterion ID]
+//                                 [--idempotent] [--scope descendants|self|both]
+//                                 [--timeout 30s] [--criterion ID]
 //   task acceptance list <task-id>
 //   task acceptance supersede <task-id> --criterion ID --reason R [--by NEW-ID]
 //
@@ -592,6 +598,12 @@ function doAcceptanceAdd(store: ScrumStore, taskId: string, flags: TaskCmdFlags)
     );
     return 1;
   }
+  if (flags.scope !== undefined && !VALID_SCOPES.includes(flags.scope as AcceptanceScope)) {
+    process.stderr.write(
+      `scrum task acceptance add: --scope must be one of: ${VALID_SCOPES.join(', ')}\n`,
+    );
+    return 1;
+  }
 
   const criterion: AcceptanceCriterion = {
     id:
@@ -607,6 +619,8 @@ function doAcceptanceAdd(store: ScrumStore, taskId: string, flags: TaskCmdFlags)
     reason: null,
     inherited_from: null,
   };
+  // Absent --scope leaves scope undefined: the copy-down default (`both`).
+  if (flags.scope !== undefined) criterion.scope = flags.scope as AcceptanceScope;
   if (flags.timeout !== undefined && flags.timeout.length > 0) criterion.timeout = flags.timeout;
 
   const task = store.addCriterion(taskId, criterion);

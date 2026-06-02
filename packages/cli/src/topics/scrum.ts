@@ -22,6 +22,7 @@
  *   claude-prove scrum task acceptance supersede <id> --criterion ID --reason R [--by NEW-ID]
  *   claude-prove scrum task bounds set <id>      --bounds JSON   (pass --bounds '' to clear)
  *   claude-prove scrum task bounds show <id>
+ *   claude-prove scrum gate respond <criterion-id> <approve|reject> --task <id> [--comment T] [--by R]
  *   claude-prove scrum alerts                    [--human] [--stalled-after-days N]
  *   claude-prove scrum milestone create          --title X [--description Y] [--target-state S] [--id I] [--initiative N]
  *   claude-prove scrum milestone list            [--status S] [--initiative N]
@@ -56,6 +57,7 @@ import type { CAC } from 'cac';
 import { runAlertsCmd } from './scrum/cli/alerts-cmd';
 import { runCompilePlanCmd } from './scrum/cli/compile-plan-cmd';
 import { runDecisionCmd } from './scrum/cli/decision-cmd';
+import { runGateCmd } from './scrum/cli/gate-cmd';
 import { runHookCmd } from './scrum/cli/hook-cmd';
 import { runInitCmd } from './scrum/cli/init-cmd';
 import { runLinkRunCmd } from './scrum/cli/link-run-cmd';
@@ -72,6 +74,7 @@ type ScrumAction =
   | 'compile-plan'
   | 'alerts'
   | 'task'
+  | 'gate'
   | 'milestone'
   | 'tag'
   | 'decision'
@@ -85,6 +88,7 @@ const SCRUM_ACTIONS: ScrumAction[] = [
   'compile-plan',
   'alerts',
   'task',
+  'gate',
   'milestone',
   'tag',
   'decision',
@@ -122,8 +126,11 @@ interface ScrumFlags {
   verifiesBy?: string;
   check?: string;
   idempotent?: boolean;
+  scope?: string;
   timeout?: string;
   criterion?: string;
+  // `gate respond` flag: human responder's optional rationale on the verdict.
+  comment?: string;
   // `task create` + `task bounds set` declared-bounds JSON blob (v6).
   bounds?: string;
   // `task cancel` cascade + terminal provenance (v7).
@@ -146,7 +153,7 @@ export function register(cli: CAC): void {
     .option('--layer <l>', 'Containment tier for `task create` (epic | story | task)')
     .option('--status <s>', 'Status filter (list / close / create)')
     .option('--tag <t>', 'Tag filter')
-    .option('--task <id>', 'Task filter for `tag list`')
+    .option('--task <id>', 'Task filter for `tag list`; owning task for `gate respond`')
     .option('--topic <t>', 'Topic filter for `decision list`')
     .option('--target-state <s>', 'Milestone target state (milestone create)')
     .option(
@@ -169,8 +176,13 @@ export function register(cli: CAC): void {
     .option('--verifies-by <k>', 'task acceptance add: bash | assert | gate | agent')
     .option('--check <c>', 'task acceptance add: kind-specific check payload (command/expr/prompt)')
     .option('--idempotent', 'task acceptance add: mark the criterion safe to re-run')
+    .option(
+      '--scope <s>',
+      'task acceptance add: copy-down scope (descendants | self | both); absent defaults to both',
+    )
     .option('--timeout <t>', 'task acceptance add: optional wall-clock budget (e.g. 30s)')
     .option('--criterion <id>', 'task acceptance: explicit criterion id (default: generated)')
+    .option('--comment <text>', 'gate respond: optional human rationale recorded on the verdict')
     .option(
       '--bounds <json>',
       "task create / task bounds set: declared bounds JSON ({ read?, write?, tools?, budgets? }); pass '' to clear",
@@ -267,6 +279,7 @@ function dispatch(
         verifiesBy: flags.verifiesBy,
         check: flags.check,
         idempotent: flags.idempotent,
+        scope: flags.scope,
         timeout: flags.timeout,
         criterion: flags.criterion,
         reason: flags.reason,
@@ -274,6 +287,18 @@ function dispatch(
         bounds: flags.bounds,
         cascade: flags.cascade,
         detail: flags.detail,
+        workspaceRoot: flags.workspaceRoot,
+      });
+
+    case 'gate':
+      if (arg1 === undefined) {
+        console.error('error: scrum gate: sub-action required (one of: respond)');
+        return 1;
+      }
+      return runGateCmd(arg1, [arg2, arg3], {
+        task: flags.task,
+        comment: flags.comment,
+        by: flags.by,
         workspaceRoot: flags.workspaceRoot,
       });
 
