@@ -62,6 +62,8 @@
  *   claude-prove scrum lore record <slug>        --body TEXT --author CT-UUID   (append a team-scoped Lore entry; rejects a non-tech_lead author, warns when no tech_lead seated)
  *   claude-prove scrum lore list <slug>          [--human]   (team Lore entries, oldest-first)
  *   claude-prove scrum lore show <id>            (one Lore entry by id)
+ *   claude-prove scrum annotation add            --target-kind task|team|decision --target REF --body TEXT --author ID   (append a per-artifact note; target is a soft reference, no authorship gate)
+ *   claude-prove scrum annotation list           --target-kind K --target REF [--human]   (a target's notes, oldest-first)
  *   claude-prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
  *   claude-prove scrum hook <event>              (event: session-start | subagent-stop | stop)
  *
@@ -79,6 +81,7 @@
 
 import type { CAC } from 'cac';
 import { runAlertsCmd } from './scrum/cli/alerts-cmd';
+import { runAnnotationCmd } from './scrum/cli/annotation-cmd';
 import { runCompilePlanCmd } from './scrum/cli/compile-plan-cmd';
 import { runContributorCmd } from './scrum/cli/contributor-cmd';
 import { runDecisionCmd } from './scrum/cli/decision-cmd';
@@ -110,6 +113,7 @@ type ScrumAction =
   | 'operator'
   | 'team'
   | 'lore'
+  | 'annotation'
   | 'link-run'
   | 'hook';
 
@@ -128,6 +132,7 @@ const SCRUM_ACTIONS: ScrumAction[] = [
   'operator',
   'team',
   'lore',
+  'annotation',
   'link-run',
   'hook',
 ];
@@ -211,8 +216,14 @@ interface ScrumFlags {
   schemaRef?: string;
   // `lore record` (v19). `body` is the Lore entry's free text; `author` is the
   // writer's CT-UUID (must be the team's current tech_lead when one is seated).
+  // `body` + `author` are shared by `annotation add` (v20) below.
   body?: string;
   author?: string;
+  // `annotation add`/`list` (v20). `targetKind` is the artifact class the note
+  // attaches to (task | team | decision); `target` is the soft reference to the
+  // specific target within that class.
+  targetKind?: string;
+  target?: string;
 }
 
 export function register(cli: CAC): void {
@@ -316,10 +327,21 @@ export function register(cli: CAC): void {
     )
     .option('--name <n>', 'team expose-add: handle of the exposed output')
     .option('--schema-ref <r>', "team expose-add: pointer to the exposed output's shape")
-    .option('--body <text>', 'lore record: the Lore entry body (team-scoped wisdom)')
+    .option(
+      '--body <text>',
+      'lore record / annotation add: the entry body (Lore wisdom or per-artifact note)',
+    )
     .option(
       '--author <id>',
-      'lore record: the entry author (a contributor CT-UUID; must be the team current tech_lead when one is seated)',
+      'lore record: the entry author (a contributor CT-UUID; must be the team current tech_lead when one is seated). annotation add: the note author (recorded, not gated)',
+    )
+    .option(
+      '--target-kind <k>',
+      'annotation add/list: the target artifact class (task | team | decision)',
+    )
+    .option(
+      '--target <ref>',
+      'annotation add/list: the target identifier within its class (a soft reference — existence is not checked)',
     )
     .option(
       '--workspace-root <w>',
@@ -548,6 +570,20 @@ function dispatch(
         return 1;
       }
       return runLoreCmd(arg1, [arg2], {
+        body: flags.body,
+        author: flags.author,
+        human: flags.human,
+        workspaceRoot: flags.workspaceRoot,
+      });
+
+    case 'annotation':
+      if (arg1 === undefined) {
+        console.error('error: scrum annotation: sub-action required (one of: add | list)');
+        return 1;
+      }
+      return runAnnotationCmd(arg1, {
+        targetKind: flags.targetKind,
+        target: flags.target,
         body: flags.body,
         author: flags.author,
         human: flags.human,

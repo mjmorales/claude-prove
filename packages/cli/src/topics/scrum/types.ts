@@ -1103,6 +1103,67 @@ export interface RecordLoreResult {
   warning: string | null;
 }
 
+/**
+ * The kind of artifact an Annotation is attached to. A closed set: an
+ * Annotation hangs off a task, a team, or a decision. Matches the
+ * `scrum_annotations.target_kind` column; the column carries no CHECK
+ * constraint, so this union documents the canonical set and the store boundary
+ * enforces it (`addAnnotation` rejects any value outside this list).
+ *
+ *   task     — the target_ref is a `scrum_tasks.id`.
+ *   team     — the target_ref is a `scrum_teams.slug`.
+ *   decision — the target_ref is a `scrum_decisions.id`.
+ */
+export type AnnotationTargetKind = 'task' | 'team' | 'decision';
+
+/** Runtime-checkable list of the closed `AnnotationTargetKind` set. */
+export const ANNOTATION_TARGET_KINDS: AnnotationTargetKind[] = ['task', 'team', 'decision'];
+
+/**
+ * A row in `scrum_annotations` (v20) — the Annotation memory layer. An
+ * Annotation is the lightest layer: a per-artifact note captured during work,
+ * visible to ANYONE reading the target, written by the artifact's owner. Unlike
+ * Lore (team-scoped, tech_lead-gated), an Annotation hangs off a single target
+ * artifact and carries no authorship gate beyond recording who wrote it.
+ *
+ *   id          — AUTOINCREMENT surrogate.
+ *   target_kind — which artifact class the note attaches to (`task` | `team` |
+ *                 `decision`). A closed enum, guarded at the store boundary.
+ *   target_ref  — the specific target's identifier within that class: a task id,
+ *                 a team slug, or a decision id. A SOFT reference — it spans
+ *                 multiple tables by `target_kind`, so it carries NO foreign key
+ *                 and the store does NOT verify the target row exists (matching
+ *                 how `author_contributor_id` and the operator history hold their
+ *                 referents without an FK).
+ *   body        — the note's free-text content.
+ *   author      — who wrote the note (an identifier — typically a CT-UUID).
+ *                 Recorded, not gated: any author may annotate any target.
+ *   created_at  — when the note was appended (ISO-8601).
+ */
+export interface AnnotationRow {
+  id: number;
+  target_kind: AnnotationTargetKind;
+  target_ref: string;
+  body: string;
+  author: string;
+  created_at: string;
+}
+
+/**
+ * Input to `addAnnotation` (v20). `targetKind` must be a member of the closed
+ * `AnnotationTargetKind` set (guarded at the store boundary). `targetRef` is a
+ * soft reference — the store does NOT check that the target row exists.
+ * `createdAt` defaults to now().
+ */
+export interface AddAnnotationInput {
+  targetKind: AnnotationTargetKind;
+  targetRef: string;
+  body: string;
+  author: string;
+  /** ISO-8601 timestamp; defaults to now(). */
+  createdAt?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Derived views
 // ---------------------------------------------------------------------------

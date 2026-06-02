@@ -21,6 +21,7 @@ import { join } from 'node:path';
 
 import { appendEntry } from '../../acb/reasoning-log-store';
 import { runAlertsCmd } from './alerts-cmd';
+import { runAnnotationCmd } from './annotation-cmd';
 import { runContributorCmd } from './contributor-cmd';
 import { parseDecisionFile, runDecisionCmd } from './decision-cmd';
 import { runGateCmd } from './gate-cmd';
@@ -457,7 +458,7 @@ describe('runTaskCmd', () => {
       expect(shown.task.run_id).toBe('feat-prov');
       expect(shown.task.provenance.worker_id).toBe('worker-42');
       expect(shown.task.provenance.run_id).toBe('feat-prov');
-      expect(shown.task.provenance.schema_version).toBe(19);
+      expect(shown.task.provenance.schema_version).toBe(20);
     } finally {
       restoreEnv('PROVE_WORKER_ID', savedWorker);
       restoreEnv('PROVE_RUN_SLUG', savedSlug);
@@ -2488,7 +2489,7 @@ describe('runTeamCmd', () => {
     const artifact = join(workspace, 'teams', 'payments.md');
     expect(existsSync(artifact)).toBe(true);
     const content = readFileSync(artifact, 'utf8');
-    expect(content).toContain('schema_version: 19');
+    expect(content).toContain('schema_version: 20');
     expect(content).toContain('team:');
     expect(content).toContain('slug: payments');
     expect(content).toContain('team_type: stream_aligned');
@@ -3337,5 +3338,190 @@ describe('runLoreCmd', () => {
     const res = withCapture(() => runLoreCmd('bogus', ['payments'], { workspaceRoot: workspace }));
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('unknown lore action');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runAnnotationCmd — per-artifact note add / list (v20)
+// ---------------------------------------------------------------------------
+
+interface AnnotationRow {
+  id: number;
+  target_kind: string;
+  target_ref: string;
+  body: string;
+  author: string;
+  created_at: string;
+}
+
+describe('runAnnotationCmd', () => {
+  test('add appends a note and prints the JSON row (no authorship gate)', () => {
+    const res = withCapture(() =>
+      runAnnotationCmd('add', {
+        targetKind: 'task',
+        target: 't1',
+        body: 'watch the off-by-one',
+        author: 'CT-a',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as AnnotationRow;
+    expect(row.target_kind).toBe('task');
+    expect(row.target_ref).toBe('t1');
+    expect(row.body).toBe('watch the off-by-one');
+    expect(row.author).toBe('CT-a');
+  });
+
+  test('add on a soft target_ref succeeds even though no such target row exists', () => {
+    const res = withCapture(() =>
+      runAnnotationCmd('add', {
+        targetKind: 'decision',
+        target: 'ghost',
+        body: 'note on a phantom decision',
+        author: 'CT-a',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    expect((JSON.parse(res.stdout.trim()) as AnnotationRow).target_ref).toBe('ghost');
+  });
+
+  test('add rejects a target_kind outside the closed enum, naming the valid set', () => {
+    const res = withCapture(() =>
+      runAnnotationCmd('add', {
+        targetKind: 'milestone',
+        target: 'm1',
+        body: 'x',
+        author: 'CT-a',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--target-kind');
+    expect(res.stderr).toContain('task|team|decision');
+  });
+
+  test('add requires --target, --body, and --author', () => {
+    const noTarget = withCapture(() =>
+      runAnnotationCmd('add', {
+        targetKind: 'task',
+        body: 'x',
+        author: 'CT-a',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(noTarget.exit).toBe(1);
+    expect(noTarget.stderr).toContain('--target');
+
+    const noBody = withCapture(() =>
+      runAnnotationCmd('add', {
+        targetKind: 'task',
+        target: 't1',
+        author: 'CT-a',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(noBody.exit).toBe(1);
+    expect(noBody.stderr).toContain('--body');
+
+    const noAuthor = withCapture(() =>
+      runAnnotationCmd('add', {
+        targetKind: 'task',
+        target: 't1',
+        body: 'x',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(noAuthor.exit).toBe(1);
+    expect(noAuthor.stderr).toContain('--author');
+  });
+
+  test('list returns a target notes oldest-first as JSON', () => {
+    withCapture(() =>
+      runAnnotationCmd('add', {
+        targetKind: 'team',
+        target: 'payments',
+        body: 'first',
+        author: 'CT-a',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runAnnotationCmd('add', {
+        targetKind: 'team',
+        target: 'payments',
+        body: 'second',
+        author: 'CT-b',
+        workspaceRoot: workspace,
+      }),
+    );
+    const res = withCapture(() =>
+      runAnnotationCmd('list', {
+        targetKind: 'team',
+        target: 'payments',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const rows = JSON.parse(res.stdout.trim()) as AnnotationRow[];
+    expect(rows.map((r) => r.body)).toEqual(['first', 'second']);
+  });
+
+  test('list scopes by (target_kind, target_ref) — a different kind, same ref, does not bleed', () => {
+    withCapture(() =>
+      runAnnotationCmd('add', {
+        targetKind: 'task',
+        target: 'x',
+        body: 'task note',
+        author: 'CT-a',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runAnnotationCmd('add', {
+        targetKind: 'team',
+        target: 'x',
+        body: 'team note',
+        author: 'CT-b',
+        workspaceRoot: workspace,
+      }),
+    );
+    const res = withCapture(() =>
+      runAnnotationCmd('list', { targetKind: 'task', target: 'x', workspaceRoot: workspace }),
+    );
+    expect((JSON.parse(res.stdout.trim()) as AnnotationRow[]).map((r) => r.body)).toEqual([
+      'task note',
+    ]);
+  });
+
+  test('list on a target with no notes returns an empty array, exit 0', () => {
+    const res = withCapture(() =>
+      runAnnotationCmd('list', { targetKind: 'task', target: 'ghost', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+    expect(JSON.parse(res.stdout.trim())).toEqual([]);
+  });
+
+  test('list requires --target-kind and --target', () => {
+    const noKind = withCapture(() =>
+      runAnnotationCmd('list', { target: 't1', workspaceRoot: workspace }),
+    );
+    expect(noKind.exit).toBe(1);
+    expect(noKind.stderr).toContain('--target-kind');
+
+    const noTarget = withCapture(() =>
+      runAnnotationCmd('list', { targetKind: 'task', workspaceRoot: workspace }),
+    );
+    expect(noTarget.exit).toBe(1);
+    expect(noTarget.stderr).toContain('--target');
+  });
+
+  test('an unknown annotation action exits 1', () => {
+    const res = withCapture(() =>
+      runAnnotationCmd('bogus', { targetKind: 'task', target: 't1', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('unknown annotation action');
   });
 });

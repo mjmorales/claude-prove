@@ -777,6 +777,54 @@ CREATE TABLE scrum_lores (
 CREATE INDEX idx_scrum_lores_team ON scrum_lores(team_slug);
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v20 — per-artifact Annotation memory layer (scrum_annotations)
+// ---------------------------------------------------------------------------
+
+/**
+ * v20: an Annotation layer — the lightest memory layer. An Annotation is a
+ * per-artifact note captured during work, visible to ANYONE reading the target,
+ * written by the artifact's owner. A new table (not columns on an existing one)
+ * because an Annotation is not owned by any one artifact table: a single note
+ * may hang off a task, a team, or a decision, so the target is addressed by a
+ * (kind, ref) pair rather than a typed foreign key.
+ *
+ *   scrum_annotations — one row per note appended to a target artifact.
+ *                 `target_kind` is the artifact class the note attaches to
+ *                 (`task` | `team` | `decision`) — a closed enum carrying NO SQL
+ *                 CHECK; the boundary guard in `addAnnotation` enforces it, and
+ *                 the index orders by it. `target_ref` is the specific target's
+ *                 identifier within that class (a task id, a team slug, a
+ *                 decision id) — a SOFT reference: it spans multiple tables by
+ *                 `target_kind`, so it carries NO foreign key and the store does
+ *                 NOT verify the target row exists, matching how the roster's
+ *                 `contributor_id` holds its referent without an FK. `body` is
+ *                 the note's free text. `author` records who wrote it.
+ *                 `created_at` records when it was appended.
+ *
+ * APPEND-ONLY, no supersession column: an Annotation is never updated or deleted
+ * in place — a correction is a NEW row, not an edit, so the full history of what
+ * was noted at each point survives. Mirrors the per-team Lore idiom (entries are
+ * appended, never rewritten); an Annotation has no lifecycle state to flip, so
+ * it carries no `status`/`superseded_by` pointer.
+ *
+ * `id` is an AUTOINCREMENT surrogate. The index backs the per-target fetch
+ * (`target_kind, target_ref`). Table and index names carry the `scrum_` /
+ * `idx_scrum_` prefix per the domain-namespacing contract established in v1.
+ */
+export const SCRUM_MIGRATION_V20_SQL = `
+CREATE TABLE scrum_annotations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_kind TEXT NOT NULL,
+    target_ref TEXT NOT NULL,
+    body TEXT NOT NULL,
+    author TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_scrum_annotations_target ON scrum_annotations(target_kind, target_ref);
+`;
+
 /**
  * Current scrum-domain store version — the highest migration version this
  * module registers. Stamped as the per-artifact `schema_version` on the
@@ -784,12 +832,12 @@ CREATE INDEX idx_scrum_lores_team ON scrum_lores(team_slug);
  * scrum row reports the schema it was read under. Bump in lockstep with the
  * top migration version on every additive hop.
  */
-export const SCRUM_SCHEMA_VERSION = 19;
+export const SCRUM_SCHEMA_VERSION = 20;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that have hit `clearRegistry()` — both
- * paths land a single scrum/{v1..v19} entry set. Matches
+ * paths land a single scrum/{v1..v20} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -946,6 +994,14 @@ export function ensureScrumSchemaRegistered(): void {
           'create scrum_lores (per-team append-only Lore memory layer, tech_lead-authored) + idx_scrum_lores_team',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V19_SQL);
+        },
+      },
+      {
+        version: 20,
+        description:
+          'create scrum_annotations (per-artifact append-only Annotation memory layer, soft target reference) + idx_scrum_annotations_target',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V20_SQL);
         },
       },
     ],
