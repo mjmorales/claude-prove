@@ -67,7 +67,7 @@ Parse `$ARGUMENTS`. First non-flag token selects the methodology:
 | Target | Mode | Path |
 |--------|------|------|
 | A milestone id, or `VISION.md` / a charter path | **Ladder** (B1) | Phase L1–L4 |
-| A story task id (a `layer: story` task) | **Story-close** (B2) | Phase C1–C5 |
+| A story task id (a `layer: story` task) | **Story-close** (B2) | Phase C1–C6 |
 | *(none)* | Ask. Offer open milestones (`scrum status`) for the ladder, or `scrum next-ready --status review` stories for close. | — |
 
 Flags:
