@@ -825,6 +825,47 @@ CREATE TABLE scrum_annotations (
 CREATE INDEX idx_scrum_annotations_target ON scrum_annotations(target_kind, target_ref);
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v21 — gated Codex write protocol on scrum_decisions
+// ---------------------------------------------------------------------------
+
+/**
+ * v21: a per-subtype write gate on the Codex (`scrum_decisions`). Certain
+ * decision subtypes are not durably accepted the moment they are recorded — they
+ * land as a DRAFT and become accepted only when their required gate/review is
+ * approved. Three nullable TEXT columns, no new table:
+ *
+ *   write_status       — the decision's write-gate state, a closed
+ *                        `draft | approved | rejected` enum. Set to `'draft'` on
+ *                        record for a GATED-kind decision (`adr | glossary |
+ *                        pattern`); NULL for a non-gated decision (no kind, or a
+ *                        kind outside the gated set) — which bypasses the gate
+ *                        and records as `accepted` immediately. `approved` flips
+ *                        the row's `status` to `'accepted'`; `rejected` blocks
+ *                        the decision (its `status` stays `'draft'`, never
+ *                        `accepted`).
+ *   gate_responder     — who resolved the gate (approved/rejected it). NULL while
+ *                        `draft` or on a non-gated row.
+ *   gate_responded_at  — ISO-8601 timestamp of the gate-resolving write. NULL
+ *                        until resolved.
+ *
+ * The per-kind rule (a human approve gate for `adr`/`pattern`; a tech_lead
+ * review for `glossary`, where the responder must currently hold a `tech_lead`
+ * slot on some team) spans the team roster and is enforced at the store boundary
+ * in `approveDecision`, NOT by a SQL constraint.
+ *
+ * `ADD COLUMN` with a NULL default is safe on a populated table (every existing
+ * decision is already durably accepted and needs no gate). No CHECK — the
+ * columns stay forward-compatible TEXT, matching the v2–v20 convention; the
+ * closed `write_status` vocabulary is documented on `DecisionWriteStatus` in
+ * `types.ts`.
+ */
+export const SCRUM_MIGRATION_V21_SQL = `
+ALTER TABLE scrum_decisions ADD COLUMN write_status TEXT;
+ALTER TABLE scrum_decisions ADD COLUMN gate_responder TEXT;
+ALTER TABLE scrum_decisions ADD COLUMN gate_responded_at TEXT;
+`;
+
 /**
  * Current scrum-domain store version — the highest migration version this
  * module registers. Stamped as the per-artifact `schema_version` on the
@@ -832,12 +873,12 @@ CREATE INDEX idx_scrum_annotations_target ON scrum_annotations(target_kind, targ
  * scrum row reports the schema it was read under. Bump in lockstep with the
  * top migration version on every additive hop.
  */
-export const SCRUM_SCHEMA_VERSION = 20;
+export const SCRUM_SCHEMA_VERSION = 21;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that have hit `clearRegistry()` — both
- * paths land a single scrum/{v1..v20} entry set. Matches
+ * paths land a single scrum/{v1..v21} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -1002,6 +1043,14 @@ export function ensureScrumSchemaRegistered(): void {
           'create scrum_annotations (per-artifact append-only Annotation memory layer, soft target reference) + idx_scrum_annotations_target',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V20_SQL);
+        },
+      },
+      {
+        version: 21,
+        description:
+          'add scrum_decisions.write_status (draft|approved|rejected) + gate_responder + gate_responded_at for the gated Codex write protocol',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V21_SQL);
         },
       },
     ],

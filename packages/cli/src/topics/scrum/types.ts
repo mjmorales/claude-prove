@@ -520,6 +520,43 @@ export interface ScrumContextBundle {
 }
 
 /**
+ * Closed Codex subtypes whose write path is GATED — a decision of one of these
+ * kinds does NOT land durably `accepted` on record. It enters as a DRAFT and
+ * becomes `accepted` only when its required write-gate is approved:
+ *   - `adr` and `pattern` require a human approve gate (any responder).
+ *   - `glossary` requires a tech_lead review (the responder must currently hold
+ *     a `tech_lead` slot on some team).
+ * A decision with NO kind, or a kind outside this set, is NOT gated — it lands
+ * `accepted` immediately on record, exactly as an untyped decision always has.
+ */
+export const GATED_DECISION_KINDS = ['adr', 'glossary', 'pattern'] as const;
+
+/** The subtype that requires tech_lead review (rather than a plain human gate). */
+export const TECH_LEAD_REVIEW_KIND = 'glossary';
+
+/**
+ * Write-gate state on a Codex decision (v21). Mirrors the `GateVerdict` idiom
+ * (a HUMAN decision recorded as standing state, never a blocking process), but
+ * names the write-acceptance lifecycle of a gated decision:
+ *
+ *   draft    — the decision is recorded but NOT durably accepted; its required
+ *              approve gate / tech_lead review has not yet been approved. The
+ *              row's `status` is held at `'draft'` (out of the accepted set)
+ *              while in this state.
+ *   approved — the gate was approved; the decision is durably `accepted`.
+ *   rejected — the gate was rejected; the decision is BLOCKED — it never becomes
+ *              `accepted`. Re-deciding a rejected (or approved) gate is refused.
+ *
+ * A NON-gated decision (no kind, or a kind outside `GATED_DECISION_KINDS`)
+ * carries `write_status = null` — it bypasses the gate entirely and lands
+ * `accepted` on record.
+ */
+export type DecisionWriteStatus = 'draft' | 'approved' | 'rejected';
+
+/** Runtime-checkable list of the closed `DecisionWriteStatus` set. */
+export const DECISION_WRITE_STATUSES: DecisionWriteStatus[] = ['draft', 'approved', 'rejected'];
+
+/**
  * One row of the `scrum_decisions` table. `id` is the filename slug
  * (e.g., `decision-persistence`). `content_sha` is the
  * hex-encoded sha256 of `content`, computed at write time so drift
@@ -558,6 +595,25 @@ export interface DecisionRow {
    * by a CHECK, matching the forward-compatible convention on `status`.
    */
   kind: string | null;
+  /**
+   * Write-gate state (v21). `draft | approved | rejected` for a GATED-kind
+   * decision (`adr | glossary | pattern`); NULL for a non-gated decision (no
+   * kind, or a kind outside the gated set) — which bypasses the gate and lands
+   * `accepted` on record. A `draft` row is NOT durably accepted (`status` is
+   * held at `'draft'`); `approved` flips `status` to `'accepted'`; `rejected`
+   * blocks the decision (it never becomes accepted). TEXT column — not pinned by
+   * a CHECK, matching the forward-compatible convention on `status`/`kind`.
+   */
+  write_status: DecisionWriteStatus | null;
+  /**
+   * The responder who resolved the write-gate (v21) — `approveDecision` /
+   * `rejectDecision` stamp it. NULL while `draft` or on a non-gated row. The
+   * write-acceptance contributor of record, mirroring `gate.responder` on a
+   * task's acceptance gate.
+   */
+  gate_responder: string | null;
+  /** ISO-8601 timestamp of the gate-resolving write (v21). NULL until resolved. */
+  gate_responded_at: string | null;
 }
 
 /**

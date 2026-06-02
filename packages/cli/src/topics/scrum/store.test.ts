@@ -2303,7 +2303,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 20,
+      schema_version: 21,
     });
   });
 
@@ -2316,7 +2316,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(20);
+    expect(updated.provenance.schema_version).toBe(21);
   });
 });
 
@@ -3343,5 +3343,143 @@ describe('ScrumStore — Annotation layer (v20)', () => {
       'use tabs',
       'correction: use spaces',
     ]);
+  });
+});
+
+describe('ScrumStore — gated Codex write protocol (v21)', () => {
+  test('a non-gated record (no kind) lands accepted immediately, write_status null', () => {
+    const row = store.recordDecision({ id: 'plain', title: 'Plain', content: 'body' });
+    expect(row.status).toBe('accepted');
+    expect(row.write_status).toBeNull();
+    expect(row.gate_responder).toBeNull();
+    expect(row.gate_responded_at).toBeNull();
+  });
+
+  test('an adr record lands as a draft — not accepted until approved', () => {
+    const row = store.recordDecision({ id: 'a1', title: 'A', content: 'body', kind: 'adr' });
+    expect(row.kind).toBe('adr');
+    expect(row.status).toBe('draft');
+    expect(row.write_status).toBe('draft');
+    // It is NOT in the accepted set yet.
+    expect(store.listDecisions({ status: 'accepted' }).map((d) => d.id)).not.toContain('a1');
+  });
+
+  test('adr draft -> approve -> accepted (human gate, any responder)', () => {
+    store.recordDecision({ id: 'a1', title: 'A', content: 'body', kind: 'adr' });
+    const approved = store.approveDecision('a1', 'ct-anyone');
+    expect(approved.status).toBe('accepted');
+    expect(approved.write_status).toBe('approved');
+    expect(approved.gate_responder).toBe('ct-anyone');
+    expect(approved.gate_responded_at).not.toBeNull();
+    expect(store.listDecisions({ status: 'accepted' }).map((d) => d.id)).toContain('a1');
+  });
+
+  test('pattern draft -> approve -> accepted (human gate, any responder)', () => {
+    store.recordDecision({ id: 'p1', title: 'P', content: 'body', kind: 'pattern' });
+    const approved = store.approveDecision('p1', 'ct-anyone');
+    expect(approved.status).toBe('accepted');
+    expect(approved.write_status).toBe('approved');
+  });
+
+  test('glossary draft -> approve by a tech_lead -> accepted', () => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
+    store.recordDecision({ id: 'g1', title: 'G', content: 'body', kind: 'glossary' });
+    const approved = store.approveDecision('g1', 'ct-lead');
+    expect(approved.status).toBe('accepted');
+    expect(approved.write_status).toBe('approved');
+    expect(approved.gate_responder).toBe('ct-lead');
+  });
+
+  test('glossary approve by a NON-tech_lead is rejected, decision stays a draft', () => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'engineer', contributorId: 'ct-eng' });
+    store.recordDecision({ id: 'g1', title: 'G', content: 'body', kind: 'glossary' });
+    expect(() => store.approveDecision('g1', 'ct-eng')).toThrow(
+      /requires a tech_lead review.*holds no current tech_lead slot/,
+    );
+    // The rejected approve never mutated the row — it is still a draft.
+    const row = store.getDecision('g1');
+    expect(row?.status).toBe('draft');
+    expect(row?.write_status).toBe('draft');
+  });
+
+  test('a tech_lead on ANY team may approve a glossary (cross-team review)', () => {
+    store.createTeam({ slug: 'other', teamType: 'platform' });
+    store.rotateTeamMember({ teamSlug: 'other', role: 'tech_lead', contributorId: 'ct-lead' });
+    store.recordDecision({ id: 'g1', title: 'G', content: 'body', kind: 'glossary' });
+    expect(store.approveDecision('g1', 'ct-lead').status).toBe('accepted');
+  });
+
+  test('a former tech_lead (rotated out) may NOT approve a glossary', () => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-old' });
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-new' });
+    store.recordDecision({ id: 'g1', title: 'G', content: 'body', kind: 'glossary' });
+    // The closed (rotated-out) slot does not count; only the open holder does.
+    expect(() => store.approveDecision('g1', 'ct-old')).toThrow(/requires a tech_lead review/);
+    expect(store.approveDecision('g1', 'ct-new').status).toBe('accepted');
+  });
+
+  test('reject blocks a gated draft — it never becomes accepted', () => {
+    store.recordDecision({ id: 'a1', title: 'A', content: 'body', kind: 'adr' });
+    const rejected = store.rejectDecision('a1', 'ct-reviewer', 'duplicate of existing ADR');
+    expect(rejected.write_status).toBe('rejected');
+    // Blocked: status stays 'draft', never accepted.
+    expect(rejected.status).toBe('draft');
+    expect(rejected.reason).toBe('duplicate of existing ADR');
+    expect(rejected.gate_responder).toBe('ct-reviewer');
+    expect(store.listDecisions({ status: 'accepted' }).map((d) => d.id)).not.toContain('a1');
+  });
+
+  test('re-deciding an already-approved gate is refused', () => {
+    store.recordDecision({ id: 'a1', title: 'A', content: 'body', kind: 'adr' });
+    store.approveDecision('a1', 'ct-anyone');
+    expect(() => store.approveDecision('a1', 'ct-other')).toThrow(
+      /already resolved \('approved'\)/,
+    );
+    expect(() => store.rejectDecision('a1', 'ct-other')).toThrow(/already resolved \('approved'\)/);
+  });
+
+  test('re-deciding an already-rejected gate is refused', () => {
+    store.recordDecision({ id: 'a1', title: 'A', content: 'body', kind: 'adr' });
+    store.rejectDecision('a1', 'ct-reviewer');
+    expect(() => store.approveDecision('a1', 'ct-other')).toThrow(
+      /already resolved \('rejected'\)/,
+    );
+    expect(() => store.rejectDecision('a1', 'ct-other')).toThrow(/already resolved \('rejected'\)/);
+  });
+
+  test('approve/reject refuse a non-gated decision (no write-gate to resolve)', () => {
+    store.recordDecision({ id: 'plain', title: 'Plain', content: 'body' });
+    expect(() => store.approveDecision('plain', 'ct-x')).toThrow(/is not gated/);
+    expect(() => store.rejectDecision('plain', 'ct-x')).toThrow(/is not gated/);
+  });
+
+  test('approve/reject refuse an unknown decision id', () => {
+    expect(() => store.approveDecision('ghost', 'ct-x')).toThrow(/unknown decision 'ghost'/);
+    expect(() => store.rejectDecision('ghost', 'ct-x')).toThrow(/unknown decision 'ghost'/);
+  });
+
+  test('a re-record of a gated draft re-enters the draft gate (not auto-accepted)', () => {
+    store.recordDecision({ id: 'a1', title: 'A', content: 'v1', kind: 'adr' });
+    const reRecorded = store.recordDecision({ id: 'a1', title: 'A', content: 'v2', kind: 'adr' });
+    expect(reRecorded.status).toBe('draft');
+    expect(reRecorded.write_status).toBe('draft');
+  });
+
+  test('a superseded gated decision keeps its terminal state across a bare re-record', () => {
+    store.recordDecision({ id: 'a1', title: 'A', content: 'body', kind: 'adr' });
+    store.approveDecision('a1', 'ct-anyone');
+    store.recordDecision({ id: 'a2', title: 'A2', content: 'body2', kind: 'adr' });
+    store.approveDecision('a2', 'ct-anyone');
+    store.supersedeDecision('a1', 'a2', 'superseded by a2');
+    // A bare re-record (no asserted status) must not resurrect the supersession
+    // nor clobber the gate columns.
+    const reRecorded = store.recordDecision({ id: 'a1', title: 'A', content: 'recovered' });
+    expect(reRecorded.status).toBe('superseded');
+    expect(reRecorded.superseded_by).toBe('a2');
+    expect(reRecorded.write_status).toBe('approved');
+    expect(reRecorded.gate_responder).toBe('ct-anyone');
   });
 });

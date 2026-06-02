@@ -97,6 +97,10 @@ describe('ScrumStore — decisions: schema materialization', () => {
       'reason:TEXT:0',
       // v8 appends the Codex subtype, NULL default.
       'kind:TEXT:0',
+      // v21 appends the gated-write columns, NULL default.
+      'write_status:TEXT:0',
+      'gate_responder:TEXT:0',
+      'gate_responded_at:TEXT:0',
     ]);
   });
 });

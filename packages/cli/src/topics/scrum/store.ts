@@ -36,6 +36,7 @@ import type {
   Contributor,
   ContributorStatus,
   DecisionRow,
+  DecisionWriteStatus,
   DepKind,
   EscalationPayload,
   EscalationType,
@@ -83,10 +84,12 @@ import {
   ACCEPTANCE_SCOPES,
   ANNOTATION_TARGET_KINDS,
   ESCALATION_TYPES,
+  GATED_DECISION_KINDS,
   GATE_VERDICTS,
   TEAM_LIFETIMES,
   TEAM_ROLES,
   TEAM_TYPES,
+  TECH_LEAD_REVIEW_KIND,
   VERIFICATION_VERDICTS,
 } from './types';
 
@@ -314,6 +317,10 @@ const LORE_COLUMNS = 'id, team_slug, body, author_contributor_id, created_at';
 
 /** Canonical `scrum_annotations` SELECT column list (v20); maps 1:1 to `AnnotationRow`. */
 const ANNOTATION_COLUMNS = 'id, target_kind, target_ref, body, author, created_at';
+
+/** Canonical `scrum_decisions` SELECT column list (v2/v4/v8/v21); maps 1:1 to `DecisionRow`. */
+const DECISION_COLUMNS =
+  'id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason, kind, write_status, gate_responder, gate_responded_at';
 
 /**
  * Kebab-case ask-type format: one or more lowercase-alphanumeric segments
@@ -1952,6 +1959,15 @@ export class ScrumStore {
    * never emits it; supersession carries a pointer the file cannot supply).
    * `supersedeDecision` remains the sole entry point for retiring a decision.
    *
+   * Gated write protocol (v21): a decision whose `kind` is in
+   * `GATED_DECISION_KINDS` (`adr | glossary | pattern`) is NOT durably accepted
+   * on record — it lands as a DRAFT (`status = 'draft'`, `write_status =
+   * 'draft'`) and becomes `accepted` only when `approveDecision` resolves its
+   * gate. A NON-gated record (no kind, or a kind outside the set) is unchanged:
+   * it lands `accepted` immediately with `write_status = null`. The gate state
+   * follows the row status through the supersession-preserve branch — a
+   * re-record of a superseded row keeps its existing gate columns intact.
+   *
    * `content_sha` uses node:crypto sha256 — same std-lib primitive every
    * other prove domain uses; no new dependency.
    */
@@ -1965,11 +1981,21 @@ export class ScrumStore {
     // flag so the ON CONFLICT branch preserves an existing terminal row.
     const incomingStatus = input.status ?? 'accepted';
     const assertsStatus = incomingStatus === 'superseded' ? 1 : 0;
+    const kind = input.kind ?? null;
+    // A gated-kind record is held as a DRAFT until its write-gate is approved.
+    // A non-gated record (no kind / off-set kind) bypasses the gate: it keeps
+    // the incoming status (default 'accepted') and a null write_status. A record
+    // that asserts a 'superseded' status is never a fresh gated draft — it is a
+    // (legacy) supersession-carrying re-record, so the gate columns stay null.
+    const gated = kind !== null && (GATED_DECISION_KINDS as readonly string[]).includes(kind);
+    const isDraft = gated && assertsStatus === 0;
+    const landingStatus = isDraft ? 'draft' : incomingStatus;
+    const writeStatus: DecisionWriteStatus | null = isDraft ? 'draft' : null;
     const row: DecisionRow = {
       id: input.id,
       title: input.title,
       topic: input.topic ?? null,
-      status: incomingStatus,
+      status: landingStatus,
       content: input.content,
       source_path: input.sourcePath ?? null,
       content_sha: contentSha,
@@ -1981,15 +2007,18 @@ export class ScrumStore {
       // change (see ON CONFLICT below).
       superseded_by: null,
       reason: null,
-      kind: input.kind ?? null,
+      kind,
+      write_status: writeStatus,
+      gate_responder: null,
+      gate_responded_at: null,
     };
 
     // All binds are named ($-prefixed) so the supersession-preserve flag
     // ($assertsStatus) and every column value survive a future reorder of the
     // INSERT column list — no positional `?N` to silently misalign.
     this.prep(
-      `INSERT INTO scrum_decisions (id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason, kind)
-       VALUES ($id, $title, $topic, $status, $content, $source_path, $content_sha, $recorded_at, $recorded_by_agent, $superseded_by, $reason, $kind)
+      `INSERT INTO scrum_decisions (id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason, kind, write_status, gate_responder, gate_responded_at)
+       VALUES ($id, $title, $topic, $status, $content, $source_path, $content_sha, $recorded_at, $recorded_by_agent, $superseded_by, $reason, $kind, $write_status, $gate_responder, $gate_responded_at)
        ON CONFLICT(id) DO UPDATE SET
          title = excluded.title,
          topic = excluded.topic,
@@ -2001,8 +2030,10 @@ export class ScrumStore {
          kind = excluded.kind,
          -- Preserve a terminal supersession across a bare re-record. When the
          -- existing row is 'superseded' and the incoming record asserts no
-         -- status ($assertsStatus = 0), keep status/superseded_by/reason
-         -- intact; never auto-resurrect. Otherwise adopt the incoming values.
+         -- status ($assertsStatus = 0), keep status/superseded_by/reason and
+         -- the gate columns intact; never auto-resurrect. Otherwise adopt the
+         -- incoming values (a re-record of a non-superseded row re-enters the
+         -- gate per the incoming kind).
          status = CASE
            WHEN scrum_decisions.status = 'superseded' AND $assertsStatus = 0
              THEN scrum_decisions.status
@@ -2017,6 +2048,21 @@ export class ScrumStore {
            WHEN scrum_decisions.status = 'superseded' AND $assertsStatus = 0
              THEN scrum_decisions.reason
            ELSE excluded.reason
+         END,
+         write_status = CASE
+           WHEN scrum_decisions.status = 'superseded' AND $assertsStatus = 0
+             THEN scrum_decisions.write_status
+           ELSE excluded.write_status
+         END,
+         gate_responder = CASE
+           WHEN scrum_decisions.status = 'superseded' AND $assertsStatus = 0
+             THEN scrum_decisions.gate_responder
+           ELSE excluded.gate_responder
+         END,
+         gate_responded_at = CASE
+           WHEN scrum_decisions.status = 'superseded' AND $assertsStatus = 0
+             THEN scrum_decisions.gate_responded_at
+           ELSE excluded.gate_responded_at
          END`,
     ).run({
       $id: row.id,
@@ -2031,6 +2077,9 @@ export class ScrumStore {
       $superseded_by: row.superseded_by,
       $reason: row.reason,
       $kind: row.kind,
+      $write_status: row.write_status,
+      $gate_responder: row.gate_responder,
+      $gate_responded_at: row.gate_responded_at,
       $assertsStatus: assertsStatus,
     });
 
@@ -2076,9 +2125,9 @@ export class ScrumStore {
 
   /** Fetch one decision by id, or null if missing. */
   getDecision(id: string): DecisionRow | null {
-    const row = this.prep(
-      'SELECT id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason, kind FROM scrum_decisions WHERE id = ?',
-    ).get(id) as DecisionRow | null;
+    const row = this.prep(`SELECT ${DECISION_COLUMNS} FROM scrum_decisions WHERE id = ?`).get(
+      id,
+    ) as DecisionRow | null;
     return row ?? null;
   }
 
@@ -2112,8 +2161,110 @@ export class ScrumStore {
       params.push(filter.kind);
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
-    const sql = `SELECT id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason, kind FROM scrum_decisions ${where} ORDER BY recorded_at DESC`;
+    const sql = `SELECT ${DECISION_COLUMNS} FROM scrum_decisions ${where} ORDER BY recorded_at DESC`;
     return this.prep(sql).all(...params) as DecisionRow[];
+  }
+
+  // ==========================================================================
+  // Gated Codex write protocol (v21) — draft → approve | reject
+  //
+  // A decision recorded under a gated kind (adr | glossary | pattern) lands as a
+  // DRAFT and is NOT durably accepted until its write-gate is approved:
+  //   - adr / pattern require a HUMAN approve gate — any responder may approve.
+  //   - glossary requires a TECH_LEAD REVIEW — the responder must currently hold
+  //     a `tech_lead` slot on some team.
+  // Approve flips the row to `status = 'accepted'`, `write_status = 'approved'`.
+  // Reject sets `write_status = 'rejected'` and leaves the decision blocked (its
+  // `status` stays `'draft'` — it never becomes accepted). Re-deciding an
+  // already-resolved gate is refused, mirroring `respondGate`'s guard.
+  // ==========================================================================
+
+  /**
+   * Approve a gated decision's write-gate, accepting it durably. Flips the row
+   * to `status = 'accepted'`, `write_status = 'approved'`, and stamps the
+   * responder + timestamp. For a `glossary` decision the responder MUST
+   * currently hold a `tech_lead` slot on some team (the tech_lead review);
+   * `adr`/`pattern` are a plain human gate with no role constraint.
+   *
+   * Rejects when: the decision is unknown; it is not a gated-kind draft (an
+   * untyped/non-gated decision has no write-gate to approve); its gate is
+   * already resolved (`approved`/`rejected`); or a `glossary` responder holds no
+   * `tech_lead` slot anywhere. None of these mutate the row.
+   */
+  approveDecision(id: string, responder: string): DecisionRow {
+    const existing = this.requireGatedDraft(id, 'approveDecision');
+    if (existing.kind === TECH_LEAD_REVIEW_KIND && !this.holdsTechLeadAnywhere(responder)) {
+      throw new Error(
+        `approveDecision: glossary decision '${id}' requires a tech_lead review; '${responder}' holds no current tech_lead slot on any team`,
+      );
+    }
+    const respondedAt = isoNow();
+    this.prep(
+      "UPDATE scrum_decisions SET status = 'accepted', write_status = 'approved', gate_responder = ?, gate_responded_at = ? WHERE id = ?",
+    ).run(responder, respondedAt, id);
+    return this.requireDecision(id, 'approveDecision');
+  }
+
+  /**
+   * Reject a gated decision's write-gate, blocking it. Sets `write_status =
+   * 'rejected'` and stamps the responder + timestamp; the row's `status` stays
+   * `'draft'` — a rejected decision NEVER becomes accepted. `reason` is recorded
+   * on the row's `reason` column when supplied.
+   *
+   * Rejects (exit) when the decision is unknown, is not a gated-kind draft, or
+   * its gate is already resolved — mirroring `approveDecision`. There is no
+   * role constraint on rejection: any responder may reject any gated kind.
+   */
+  rejectDecision(id: string, responder: string, reason: string | null = null): DecisionRow {
+    this.requireGatedDraft(id, 'rejectDecision');
+    const respondedAt = isoNow();
+    this.prep(
+      "UPDATE scrum_decisions SET write_status = 'rejected', gate_responder = ?, gate_responded_at = ?, reason = ? WHERE id = ?",
+    ).run(responder, respondedAt, reason, id);
+    return this.requireDecision(id, 'rejectDecision');
+  }
+
+  /**
+   * Load a decision and assert it is a gated-kind DRAFT awaiting a write-gate
+   * decision. Throws on an unknown id, a non-gated decision (no write-gate), or
+   * an already-resolved gate (`approved`/`rejected`). Shared guard for
+   * `approveDecision`/`rejectDecision`, mirroring `respondGate`'s
+   * already-resolved check.
+   */
+  private requireGatedDraft(id: string, method: string): DecisionRow {
+    const existing = this.getDecision(id);
+    if (!existing) throw new Error(`${method}: unknown decision '${id}'`);
+    if (existing.write_status === null) {
+      throw new Error(
+        `${method}: decision '${id}' is not gated (kind '${existing.kind ?? 'none'}'); it has no write-gate to resolve`,
+      );
+    }
+    if (existing.write_status !== 'draft') {
+      throw new Error(
+        `${method}: decision '${id}' write-gate is already resolved ('${existing.write_status}'); it cannot be re-decided`,
+      );
+    }
+    return existing;
+  }
+
+  /** Re-fetch a decision after a gate write, asserting it survived. */
+  private requireDecision(id: string, method: string): DecisionRow {
+    const row = this.getDecision(id);
+    if (!row) throw new Error(`${method}: decision '${id}' vanished mid-update`);
+    return row;
+  }
+
+  /**
+   * Whether `contributorId` currently holds an open `tech_lead` slot on ANY
+   * team — the tech_lead-review check for a `glossary` write-gate. Reads the
+   * open (`to_ts IS NULL`) tech_lead rows across every team, matching how
+   * `getTeamRoster` reads the open slot for a single team.
+   */
+  private holdsTechLeadAnywhere(contributorId: string): boolean {
+    const row = this.prep(
+      "SELECT 1 FROM scrum_team_members WHERE role = 'tech_lead' AND contributor_id = ? AND to_ts IS NULL LIMIT 1",
+    ).get(contributorId);
+    return row !== null && row !== undefined;
   }
 
   // ==========================================================================

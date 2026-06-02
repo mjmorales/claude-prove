@@ -36,6 +36,7 @@ import {
   SCRUM_MIGRATION_V18_SQL,
   SCRUM_MIGRATION_V19_SQL,
   SCRUM_MIGRATION_V20_SQL,
+  SCRUM_MIGRATION_V21_SQL,
   SCRUM_SCHEMA_VERSION,
   ensureScrumSchemaRegistered,
 } from './schemas';
@@ -259,7 +260,7 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V4_SQL).toContain('ALTER TABLE scrum_decisions ADD COLUMN reason');
   });
 
-  test('scrum_decisions column shape gains v4 superseded_by + reason + v8 kind', () => {
+  test('scrum_decisions column shape gains v4 superseded_by + reason + v8 kind + v21 gate cols', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -283,6 +284,10 @@ describe('scrum domain registration', () => {
         'reason:TEXT:0',
         // v8 appends the Codex subtype, NULL default.
         'kind:TEXT:0',
+        // v21 appends the gated-write columns, NULL default.
+        'write_status:TEXT:0',
+        'gate_responder:TEXT:0',
+        'gate_responded_at:TEXT:0',
       ]);
     } finally {
       raw.close();
@@ -454,12 +459,12 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('full migration chain from v0 applies v1..v20 in order', () => {
+  test('full migration chain from v0 applies v1..v21 in order', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       const result = runMigrations(raw);
       expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
       ]);
     } finally {
       raw.close();
@@ -471,7 +476,7 @@ describe('scrum domain registration', () => {
     try {
       const first = runMigrations(raw);
       expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
-        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
       ]);
 
       const second = runMigrations(raw);
@@ -502,6 +507,7 @@ describe('scrum domain registration', () => {
         { version: 18 },
         { version: 19 },
         { version: 20 },
+        { version: 21 },
       ]);
     } finally {
       raw.close();
@@ -532,7 +538,7 @@ describe('scrum domain registration', () => {
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(log).toHaveLength(20);
+      expect(log).toHaveLength(21);
       const [
         v1,
         v2,
@@ -554,6 +560,7 @@ describe('scrum domain registration', () => {
         v18,
         v19,
         v20,
+        v21,
       ] = log;
       if (
         !v1 ||
@@ -575,9 +582,10 @@ describe('scrum domain registration', () => {
         !v17 ||
         !v18 ||
         !v19 ||
-        !v20
+        !v20 ||
+        !v21
       )
-        throw new Error('expected twenty log entries');
+        throw new Error('expected twenty-one log entries');
       expect(v1.domain).toBe('scrum');
       expect(v1.version).toBe(1);
       expect(v1.description).toContain('scrum_tasks');
@@ -640,6 +648,9 @@ describe('scrum domain registration', () => {
       expect(v20.domain).toBe('scrum');
       expect(v20.version).toBe(20);
       expect(v20.description).toContain('scrum_annotations');
+      expect(v21.domain).toBe('scrum');
+      expect(v21.version).toBe(21);
+      expect(v21.description).toContain('write_status');
     } finally {
       raw.close();
     }
@@ -671,8 +682,8 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V11_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN run_id');
   });
 
-  test('SCRUM_SCHEMA_VERSION tracks the top migration version (20)', () => {
-    expect(SCRUM_SCHEMA_VERSION).toBe(20);
+  test('SCRUM_SCHEMA_VERSION tracks the top migration version (21)', () => {
+    expect(SCRUM_SCHEMA_VERSION).toBe(21);
   });
 
   test('v11 ADD COLUMN defaults worker_id/run_id to NULL on existing rows', () => {
@@ -805,7 +816,7 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V14_SQL).toContain('idx_scrum_teams_type');
   });
 
-  test('a fresh store ends at version 20 with scrum_teams present', () => {
+  test('a fresh store ends at version 21 with scrum_teams present', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -814,7 +825,7 @@ describe('scrum domain registration', () => {
         'SELECT MAX(version) AS version FROM _migrations_log WHERE domain = ?',
         ['scrum'],
       );
-      expect(top).toEqual([{ version: 20 }]);
+      expect(top).toEqual([{ version: 21 }]);
 
       const tables = raw.all<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_teams'",
@@ -1178,6 +1189,73 @@ describe('scrum domain registration', () => {
         { id: 1, body: 'watch the off-by-one', author: 'CT-a' },
         { id: 2, body: 'fixed in follow-up', author: 'CT-b' },
       ]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('SCRUM_MIGRATION_V21_SQL adds the three gated-write columns to scrum_decisions', () => {
+    expect(SCRUM_MIGRATION_V21_SQL).toContain(
+      'ALTER TABLE scrum_decisions ADD COLUMN write_status',
+    );
+    expect(SCRUM_MIGRATION_V21_SQL).toContain(
+      'ALTER TABLE scrum_decisions ADD COLUMN gate_responder',
+    );
+    expect(SCRUM_MIGRATION_V21_SQL).toContain(
+      'ALTER TABLE scrum_decisions ADD COLUMN gate_responded_at',
+    );
+  });
+
+  test('a fresh store has scrum_decisions with the v21 column shape appended', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      const cols = raw
+        .all<{ name: string; type: string; notnull: number }>(
+          "SELECT name, type, [notnull] FROM pragma_table_info('scrum_decisions') ORDER BY cid",
+        )
+        .map((c) => `${c.name}:${c.type}:${c.notnull}`);
+      expect(cols).toEqual([
+        'id:TEXT:0',
+        'title:TEXT:1',
+        'topic:TEXT:0',
+        'status:TEXT:1',
+        'content:TEXT:1',
+        'source_path:TEXT:0',
+        'content_sha:TEXT:1',
+        'recorded_at:TEXT:1',
+        'recorded_by_agent:TEXT:0',
+        'superseded_by:TEXT:0',
+        'reason:TEXT:0',
+        'kind:TEXT:0',
+        // v21 gated-write columns append at the end, NULL default.
+        'write_status:TEXT:0',
+        'gate_responder:TEXT:0',
+        'gate_responded_at:TEXT:0',
+      ]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('v21 ADD COLUMN defaults the gated-write columns to NULL on existing rows', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      // A decision inserted without the v21 columns — simulates a pre-v21 row
+      // carried through the upgrade. The new columns must read NULL.
+      raw.exec(
+        "INSERT INTO scrum_decisions (id, title, status, content, content_sha, recorded_at) VALUES ('d1', 'D1', 'accepted', 'body', 'sha', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{
+        write_status: string | null;
+        gate_responder: string | null;
+        gate_responded_at: string | null;
+      }>(
+        'SELECT write_status, gate_responder, gate_responded_at FROM scrum_decisions WHERE id = ?',
+        ['d1'],
+      );
+      expect(row).toEqual([{ write_status: null, gate_responder: null, gate_responded_at: null }]);
     } finally {
       raw.close();
     }

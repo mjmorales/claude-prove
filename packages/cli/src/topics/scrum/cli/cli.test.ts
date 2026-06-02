@@ -458,7 +458,7 @@ describe('runTaskCmd', () => {
       expect(shown.task.run_id).toBe('feat-prov');
       expect(shown.task.provenance.worker_id).toBe('worker-42');
       expect(shown.task.provenance.run_id).toBe('feat-prov');
-      expect(shown.task.provenance.schema_version).toBe(20);
+      expect(shown.task.provenance.schema_version).toBe(21);
     } finally {
       restoreEnv('PROVE_WORKER_ID', savedWorker);
       restoreEnv('PROVE_RUN_SLUG', savedSlug);
@@ -1910,6 +1910,118 @@ describe('runDecisionCmd', () => {
 });
 
 // ---------------------------------------------------------------------------
+// decision approve / reject — gated Codex write protocol (v21)
+// ---------------------------------------------------------------------------
+
+describe('runDecisionCmd approve / reject (gated write)', () => {
+  /** Write a decision file and record it under `kind`. Returns the decision id. */
+  function recordKind(id: string, kind: string): string {
+    const rel = join('.prove', 'decisions', `${id}.md`);
+    mkdirSync(join(workspace, '.prove', 'decisions'), { recursive: true });
+    writeFileSync(join(workspace, rel), `# ${id}\n\nBody\n`, 'utf8');
+    withCapture(() => runDecisionCmd('record', [rel, undefined], { kind }));
+    return id;
+  }
+
+  test('record of a gated kind reports a draft on stderr', () => {
+    const rel = join('.prove', 'decisions', 'draft-adr.md');
+    mkdirSync(join(workspace, '.prove', 'decisions'), { recursive: true });
+    writeFileSync(join(workspace, rel), '# draft-adr\n\nBody\n', 'utf8');
+    const res = withCapture(() => runDecisionCmd('record', [rel, undefined], { kind: 'adr' }));
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as { status: string; write_status: string };
+    expect(row.status).toBe('draft');
+    expect(row.write_status).toBe('draft');
+    expect(res.stderr).toContain('draft — awaiting approve');
+  });
+
+  test('approve accepts an adr draft (human gate, any responder)', () => {
+    recordKind('a1', 'adr');
+    const res = withCapture(() =>
+      runDecisionCmd('approve', ['a1', undefined], { by: 'ct-anyone' }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as { status: string; write_status: string };
+    expect(row.status).toBe('accepted');
+    expect(row.write_status).toBe('approved');
+    expect(res.stderr).toContain('-> accepted (by ct-anyone)');
+  });
+
+  test('approve of a glossary requires a tech_lead responder', () => {
+    withCapture(() =>
+      runTeamCmd('create', [undefined], { slug: 'payments', teamType: 'stream_aligned' }),
+    );
+    withCapture(() =>
+      runTeamCmd('rotate', ['payments'], { role: 'tech_lead', contributor: 'ct-lead' }),
+    );
+    recordKind('g1', 'glossary');
+
+    // A non-tech_lead responder is rejected (exit 1, no acceptance).
+    const denied = withCapture(() =>
+      runDecisionCmd('approve', ['g1', undefined], { by: 'ct-eng' }),
+    );
+    expect(denied.exit).toBe(1);
+    expect(denied.stderr).toContain('requires a tech_lead review');
+
+    // The tech_lead approves successfully.
+    const ok = withCapture(() => runDecisionCmd('approve', ['g1', undefined], { by: 'ct-lead' }));
+    expect(ok.exit).toBe(0);
+    expect((JSON.parse(ok.stdout.trim()) as { status: string }).status).toBe('accepted');
+  });
+
+  test('reject blocks a gated draft and records the reason', () => {
+    recordKind('p1', 'pattern');
+    const res = withCapture(() =>
+      runDecisionCmd('reject', ['p1', undefined], { by: 'ct-rev', reason: 'duplicate' }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as {
+      status: string;
+      write_status: string;
+      reason: string | null;
+    };
+    expect(row.write_status).toBe('rejected');
+    expect(row.status).toBe('draft');
+    expect(row.reason).toBe('duplicate');
+    expect(res.stderr).toContain('-> blocked (by ct-rev)');
+  });
+
+  test('approve / reject require --by (no PROVE_AGENT fallback set)', () => {
+    recordKind('a1', 'adr');
+    const savedAgent = process.env.PROVE_AGENT;
+    restoreEnv('PROVE_AGENT', undefined);
+    try {
+      const a = withCapture(() => runDecisionCmd('approve', ['a1', undefined], {}));
+      expect(a.exit).toBe(1);
+      expect(a.stderr).toContain('--by <responder> is required');
+      const r = withCapture(() => runDecisionCmd('reject', ['a1', undefined], {}));
+      expect(r.exit).toBe(1);
+      expect(r.stderr).toContain('--by <responder> is required');
+    } finally {
+      restoreEnv('PROVE_AGENT', savedAgent);
+    }
+  });
+
+  test('approve refuses a non-gated decision', () => {
+    const rel = join('.prove', 'decisions', 'plain.md');
+    mkdirSync(join(workspace, '.prove', 'decisions'), { recursive: true });
+    writeFileSync(join(workspace, rel), '# plain\n\nBody\n', 'utf8');
+    withCapture(() => runDecisionCmd('record', [rel, undefined], {}));
+    const res = withCapture(() => runDecisionCmd('approve', ['plain', undefined], { by: 'ct-x' }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('is not gated');
+  });
+
+  test('re-deciding an already-resolved gate exits 1', () => {
+    recordKind('a1', 'adr');
+    withCapture(() => runDecisionCmd('approve', ['a1', undefined], { by: 'ct-x' }));
+    const res = withCapture(() => runDecisionCmd('reject', ['a1', undefined], { by: 'ct-y' }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("already resolved ('approved')");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // task link-decision — auto-record + new-shape payload
 // ---------------------------------------------------------------------------
 
@@ -2489,7 +2601,7 @@ describe('runTeamCmd', () => {
     const artifact = join(workspace, 'teams', 'payments.md');
     expect(existsSync(artifact)).toBe(true);
     const content = readFileSync(artifact, 'utf8');
-    expect(content).toContain('schema_version: 20');
+    expect(content).toContain('schema_version: 21');
     expect(content).toContain('team:');
     expect(content).toContain('slug: payments');
     expect(content).toContain('team_type: stream_aligned');

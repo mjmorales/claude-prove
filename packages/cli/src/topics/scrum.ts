@@ -33,7 +33,9 @@
  *   claude-prove scrum tag add <task-id> <tag>
  *   claude-prove scrum tag remove <task-id> <tag>
  *   claude-prove scrum tag list                  [--task <id>] [--tag <tag>]
- *   claude-prove scrum decision record <path>    [--kind adr|glossary|pattern]
+ *   claude-prove scrum decision record <path>    [--kind adr|glossary|pattern]   (gated kind lands as a draft, not yet accepted)
+ *   claude-prove scrum decision approve <id>     --by <responder>   (accept a gated draft; glossary requires a tech_lead responder)
+ *   claude-prove scrum decision reject <id>      --by <responder> [--reason R]   (block a gated draft; never becomes accepted)
  *   claude-prove scrum decision get <id>
  *   claude-prove scrum decision list             [--topic T] [--status S] [--kind K] [--human]
  *   claude-prove scrum decision review-stale     [--days N] [--human]
@@ -483,7 +485,7 @@ function dispatch(
     case 'decision':
       if (arg1 === undefined) {
         console.error(
-          'error: scrum decision: sub-action required (one of: record | get | list | recover | supersede | review-stale)',
+          'error: scrum decision: sub-action required (one of: record | approve | reject | get | list | recover | supersede | review-stale)',
         );
         return 1;
       }
