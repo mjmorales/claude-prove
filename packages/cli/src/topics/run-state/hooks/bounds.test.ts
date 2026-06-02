@@ -31,11 +31,11 @@ function stubDeps(active: ActiveBounds | null): BoundsHookDeps {
 }
 
 function writeBounds(write: string[]): ActiveBounds {
-  return { bounds: { write }, projectRoot: PROJECT_ROOT };
+  return { taskId: 't1', bounds: { write }, projectRoot: PROJECT_ROOT };
 }
 
 function readBounds(read: string[]): ActiveBounds {
-  return { bounds: { read }, projectRoot: PROJECT_ROOT };
+  return { taskId: 't1', bounds: { read }, projectRoot: PROJECT_ROOT };
 }
 
 describe('runBoundsHook — write wall', () => {
@@ -332,11 +332,23 @@ describe('resolveActiveBoundsFromStore', () => {
       store.updateTaskStatus('t1', 'in_progress');
     });
     const active = resolveActiveBoundsFromStore(dir);
+    expect(active?.taskId).toBe('t1');
     expect(active?.bounds.write).toEqual(['src/**']);
     expect(active?.projectRoot).toBe(resolve(dir));
   });
 
-  test('returns null when no in_progress task has path globs (permissive)', () => {
+  test('returns the single in_progress task carrying only a tool_calls budget', () => {
+    seedStore((store) => {
+      store.createTask({ id: 't1', title: 'budgeted', bounds: { budgets: { tool_calls: 5 } } });
+      store.updateTaskStatus('t1', 'ready');
+      store.updateTaskStatus('t1', 'in_progress');
+    });
+    const active = resolveActiveBoundsFromStore(dir);
+    expect(active?.taskId).toBe('t1');
+    expect(active?.bounds.budgets?.tool_calls).toBe(5);
+  });
+
+  test('returns null when no in_progress task has an enforceable bound (permissive)', () => {
     seedStore((store) => {
       store.createTask({ id: 't1', title: 'unbounded' });
       store.updateTaskStatus('t1', 'ready');
