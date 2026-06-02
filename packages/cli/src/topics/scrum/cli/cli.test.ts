@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { appendEntry } from '../../acb/reasoning-log-store';
 import { runAlertsCmd } from './alerts-cmd';
 import { parseDecisionFile, runDecisionCmd } from './decision-cmd';
+import { runGateCmd } from './gate-cmd';
 import { runHookCmd } from './hook-cmd';
 import { runInitCmd } from './init-cmd';
 import { runLinkRunCmd } from './link-run-cmd';
@@ -957,6 +958,108 @@ describe('runTaskCmd acceptance', () => {
     const res = withCapture(() => runTaskCmd('acceptance', ['nope', 'at'], {}));
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('sub-action required');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// gate respond — positional = [sub-action, criterion-id, verdict]
+// ---------------------------------------------------------------------------
+
+describe('runGateCmd respond', () => {
+  function seedGateTask(taskId = 'gt', criterionId = 'g1') {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: taskId, id: taskId }));
+    withCapture(() =>
+      runTaskCmd('acceptance', ['add', taskId], {
+        text: 'operator approves',
+        verifiesBy: 'gate',
+        check: 'approve the design',
+        criterion: criterionId,
+      }),
+    );
+  }
+
+  function readGate(taskId = 'gt', criterionId = 'g1') {
+    const list = withCapture(() => runTaskCmd('acceptance', ['list', taskId], {}));
+    const criteria = JSON.parse(list.stdout.trim()) as Array<{
+      id: string;
+      gate?: { verdict: string; responder?: string | null; comment?: string | null };
+    }>;
+    return criteria.find((c) => c.id === criterionId)?.gate;
+  }
+
+  test('approve persists verdict + responder + comment, round-trips through the store', () => {
+    seedGateTask();
+    const res = withCapture(() =>
+      runGateCmd('respond', ['g1', 'approve'], { task: 'gt', by: 'alice', comment: 'LGTM' }),
+    );
+    expect(res.exit).toBe(0);
+    const payload = JSON.parse(res.stdout.trim()) as { verdict: string; responder: string };
+    expect(payload.verdict).toBe('approved');
+    expect(payload.responder).toBe('alice');
+
+    const gate = readGate();
+    expect(gate?.verdict).toBe('approved');
+    expect(gate?.responder).toBe('alice');
+    expect(gate?.comment).toBe('LGTM');
+  });
+
+  test('reject persists rejected', () => {
+    seedGateTask();
+    const res = withCapture(() =>
+      runGateCmd('respond', ['g1', 'reject'], { task: 'gt', by: 'bob' }),
+    );
+    expect(res.exit).toBe(0);
+    expect(readGate()?.verdict).toBe('rejected');
+  });
+
+  test('rejects an unknown criterion id (exit 1)', () => {
+    seedGateTask();
+    const res = withCapture(() => runGateCmd('respond', ['nope', 'approve'], { task: 'gt' }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown criterion 'nope'");
+  });
+
+  test('rejects a non-gate criterion (exit 1)', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'bt', id: 'bt' }));
+    withCapture(() =>
+      runTaskCmd('acceptance', ['add', 'bt'], {
+        text: 'builds',
+        verifiesBy: 'bash',
+        check: 'bun run build',
+        criterion: 'c1',
+      }),
+    );
+    const res = withCapture(() => runGateCmd('respond', ['c1', 'approve'], { task: 'bt' }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("not 'gate'");
+  });
+
+  test('rejects an already-resolved gate (exit 1)', () => {
+    seedGateTask();
+    withCapture(() => runGateCmd('respond', ['g1', 'approve'], { task: 'gt', by: 'x' }));
+    const res = withCapture(() => runGateCmd('respond', ['g1', 'reject'], { task: 'gt', by: 'y' }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('already resolved');
+  });
+
+  test('rejects an off-enum verdict (exit 1)', () => {
+    seedGateTask();
+    const res = withCapture(() => runGateCmd('respond', ['g1', 'maybe'], { task: 'gt' }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('<verdict> must be one of');
+  });
+
+  test('requires --task', () => {
+    seedGateTask();
+    const res = withCapture(() => runGateCmd('respond', ['g1', 'approve'], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--task <task-id> is required');
+  });
+
+  test('unknown gate action: exit 1', () => {
+    const res = withCapture(() => runGateCmd('nope', [undefined, undefined], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown gate action 'nope'");
   });
 });
 

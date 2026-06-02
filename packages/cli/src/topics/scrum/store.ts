@@ -28,6 +28,7 @@ import type {
   EscalationPayload,
   EscalationType,
   EventKind,
+  GateVerdict,
   MilestoneStatus,
   NextReadyRow,
   Provenance,
@@ -42,7 +43,7 @@ import type {
   TaskLayer,
   TaskStatus,
 } from './types';
-import { ACCEPTANCE_SCOPES, ESCALATION_TYPES } from './types';
+import { ACCEPTANCE_SCOPES, ESCALATION_TYPES, GATE_VERDICTS } from './types';
 
 // ---------------------------------------------------------------------------
 // Public openers
@@ -308,6 +309,10 @@ export class ScrumStore {
       const inherited = this.inheritAcceptance(parentId);
       acceptance = inherited.length > 0 ? { criteria: inherited } : null;
     }
+    // Seed `gate_pending` on any gate-kind criterion that arrived without an
+    // explicit gate state, so a fresh gate criterion always carries a resolvable
+    // verdict. Idempotent on an already-stated gate.
+    if (acceptance !== null) acceptance = withGateStatesSeeded(acceptance);
     if (acceptance !== null) validateAcceptance(acceptance);
 
     // Declared bounds (v6): explicit input only — never inherited. Validated
@@ -833,6 +838,12 @@ export class ScrumStore {
   // agent→validation-agent. Only `assert` is decided in-process (the engine owns
   // the closed grammar); the other three delegate to channels the driver session
   // owns.
+  //
+  // The `gate` channel is the one whose decision the engine PERSISTS but does
+  // not make: a gate criterion carries a `gate.verdict` (gate_pending → approved
+  // | rejected) resolved PULL-based via `respondGate` (the human approve/reject
+  // is the judgment). The verdict is standing state on the criterion — there is
+  // never a daemon blocking the engine waiting for the human to decide.
   // ==========================================================================
 
   /**
@@ -844,8 +855,9 @@ export class ScrumStore {
   setAcceptance(taskId: string, acceptance: Acceptance | null): ScrumTask {
     const task = this.getTask(taskId);
     if (!task) throw new Error(`setAcceptance: unknown task '${taskId}'`);
-    if (acceptance !== null) validateAcceptance(acceptance);
-    this.writeAcceptance(taskId, acceptance);
+    const seeded = acceptance === null ? null : withGateStatesSeeded(acceptance);
+    if (seeded !== null) validateAcceptance(seeded);
+    this.writeAcceptance(taskId, seeded);
     return this.requireTask(taskId, 'setAcceptance');
   }
 
@@ -865,7 +877,9 @@ export class ScrumStore {
       throw new Error(`addCriterion: duplicate criterion id '${criterion.id}' on task '${taskId}'`);
     }
     criteria.push(criterion);
-    const next: Acceptance = current?.policy ? { criteria, policy: current.policy } : { criteria };
+    const next: Acceptance = withGateStatesSeeded(
+      current?.policy ? { criteria, policy: current.policy } : { criteria },
+    );
     validateAcceptance(next);
     this.writeAcceptance(taskId, next);
     return this.requireTask(taskId, 'addCriterion');
@@ -912,6 +926,82 @@ export class ScrumStore {
   }
 
   /**
+   * Resolve a `gate`-kind criterion's persisted verdict — the mechanical half of
+   * the human approve/reject decision. Transitions the criterion's `gate.verdict`
+   * from `gate_pending` to `approved` or `rejected`, stamps the human `responder`
+   * (the verification contributor of record) and optional `comment`, and appends
+   * a `gate_responded` event so the responder is recorded in the append-only
+   * audit log. The state round-trips through `acceptance_json` — no DB migration.
+   *
+   * This is PULL-based resolution: a session (an interactive `AskUserQuestion`
+   * turn, the `scrum gate respond` CLI, or a session-start surfacing of pending
+   * gates) calls in to record the verdict. It NEVER blocks waiting for input.
+   *
+   * Rejects, as domain errors:
+   *   - unknown task / criterion id
+   *   - a non-`gate` criterion (only gate-kind carries a verdict)
+   *   - an already-resolved gate (verdict no longer `gate_pending`) — the gate
+   *     is decided once; re-deciding requires superseding the criterion
+   *   - a `verdict` outside the closed `approved | rejected` respond set
+   */
+  respondGate(
+    taskId: string,
+    criterionId: string,
+    verdict: 'approved' | 'rejected',
+    opts: { responder: string; comment?: string | null } = { responder: '' },
+  ): ScrumTask {
+    if (verdict !== 'approved' && verdict !== 'rejected') {
+      throw new Error(
+        `respondGate: invalid verdict '${verdict}'; expected one of: approved, rejected`,
+      );
+    }
+    const task = this.getTask(taskId);
+    if (!task) throw new Error(`respondGate: unknown task '${taskId}'`);
+    if (!task.acceptance) {
+      throw new Error(`respondGate: task '${taskId}' has no acceptance criteria`);
+    }
+    const target = task.acceptance.criteria.find((c) => c.id === criterionId);
+    if (!target) {
+      throw new Error(`respondGate: unknown criterion '${criterionId}' on task '${taskId}'`);
+    }
+    if (target.verifies_by !== 'gate') {
+      throw new Error(
+        `respondGate: criterion '${criterionId}' is verifies_by '${target.verifies_by}', not 'gate'`,
+      );
+    }
+    const current = target.gate?.verdict ?? 'gate_pending';
+    if (current !== 'gate_pending') {
+      throw new Error(
+        `respondGate: gate criterion '${criterionId}' is already resolved ('${current}'); supersede it to re-decide`,
+      );
+    }
+
+    const respondedAt = isoNow();
+    const responder = opts.responder.length > 0 ? opts.responder : null;
+    const comment = opts.comment && opts.comment.length > 0 ? opts.comment : null;
+    const gate = { verdict, responder, comment, responded_at: respondedAt };
+    const criteria = task.acceptance.criteria.map((c) =>
+      c.id === criterionId ? { ...c, gate } : c,
+    );
+    const next: Acceptance = task.acceptance.policy
+      ? { criteria, policy: task.acceptance.policy }
+      : { criteria };
+
+    // Single transaction: persist the verdict AND record the human responder as
+    // the verification contributor in the append-only event log.
+    this.transaction(() => {
+      this.writeAcceptance(taskId, next);
+      this.appendEvent({
+        taskId,
+        kind: 'gate_responded',
+        agent: responder,
+        payload: { criterion_id: criterionId, verdict, responder, comment },
+      });
+    });
+    return this.requireTask(taskId, 'respondGate');
+  }
+
+  /**
    * The criteria a child should inherit from `parentId` via shared_acceptance.
    * Returns independent deep copies of the parent's ACTIVE,
    * copy-down-scoped criteria, each tagged `inherited_from: parentId` and reset
@@ -937,6 +1027,10 @@ export class ScrumStore {
         superseded_by: null,
         reason: null,
         inherited_from: parentId,
+        // A gate-kind child inherits a FRESH pending gate — the parent's human
+        // verdict does not satisfy the child's own gate. `withGateStatesSeeded`
+        // re-seeds non-gate criteria to undefined gate at the write boundary.
+        ...(c.verifies_by === 'gate' ? { gate: { verdict: 'gate_pending' as const } } : {}),
       }));
   }
 
@@ -1895,6 +1989,40 @@ function copiesDown(scope: AcceptanceScope | undefined): boolean {
 }
 
 /**
+ * Return a copy of `acceptance` with every `gate`-kind criterion guaranteed to
+ * carry a gate state. A gate-kind criterion missing a `gate` field is seeded
+ * `{ verdict: 'gate_pending' }` — a fresh gate always starts pending and
+ * resolvable; an already-stated gate (any verdict) is left untouched. Non-gate
+ * criteria never carry gate state — a stray `gate` on them is stripped so the
+ * field maps 1:1 to the gate kind. Idempotent: re-seeding a seeded object is a
+ * no-op. Does not mutate the input.
+ */
+function withGateStatesSeeded(acceptance: Acceptance): Acceptance {
+  const criteria = acceptance.criteria.map((c) => {
+    if (c.verifies_by === 'gate') {
+      return c.gate ? c : { ...c, gate: { verdict: 'gate_pending' as GateVerdict } };
+    }
+    if (c.gate === undefined) return c;
+    const { gate: _drop, ...rest } = c;
+    return rest;
+  });
+  return acceptance.policy ? { criteria, policy: acceptance.policy } : { criteria };
+}
+
+/**
+ * Whether a single acceptance criterion currently counts as satisfied from the
+ * store's mechanical vantage. Only `gate`-kind is decided here: an `approved`
+ * verdict satisfies, `gate_pending`/`rejected` do not. The other three kinds
+ * are decided by their downstream channels (validators / assert evaluator /
+ * validation-agent), so this returns false for them — the store does not run a
+ * shell, evaluate an expression, or call a model.
+ */
+export function criterionSatisfied(criterion: AcceptanceCriterion): boolean {
+  if (criterion.verifies_by !== 'gate') return false;
+  return (criterion.gate?.verdict ?? 'gate_pending') === 'approved';
+}
+
+/**
  * Enforce the acceptance write-time invariants:
  *
  *   - scope is a closed enum — any criterion carrying a `scope` outside
@@ -1913,6 +2041,18 @@ function validateAcceptance(acceptance: Acceptance): void {
   if (badScope) {
     throw new Error(
       `acceptance criterion '${badScope.id}' has invalid scope '${badScope.scope}'; expected one of: ${ACCEPTANCE_SCOPES.join(', ')}`,
+    );
+  }
+
+  // Closed-enum guard on the persisted gate verdict: a criterion carrying a
+  // `gate.verdict` outside `gate_pending | approved | rejected` is rejected so
+  // an unknown verdict cannot land silently and corrupt satisfaction reads.
+  const badGate = acceptance.criteria.find(
+    (c) => c.gate !== undefined && !(GATE_VERDICTS as string[]).includes(c.gate.verdict),
+  );
+  if (badGate) {
+    throw new Error(
+      `acceptance criterion '${badGate.id}' has invalid gate verdict '${badGate.gate?.verdict}'; expected one of: ${GATE_VERDICTS.join(', ')}`,
     );
   }
 
