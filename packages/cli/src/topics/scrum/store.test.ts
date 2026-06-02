@@ -1093,6 +1093,64 @@ describe('ScrumStore — acceptance criteria', () => {
     expect(child.acceptance?.criteria.map((c) => c.id)).toEqual(['own']);
   });
 
+  test('scope=descendants copies down on inheritance', () => {
+    seedTask('parent', { acceptance: { criteria: [ac('c1', { scope: 'descendants' })] } });
+    const child = store.createTask({ id: 'child', title: 'Child', parentId: 'parent' });
+    expect(child.acceptance?.criteria.map((c) => c.id)).toEqual(['c1']);
+    expect(child.acceptance?.criteria[0]?.inherited_from).toBe('parent');
+  });
+
+  test('scope=both copies down on inheritance', () => {
+    seedTask('parent', { acceptance: { criteria: [ac('c1', { scope: 'both' })] } });
+    const child = store.createTask({ id: 'child', title: 'Child', parentId: 'parent' });
+    expect(child.acceptance?.criteria.map((c) => c.id)).toEqual(['c1']);
+  });
+
+  test('scope=self stays on the parent — NOT copied down', () => {
+    seedTask('parent', { acceptance: { criteria: [ac('c1', { scope: 'self' })] } });
+    const child = store.createTask({ id: 'child', title: 'Child', parentId: 'parent' });
+    // self-scoped criteria do not descend; the child inherits nothing.
+    expect(child.acceptance).toBeNull();
+  });
+
+  test('mixed scopes: only descendants/both descend; self is filtered out', () => {
+    seedTask('parent', {
+      acceptance: {
+        criteria: [
+          ac('keep-desc', { scope: 'descendants' }),
+          ac('drop-self', { scope: 'self' }),
+          ac('keep-both', { scope: 'both' }),
+        ],
+      },
+    });
+    const child = store.createTask({ id: 'child', title: 'Child', parentId: 'parent' });
+    expect(child.acceptance?.criteria.map((c) => c.id)).toEqual(['keep-desc', 'keep-both']);
+  });
+
+  test('absent scope inherits as before (copy-down default)', () => {
+    // ac() omits scope, mirroring a legacy row authored before scope existed.
+    seedTask('parent', { acceptance: { criteria: [ac('c1')] } });
+    const child = store.createTask({ id: 'child', title: 'Child', parentId: 'parent' });
+    expect(child.acceptance?.criteria.map((c) => c.id)).toEqual(['c1']);
+    expect(child.acceptance?.criteria[0]?.inherited_from).toBe('parent');
+  });
+
+  test('an invalid scope is rejected at the write boundary', () => {
+    const bad: Acceptance = {
+      criteria: [ac('c1', { scope: 'children' as never })],
+    };
+    expect(() => store.createTask({ id: 't1', title: 'T1', acceptance: bad })).toThrow(
+      /invalid scope 'children'/,
+    );
+    // Same guard on the in-place setter and the appender.
+    seedTask('t2');
+    expect(() => store.setAcceptance('t2', bad)).toThrow(/invalid scope 'children'/);
+    seedTask('t3');
+    expect(() => store.addCriterion('t3', ac('c1', { scope: 'children' as never }))).toThrow(
+      /invalid scope 'children'/,
+    );
+  });
+
   test('policy validation rejects parallel/failed_only with a non-idempotent criterion', () => {
     const bad: Acceptance = {
       criteria: [ac('c1', { idempotent: false })],

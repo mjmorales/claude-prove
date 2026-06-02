@@ -118,6 +118,26 @@ export type AcceptanceVerifiesBy = 'bash' | 'assert' | 'gate' | 'agent';
 export type AcceptanceCriterionStatus = 'active' | 'superseded';
 
 /**
+ * Copy-down scope of a criterion when a child task inherits its parent's
+ * shared acceptance. Closed vocabulary documented here, not pinned by a SQL
+ * CHECK — the value lives inside `acceptance_json`, so the schema stays
+ * forward-compatible.
+ *
+ *   descendants — copy to inheriting children; not a goalpost on the parent
+ *                 itself (the parent declares it for the subtree to satisfy).
+ *   self        — parent-only; NOT copied down to children.
+ *   both        — applies to the parent AND copies down to children.
+ *
+ * Absent/undefined on a criterion is the copy-down default — treated as
+ * `both` — so legacy rows authored before scope existed keep inheriting
+ * exactly as before, with no silent behavior break.
+ */
+export type AcceptanceScope = 'descendants' | 'self' | 'both';
+
+/** Runtime-checkable list of the closed `AcceptanceScope` set. */
+export const ACCEPTANCE_SCOPES: AcceptanceScope[] = ['descendants', 'self', 'both'];
+
+/**
  * One acceptance criterion on a task. Criteria are append-only:
  * a retired criterion flips `status` to `'superseded'` with a `reason` (and
  * optional `superseded_by` pointer) rather than being removed — mirrors the
@@ -131,6 +151,10 @@ export type AcceptanceCriterionStatus = 'active' | 'superseded';
  *                    (the parent task id); null on locally-authored criteria.
  *                    Copies are independent — editing the parent does not
  *                    retroactively change an existing child copy.
+ *   scope          — copy-down gate when a child inherits this criterion:
+ *                    `descendants`/`both` descend, `self` stays on the parent.
+ *                    Absent = the copy-down default (`both`), so legacy rows
+ *                    inherit exactly as before.
  */
 export interface AcceptanceCriterion {
   id: string;
@@ -140,6 +164,12 @@ export interface AcceptanceCriterion {
   check: string;
   status: AcceptanceCriterionStatus;
   idempotent: boolean;
+  /**
+   * Copy-down scope when a child inherits the parent's shared acceptance.
+   * Absent = the copy-down default (`both`): copies down and applies to the
+   * parent, preserving pre-scope inheritance behavior.
+   */
+  scope?: AcceptanceScope;
   timeout?: string;
   /** Set on supersession to the replacement criterion id. NULL = current. */
   superseded_by?: string | null;

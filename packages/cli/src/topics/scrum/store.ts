@@ -22,6 +22,7 @@ import { SCRUM_SCHEMA_VERSION, ensureScrumSchemaRegistered } from './schemas';
 import type {
   Acceptance,
   AcceptanceCriterion,
+  AcceptanceScope,
   DecisionRow,
   DepKind,
   EscalationPayload,
@@ -41,7 +42,7 @@ import type {
   TaskLayer,
   TaskStatus,
 } from './types';
-import { ESCALATION_TYPES } from './types';
+import { ACCEPTANCE_SCOPES, ESCALATION_TYPES } from './types';
 
 // ---------------------------------------------------------------------------
 // Public openers
@@ -912,10 +913,15 @@ export class ScrumStore {
 
   /**
    * The criteria a child should inherit from `parentId` via shared_acceptance.
-   * Returns independent deep copies of the parent's ACTIVE
-   * criteria, each tagged `inherited_from: parentId` and reset to
-   * `status: 'active'` with cleared supersession pointers. Returns `[]` when
-   * the parent is unknown or carries no active criteria.
+   * Returns independent deep copies of the parent's ACTIVE,
+   * copy-down-scoped criteria, each tagged `inherited_from: parentId` and reset
+   * to `status: 'active'` with cleared supersession pointers. Returns `[]` when
+   * the parent is unknown or carries no inheritable criteria.
+   *
+   * Scope gates copy-down: only `descendants` and `both` descend; `self`-scoped
+   * criteria stay on the parent and are skipped. An absent scope is the
+   * copy-down default (`both`), so legacy criteria authored before scope
+   * existed still inherit exactly as before.
    *
    * Copies are intentionally independent: a later edit to the parent's
    * criterion does NOT retroactively change a child that already inherited it.
@@ -924,7 +930,7 @@ export class ScrumStore {
     const parent = this.getTask(parentId);
     if (!parent?.acceptance) return [];
     return parent.acceptance.criteria
-      .filter((c) => c.status === 'active')
+      .filter((c) => c.status === 'active' && copiesDown(c.scope))
       .map((c) => ({
         ...c,
         status: 'active' as const,
@@ -1880,13 +1886,36 @@ function validateBounds(bounds: TaskBounds): void {
 }
 
 /**
- * Enforce the policy invariant: a `parallel` eval_order or a
- * `failed_only` rerun_policy is only valid when every criterion is
- * `idempotent: true`. Non-idempotent criteria cannot be safely re-run or
- * run concurrently, so the policy is rejected at write time. No policy (the
- * default sequential / re-run-all behavior) always passes.
+ * Whether a criterion's scope descends to inheriting children. `descendants`
+ * and `both` copy down; `self` does not. An absent scope is the copy-down
+ * default (`both`), so pre-scope criteria keep inheriting as before.
+ */
+function copiesDown(scope: AcceptanceScope | undefined): boolean {
+  return scope === undefined || scope === 'descendants' || scope === 'both';
+}
+
+/**
+ * Enforce the acceptance write-time invariants:
+ *
+ *   - scope is a closed enum — any criterion carrying a `scope` outside
+ *     `descendants | self | both` is rejected so an unknown value cannot land
+ *     silently and break copy-down gating. Absent scope is the legal default.
+ *   - policy invariant — a `parallel` eval_order or a `failed_only`
+ *     rerun_policy is only valid when every criterion is `idempotent: true`.
+ *     Non-idempotent criteria cannot be safely re-run or run concurrently, so
+ *     the policy is rejected at write time. No policy (the default sequential /
+ *     re-run-all behavior) always passes.
  */
 function validateAcceptance(acceptance: Acceptance): void {
+  const badScope = acceptance.criteria.find(
+    (c) => c.scope !== undefined && !ACCEPTANCE_SCOPES.includes(c.scope),
+  );
+  if (badScope) {
+    throw new Error(
+      `acceptance criterion '${badScope.id}' has invalid scope '${badScope.scope}'; expected one of: ${ACCEPTANCE_SCOPES.join(', ')}`,
+    );
+  }
+
   const policy = acceptance.policy;
   if (!policy) return;
   const needsIdempotent = policy.eval_order === 'parallel' || policy.rerun_policy === 'failed_only';
