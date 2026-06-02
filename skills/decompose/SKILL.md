@@ -260,12 +260,22 @@ summarizing the close — it also closes the open reasoning episode:
 
 ### Phase C4: Synthesize the Review Brief
 
-Read the episode structure back with `claude-prove acb log episodes --run-dir <run-dir>`
-(or `acb log list` for the flat entry stream) and synthesize a risk-forward brief.
+Read the entry stream back with `claude-prove acb log list --run-dir <run-dir>` and
+synthesize a risk-forward brief from that flat stream — every entry in `ts` order, the
+`verification` entries plus the closing `synthesis`.
 
-> `TODO(reasoning-brief):` the multipass episode-chunk → fragment → merge **synthesizer
-> is a future task** — it is Claude-owned (the synthesis is model judgment), not yet a CLI
-> command. For now, synthesize the brief inline from the episodes, surfacing every
+**Draw the story-close brief from the flat `acb log list` stream, never from
+`acb log episodes` alone.** An episode opens only on a `decision` entry; a story-close
+that passes its criteria logs `verification` entries and one closing `synthesis` and
+records no `decision`, so `acb log episodes` returns an empty set for it and would yield
+a degenerate brief. The flat stream carries every entry regardless of episode boundaries,
+so it is the correct source whenever a close has no decisions to anchor episodes on. Use
+`acb log episodes` only as a supplementary lens when decisions exist (decompose/impl
+runs) — and treat an empty result as expected, not an error.
+
+> `TODO(reasoning-brief):` the multipass chunk → fragment → merge **synthesizer is a
+> future task** — it is Claude-owned (the synthesis is model judgment), not yet a CLI
+> command. For now, synthesize the brief inline from the flat entry stream, surfacing every
 > `hack`/`risk`/open `assumption`/`bailout` first (the preservation rule), and assemble the
 > PR body via the existing `acb` path:
 
@@ -464,9 +474,11 @@ const synth = {
 await writeFile(`${runDir}/_staging/${synth.id}.json`, JSON.stringify(synth));
 await sh(`claude-prove acb log append --run-dir ${runDir} --file ${runDir}/_staging/${synth.id}.json`);
 
-// C4: synthesize the brief. TODO(reasoning-brief): multipass synthesizer is a future task;
-// for now read the episodes and assemble the PR body via the existing acb path.
-await sh(`claude-prove acb log episodes --run-dir ${runDir}`);
+// C4: synthesize the brief from the FLAT entry stream — a pure-verification close records
+// no `decision`, so `acb log episodes` would be empty; `acb log list` carries every entry.
+// TODO(reasoning-brief): multipass synthesizer is a future task; for now read the flat
+// stream and assemble the PR body via the existing acb path.
+await sh(`claude-prove acb log list --run-dir ${runDir}`);
 await sh(`claude-prove acb assemble --branch ${branch} --base ${base}`);
 
 // C5: review + PR — delegate to orchestrator full-mode (do NOT reimplement).
