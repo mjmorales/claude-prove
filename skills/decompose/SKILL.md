@@ -11,7 +11,8 @@ description: >
   structured output) emits each layer's child list, you write children as
   layered scrum tasks, an AskUserQuestion gate promotes them, and you recurse.
   Story-close dispatches each acceptance criterion by kind (bash/assert/gate/
-  agent), writes a verification reasoning-log entry per criterion, then
+  agent), writes a verification reasoning-log entry per criterion, promotes the
+  run's durable decisions into the scrum decision store (human-gated), then
   delegates worktree/validation/review/merge to orchestrator full-mode.
 ---
 
@@ -26,13 +27,36 @@ spawn. This skill encodes two methodologies on prove machinery:
   story → task`, one planning subagent per layer, layered scrum tasks as children,
   an accept gate per layer, forced bubble-up on discovery.
 - **B2 — AC-gated story-close**: dispatch a story's acceptance criteria
-  by kind, log a `verification` entry per criterion, synthesize a Review Brief, then
-  hand the worktree/validation/review/merge to **orchestrator full-mode** — do not
+  by kind, log a `verification` entry per criterion, synthesize a Review Brief,
+  promote durable `decision` entries into the decision store, then hand the
+  worktree/validation/review/merge to **orchestrator full-mode** — do not
   reimplement it.
 
 **Source of truth is `prove.db`.** Children are scrum tasks (`parent_id` = the tree,
 `layer` = the tier); criteria live on the story task; reasoning lands in the run's
 `log/`. Nothing here is a throwaway in-context structure.
+
+### Two knowledge tiers
+
+Story-close moves knowledge between two distinct tiers, and the distinction governs
+Phase C5:
+
+- **The reasoning log** — the run's append-only journal under `<run-dir>/log/`. Every
+  `decision`, `verification`, `hack`, `risk`, and `assumption` lands here as it
+  happens. It is run-scoped, exhaustive, and disposable in the sense that no future
+  session is expected to re-read a finished run's raw log.
+- **The decision store** (`scrum_decisions`) — the project's durable, cross-run memory.
+  A row here is a standing fact a future session must not have to rediscover. It is
+  append-only with supersession: a replaced decision is superseded (the new one carries
+  a back-pointer and a reason), never overwritten.
+
+The reasoning log is where a decision is *made*; the decision store is where a decision
+that outlives its run is *kept*. Phase C5 is the named bridge between the two at
+story-close — the per-story analogue of the milestone-close curation pass
+(`skills/curate/SKILL.md`), which performs the same promotion across a whole milestone's
+tasks. Story-close promotes the decisions of one story's run; milestone-close sweeps the
+whole milestone for findings the story-close passes left behind. They are the same move
+at two scopes — do not reimplement one inside the other.
 
 ---
 
@@ -43,7 +67,7 @@ Parse `$ARGUMENTS`. First non-flag token selects the methodology:
 | Target | Mode | Path |
 |--------|------|------|
 | A milestone id, or `VISION.md` / a charter path | **Ladder** (B1) | Phase L1–L4 |
-| A story task id (a `layer: story` task) | **Story-close** (B2) | Phase C1–C5 |
+| A story task id (a `layer: story` task) | **Story-close** (B2) | Phase C1–C6 |
 | *(none)* | Ask. Offer open milestones (`scrum status`) for the ladder, or `scrum next-ready --status review` stories for close. | — |
 
 Flags:
@@ -111,12 +135,30 @@ never prose you have to parse.
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["title", "description", "blocked_by"],
+        "required": ["title", "description", "blocked_by", "acceptance"],
         "properties": {
           "title":       { "type": "string" },
           "description": { "type": "string" },
           "blocked_by":  { "type": "array", "items": { "type": "string" },
-                           "description": "titles of sibling children that must finish first" }
+                           "description": "titles of sibling children that must finish first" },
+          "acceptance":  {
+            "type": "array",
+            "description": "verifiable close criteria for this child; REQUIRED non-empty for a `story` child, since a story cannot reach ready/in_progress/done with zero active criteria",
+            "items": {
+              "type": "object",
+              "required": ["text", "verifies_by"],
+              "properties": {
+                "text":       { "type": "string",
+                                "description": "what must hold for the child to be done" },
+                "verifies_by":{ "type": "string", "enum": ["bash", "assert", "gate", "agent"],
+                                "description": "how the close floor checks it" },
+                "check":      { "type": "string",
+                                "description": "kind-specific payload — shell command (bash), boolean expr (assert), operator prompt (gate), or agent prompt (agent)" },
+                "idempotent": { "type": "boolean",
+                                "description": "true if the check is safe to re-run; required true for the parallel close path" }
+              }
+            }
+          }
         }
       }
     },
@@ -133,6 +175,16 @@ personas* above — `epic → pm@milestone`, `story → tech_lead@epic`, `task �
 as the opening role frame, the parent artifact (title + description, or VISION text), the
 target child `layer`, and any relevant decisions (`claude-prove scrum decision list`).
 
+**Each `story` child must return a non-empty `acceptance` array.** A story is the unit
+story-close verifies, and the store rejects a `layer: story` task on `→ ready|in_progress|
+done` with zero active criteria — so the planning subagent authors each story's criteria
+here, at the same moment it proposes the story. The persona writes the criteria as the
+engineer who will verify them: prefer `bash` checks with a runnable `check` command, fall
+back to `assert`/`agent` when no command captures the intent, and reserve `gate` for
+judgment a human must make. Mark a criterion `idempotent: true` when its check is safe to
+re-run. `epic` and `task` children may carry `acceptance` when the planner has a concrete
+check in mind, but only `story` children are obligated to.
+
 ### Phase L3: Write children + accept gate
 
 For each returned child, create a layered scrum task (status defaults to `backlog`, the
@@ -147,6 +199,23 @@ claude-prove scrum task create \
 Capture each new id. After all children of a parent exist, record sibling ordering with
 `claude-prove scrum task add-dep <child> <blocked-child> --kind blocked_by` for every
 `blocked_by` edge the schema returned.
+
+**Author acceptance criteria at creation.** For each criterion in a child's `acceptance`
+array, attach it to the new task:
+
+```bash
+claude-prove scrum task acceptance add <child-id> \
+  --text "<criterion.text>" --verifies-by <bash|assert|gate|agent> \
+  --check "<criterion.check>" [--idempotent]
+```
+
+Pass `--idempotent` only when the criterion's `idempotent` is true; omit `--check` when the
+criterion carries none. Authoring criteria here is what makes a `story` born already
+satisfying the close floor: B2 story-close reads these exact criteria to verify the story,
+so the ladder that creates the story owns its criteria and close never has to invent them.
+If a `story` child returned an empty `acceptance` array, re-run Phase L2 for that parent
+before promoting — the accept gate below pushes children to `ready`, a state the floor
+rejects for a criteria-less story.
 
 **Accept gate** (`proposed→accepted`):
 
@@ -185,7 +254,8 @@ leaf.
 ## B2 — AC-gated story-close
 
 Close a `layer: story` task by verifying its acceptance criteria, logging the reasoning,
-then delegating the heavy lifting to orchestrator full-mode.
+promoting the durable decisions into the decision store, then delegating the heavy
+lifting to orchestrator full-mode.
 
 ### Phase C1: Read criteria from the scrum store
 
@@ -260,12 +330,20 @@ summarizing the close — it also closes the open reasoning episode:
 
 ### Phase C4: Synthesize the Review Brief
 
-Read the episode structure back with `claude-prove acb log episodes --run-dir <run-dir>`
-(or `acb log list` for the flat entry stream) and synthesize a risk-forward brief.
+**Draw the story-close brief from the flat `acb log list` stream, never from
+`acb log episodes` alone.** Read the stream with `claude-prove acb log list --run-dir
+<run-dir>` and synthesize a risk-forward brief over every entry in `ts` order — the
+`verification` entries plus the closing `synthesis`. An episode opens only on a `decision`
+entry; a story-close that passes its criteria logs `verification` entries and one closing
+`synthesis` and records no `decision`, so `acb log episodes` returns an empty set for it
+and would yield a degenerate brief. The flat stream carries every entry regardless of
+episode boundaries, so it is the correct source whenever a close has no decisions to anchor
+episodes on. Use `acb log episodes` only as a supplementary lens when decisions exist
+(decompose/impl runs); an empty result there is expected, not an error.
 
-> `TODO(reasoning-brief):` the multipass episode-chunk → fragment → merge **synthesizer
-> is a future task** — it is Claude-owned (the synthesis is model judgment), not yet a CLI
-> command. For now, synthesize the brief inline from the episodes, surfacing every
+> `TODO(reasoning-brief):` the multipass chunk → fragment → merge **synthesizer is a
+> future task** — it is Claude-owned (the synthesis is model judgment), not yet a CLI
+> command. For now, synthesize the brief inline from the flat entry stream, surfacing every
 > `hack`/`risk`/open `assumption`/`bailout` first (the preservation rule), and assemble the
 > PR body via the existing `acb` path:
 
@@ -273,7 +351,79 @@ Read the episode structure back with `claude-prove acb log episodes --run-dir <r
 claude-prove acb assemble --branch <branch> --base main
 ```
 
-### Phase C5: Review + PR — delegate to orchestrator full-mode
+### Phase C5: Promote durable decisions into the decision store
+
+Bridge the two tiers (see *Two knowledge tiers*): surface the run's episode-closing
+`decision` entries and promote the durable ones into `scrum_decisions`. A story's run
+carries `decision` entries only when its work weighed a real choice (the decompose/impl
+episodes that built it); a pure-verification close logs only `verification` entries and
+records no `decision`, so this phase is a no-op for it. **Promoting zero decisions is a
+valid outcome, not a failure** — promote on significance, never on count.
+
+**The promotion is judgment-side, never mechanical.** The model surfaces candidates and
+the operator decides which promote; do not blanket-promote every `decision` entry.
+Instead, gate the set behind one `AskUserQuestion` and record only the chosen ones. The
+reasoning: a decision the engine cannot read for significance would corrupt the durable
+store with run-local narration the engine has no context to repair.
+
+1. **Surface candidates from the journal.** Read the run's episodes — each opens on a
+   `decision` entry:
+
+   ```bash
+   claude-prove acb log episodes --run-dir <run-dir>
+   ```
+
+   An empty result means the run recorded no decisions — skip this phase. Otherwise each
+   episode's opening `decision` entry (its `alternatives` and `selected_rationale`) is a
+   promotion candidate.
+
+2. **Classify each candidate by content**, not by source — `adr` (an engineering
+   decision of record: what was chosen, alternatives, rationale), `glossary` (a durable
+   definition or resolved assumption that became a project fact), or `pattern` (a
+   recurring solution shape, anti-pattern, or tracked tech-debt). Promote only decisions
+   that carry signal **beyond this run** — something a future session must not
+   rediscover; treat run-local narration as noise that stays in the log.
+
+3. **Gate the promotion set** with one `AskUserQuestion` (header `"Promote"`,
+   `references/interaction-patterns.md` Approval Gate), stating each candidate's proposed
+   kind and a one-line title:
+   - **Promote selected** — record each chosen decision as classified.
+   - **Revise** — adjust the kind/title/skip set, then re-present.
+
+4. **Record each chosen promotion** (append-only, supersession-aware). First dedup
+   against the standing store so a promotion never duplicates an existing decision:
+
+   ```bash
+   claude-prove scrum decision list --kind <kind>     # add --topic for a tighter match
+   ```
+
+   For a fresh promotion, author the decision file with the native **Write** tool (prose
+   lives in a file, never an inline flag — model-consumed text must be reviewable as
+   text), then record it under its kind and link it back to the story task:
+
+   ```bash
+   # 1. Write .prove/decisions/<slug>.md (native Write tool): title, topic, status,
+   #    and a body carrying the choice, its rationale, and provenance (source entry id,
+   #    run_path, story id).
+   # 2. Record under its decision kind (only adr|glossary|pattern, case-insensitive):
+   claude-prove scrum decision record .prove/decisions/<slug>.md --kind <adr|glossary|pattern>
+   # 3. Link back to the story task that surfaced it:
+   claude-prove scrum task link-decision <story-id> .prove/decisions/<slug>.md
+   ```
+
+   If an equivalent decision already exists and this one refines or replaces it,
+   **supersede** instead of adding — record the new decision first, then point the old
+   one at it (append-only: never overwrite):
+
+   ```bash
+   claude-prove scrum decision supersede <old-id> --by <new-id> --reason "<why it changed>"
+   ```
+
+The reasoning log stays intact — promotion only *copies* a decision into durable memory;
+it never edits or deletes the journal. A skipped candidate stays in the log for the
+milestone-close `curate` pass to reconsider.
+
+### Phase C6: Review + PR — delegate to orchestrator full-mode
 
 Story-close is ~80% the orchestrator's existing full-mode pipeline. **Do not reimplement**
 worktrees, validation, the review loop, or merge — drive
@@ -310,11 +460,26 @@ const childrenSchema = {
       type: "array",
       items: {
         type: "object",
-        required: ["title", "description", "blocked_by"],
+        required: ["title", "description", "blocked_by", "acceptance"],
         properties: {
           title:       { type: "string" },
           description: { type: "string" },
           blocked_by:  { type: "array", items: { type: "string" } },
+          // Verifiable close criteria; non-empty REQUIRED for a `story` child — a story
+          // cannot reach ready/in_progress/done with zero active criteria.
+          acceptance: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["text", "verifies_by"],
+              properties: {
+                text:        { type: "string" },
+                verifies_by: { type: "string", enum: ["bash", "assert", "gate", "agent"] },
+                check:       { type: "string" },
+                idempotent:  { type: "boolean" },
+              },
+            },
+          },
         },
       },
     },
@@ -361,12 +526,36 @@ async function decompose(parent, tierIndex, { milestone, autoAcceptThrough, maxF
       `--parent ${parent.id} --layer ${layer} ` +
       `--title ${q(c.title)} --description ${q(c.description)}`,
     );
-    created.push({ ...JSON.parse(out.stdout), blocked_by: c.blocked_by, srcTitle: c.title });
+    created.push({
+      ...JSON.parse(out.stdout),
+      blocked_by: c.blocked_by,
+      acceptance: c.acceptance ?? [],
+      srcTitle: c.title,
+    });
   }
   for (const child of created) {
     for (const depTitle of child.blocked_by) {
       const dep = created.find((x) => x.srcTitle === depTitle);
       if (dep) await sh(`claude-prove scrum task add-dep ${child.id} ${dep.id} --kind blocked_by`);
+    }
+  }
+
+  // Author each child's acceptance criteria at creation, so a `story` is born satisfying
+  // the close floor (a story with zero active criteria is rejected on →ready/done) and B2
+  // story-close reads these exact criteria. A `story` with no criteria must be re-planned,
+  // not promoted — the accept gate below would push it to a state the floor rejects.
+  for (const child of created) {
+    if (layer === "story" && child.acceptance.length === 0) {
+      parent.description += `\n\nDISCOVERY (re-plan): story "${child.srcTitle}" returned no acceptance criteria.`;
+      return decompose(parent, tierIndex, { milestone, autoAcceptThrough, maxFanout });
+    }
+    for (const ac of child.acceptance) {
+      const idemFlag = ac.idempotent ? " --idempotent" : "";
+      const checkFlag = ac.check ? ` --check ${q(ac.check)}` : "";
+      await sh(
+        `claude-prove scrum task acceptance add ${child.id} ` +
+        `--text ${q(ac.text)} --verifies-by ${ac.verifies_by}${checkFlag}${idemFlag}`,
+      );
     }
   }
 
@@ -464,15 +653,49 @@ const synth = {
 await writeFile(`${runDir}/_staging/${synth.id}.json`, JSON.stringify(synth));
 await sh(`claude-prove acb log append --run-dir ${runDir} --file ${runDir}/_staging/${synth.id}.json`);
 
-// C4: synthesize the brief. TODO(reasoning-brief): multipass synthesizer is a future task;
-// for now read the episodes and assemble the PR body via the existing acb path.
-await sh(`claude-prove acb log episodes --run-dir ${runDir}`);
+// C4: synthesize the brief from the FLAT entry stream — a pure-verification close records
+// no `decision`, so `acb log episodes` would be empty; `acb log list` carries every entry.
+// TODO(reasoning-brief): multipass synthesizer is a future task; for now read the flat
+// stream and assemble the PR body via the existing acb path.
+await sh(`claude-prove acb log list --run-dir ${runDir}`);
 await sh(`claude-prove acb assemble --branch ${branch} --base ${base}`);
 
-// C5: review + PR — delegate to orchestrator full-mode (do NOT reimplement).
+// C5: promote durable decisions journal→decision store — judgment-side, human-gated.
+// Each episode opens on a `decision`; a pure-verification close has none (no-op).
+const episodes = JSON.parse(
+  (await sh(`claude-prove acb log episodes --run-dir ${runDir}`)).stdout,
+).episodes ?? [];
+const candidates = episodes
+  .map((ep) => ep.opener)          // the episode-opening `decision` entry
+  .filter((d) => significantBeyondRun(d)); // model judgment, not a counter
+if (candidates.length > 0) {
+  // ONE gate for the whole set — never blanket-promote.
+  const verdict = await AskUserQuestion({
+    header: "Promote",
+    question: `Promote these ${candidates.length} decision(s) into the durable store?`,
+    options: [
+      { label: "Promote selected", description: "Record each chosen decision as classified" },
+      { label: "Revise", description: "Adjust kinds/skip set, then re-present" },
+    ],
+  });
+  if (verdict === "Promote selected") {
+    for (const d of chosen(candidates)) {           // operator's selection
+      const kind = classify(d);                     // adr | glossary | pattern (by content)
+      const path = `.prove/decisions/${slugify(d)}.md`;
+      await writeFile(path, decisionMarkdown(d, { storyId, runDir })); // native Write; body carries provenance
+      // Dedup/supersede against the standing store before adding (append-only).
+      const dupe = findEquivalent(d, kind);
+      const rec = JSON.parse((await sh(`claude-prove scrum decision record ${path} --kind ${kind}`)).stdout);
+      if (dupe) await sh(`claude-prove scrum decision supersede ${dupe.id} --by ${rec.id} --reason ${q("refined at story-close")}`);
+      await sh(`claude-prove scrum task link-decision ${storyId} ${path}`);
+    }
+  }
+}
+
+// C6: review + PR — delegate to orchestrator full-mode (do NOT reimplement).
 //   Not a CLI call and not defined here — an intentional delegation seam: drive
 //   skills/orchestrator/SKILL.md "Full Mode" (validation gate → architect review → merge-back) —
-//   validators → prove:principal-architect review loop → merge → gh pr create. See prose C5.
+//   validators → prove:principal-architect review loop → merge → gh pr create. See prose C6.
 
 // Mirror status back to scrum.
 await sh(`claude-prove scrum task status ${storyId} done`);
@@ -490,6 +713,10 @@ await sh(`claude-prove scrum link-run ${storyId} ${runDir} --branch ${branch} --
   brief can trace it.
 - **Story-close halts on the first failing criterion.** Do not partially close — the story
   stays open; mark it `blocked` only if the failure needs another session.
+- **Promotion is judgment-gated, never automatic.** Phase C5 promotes a decision only on
+  significance and only through the operator gate; do not blanket-promote every `decision`
+  entry, and never edit or delete the journal — promotion copies into the durable store,
+  the log stays intact for the milestone-close `curate` pass.
 - **Never reimplement orchestrator full-mode.** Worktrees, validators, the
   `principal-architect` loop, and merge are `skills/orchestrator/SKILL.md`'s job. This
   skill owns the ladder, the AC dispatch, and the reasoning log — nothing else.
@@ -500,5 +727,6 @@ await sh(`claude-prove scrum link-run ${storyId} ${runDir} --branch ${branch} --
 |------|---------|
 | `references/design-principles.md` | Design principles — the engine boundary (mechanical CLI vs model judgment), native primitives, forced bubble-up, append-only |
 | `skills/orchestrator/SKILL.md` ("Full Mode") | The worktree/validation/review/merge pipeline story-close delegates to |
-| `references/interaction-patterns.md` | AskUserQuestion accept/verify gates |
+| `references/interaction-patterns.md` | AskUserQuestion accept/verify/promote gates |
 | `references/validation-config.md` | Validator phases the close gate runs |
+| `skills/curate/SKILL.md` | The milestone-close curation pass — the same journal→decision-store promotion at milestone scope (Phase C5 is its per-story analogue) |

@@ -18,6 +18,12 @@ import { createHash } from 'node:crypto';
 import { dirname, isAbsolute, join } from 'node:path';
 import { type Store, type StoreOptions, openStore, runMigrations } from '@claude-prove/store';
 import { listEntries } from '../acb/reasoning-log-store';
+import { type AssertContext, type CriterionVerification, verifyCriterion } from './assert-grammar';
+import {
+  type BashVerifyResult,
+  prepareAgentWorktree,
+  verifyBashCriterion,
+} from './criterion-verify';
 import { SCRUM_SCHEMA_VERSION, ensureScrumSchemaRegistered } from './schemas';
 import type {
   Acceptance,
@@ -42,8 +48,9 @@ import type {
   TaskBounds,
   TaskLayer,
   TaskStatus,
+  VerificationRecord,
 } from './types';
-import { ACCEPTANCE_SCOPES, ESCALATION_TYPES, GATE_VERDICTS } from './types';
+import { ACCEPTANCE_SCOPES, ESCALATION_TYPES, GATE_VERDICTS, VERIFICATION_VERDICTS } from './types';
 
 // ---------------------------------------------------------------------------
 // Public openers
@@ -228,6 +235,65 @@ const PRIORITY_TAGS = new Set(['p0', 'p1', 'urgent', 'blocker']);
 // `tag_boost`, allowing deferred/blocked/wontfix work to net negative even
 // when the task also carries a priority tag.
 const DEFER_TAGS = new Set(['deferred', 'blocked', 'wontfix']);
+
+// ---------------------------------------------------------------------------
+// Acceptance verification — entry-point result shape
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-criterion outcome inside a `verifyTaskAcceptance` aggregate. `ok` is the
+ * resolved pass/fail; `kind` echoes the criterion's `verifies_by`; `reason`
+ * carries the failing detail (offending assert sub-expression, bash transcript
+ * pointer, gate verdict, agent-pending note). A criterion that cannot be
+ * decided in the calling context (a `bash` worktree run that was not requested,
+ * or an `agent` judgment that stays driver-side) reports `ok: false` with
+ * `pending: true` — unverified, NOT a confirmed failure.
+ */
+export interface CriterionResult {
+  id: string;
+  kind: AcceptanceCriterion['verifies_by'];
+  ok: boolean;
+  reason: string;
+  /** True when the criterion is unresolved in this context (delegated/awaiting). */
+  pending: boolean;
+}
+
+/**
+ * Aggregate outcome of `verifyTaskAcceptance`. `ok` is true only when every
+ * applicable criterion resolved `ok` (a `pending` criterion makes the aggregate
+ * not-ok — an unverified goalpost is not a passed one). `results` carries the
+ * per-criterion breakdown in evaluation order.
+ */
+export interface TaskAcceptanceResult {
+  ok: boolean;
+  results: CriterionResult[];
+}
+
+/**
+ * Inputs `verifyTaskAcceptance` needs beyond the task id. All optional — what
+ * is supplied determines which kinds can be decided in this call:
+ *
+ *   assertContext — the run/plan view an `assert` criterion evaluates against
+ *                   (build it with `buildAssertContext`). Absent → `assert`
+ *                   criteria report `pending` (no context to decide them).
+ *   repoRoot      — repository path; required to run a `bash` criterion's
+ *                   isolation worktree. Absent → `bash` criteria report
+ *                   `pending`.
+ *   storyHead     — the commit-ish a `bash`/`agent` worktree is cut from.
+ *                   Absent → `bash`/`agent` criteria report `pending`.
+ *   runDir        — directory a failing `bash` transcript is persisted under.
+ *   record        — when true, each resolved heavy-kind (`assert`/`bash`)
+ *                   outcome is STAMPED onto the criterion's `verification`
+ *                   record so the close floor can later read it. The
+ *                   orchestrator validation gate passes `record: true`.
+ */
+export interface VerifyTaskAcceptanceOptions {
+  assertContext?: AssertContext;
+  repoRoot?: string;
+  storyHead?: string;
+  runDir?: string;
+  record?: boolean;
+}
 
 // ---------------------------------------------------------------------------
 // ScrumStore class
@@ -700,18 +766,42 @@ export class ScrumStore {
 
   /**
    * Reject a `layer=story` transition INTO `ready`/`in_progress`/`done` when
-   * the story has zero ACTIVE acceptance criteria. A story with
+   * the story has zero APPLICABLE active acceptance criteria, and additionally
+   * reject `→ done` when any applicable criterion is unsatisfied. A story with
    * no goalposts cannot be started or closed; superseded criteria do not count.
    * Other target statuses (`blocked`, `review`, `cancelled`, `backlog`) pass —
    * a story may be parked or abandoned without criteria. Invariant: only
    * called for `task.layer === 'story'`.
+   *
+   * Applicability honors `scope`: only criteria that apply to the story itself
+   * (`self`/`both`/absent) gate it; a `descendants`-scoped criterion is the
+   * subtree's goalpost, not the parent's, so it never blocks the parent.
+   *
+   * The `→ done` satisfaction gate is split by cost (a store-level floor cannot
+   * run a git worktree, nor does it hold the run/plan context an assert needs):
+   *   - `gate` is decided HERE via the persisted human verdict
+   *     (`criterionSatisfied`) — context-free standing state.
+   *   - `assert`/`bash`/`agent` are decided at the orchestrator validation gate
+   *     (which has the run context + git) and RECORDED onto the criterion's
+   *     `verification`; this floor READS that record. An unsatisfied (`failed`)
+   *     or never-recorded (`pending`/absent) verdict blocks the close.
    */
   private assertStoryAcceptanceFloor(task: ScrumTask, next: TaskStatus): void {
     if (next !== 'ready' && next !== 'in_progress' && next !== 'done') return;
     const active = task.acceptance?.criteria.filter((c) => c.status === 'active') ?? [];
-    if (active.length === 0) {
+    const applicable = active.filter((c) => appliesToSelf(c.scope));
+    if (applicable.length === 0) {
       throw new Error(
         `updateTaskStatus: story '${task.id}' has no active acceptance criteria; add at least one (\`scrum task acceptance add ${task.id} ...\`) before '${next}'`,
+      );
+    }
+    if (next !== 'done') return;
+
+    const unsatisfied = applicable.filter((c) => !criterionSatisfiedAtFloor(c));
+    if (unsatisfied.length > 0) {
+      const detail = unsatisfied.map((c) => `${c.id} (${c.verifies_by})`).join(', ');
+      throw new Error(
+        `updateTaskStatus: story '${task.id}' cannot close — unsatisfied acceptance criteria: ${detail}. Approve gate criteria (\`scrum gate respond\`) and record heavy-kind verdicts at the orchestrator validation gate before '${next}'.`,
       );
     }
   }
@@ -1001,6 +1091,193 @@ export class ScrumStore {
     return this.requireTask(taskId, 'respondGate');
   }
 
+  // ==========================================================================
+  // Acceptance verification — the capstone caller of the kind primitives
+  //
+  // `verifyTaskAcceptance` is the single "verify a task's acceptance" entry
+  // point. It selects the criteria that APPLY to the task — honoring `scope`,
+  // so a `descendants`-scoped criterion is a goalpost for the subtree, NOT for
+  // the parent it was authored on — and dispatches each by kind, reusing the
+  // existing primitives (never reimplementing assert eval / worktree exec / gate
+  // logic):
+  //
+  //   assert → evaluateAssert over the run/plan AssertContext (in-process)
+  //   gate   → criterionSatisfied (the persisted human verdict)
+  //   bash   → verifyBashCriterion (a write-isolated ephemeral worktree)
+  //   agent  → prepareAgentWorktree (the model judgment stays driver-side; the
+  //            engine prepares the isolated tree and reports the criterion
+  //            pending — it never invokes a model here)
+  //
+  // Close-floor vs orchestrator-gate division (a store-level close floor CANNOT
+  // run git-worktree bash, and has no run context for an assert expression):
+  //
+  //   - The CHEAP, context-free kind — `gate` — is enforced directly at the
+  //     close floor via `criterionSatisfied` (it reads standing human verdict
+  //     state, needing neither git nor run context).
+  //   - The HEAVY/context-bearing kinds — `bash` (needs git) and `assert`
+  //     (needs the run/plan context) — are run by `verifyTaskAcceptance` at the
+  //     orchestrator validation gate, which HAS both. The gate passes
+  //     `record: true` so each outcome is STAMPED onto the criterion's
+  //     `verification` record. The close floor then READS that recorded verdict
+  //     rather than re-running the worktree it cannot run. `agent` is judged
+  //     driver-side and its verdict is recorded the same way once the model
+  //     reports.
+  // ==========================================================================
+
+  /**
+   * Verify the acceptance criteria that APPLY to `taskId`, dispatching each by
+   * `verifies_by` and aggregating to `{ ok, results }`. Scope selection:
+   * `self`/`both`/absent criteria apply to the task itself; a `descendants`
+   * criterion does NOT (it is the subtree's goalpost, satisfied on the children
+   * that inherited it, not on the parent). Superseded criteria are skipped.
+   *
+   * Per kind: `assert` evaluates in-process against `opts.assertContext`;
+   * `gate` reads the persisted human verdict (`criterionSatisfied`); `bash`
+   * runs in a write-isolated worktree (`opts.repoRoot`/`opts.storyHead`
+   * required); `agent` prepares the isolation worktree but reports `pending`
+   * (the model judgment stays driver-side — this never calls a model). A kind
+   * that lacks the inputs to decide it in this call reports `pending`, which
+   * makes the aggregate not-ok (an unverified goalpost is not a passed one).
+   *
+   * When `opts.record` is set, each resolved heavy-kind (`assert`/`bash`)
+   * outcome is stamped onto the criterion's `verification` record so the close
+   * floor can read it later. `gate` is never stamped here — its decision lives
+   * in `gate.verdict`. Throws on an unknown task id.
+   */
+  async verifyTaskAcceptance(
+    taskId: string,
+    opts: VerifyTaskAcceptanceOptions = {},
+  ): Promise<TaskAcceptanceResult> {
+    const task = this.getTask(taskId);
+    if (!task) throw new Error(`verifyTaskAcceptance: unknown task '${taskId}'`);
+
+    const applicable = (task.acceptance?.criteria ?? []).filter(
+      (c) => c.status === 'active' && appliesToSelf(c.scope),
+    );
+
+    const results: CriterionResult[] = [];
+    for (const criterion of applicable) {
+      const result = await this.verifyOneCriterion(taskId, criterion, opts);
+      results.push(result);
+    }
+    return { ok: results.every((r) => r.ok), results };
+  }
+
+  /**
+   * Dispatch one criterion by kind and return its `CriterionResult`. Reuses the
+   * kind primitives verbatim; the heavy kinds (`assert`/`bash`) are recorded
+   * onto the criterion's `verification` field when `opts.record` is set so the
+   * close floor can read the verdict.
+   */
+  private async verifyOneCriterion(
+    taskId: string,
+    criterion: AcceptanceCriterion,
+    opts: VerifyTaskAcceptanceOptions,
+  ): Promise<CriterionResult> {
+    const kind = criterion.verifies_by;
+    switch (kind) {
+      case 'gate': {
+        // The persisted human verdict — no run context, no git, no recording.
+        const ok = criterionSatisfied(criterion);
+        const verdict = criterion.gate?.verdict ?? 'gate_pending';
+        const pending = verdict === 'gate_pending';
+        return { id: criterion.id, kind, ok, pending, reason: pending ? '' : `gate ${verdict}` };
+      }
+      case 'assert': {
+        if (!opts.assertContext) {
+          return pendingResult(criterion, kind, 'assert: no run/plan context supplied');
+        }
+        // In-process closed-grammar eval via the shared verifyCriterion dispatch.
+        const verification: CriterionVerification = verifyCriterion(criterion, opts.assertContext);
+        const reason = verification.ok ? '' : verification.reason;
+        if (opts.record) this.recordCriterionVerdict(taskId, criterion.id, verification.ok, reason);
+        return { id: criterion.id, kind, ok: verification.ok, pending: false, reason };
+      }
+      case 'bash': {
+        if (!opts.repoRoot || !opts.storyHead) {
+          return pendingResult(
+            criterion,
+            kind,
+            'bash: no repo/story-head supplied to run worktree',
+          );
+        }
+        const run: BashVerifyResult = await verifyBashCriterion(criterion, {
+          repoRoot: opts.repoRoot,
+          storyHead: opts.storyHead,
+          runDir: opts.runDir,
+        });
+        const reason = run.ok
+          ? ''
+          : `bash exit ${run.exitCode}${run.timedOut ? ' (timed out)' : ''}${run.transcriptPath ? ` — ${run.transcriptPath}` : ''}`;
+        if (opts.record) this.recordCriterionVerdict(taskId, criterion.id, run.ok, reason);
+        return { id: criterion.id, kind, ok: run.ok, pending: false, reason };
+      }
+      case 'agent': {
+        // The model judgment stays driver-side. The engine only prepares the
+        // isolated read surface; the criterion is pending until the driver
+        // records the verdict via `recordCriterionVerdict`.
+        if (opts.repoRoot && opts.storyHead) {
+          const wt = prepareAgentWorktree(criterion, opts.repoRoot, opts.storyHead);
+          wt.cleanup();
+        }
+        return pendingResult(criterion, kind, 'agent: judged driver-side (delegated)');
+      }
+      default: {
+        const exhaustive: never = kind;
+        throw new Error(`verifyTaskAcceptance: unknown verifies_by '${String(exhaustive)}'`);
+      }
+    }
+  }
+
+  /**
+   * Stamp a recorded verification verdict onto a criterion's `verification`
+   * field (append-style in-place, like `respondGate` for `gate`). The
+   * orchestrator validation gate calls this for `assert`/`bash`/`agent`
+   * outcomes so the close floor can later read `verified`/`failed` without
+   * re-running the check. `ok` maps to `verified`/`failed`; `verified_by`/`_at`
+   * are stamped from the run env. Rejects unknown task/criterion ids and a
+   * `gate`-kind criterion (whose verdict lives in `gate.verdict`).
+   */
+  recordCriterionVerdict(
+    taskId: string,
+    criterionId: string,
+    ok: boolean,
+    reason: string | null = null,
+  ): ScrumTask {
+    const task = this.getTask(taskId);
+    if (!task) throw new Error(`recordCriterionVerdict: unknown task '${taskId}'`);
+    if (!task.acceptance) {
+      throw new Error(`recordCriterionVerdict: task '${taskId}' has no acceptance criteria`);
+    }
+    const target = task.acceptance.criteria.find((c) => c.id === criterionId);
+    if (!target) {
+      throw new Error(
+        `recordCriterionVerdict: unknown criterion '${criterionId}' on task '${taskId}'`,
+      );
+    }
+    if (target.verifies_by === 'gate') {
+      throw new Error(
+        `recordCriterionVerdict: criterion '${criterionId}' is a gate; its verdict lives in gate.verdict (use respondGate)`,
+      );
+    }
+
+    const { workerId } = resolveRunContext();
+    const verification: VerificationRecord = {
+      verdict: ok ? 'verified' : 'failed',
+      reason: reason && reason.length > 0 ? reason : null,
+      verified_by: workerId,
+      verified_at: isoNow(),
+    };
+    const criteria = task.acceptance.criteria.map((c) =>
+      c.id === criterionId ? { ...c, verification } : c,
+    );
+    const next: Acceptance = task.acceptance.policy
+      ? { criteria, policy: task.acceptance.policy }
+      : { criteria };
+    this.writeAcceptance(taskId, next);
+    return this.requireTask(taskId, 'recordCriterionVerdict');
+  }
+
   /**
    * The criteria a child should inherit from `parentId` via shared_acceptance.
    * Returns independent deep copies of the parent's ACTIVE,
@@ -1021,17 +1298,28 @@ export class ScrumStore {
     if (!parent?.acceptance) return [];
     return parent.acceptance.criteria
       .filter((c) => c.status === 'active' && copiesDown(c.scope))
-      .map((c) => ({
-        ...c,
-        status: 'active' as const,
-        superseded_by: null,
-        reason: null,
-        inherited_from: parentId,
-        // A gate-kind child inherits a FRESH pending gate — the parent's human
-        // verdict does not satisfy the child's own gate. `withGateStatesSeeded`
-        // re-seeds non-gate criteria to undefined gate at the write boundary.
-        ...(c.verifies_by === 'gate' ? { gate: { verdict: 'gate_pending' as const } } : {}),
-      }));
+      .map((c) => {
+        // A child inherits a FRESH, unverified copy: the parent's recorded
+        // verification verdict (`verified`/`failed`) does NOT satisfy the
+        // child's own copy, so drop it — the child re-verifies from scratch.
+        const { verification: _drop, ...rest } = c;
+        return {
+          ...rest,
+          status: 'active' as const,
+          superseded_by: null,
+          reason: null,
+          inherited_from: parentId,
+          // The copy lands as `both` on the child: the child IS a descendant, so
+          // the criterion is now a goalpost on the child itself, AND it keeps
+          // cascading to the child's own descendants. A parent-only (`self`)
+          // criterion never reaches here (it does not copy down).
+          scope: 'both' as const,
+          // A gate-kind child inherits a FRESH pending gate — the parent's human
+          // verdict does not satisfy the child's own gate. `withGateStatesSeeded`
+          // re-seeds non-gate criteria to undefined gate at the write boundary.
+          ...(c.verifies_by === 'gate' ? { gate: { verdict: 'gate_pending' as const } } : {}),
+        };
+      });
   }
 
   /**
@@ -1841,6 +2129,51 @@ export class ScrumStore {
   }
 
   /**
+   * Open gate-kind acceptance criteria awaiting a human verdict, across all
+   * non-terminal, non-deleted tasks. A pending gate is an `active`,
+   * `verifies_by: 'gate'` criterion whose persisted verdict is `gate_pending`
+   * (the seed state; `approved`/`rejected` are resolved and excluded). Backs
+   * the `alerts` pending-gate surface so an out-of-turn driver sees gates the
+   * in-turn `AskUserQuestion` path and the `scrum gate respond` CLI would
+   * otherwise be the only way to discover. A `done`/`cancelled` task's gates
+   * are no longer actionable and are excluded — same terminal-status filter as
+   * `listOpenEscalations`. Ordered by task id then criterion id for a stable
+   * report.
+   */
+  listPendingGates(): Array<{
+    task_id: string;
+    title: string;
+    criterion_id: string;
+    criterion_text: string;
+  }> {
+    const tasks = this.listTasks().filter((t) => t.status !== 'done' && t.status !== 'cancelled');
+    const pending: Array<{
+      task_id: string;
+      title: string;
+      criterion_id: string;
+      criterion_text: string;
+    }> = [];
+    for (const task of tasks) {
+      for (const criterion of task.acceptance?.criteria ?? []) {
+        if (criterion.verifies_by !== 'gate') continue;
+        if (criterion.status !== 'active') continue;
+        const verdict = criterion.gate?.verdict ?? 'gate_pending';
+        if (verdict !== 'gate_pending') continue;
+        pending.push({
+          task_id: task.id,
+          title: task.title,
+          criterion_id: criterion.id,
+          criterion_text: criterion.text,
+        });
+      }
+    }
+    pending.sort(
+      (a, b) => a.task_id.localeCompare(b.task_id) || a.criterion_id.localeCompare(b.criterion_id),
+    );
+    return pending;
+  }
+
+  /**
    * Lazily-cached prepared statement. Caching by SQL text matches bun's own
    * internal prepared-statement cache semantics and avoids re-parsing on
    * every hot-path call (nextReady walks the graph N times).
@@ -1989,6 +2322,33 @@ function copiesDown(scope: AcceptanceScope | undefined): boolean {
 }
 
 /**
+ * Whether a criterion is a goalpost on the task it is authored on. `self` and
+ * `both` apply to the task itself; `descendants` does NOT — a `descendants`
+ * criterion is a goalpost the parent declares FOR its subtree, satisfied on the
+ * children that inherited it, never evaluated against the parent. An absent
+ * scope defaults to `both` (the legacy copy-down default also applied to self),
+ * so pre-scope criteria stay goalposts on their own task exactly as before.
+ * Dual of `copiesDown`.
+ */
+function appliesToSelf(scope: AcceptanceScope | undefined): boolean {
+  return scope === undefined || scope === 'self' || scope === 'both';
+}
+
+/**
+ * Build a `pending` (unverified) `CriterionResult` — the criterion could not be
+ * decided in this call (delegated to the driver, or missing the git/run context
+ * a heavy kind needs). Not `ok`, but not a confirmed failure either; the reason
+ * names why it is unresolved.
+ */
+function pendingResult(
+  criterion: AcceptanceCriterion,
+  kind: AcceptanceCriterion['verifies_by'],
+  reason: string,
+): CriterionResult {
+  return { id: criterion.id, kind, ok: false, pending: true, reason };
+}
+
+/**
  * Return a copy of `acceptance` with every `gate`-kind criterion guaranteed to
  * carry a gate state. A gate-kind criterion missing a `gate` field is seeded
  * `{ verdict: 'gate_pending' }` — a fresh gate always starts pending and
@@ -2023,6 +2383,23 @@ export function criterionSatisfied(criterion: AcceptanceCriterion): boolean {
 }
 
 /**
+ * Whether a criterion counts as satisfied from the story-CLOSE-floor vantage —
+ * the read the floor uses to decide `→ done`. The floor has no git and no
+ * run/plan context, so it splits by cost:
+ *   - `gate` is decided directly via the persisted human verdict
+ *     (`criterionSatisfied`).
+ *   - `assert`/`bash`/`agent` are decided upstream at the orchestrator
+ *     validation gate, which RECORDS the outcome onto the criterion's
+ *     `verification`; the floor reads `verification.verdict === 'verified'`.
+ *     An absent or non-`verified` record (`pending`/`failed`) is NOT satisfied —
+ *     a never-run heavy criterion blocks the close until the gate records it.
+ */
+export function criterionSatisfiedAtFloor(criterion: AcceptanceCriterion): boolean {
+  if (criterion.verifies_by === 'gate') return criterionSatisfied(criterion);
+  return criterion.verification?.verdict === 'verified';
+}
+
+/**
  * Enforce the acceptance write-time invariants:
  *
  *   - scope is a closed enum — any criterion carrying a `scope` outside
@@ -2053,6 +2430,20 @@ function validateAcceptance(acceptance: Acceptance): void {
   if (badGate) {
     throw new Error(
       `acceptance criterion '${badGate.id}' has invalid gate verdict '${badGate.gate?.verdict}'; expected one of: ${GATE_VERDICTS.join(', ')}`,
+    );
+  }
+
+  // Closed-enum guard on the recorded verification verdict: a criterion carrying
+  // a `verification.verdict` outside `pending | verified | failed` is rejected
+  // so an unknown verdict cannot land silently and corrupt the close-floor read.
+  const badVerification = acceptance.criteria.find(
+    (c) =>
+      c.verification !== undefined &&
+      !(VERIFICATION_VERDICTS as string[]).includes(c.verification.verdict),
+  );
+  if (badVerification) {
+    throw new Error(
+      `acceptance criterion '${badVerification.id}' has invalid verification verdict '${badVerification.verification?.verdict}'; expected one of: ${VERIFICATION_VERDICTS.join(', ')}`,
     );
   }
 

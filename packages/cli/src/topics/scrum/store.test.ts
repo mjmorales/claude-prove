@@ -8,10 +8,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendEntry } from '../acb/reasoning-log-store';
+import type { AssertContext } from './assert-grammar';
 import { type ScrumStore, criterionSatisfied, openScrumStore } from './store';
 import type { Acceptance, AcceptanceCriterion, TaskBounds } from './types';
 
@@ -1307,6 +1309,341 @@ describe('ScrumStore — gate-kind respond flow', () => {
 });
 
 // ===========================================================================
+// verifyTaskAcceptance — the capstone caller of the kind primitives
+// ===========================================================================
+
+/** A passing in-process assert: `task.status == 'in_progress'`. */
+function passingAssertCtx(): AssertContext {
+  return {
+    run: { status: 'running' },
+    task: { status: 'in_progress', review: 'pending' },
+    step: { status: 'completed' },
+    validator: { build: 'pass', lint: 'pass', test: 'pass', custom: 'pending', llm: 'pending' },
+  };
+}
+
+describe('ScrumStore — verifyTaskAcceptance: scope selection', () => {
+  test('self/both/absent criteria apply to the task; descendants does NOT', async () => {
+    seedTask('t', {
+      acceptance: {
+        criteria: [
+          ac('self-c', { verifies_by: 'gate', scope: 'self', gate: { verdict: 'approved' } }),
+          ac('both-c', { verifies_by: 'gate', scope: 'both', gate: { verdict: 'approved' } }),
+          ac('absent-c', { verifies_by: 'gate', gate: { verdict: 'approved' } }),
+          // A descendants-scoped criterion is the subtree's goalpost, NOT the
+          // parent's — it must be excluded from the parent's own verification.
+          ac('desc-c', {
+            verifies_by: 'gate',
+            scope: 'descendants',
+            gate: { verdict: 'approved' },
+          }),
+        ],
+      },
+    });
+    const res = await store.verifyTaskAcceptance('t');
+    expect(res.results.map((r) => r.id)).toEqual(['self-c', 'both-c', 'absent-c']);
+    expect(res.ok).toBe(true);
+  });
+
+  test('superseded criteria are skipped', async () => {
+    seedTask('t', {
+      acceptance: {
+        criteria: [ac('keep', { verifies_by: 'gate', gate: { verdict: 'approved' } }), ac('gone')],
+      },
+    });
+    store.supersedeCriterion('t', 'gone', 'retired');
+    const res = await store.verifyTaskAcceptance('t');
+    expect(res.results.map((r) => r.id)).toEqual(['keep']);
+  });
+
+  test('an inherited descendants criterion IS a goalpost on the child it copied to', async () => {
+    seedTask('parent', {
+      acceptance: {
+        criteria: [ac('shared', { verifies_by: 'gate', scope: 'descendants' })],
+      },
+    });
+    // The child inherits the criterion as an absent-scope (applies-to-self) copy.
+    const child = store.createTask({ id: 'child', title: 'Child', parentId: 'parent' });
+    expect(child.acceptance?.criteria.map((c) => c.id)).toEqual(['shared']);
+    store.respondGate('child', 'shared', 'approved', { responder: 'a' });
+    const res = await store.verifyTaskAcceptance('child');
+    expect(res.results.map((r) => r.id)).toEqual(['shared']);
+    expect(res.ok).toBe(true);
+  });
+
+  test('rejects an unknown task id', async () => {
+    await expect(store.verifyTaskAcceptance('nope')).rejects.toThrow(/unknown task 'nope'/);
+  });
+
+  test('a task with no acceptance verifies vacuously ok', async () => {
+    seedTask('t');
+    const res = await store.verifyTaskAcceptance('t');
+    expect(res).toEqual({ ok: true, results: [] });
+  });
+});
+
+describe('ScrumStore — verifyTaskAcceptance: per-kind dispatch', () => {
+  test('gate kind reads the persisted human verdict', async () => {
+    seedTask('t', {
+      acceptance: {
+        criteria: [
+          gateAc('approved-g', { gate: { verdict: 'approved' } }),
+          gateAc('pending-g', { gate: { verdict: 'gate_pending' } }),
+          gateAc('rejected-g', { gate: { verdict: 'rejected' } }),
+        ],
+      },
+    });
+    const res = await store.verifyTaskAcceptance('t');
+    const byId = Object.fromEntries(res.results.map((r) => [r.id, r]));
+    expect(byId['approved-g']).toMatchObject({ ok: true, pending: false });
+    expect(byId['pending-g']).toMatchObject({ ok: false, pending: true });
+    expect(byId['rejected-g']).toMatchObject({ ok: false, pending: false });
+    expect(res.ok).toBe(false);
+  });
+
+  test('assert kind evaluates in-process against the supplied context', async () => {
+    seedTask('t', {
+      acceptance: {
+        criteria: [
+          ac('pass-a', { verifies_by: 'assert', check: "task.status == 'in_progress'" }),
+          ac('fail-a', { verifies_by: 'assert', check: "task.review == 'approved'" }),
+        ],
+      },
+    });
+    const res = await store.verifyTaskAcceptance('t', { assertContext: passingAssertCtx() });
+    const byId = Object.fromEntries(res.results.map((r) => [r.id, r]));
+    expect(byId['pass-a']).toMatchObject({ ok: true, pending: false });
+    expect(byId['fail-a']?.ok).toBe(false);
+    expect(byId['fail-a']?.reason).toContain('approved');
+  });
+
+  test('assert kind is pending when no context is supplied', async () => {
+    seedTask('t', {
+      acceptance: { criteria: [ac('a', { verifies_by: 'assert', check: 'run.status' })] },
+    });
+    const res = await store.verifyTaskAcceptance('t');
+    expect(res.results[0]).toMatchObject({ kind: 'assert', ok: false, pending: true });
+  });
+
+  test('bash kind runs in an isolated worktree (pass + fail)', async () => {
+    const base = mkdtempSync(join(tmpdir(), 'vta-bash-'));
+    const repo = join(base, 'repo');
+    execFileSync('git', ['init', '-q', repo]);
+    execFileSync('git', ['-C', repo, 'config', 'user.email', 't@t']);
+    execFileSync('git', ['-C', repo, 'config', 'user.name', 't']);
+    writeFileSync(join(repo, 'f.txt'), 'x\n');
+    execFileSync('git', ['-C', repo, 'add', '.']);
+    execFileSync('git', ['-C', repo, 'commit', '-qm', 'init']);
+    const head = execFileSync('git', ['-C', repo, 'rev-parse', 'HEAD'], {
+      encoding: 'utf8',
+    }).trim();
+    try {
+      seedTask('t', {
+        acceptance: {
+          criteria: [
+            ac('pass-b', { verifies_by: 'bash', check: 'true', idempotent: true }),
+            ac('fail-b', { verifies_by: 'bash', check: 'exit 3', idempotent: true }),
+          ],
+        },
+      });
+      const res = await store.verifyTaskAcceptance('t', { repoRoot: repo, storyHead: head });
+      const byId = Object.fromEntries(res.results.map((r) => [r.id, r]));
+      expect(byId['pass-b']).toMatchObject({ ok: true, pending: false });
+      expect(byId['fail-b']?.ok).toBe(false);
+      expect(byId['fail-b']?.reason).toContain('exit 3');
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test('bash kind is pending when no repo/story-head is supplied', async () => {
+    seedTask('t', {
+      acceptance: { criteria: [ac('b', { verifies_by: 'bash', check: 'true' })] },
+    });
+    const res = await store.verifyTaskAcceptance('t');
+    expect(res.results[0]).toMatchObject({ kind: 'bash', ok: false, pending: true });
+  });
+
+  test('agent kind is always pending (model judgment stays driver-side)', async () => {
+    seedTask('t', {
+      acceptance: { criteria: [ac('ag', { verifies_by: 'agent', check: 'looks right' })] },
+    });
+    const res = await store.verifyTaskAcceptance('t');
+    expect(res.results[0]).toMatchObject({ kind: 'agent', ok: false, pending: true });
+    expect(res.results[0]?.reason).toContain('driver-side');
+  });
+});
+
+describe('ScrumStore — verifyTaskAcceptance: aggregation', () => {
+  test('ok only when every applicable criterion resolved ok; pending makes it not-ok', async () => {
+    seedTask('t', {
+      acceptance: {
+        criteria: [
+          gateAc('g', { gate: { verdict: 'approved' } }),
+          ac('a', { verifies_by: 'assert', check: "task.status == 'in_progress'" }),
+          ac('ag', { verifies_by: 'agent', check: 'x' }), // always pending
+        ],
+      },
+    });
+    const res = await store.verifyTaskAcceptance('t', { assertContext: passingAssertCtx() });
+    expect(res.ok).toBe(false); // the agent criterion is pending
+    expect(res.results.find((r) => r.id === 'ag')?.pending).toBe(true);
+  });
+
+  test('all-satisfied applicable criteria aggregate to ok', async () => {
+    seedTask('t', {
+      acceptance: {
+        criteria: [
+          gateAc('g', { gate: { verdict: 'approved' } }),
+          ac('a', { verifies_by: 'assert', check: "run.status == 'running'" }),
+        ],
+      },
+    });
+    const res = await store.verifyTaskAcceptance('t', { assertContext: passingAssertCtx() });
+    expect(res.ok).toBe(true);
+  });
+});
+
+describe('ScrumStore — recordCriterionVerdict + record option', () => {
+  test('record: true stamps the assert outcome onto the criterion verification', async () => {
+    seedTask('t', {
+      acceptance: {
+        criteria: [ac('a', { verifies_by: 'assert', check: "run.status == 'running'" })],
+      },
+    });
+    await store.verifyTaskAcceptance('t', { assertContext: passingAssertCtx(), record: true });
+    const c = store.getTask('t')?.acceptance?.criteria[0];
+    expect(c?.verification?.verdict).toBe('verified');
+    expect(typeof c?.verification?.verified_at).toBe('string');
+  });
+
+  test('record: true stamps a failed verdict with a reason', async () => {
+    seedTask('t', {
+      acceptance: {
+        criteria: [ac('a', { verifies_by: 'assert', check: "task.review == 'approved'" })],
+      },
+    });
+    await store.verifyTaskAcceptance('t', { assertContext: passingAssertCtx(), record: true });
+    const c = store.getTask('t')?.acceptance?.criteria[0];
+    expect(c?.verification?.verdict).toBe('failed');
+    expect(c?.verification?.reason).toContain('approved');
+  });
+
+  test('without record, the verification field stays absent', async () => {
+    seedTask('t', {
+      acceptance: { criteria: [ac('a', { verifies_by: 'assert', check: 'run.status' })] },
+    });
+    await store.verifyTaskAcceptance('t', { assertContext: passingAssertCtx() });
+    expect(store.getTask('t')?.acceptance?.criteria[0]?.verification).toBeUndefined();
+  });
+
+  test('recordCriterionVerdict rejects a gate criterion (verdict lives in gate.verdict)', () => {
+    seedTask('t', { acceptance: { criteria: [gateAc('g')] } });
+    expect(() => store.recordCriterionVerdict('t', 'g', true)).toThrow(
+      /is a gate; its verdict lives in gate.verdict/,
+    );
+  });
+
+  test('recordCriterionVerdict rejects unknown task/criterion ids', () => {
+    expect(() => store.recordCriterionVerdict('nope', 'c', true)).toThrow(/unknown task 'nope'/);
+    seedTask('t', { acceptance: { criteria: [ac('a', { verifies_by: 'assert', check: 'x' })] } });
+    expect(() => store.recordCriterionVerdict('t', 'nope', true)).toThrow(
+      /unknown criterion 'nope'/,
+    );
+  });
+
+  test('an off-enum verification verdict is rejected at the acceptance write boundary', () => {
+    seedTask('t');
+    expect(() =>
+      store.addCriterion(
+        't',
+        ac('a', {
+          verifies_by: 'assert',
+          check: 'x',
+          verification: { verdict: 'maybe' as never },
+        }),
+      ),
+    ).toThrow(/invalid verification verdict 'maybe'/);
+  });
+
+  test('an inherited criterion drops the parent recorded verdict (re-verifies fresh)', () => {
+    seedTask('parent', {
+      acceptance: { criteria: [ac('a', { verifies_by: 'assert', check: 'x', scope: 'both' })] },
+    });
+    store.recordCriterionVerdict('parent', 'a', true);
+    expect(store.getTask('parent')?.acceptance?.criteria[0]?.verification?.verdict).toBe(
+      'verified',
+    );
+    const child = store.createTask({ id: 'child', title: 'Child', parentId: 'parent' });
+    // The child's inherited copy carries NO recorded verdict — it must re-verify.
+    expect(child.acceptance?.criteria[0]?.verification).toBeUndefined();
+  });
+});
+
+// Pending-gate surfacing (out-of-turn pull path)
+// ===========================================================================
+
+describe('ScrumStore — listPendingGates', () => {
+  test('no gate criteria: clean empty result', () => {
+    seedTask('t1', { acceptance: { criteria: [ac('c1')] } });
+    expect(store.listPendingGates()).toHaveLength(0);
+  });
+
+  test('a fresh gate-kind criterion surfaces with task + criterion id + text', () => {
+    seedTask('t1', { acceptance: { criteria: [gateAc('g1', { text: 'operator approves' })] } });
+    const pending = store.listPendingGates();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toEqual({
+      task_id: 't1',
+      title: 'Task t1',
+      criterion_id: 'g1',
+      criterion_text: 'operator approves',
+    });
+  });
+
+  test('a resolved gate (approved or rejected) is excluded', () => {
+    seedTask('t1', { acceptance: { criteria: [gateAc('g1')] } });
+    seedTask('t2', { acceptance: { criteria: [gateAc('g2')] } });
+    store.respondGate('t1', 'g1', 'approved', { responder: 'alice' });
+    store.respondGate('t2', 'g2', 'rejected', { responder: 'bob' });
+    expect(store.listPendingGates()).toHaveLength(0);
+  });
+
+  test('a superseded gate criterion is excluded even while pending', () => {
+    seedTask('t1', { acceptance: { criteria: [gateAc('g1')] } });
+    store.supersedeCriterion('t1', 'g1', 'no longer required');
+    expect(store.listPendingGates()).toHaveLength(0);
+  });
+
+  test('gates on done/cancelled tasks are excluded (terminal-status filter)', () => {
+    seedTask('done-task', { acceptance: { criteria: [gateAc('g1')] } });
+    store.updateTaskStatus('done-task', 'ready');
+    store.updateTaskStatus('done-task', 'in_progress');
+    store.updateTaskStatus('done-task', 'done');
+    seedTask('cancelled-task', { acceptance: { criteria: [gateAc('g2')] } });
+    store.updateTaskStatus('cancelled-task', 'cancelled');
+    expect(store.listPendingGates()).toHaveLength(0);
+  });
+
+  test('non-gate criteria never surface as pending gates', () => {
+    seedTask('t1', { acceptance: { criteria: [ac('c1'), gateAc('g1')] } });
+    const pending = store.listPendingGates();
+    expect(pending.map((g) => g.criterion_id)).toEqual(['g1']);
+  });
+
+  test('result is ordered by task id then criterion id', () => {
+    seedTask('t2', { acceptance: { criteria: [gateAc('gz'), gateAc('ga')] } });
+    seedTask('t1', { acceptance: { criteria: [gateAc('g1')] } });
+    const pending = store.listPendingGates();
+    expect(pending.map((g) => `${g.task_id}/${g.criterion_id}`)).toEqual([
+      't1/g1',
+      't2/ga',
+      't2/gz',
+    ]);
+  });
+});
+
+// ===========================================================================
 // Declared bounds (v6)
 // ===========================================================================
 
@@ -1491,6 +1828,92 @@ describe('ScrumStore — story acceptance floor (≥1 active criterion)', () => 
     expect(() => store.updateTaskStatus('t', 'in_progress')).not.toThrow();
     expect(() => store.updateTaskStatus('flat', 'in_progress')).not.toThrow();
   });
+
+  test('a story whose only criterion is descendants-scoped has no applicable goalpost', () => {
+    // A descendants criterion is the subtree's goalpost, not the parent's — so
+    // the parent story has zero APPLICABLE criteria and is blocked forward.
+    seedTask('s', {
+      layer: 'story',
+      acceptance: { criteria: [ac('d', { scope: 'descendants' })] },
+    });
+    expect(() => store.updateTaskStatus('s', 'ready')).toThrow(/no active acceptance criteria/);
+  });
+});
+
+describe('ScrumStore — story close-floor acceptance-satisfaction gate', () => {
+  let runDir: string;
+
+  beforeEach(() => {
+    runDir = mkdtempSync(join(tmpdir(), 'scrum-close-'));
+    // A synthesis entry on the linked run clears the synthesis floor so these
+    // tests isolate the acceptance-satisfaction gate.
+    appendEntry(runDir, {
+      id: 'synth',
+      ts: '2026-06-01T00:00:00Z',
+      type: 'synthesis',
+      agent: 'worker',
+      run_path: runDir,
+      body: 'wrapped',
+      outcome: 'shipped',
+    });
+  });
+  afterEach(() => {
+    rmSync(runDir, { recursive: true, force: true });
+  });
+
+  /** An in_progress story with the given criteria, linked to a synthesized run. */
+  function seedStoryForClose(criteria: AcceptanceCriterion[]) {
+    seedTask('s', { layer: 'story', status: 'in_progress', acceptance: { criteria } });
+    store.linkRun({ taskId: 's', runPath: runDir });
+  }
+
+  test('an unapproved gate criterion blocks the close', () => {
+    seedStoryForClose([gateAc('g', { gate: { verdict: 'gate_pending' } })]);
+    expect(() => store.updateTaskStatus('s', 'done')).toThrow(/cannot close.*g \(gate\)/);
+  });
+
+  test('an approved gate criterion allows the close (decided at the floor, no context)', () => {
+    seedStoryForClose([gateAc('g', { gate: { verdict: 'approved' } })]);
+    expect(() => store.updateTaskStatus('s', 'done')).not.toThrow();
+    expect(store.getTask('s')?.status).toBe('done');
+  });
+
+  test('a heavy criterion with no recorded verdict blocks the close (gate must record first)', () => {
+    seedStoryForClose([ac('b', { verifies_by: 'bash', check: 'true' })]);
+    expect(() => store.updateTaskStatus('s', 'done')).toThrow(/cannot close.*b \(bash\)/);
+  });
+
+  test('a heavy criterion recorded verified allows the close (the floor reads the verdict)', () => {
+    seedStoryForClose([ac('b', { verifies_by: 'bash', check: 'true' })]);
+    store.recordCriterionVerdict('s', 'b', true);
+    expect(() => store.updateTaskStatus('s', 'done')).not.toThrow();
+    expect(store.getTask('s')?.status).toBe('done');
+  });
+
+  test('a heavy criterion recorded failed blocks the close', () => {
+    seedStoryForClose([ac('a', { verifies_by: 'assert', check: "task.review == 'approved'" })]);
+    store.recordCriterionVerdict('s', 'a', false, "task.review == 'approved'");
+    expect(() => store.updateTaskStatus('s', 'done')).toThrow(/cannot close.*a \(assert\)/);
+  });
+
+  test('mixed kinds: all satisfied (approved gate + recorded verified) allows the close', () => {
+    seedStoryForClose([
+      gateAc('g', { gate: { verdict: 'approved' } }),
+      ac('a', { verifies_by: 'assert', check: 'run.status' }),
+    ]);
+    store.recordCriterionVerdict('s', 'a', true);
+    expect(() => store.updateTaskStatus('s', 'done')).not.toThrow();
+  });
+
+  test('a descendants criterion never blocks the parent close (not an applicable goalpost)', () => {
+    // The story carries one applicable approved gate plus a descendants criterion
+    // that is the subtree's goalpost; the descendants one must not gate the parent.
+    seedStoryForClose([
+      gateAc('g', { gate: { verdict: 'approved' } }),
+      ac('d', { verifies_by: 'bash', check: 'false', scope: 'descendants' }),
+    ]);
+    expect(() => store.updateTaskStatus('s', 'done')).not.toThrow();
+  });
 });
 
 describe('ScrumStore — story synthesis floor', () => {
@@ -1504,12 +1927,14 @@ describe('ScrumStore — story synthesis floor', () => {
   });
 
   function seedStartedStory(id: string) {
-    // Story with an active criterion (clears the acceptance floor) already
-    // in_progress so the only remaining gate for `done` is the synthesis floor.
+    // Story with a SATISFIED active criterion (clears both the acceptance-count
+    // floor and the new acceptance-satisfaction gate) already in_progress, so the
+    // only remaining gate for `done` is the synthesis floor under test. An
+    // approved gate criterion is satisfied without git or run context.
     seedTask(id, {
       layer: 'story',
       status: 'in_progress',
-      acceptance: { criteria: [ac('c1')] },
+      acceptance: { criteria: [ac('c1', { verifies_by: 'gate', gate: { verdict: 'approved' } })] },
     });
   }
 
