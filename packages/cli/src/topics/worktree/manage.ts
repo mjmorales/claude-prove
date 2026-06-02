@@ -12,7 +12,8 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
 
@@ -231,4 +232,74 @@ function taskWorktrees(worktreeDir: string, slug: string): string[] {
 
 function writeMarker(wtPath: string, slug: string): void {
   writeFileSync(join(wtPath, '.prove-wt-slug.txt'), `${slug}\n`);
+}
+
+// ---------------------------------------------------------------------------
+// Ephemeral worktree — short-lived, detached, throwaway
+// ---------------------------------------------------------------------------
+
+/**
+ * A short-lived git worktree checked out at an arbitrary commit ref, isolated
+ * from every other worktree by construction. Unlike the namespaced sub-task
+ * worktrees above (which carry a stable `<slug>-task-<id>` path and a branch),
+ * an ephemeral worktree is detached at a fixed ref, lives in a fresh temp
+ * directory, and is meant to be removed the moment the work that read it
+ * finishes. It exists so a read-only check (acceptance-criterion verification)
+ * can run against a known tree state without any chance of mutating the real
+ * working tree, and so two such checks running at once cannot collide — each
+ * gets its own throwaway directory cut from the same commit.
+ */
+export interface EphemeralWorktree {
+  /** Absolute path to the throwaway checkout directory. */
+  path: string;
+  /** The commit SHA the worktree is detached at (resolved from the ref). */
+  sha: string;
+}
+
+/**
+ * Create a detached, short-lived worktree of `repoRoot` at `ref`, in a fresh
+ * temp directory. The checkout is detached (no branch), so it never competes
+ * with a sub-task branch and leaves no ref behind on removal.
+ *
+ * `repoRoot` is any path inside the repository; the worktree is added relative
+ * to it. `ref` is any commit-ish (a SHA, a branch, `HEAD`). Throws if `ref`
+ * does not resolve or if `git worktree add` fails — the caller cannot proceed
+ * without a clean isolated tree.
+ *
+ * Always pair with `removeEphemeralWorktree` in a `finally` so a thrown check
+ * still tears the worktree down.
+ */
+export function createEphemeralWorktree(repoRoot: string, ref: string): EphemeralWorktree {
+  const resolved = git(repoRoot, ['rev-parse', '--verify', `${ref}^{commit}`]);
+  if (resolved.code !== 0) {
+    throw new Error(
+      `createEphemeralWorktree: ref '${ref}' does not resolve to a commit: ${resolved.stderr.trim()}`,
+    );
+  }
+  const sha = resolved.stdout.trim();
+  const path = mkdtempSync(join(tmpdir(), 'prove-verify-'));
+  // `--detach` keeps the checkout headless: no branch is created, so parallel
+  // ephemeral worktrees at the same SHA never contend for one branch name.
+  const add = git(repoRoot, ['worktree', 'add', '--detach', path, sha]);
+  if (add.code !== 0) {
+    rmSync(path, { recursive: true, force: true });
+    throw new Error(`createEphemeralWorktree: git worktree add failed: ${add.stderr.trim()}`);
+  }
+  return { path, sha };
+}
+
+/**
+ * Remove an ephemeral worktree created by `createEphemeralWorktree`. Forces
+ * removal (a check may have left untracked files), then prunes the registration
+ * and deletes the directory directly as a fallback. Best-effort and never
+ * throws, so it is safe to call from a `finally` even when the worktree was
+ * only partially created.
+ */
+export function removeEphemeralWorktree(repoRoot: string, wtPath: string): void {
+  if (existsSync(wtPath)) {
+    if (git(repoRoot, ['worktree', 'remove', wtPath, '--force']).code !== 0) {
+      rmSync(wtPath, { recursive: true, force: true });
+    }
+  }
+  git(repoRoot, ['worktree', 'prune']);
 }
