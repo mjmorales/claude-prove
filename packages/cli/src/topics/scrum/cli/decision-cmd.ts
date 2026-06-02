@@ -5,6 +5,18 @@
  *   record <path> [--kind K]   Read, parse, upsert decision row; prints JSON row.
  *                              `--kind` (adr|glossary|pattern) sets the Codex
  *                              subtype (v8) and overrides any kind in the file.
+ *                              A GATED kind (adr|glossary|pattern) lands as a
+ *                              DRAFT — not durably accepted until approved.
+ *   approve <id> --by <responder>
+ *                              Approve a gated decision's write-gate, accepting
+ *                              it durably (status -> accepted). adr/pattern are a
+ *                              human gate (any responder); glossary requires a
+ *                              tech_lead review (the responder must currently
+ *                              hold a tech_lead slot on some team).
+ *   reject <id> --by <responder> [--reason <text>]
+ *                              Reject a gated decision's write-gate. The decision
+ *                              stays blocked (never accepted). `--reason` is
+ *                              recorded on the row.
  *   get <id>                   Prints the decision's stored `content` to stdout.
  *   list                       [--topic T] [--status S] [--kind K] [--human]
  *   recover --from-git         Backfill scrum_decisions from every .prove/decisions/*.md
@@ -44,9 +56,9 @@ export interface DecisionCmdFlags {
   workspaceRoot?: string;
   /** Required by `recover`; absent triggers a usage error. */
   fromGit?: boolean;
-  /** `supersede`: id of the replacement decision (`--by`). */
+  /** `supersede`: replacement id; `approve`/`reject`: the gate responder (`--by`). */
   by?: string;
-  /** `supersede`: rationale recorded on the retired decision (`--reason`). */
+  /** `supersede`: retirement rationale; `reject`: optional gate rationale (`--reason`). */
   reason?: string;
   /** `review-stale`: staleness threshold in days (default 90). */
   days?: number | string;
@@ -54,10 +66,20 @@ export interface DecisionCmdFlags {
   kind?: string;
 }
 
-export type DecisionAction = 'record' | 'get' | 'list' | 'recover' | 'supersede' | 'review-stale';
+export type DecisionAction =
+  | 'record'
+  | 'approve'
+  | 'reject'
+  | 'get'
+  | 'list'
+  | 'recover'
+  | 'supersede'
+  | 'review-stale';
 
 const DECISION_ACTIONS: DecisionAction[] = [
   'record',
+  'approve',
+  'reject',
   'get',
   'list',
   'recover',
@@ -99,6 +121,10 @@ export function runDecisionCmd(
     switch (action) {
       case 'record':
         return doRecord(store, positional[0], flags);
+      case 'approve':
+        return doApprove(store, positional[0], flags);
+      case 'reject':
+        return doReject(store, positional[0], flags);
       case 'get':
         return doGet(store, positional[0]);
       case 'list':
@@ -149,8 +175,74 @@ function doRecord(store: ScrumStore, path: string | undefined, flags: DecisionCm
   const row = store.recordDecision(input);
   const bytes = Buffer.byteLength(content, 'utf8');
   process.stdout.write(`${JSON.stringify(row)}\n`);
-  process.stderr.write(`scrum decision record: ${row.id} (${bytes} bytes)\n`);
+  // A gated-kind record lands as a DRAFT (write_status='draft', not accepted)
+  // until approved; surface that on stderr so the operator knows a gate is open.
+  const gate = row.write_status === 'draft' ? ' [draft — awaiting approve]' : '';
+  process.stderr.write(`scrum decision record: ${row.id} (${bytes} bytes)${gate}\n`);
   return 0;
+}
+
+// ---------------------------------------------------------------------------
+// approve / reject — resolve a gated decision's write-gate
+// ---------------------------------------------------------------------------
+
+/**
+ * `decision approve <id> --by <responder>`. Delegates to
+ * `store.approveDecision`, which accepts the gated draft durably (status ->
+ * accepted, write_status -> approved). For a `glossary` decision the store
+ * additionally requires the responder to currently hold a `tech_lead` slot on
+ * some team; `adr`/`pattern` are a plain human gate. Store-level rejections
+ * (unknown id, non-gated decision, already-resolved gate, non-tech_lead
+ * glossary responder) surface as exit 1 via the caller's catch.
+ */
+function doApprove(store: ScrumStore, id: string | undefined, flags: DecisionCmdFlags): number {
+  if (id === undefined || id.length === 0) {
+    process.stderr.write('scrum decision approve: <id> positional argument required\n');
+    return 1;
+  }
+  const responder = resolveResponder(flags.by);
+  if (responder === null) {
+    process.stderr.write('scrum decision approve: --by <responder> is required\n');
+    return 1;
+  }
+  const row = store.approveDecision(id, responder);
+  process.stdout.write(`${JSON.stringify(row)}\n`);
+  process.stderr.write(`scrum decision approve: ${row.id} -> accepted (by ${responder})\n`);
+  return 0;
+}
+
+/**
+ * `decision reject <id> --by <responder> [--reason <text>]`. Delegates to
+ * `store.rejectDecision`, which blocks the gated draft (write_status ->
+ * rejected; status stays 'draft' — never accepted). Store-level rejections
+ * (unknown id, non-gated decision, already-resolved gate) surface as exit 1.
+ */
+function doReject(store: ScrumStore, id: string | undefined, flags: DecisionCmdFlags): number {
+  if (id === undefined || id.length === 0) {
+    process.stderr.write('scrum decision reject: <id> positional argument required\n');
+    return 1;
+  }
+  const responder = resolveResponder(flags.by);
+  if (responder === null) {
+    process.stderr.write('scrum decision reject: --by <responder> is required\n');
+    return 1;
+  }
+  const reason = flags.reason && flags.reason.length > 0 ? flags.reason : null;
+  const row = store.rejectDecision(id, responder, reason);
+  process.stdout.write(`${JSON.stringify(row)}\n`);
+  process.stderr.write(`scrum decision reject: ${row.id} -> blocked (by ${responder})\n`);
+  return 0;
+}
+
+/**
+ * The gate responder — `--by` wins, else the `PROVE_AGENT` env. Returns null
+ * when neither is set so the caller emits a usage error (a gate decision must
+ * carry a contributor of record).
+ */
+function resolveResponder(by: string | undefined): string | null {
+  if (by !== undefined && by.length > 0) return by;
+  const agent = process.env.PROVE_AGENT;
+  return agent !== undefined && agent.length > 0 ? agent : null;
 }
 
 /** Sentinel distinguishing "invalid kind given" from "no kind given". */
