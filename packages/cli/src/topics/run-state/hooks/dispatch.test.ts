@@ -6,8 +6,11 @@
  * boundary. Pure-logic tests live alongside each hook module.
  */
 
-import { describe, expect, test } from 'bun:test';
-import { resolve } from 'node:path';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { openScrumStore } from '../../scrum/store';
 
 const CLI_PATH = resolve(import.meta.dir, '../../../../bin/run.ts');
 
@@ -89,6 +92,61 @@ describe('run-state hook <event> CLI', () => {
   test('subagent-stop silent without slug marker', () => {
     const payload = JSON.stringify({ cwd: '/tmp/no-such-project' });
     const result = runHookCli('subagent-stop', payload);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('');
+  });
+
+  test('bounds event passes with no project context', () => {
+    const payload = JSON.stringify({
+      tool_name: 'Write',
+      tool_input: { file_path: '/tmp/no-such-project/x.ts' },
+      cwd: '/tmp/no-such-project',
+    });
+    const result = runHookCli('bounds', payload);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('');
+  });
+});
+
+describe('run-state hook bounds CLI — against a seeded store', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'bounds-cli-'));
+    mkdirSync(join(dir, '.git'), { recursive: true });
+    const store = openScrumStore({ override: join(dir, '.prove', 'prove.db') });
+    try {
+      store.createTask({ id: 't1', title: 'bounded', bounds: { write: ['src/**'] } });
+      store.updateTaskStatus('t1', 'ready');
+      store.updateTaskStatus('t1', 'in_progress');
+    } finally {
+      store.close();
+    }
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('denies an out-of-bounds write (permissionDecision:deny + exit 0)', () => {
+    const payload = JSON.stringify({
+      tool_name: 'Write',
+      tool_input: { file_path: join(dir, 'docs/readme.md') },
+      cwd: dir,
+    });
+    const result = runHookCli('bounds', payload);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('"permissionDecision": "deny"');
+    expect(result.stdout).toContain('docs/readme.md');
+  });
+
+  test('passes an in-bounds write', () => {
+    const payload = JSON.stringify({
+      tool_name: 'Write',
+      tool_input: { file_path: join(dir, 'src/auth/login.ts') },
+      cwd: dir,
+    });
+    const result = runHookCli('bounds', payload);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('');
   });

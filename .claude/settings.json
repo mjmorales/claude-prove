@@ -47,6 +47,17 @@
           }
         ],
         "_tool": "run_state"
+      },
+      {
+        "matcher": "Read|Write|Edit|MultiEdit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts run-state hook bounds",
+            "timeout": 5000
+          }
+        ],
+        "_tool": "run_state"
       }
     ],
     "SessionStart": [

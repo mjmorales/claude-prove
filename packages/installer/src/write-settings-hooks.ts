@@ -107,6 +107,13 @@ export const PROVE_HOOK_BLOCKS: readonly ProveHookSpec[] = [
     timeout: 5000,
   },
   {
+    event: 'PreToolUse',
+    matcher: 'Read|Write|Edit|MultiEdit|Bash',
+    tool: 'run_state',
+    commandSuffix: 'run-state hook bounds',
+    timeout: 5000,
+  },
+  {
     event: 'SessionStart',
     matcher: 'resume|compact',
     tool: 'run_state',
