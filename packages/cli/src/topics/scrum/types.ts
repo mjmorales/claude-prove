@@ -786,6 +786,108 @@ export interface TeamWriteScopeConflict {
   globB: string;
 }
 
+/**
+ * One of a team's three role slots. Every team has exactly these three —
+ * `tech_lead`, `engineer`, and `implementer` — and no others. Matches
+ * `scrum_team_members.role`; the column has no CHECK constraint, so this union
+ * documents the canonical closed set without pinning the schema (a new role
+ * lands via a schema-version bump, not a silent value). Enforced at the store
+ * boundary in `rotateTeamMember`.
+ *
+ *   tech_lead   — sets technical direction and is accountable for the team's
+ *                 architecture and standards.
+ *   engineer    — designs and builds the team's substantive work.
+ *   implementer — executes well-specified work against the engineer's design.
+ */
+export type TeamRole = 'tech_lead' | 'engineer' | 'implementer';
+
+/** Runtime-checkable list of the closed `TeamRole` set, in canonical order. */
+export const TEAM_ROLES: TeamRole[] = ['tech_lead', 'engineer', 'implementer'];
+
+/**
+ * One row of the `scrum_team_members` table (v16) — a single interval during
+ * which one contributor held one role slot on one team. The per-(team, role)
+ * generalization of the single-slot operator-of-record position history: each
+ * (team_slug, role) pair is its own append-only series of intervals.
+ *
+ *   team_slug      — the owning team, a `scrum_teams.slug`.
+ *   role           — which of the three slots this interval fills (see
+ *                    `TeamRole`).
+ *   contributor_id — the holder, a `scrum_contributors.id` (CT-UUID). A soft
+ *                    reference: it is NOT enforced by a foreign key, matching how
+ *                    the operator position history stores its holder.
+ *   from_ts        — when the holder took the slot (ISO-8601).
+ *   to_ts          — when they vacated it, or NULL for the CURRENT (open) holder
+ *                    of that (team, role). The interval is half-open
+ *                    `[from_ts, to_ts)`.
+ *   reason         — free-text rationale recorded on the rotation, or NULL.
+ *
+ * Exactly one open row (`to_ts IS NULL`) exists per (team_slug, role) once the
+ * slot has ever been filled — rotating a slot closes its prior open row before
+ * appending the new one. History is append-only: an interval is never mutated
+ * except to stamp its `to_ts` once on rotation.
+ */
+export interface TeamMemberRow {
+  id: number;
+  team_slug: string;
+  role: TeamRole;
+  contributor_id: string;
+  from_ts: string;
+  to_ts: string | null;
+  reason: string | null;
+  created_at: string;
+}
+
+/**
+ * Input to `rotateTeamMember` (v16). `teamSlug` must be a registered team and
+ * `role` must be one of the closed `TeamRole` set (both guarded at the store
+ * boundary). `contributorId` is the new holder's CT-UUID — a soft reference, not
+ * validated against the contributor registry, mirroring the operator history.
+ * `fromTs` defaults to now() — the instant the rotation takes effect, used both
+ * as the new interval's `from_ts` and as the prior open interval's `to_ts`.
+ * `reason` is an optional rationale recorded on the new interval.
+ */
+export interface RotateTeamMemberInput {
+  teamSlug: string;
+  role: TeamRole;
+  contributorId: string;
+  /** ISO-8601 effective instant of the rotation; defaults to now(). */
+  fromTs?: string;
+  /** Free-text rationale recorded on the new interval; defaults to NULL. */
+  reason?: string | null;
+}
+
+/**
+ * The result of `rotateTeamMember`: the newly-appended open interval plus an
+ * optional multi-slot warning. A WARNING (never a rejection) is emitted when the
+ * rotated-in contributor already holds ANOTHER open role on the SAME team — the
+ * team-of-one case where one person fills multiple slots. The rotation always
+ * completes; the caller surfaces `warning` on stderr.
+ */
+export interface RotateTeamMemberResult {
+  row: TeamMemberRow;
+  /** Set when the holder already occupies another open slot on the team. */
+  warning: string | null;
+}
+
+/**
+ * A team's current roster (v16) — the open holder of each of the three role
+ * slots, plus optionally the full position history per slot. The current view of
+ * the `scrum_team_members` open rows for one team.
+ *
+ *   slug    — the team the roster belongs to.
+ *   current — the open holder per role: each of `tech_lead`/`engineer`/
+ *             `implementer` maps to its open `TeamMemberRow`, or NULL when that
+ *             slot has never been filled (or has no current holder).
+ *   history — every interval for the team, oldest-first, grouped by role. Present
+ *             only when the caller requests it; omitted for the current-only view.
+ */
+export interface TeamRoster {
+  slug: string;
+  current: Record<TeamRole, TeamMemberRow | null>;
+  history?: Record<TeamRole, TeamMemberRow[]>;
+}
+
 // ---------------------------------------------------------------------------
 // Derived views
 // ---------------------------------------------------------------------------
