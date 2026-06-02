@@ -56,6 +56,10 @@ import type {
   TaskLayer,
   TaskStatus,
   Team,
+  TeamAcceptRow,
+  TeamExposeRow,
+  TeamInterface,
+  TeamInterfaceStatus,
   TeamLifetime,
   TeamMemberRow,
   TeamRole,
@@ -66,7 +70,7 @@ import type {
   TeamWriteScopeConflict,
   VerificationRecord,
 } from './types';
-import type { CreateTeamInput } from './types';
+import type { AddTeamExposeInput, CreateTeamInput } from './types';
 import {
   ACCEPTANCE_SCOPES,
   ESCALATION_TYPES,
@@ -287,6 +291,21 @@ const TEAM_COLUMNS = 'slug, team_type, charter, lifetime, created_at';
 /** Canonical `scrum_team_members` SELECT column list (v16); maps 1:1 to `TeamMemberRow`. */
 const TEAM_MEMBER_COLUMNS =
   'id, team_slug, role, contributor_id, from_ts, to_ts, reason, created_at';
+
+/** Canonical `scrum_team_accepts` SELECT column list (v17); maps 1:1 to `TeamAcceptRow`. */
+const TEAM_ACCEPT_COLUMNS = 'id, team_slug, ask_type, status, superseded_by, reason, created_at';
+
+/** Canonical `scrum_team_exposes` SELECT column list (v17); maps 1:1 to `TeamExposeRow`. */
+const TEAM_EXPOSE_COLUMNS =
+  'id, team_slug, name, schema_ref, status, superseded_by, reason, created_at';
+
+/**
+ * Kebab-case ask-type format: one or more lowercase-alphanumeric segments
+ * joined by single hyphens (e.g. `schema-change`, `api-review`, `db`). No
+ * leading/trailing/double hyphens, no uppercase, no underscores. Validated at
+ * the store boundary in `addTeamAccept` — `ask_type` carries no SQL constraint.
+ */
+const ASK_TYPE_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 /**
  * Raw `scrum_tasks` SELECT shape — identical to `ScrumTask` except the v5
@@ -2539,6 +2558,151 @@ export class ScrumStore {
       map[role] = Array.isArray(seed) ? ([...seed] as V) : seed;
     }
     return map;
+  }
+
+  // ==========================================================================
+  // Team interface — accepts / exposes, append-only with supersession (v17)
+  // ==========================================================================
+
+  /**
+   * Add an ask type a team ACCEPTS — one `active` row in the team's accept
+   * interface. The team must exist (the FK target) — an unknown slug throws.
+   * `askType` must be kebab-case (`^[a-z0-9]+(-[a-z0-9]+)*$`); a non-conforming
+   * value throws at this boundary rather than landing as a malformed row.
+   *
+   * Append-only: the row is added, never replacing or removing a prior entry.
+   * Retiring an ask type is an explicit `supersedeTeamAccept`, not a delete.
+   */
+  addTeamAccept(teamSlug: string, askType: string, createdAt?: string): TeamAcceptRow {
+    if (this.getTeam(teamSlug) === null) {
+      throw new Error(`addTeamAccept: unknown team '${teamSlug}'`);
+    }
+    if (!ASK_TYPE_PATTERN.test(askType)) {
+      throw new Error(
+        `addTeamAccept: invalid ask_type '${askType}'; expected kebab-case (e.g. 'schema-change')`,
+      );
+    }
+    const result = this.prep(
+      'INSERT INTO scrum_team_accepts (team_slug, ask_type, status, superseded_by, reason, created_at) VALUES (?, ?, ?, NULL, NULL, ?)',
+    ).run(teamSlug, askType, 'active' satisfies TeamInterfaceStatus, createdAt ?? isoNow());
+    return this.prep(`SELECT ${TEAM_ACCEPT_COLUMNS} FROM scrum_team_accepts WHERE id = ?`).get(
+      Number(result.lastInsertRowid),
+    ) as TeamAcceptRow;
+  }
+
+  /**
+   * Add an output a team EXPOSES — one `active` row in the team's expose
+   * interface. The team must exist — an unknown slug throws. `name` and
+   * `schemaRef` are free text and not format-validated.
+   *
+   * Append-only: retiring an exposed output is an explicit `supersedeTeamExpose`,
+   * never a delete — removing a published interface is a backward-compatibility
+   * hazard that must stay auditable.
+   */
+  addTeamExpose(teamSlug: string, input: AddTeamExposeInput): TeamExposeRow {
+    if (this.getTeam(teamSlug) === null) {
+      throw new Error(`addTeamExpose: unknown team '${teamSlug}'`);
+    }
+    const result = this.prep(
+      'INSERT INTO scrum_team_exposes (team_slug, name, schema_ref, status, superseded_by, reason, created_at) VALUES (?, ?, ?, ?, NULL, NULL, ?)',
+    ).run(
+      teamSlug,
+      input.name,
+      input.schemaRef,
+      'active' satisfies TeamInterfaceStatus,
+      input.createdAt ?? isoNow(),
+    );
+    return this.prep(`SELECT ${TEAM_EXPOSE_COLUMNS} FROM scrum_team_exposes WHERE id = ?`).get(
+      Number(result.lastInsertRowid),
+    ) as TeamExposeRow;
+  }
+
+  /**
+   * Supersede an accept entry in place (append-only). Flips its `status` to
+   * `superseded`, records `reason`, and optionally points `superseded_by` at a
+   * replacement accept id. Never removes the row — the retired entry stays for
+   * audit, mirroring `supersedeCriterion` and `supersedeDecision`. Rejects an
+   * unknown id and an already-superseded target.
+   */
+  supersedeTeamAccept(id: number, reason: string, supersededBy?: number | null): TeamAcceptRow {
+    const target = this.prep(
+      `SELECT ${TEAM_ACCEPT_COLUMNS} FROM scrum_team_accepts WHERE id = ?`,
+    ).get(id) as TeamAcceptRow | null;
+    if (target === null) {
+      throw new Error(`supersedeTeamAccept: unknown accept id '${id}'`);
+    }
+    if (target.status === 'superseded') {
+      throw new Error(`supersedeTeamAccept: accept id '${id}' is already superseded`);
+    }
+    this.prep(
+      'UPDATE scrum_team_accepts SET status = ?, reason = ?, superseded_by = ? WHERE id = ?',
+    ).run('superseded' satisfies TeamInterfaceStatus, reason, supersededBy ?? null, id);
+    return this.prep(`SELECT ${TEAM_ACCEPT_COLUMNS} FROM scrum_team_accepts WHERE id = ?`).get(
+      id,
+    ) as TeamAcceptRow;
+  }
+
+  /**
+   * Supersede an expose entry in place (append-only). Flips its `status` to
+   * `superseded`, records `reason`, and optionally points `superseded_by` at a
+   * replacement expose id. Never removes the row. Rejects an unknown id and an
+   * already-superseded target.
+   */
+  supersedeTeamExpose(id: number, reason: string, supersededBy?: number | null): TeamExposeRow {
+    const target = this.prep(
+      `SELECT ${TEAM_EXPOSE_COLUMNS} FROM scrum_team_exposes WHERE id = ?`,
+    ).get(id) as TeamExposeRow | null;
+    if (target === null) {
+      throw new Error(`supersedeTeamExpose: unknown expose id '${id}'`);
+    }
+    if (target.status === 'superseded') {
+      throw new Error(`supersedeTeamExpose: expose id '${id}' is already superseded`);
+    }
+    this.prep(
+      'UPDATE scrum_team_exposes SET status = ?, reason = ?, superseded_by = ? WHERE id = ?',
+    ).run('superseded' satisfies TeamInterfaceStatus, reason, supersededBy ?? null, id);
+    return this.prep(`SELECT ${TEAM_EXPOSE_COLUMNS} FROM scrum_team_exposes WHERE id = ?`).get(
+      id,
+    ) as TeamExposeRow;
+  }
+
+  /**
+   * A team's published interface — its accept and expose entries. By default
+   * only `active` entries are returned; `includeSuperseded: true` returns the
+   * full history (active and retired) for audit. Both arrays are ordered by id.
+   * Tolerates an unknown slug: both arrays are empty (the absence reads as "no
+   * interface" rather than an error, matching `getTeamScopes`).
+   */
+  getTeamInterface(slug: string, opts: { includeSuperseded?: boolean } = {}): TeamInterface {
+    const accepts = this.listTeamAccepts(slug, opts);
+    const exposes = this.listTeamExposes(slug, opts);
+    return { slug, accepts, exposes };
+  }
+
+  /**
+   * A team's accept entries, ordered by id. Active-only by default;
+   * `includeSuperseded: true` includes retired entries. Tolerates an unknown
+   * slug (returns an empty array).
+   */
+  listTeamAccepts(slug: string, opts: { includeSuperseded?: boolean } = {}): TeamAcceptRow[] {
+    const where =
+      opts.includeSuperseded === true ? 'team_slug = ?' : "team_slug = ? AND status = 'active'";
+    return this.prep(
+      `SELECT ${TEAM_ACCEPT_COLUMNS} FROM scrum_team_accepts WHERE ${where} ORDER BY id ASC`,
+    ).all(slug) as TeamAcceptRow[];
+  }
+
+  /**
+   * A team's expose entries, ordered by id. Active-only by default;
+   * `includeSuperseded: true` includes retired entries. Tolerates an unknown
+   * slug (returns an empty array).
+   */
+  listTeamExposes(slug: string, opts: { includeSuperseded?: boolean } = {}): TeamExposeRow[] {
+    const where =
+      opts.includeSuperseded === true ? 'team_slug = ?' : "team_slug = ? AND status = 'active'";
+    return this.prep(
+      `SELECT ${TEAM_EXPOSE_COLUMNS} FROM scrum_team_exposes WHERE ${where} ORDER BY id ASC`,
+    ).all(slug) as TeamExposeRow[];
   }
 
   // ==========================================================================

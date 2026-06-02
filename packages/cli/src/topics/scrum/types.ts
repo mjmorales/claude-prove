@@ -888,6 +888,108 @@ export interface TeamRoster {
   history?: Record<TeamRole, TeamMemberRow[]>;
 }
 
+/**
+ * Lifecycle of a team-interface entry (an accept or an expose). Matches
+ * `scrum_team_accepts.status` / `scrum_team_exposes.status`; the columns carry
+ * no CHECK constraint, so this union documents the closed set without pinning
+ * the schema. Enforced at the store boundary.
+ *
+ *   active     — the interface entry is current and consumable.
+ *   superseded — the entry was retired by an explicit edit. The row is never
+ *                hard-deleted (removing a published interface is a backward-
+ *                compatibility hazard that must stay auditable); instead its
+ *                `reason` records why and `superseded_by` optionally points at a
+ *                replacement entry. A superseded entry cannot be re-superseded.
+ */
+export type TeamInterfaceStatus = 'active' | 'superseded';
+
+/** Runtime-checkable list of the closed `TeamInterfaceStatus` set. */
+export const TEAM_INTERFACE_STATUSES: TeamInterfaceStatus[] = ['active', 'superseded'];
+
+/**
+ * One row of the `scrum_team_accepts` table (v17) — a closed kebab-case ask type
+ * a team handles (e.g. `schema-change`, `api-review`). Append-only with
+ * supersession: a retired ask type is never removed; its `status` flips to
+ * `superseded` with a `reason` and an optional `superseded_by` pointer.
+ *
+ *   id            — AUTOINCREMENT surrogate; the replacement target a later
+ *                   entry's `superseded_by` references.
+ *   team_slug     — the owning team, a `scrum_teams.slug`.
+ *   ask_type      — the kebab-case ask type. Format `^[a-z0-9]+(-[a-z0-9]+)*$`,
+ *                   validated at the store boundary in `addTeamAccept`.
+ *   status        — `active` or `superseded` (see `TeamInterfaceStatus`).
+ *   superseded_by — id of the replacement accept row, or NULL when the entry is
+ *                   active or was superseded without a named replacement.
+ *   reason        — free-text rationale recorded at supersession, or NULL while
+ *                   active.
+ *   created_at    — when the row was appended (ISO-8601).
+ */
+export interface TeamAcceptRow {
+  id: number;
+  team_slug: string;
+  ask_type: string;
+  status: TeamInterfaceStatus;
+  superseded_by: number | null;
+  reason: string | null;
+  created_at: string;
+}
+
+/**
+ * One row of the `scrum_team_exposes` table (v17) — an output a team publishes
+ * for other teams to consume. Append-only with supersession, mirroring
+ * `TeamAcceptRow`.
+ *
+ *   id            — AUTOINCREMENT surrogate; the replacement target a later
+ *                   entry's `superseded_by` references.
+ *   team_slug     — the owning team, a `scrum_teams.slug`.
+ *   name          — the output's handle (free text).
+ *   schema_ref    — a pointer to the output's shape (free text).
+ *   status        — `active` or `superseded` (see `TeamInterfaceStatus`).
+ *   superseded_by — id of the replacement expose row, or NULL.
+ *   reason        — free-text rationale recorded at supersession, or NULL while
+ *                   active.
+ *   created_at    — when the row was appended (ISO-8601).
+ */
+export interface TeamExposeRow {
+  id: number;
+  team_slug: string;
+  name: string;
+  schema_ref: string;
+  status: TeamInterfaceStatus;
+  superseded_by: number | null;
+  reason: string | null;
+  created_at: string;
+}
+
+/**
+ * Input to `addTeamExpose` (v17). `name` is the output's handle and `schemaRef`
+ * points at its shape; both are free text. `createdAt` defaults to now().
+ */
+export interface AddTeamExposeInput {
+  name: string;
+  schemaRef: string;
+  /** ISO-8601 timestamp; defaults to now(). */
+  createdAt?: string;
+}
+
+/**
+ * A team's published interface (v17) — the ask types it accepts and the outputs
+ * it exposes. The decoded view of one team's `scrum_team_accepts` and
+ * `scrum_team_exposes` rows. By default only `active` entries are present; a
+ * caller can request the full history (including superseded entries) for audit.
+ * Tolerates an unknown slug: both arrays are empty (the absence reads as "no
+ * interface" rather than an error, matching `getTeamScopes`).
+ *
+ *   slug    — the team the interface belongs to.
+ *   accepts — the team's accept entries, ordered by id.
+ *   exposes — the team's expose entries, ordered by id.
+ */
+export interface TeamInterface {
+  slug: string;
+  accepts: TeamAcceptRow[];
+  exposes: TeamExposeRow[];
+}
+
 // ---------------------------------------------------------------------------
 // Derived views
 // ---------------------------------------------------------------------------
