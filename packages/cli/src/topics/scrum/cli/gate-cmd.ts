@@ -48,7 +48,6 @@ const GATE_ACTIONS: GateAction[] = ['respond'];
 
 /** Closed respond-verdict set the CLI accepts; `gate_pending` is not a target. */
 const RESPOND_VERDICTS = ['approve', 'reject'] as const;
-type RespondVerdict = (typeof RESPOND_VERDICTS)[number];
 
 export function runGateCmd(
   action: string,
