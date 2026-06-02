@@ -2303,7 +2303,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 13,
+      schema_version: 14,
     });
   });
 
@@ -2316,7 +2316,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(13);
+    expect(updated.provenance.schema_version).toBe(14);
   });
 });
 
@@ -2480,5 +2480,75 @@ describe('ScrumStore — operator-of-record position history (v13)', () => {
     store.setOperatorOfRecord({ contributorId: jane, fromTs: '2026-01-01T00:00:00Z' });
     store.setOperatorOfRecord({ contributorId: bob, fromTs: '2026-03-01T00:00:00Z' });
     expect(store.operatorHistory().map((h) => h.contributor_id)).toEqual([jane, bob]);
+  });
+});
+
+// ===========================================================================
+// Team registry (v14)
+// ===========================================================================
+
+describe('ScrumStore — team registry (v14)', () => {
+  test('createTeam round-trips through SELECT and defaults lifetime to persistent', () => {
+    const row = store.createTeam({
+      slug: 'payments',
+      teamType: 'stream_aligned',
+      charter: 'Own the checkout flow',
+      createdAt: '2026-01-01T00:00:00Z',
+    });
+    expect(row).toEqual({
+      slug: 'payments',
+      team_type: 'stream_aligned',
+      charter: 'Own the checkout flow',
+      lifetime: 'persistent',
+      created_at: '2026-01-01T00:00:00Z',
+    });
+
+    const fetched = store.getTeam('payments');
+    expect(fetched).toEqual(row);
+  });
+
+  test('createTeam honors an explicit lifetime and a null charter', () => {
+    const row = store.createTeam({
+      slug: 'migration-squad',
+      teamType: 'enabling',
+      lifetime: 'terminates_on_milestone',
+    });
+    expect(row.lifetime).toBe('terminates_on_milestone');
+    expect(row.charter).toBeNull();
+  });
+
+  test('createTeam rejects a duplicate slug (primary key)', () => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    expect(() => store.createTeam({ slug: 'payments', teamType: 'platform' })).toThrow();
+  });
+
+  test('createTeam rejects an off-vocabulary team_type at the store boundary', () => {
+    expect(() =>
+      // @ts-expect-error — exercising the runtime closed-enum guard with a bad value.
+      store.createTeam({ slug: 'rogue', teamType: 'wildcat' }),
+    ).toThrow(/invalid team_type 'wildcat'/);
+  });
+
+  test('createTeam rejects an off-vocabulary lifetime at the store boundary', () => {
+    expect(() =>
+      // @ts-expect-error — exercising the runtime closed-enum guard with a bad value.
+      store.createTeam({ slug: 'rogue', teamType: 'platform', lifetime: 'forever' }),
+    ).toThrow(/invalid lifetime 'forever'/);
+  });
+
+  test('getTeam returns null for an unknown slug', () => {
+    expect(store.getTeam('ghost')).toBeNull();
+  });
+
+  test('listTeams orders by slug', () => {
+    store.createTeam({ slug: 'zeta', teamType: 'platform' });
+    store.createTeam({ slug: 'alpha', teamType: 'enabling' });
+    store.createTeam({ slug: 'mid', teamType: 'complicated_subsystem' });
+
+    expect(store.listTeams().map((t) => t.slug)).toEqual(['alpha', 'mid', 'zeta']);
+  });
+
+  test('listTeams is empty before any team is created', () => {
+    expect(store.listTeams()).toEqual([]);
   });
 });

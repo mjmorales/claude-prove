@@ -46,6 +46,9 @@
  *   claude-prove scrum operator set              --contributor CT-UUID [--from-ts ISO]   (transfer the operator-of-record + sync charter.md)
  *   claude-prove scrum operator resolve          --at ISO   (point-in-time holder — the interval containing the instant, NOT the current holder)
  *   claude-prove scrum operator history          [--human]
+ *   claude-prove scrum team create               --slug S --team-type T [--charter C] [--lifetime persistent|terminates_on_milestone]
+ *   claude-prove scrum team show <slug>
+ *   claude-prove scrum team list                 [--human]
  *   claude-prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
  *   claude-prove scrum hook <event>              (event: session-start | subagent-stop | stop)
  *
@@ -76,6 +79,7 @@ import { runOperatorCmd } from './scrum/cli/operator-cmd';
 import { runStatusCmd } from './scrum/cli/status-cmd';
 import { runTagCmd } from './scrum/cli/tag-cmd';
 import { runTaskCmd } from './scrum/cli/task-cmd';
+import { runTeamCmd } from './scrum/cli/team-cmd';
 
 type ScrumAction =
   | 'init'
@@ -90,6 +94,7 @@ type ScrumAction =
   | 'decision'
   | 'contributor'
   | 'operator'
+  | 'team'
   | 'link-run'
   | 'hook';
 
@@ -106,6 +111,7 @@ const SCRUM_ACTIONS: ScrumAction[] = [
   'decision',
   'contributor',
   'operator',
+  'team',
   'link-run',
   'hook',
 ];
@@ -165,6 +171,11 @@ interface ScrumFlags {
   contributor?: string;
   fromTs?: string;
   at?: string;
+  // `team` registry fields (v14). `slug` is shared with the contributor/link-run
+  // slug flags above — distinct actions, so the value is correct per call.
+  teamType?: string;
+  charter?: string;
+  lifetime?: string;
 }
 
 export function register(cli: CAC): void {
@@ -239,6 +250,15 @@ export function register(cli: CAC): void {
     .option(
       '--at <iso>',
       'operator resolve: ISO-8601 instant to attribute — resolves the holder at that point in time',
+    )
+    .option(
+      '--team-type <t>',
+      'team create: interaction archetype (stream_aligned | platform | enabling | complicated_subsystem)',
+    )
+    .option('--charter <c>', 'team create: one-line mission statement')
+    .option(
+      '--lifetime <l>',
+      'team create: expected longevity (persistent | terminates_on_milestone); default persistent',
     )
     .option(
       '--workspace-root <w>',
@@ -430,6 +450,20 @@ function dispatch(
         contributor: flags.contributor,
         fromTs: flags.fromTs,
         at: flags.at,
+        human: flags.human,
+        workspaceRoot: flags.workspaceRoot,
+      });
+
+    case 'team':
+      if (arg1 === undefined) {
+        console.error('error: scrum team: sub-action required (one of: create | show | list)');
+        return 1;
+      }
+      return runTeamCmd(arg1, [arg2], {
+        slug: flags.slug,
+        teamType: flags.teamType,
+        charter: flags.charter,
+        lifetime: flags.lifetime,
         human: flags.human,
         workspaceRoot: flags.workspaceRoot,
       });

@@ -33,6 +33,7 @@ import { runOperatorCmd } from './operator-cmd';
 import { runStatusCmd } from './status-cmd';
 import { runTagCmd } from './tag-cmd';
 import { runTaskCmd } from './task-cmd';
+import { runTeamCmd } from './team-cmd';
 
 // ---------------------------------------------------------------------------
 // Harness: capture stdout/stderr + chdir to a fresh git workspace per test
@@ -455,7 +456,7 @@ describe('runTaskCmd', () => {
       expect(shown.task.run_id).toBe('feat-prov');
       expect(shown.task.provenance.worker_id).toBe('worker-42');
       expect(shown.task.provenance.run_id).toBe('feat-prov');
-      expect(shown.task.provenance.schema_version).toBe(13);
+      expect(shown.task.provenance.schema_version).toBe(14);
     } finally {
       restoreEnv('PROVE_WORKER_ID', savedWorker);
       restoreEnv('PROVE_RUN_SLUG', savedSlug);
@@ -2449,5 +2450,148 @@ describe('runOperatorCmd', () => {
     const res = withCapture(() => runOperatorCmd('frobnicate', { workspaceRoot: workspace }));
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('unknown operator action');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runTeamCmd — team registry create / show / list
+// ---------------------------------------------------------------------------
+
+interface TeamRow {
+  slug: string;
+  team_type: string;
+  charter: string | null;
+  lifetime: string;
+  created_at: string;
+}
+
+describe('runTeamCmd', () => {
+  test('create inserts the row, prints JSON, and scaffolds teams/<slug>.md', () => {
+    const res = withCapture(() =>
+      runTeamCmd('create', [undefined], {
+        slug: 'payments',
+        teamType: 'stream_aligned',
+        charter: 'Own the checkout flow',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as TeamRow;
+    expect(row.slug).toBe('payments');
+    expect(row.team_type).toBe('stream_aligned');
+    expect(row.lifetime).toBe('persistent');
+    expect(row.charter).toBe('Own the checkout flow');
+
+    const artifact = join(workspace, 'teams', 'payments.md');
+    expect(existsSync(artifact)).toBe(true);
+    const content = readFileSync(artifact, 'utf8');
+    expect(content).toContain('schema_version: 14');
+    expect(content).toContain('team:');
+    expect(content).toContain('slug: payments');
+    expect(content).toContain('team_type: stream_aligned');
+    expect(content).toContain('lifetime: persistent');
+  });
+
+  test('create honors an explicit --lifetime', () => {
+    const res = withCapture(() =>
+      runTeamCmd('create', [undefined], {
+        slug: 'migration-squad',
+        teamType: 'enabling',
+        lifetime: 'terminates_on_milestone',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    expect((JSON.parse(res.stdout.trim()) as TeamRow).lifetime).toBe('terminates_on_milestone');
+  });
+
+  test('create without --slug exits 1', () => {
+    const res = withCapture(() =>
+      runTeamCmd('create', [undefined], { teamType: 'platform', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--slug');
+  });
+
+  test('create without --team-type exits 1', () => {
+    const res = withCapture(() =>
+      runTeamCmd('create', [undefined], { slug: 'orphan', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--team-type');
+  });
+
+  test('create rejects an off-vocabulary --team-type', () => {
+    const res = withCapture(() =>
+      runTeamCmd('create', [undefined], {
+        slug: 'rogue',
+        teamType: 'wildcat',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('unknown --team-type');
+  });
+
+  test('create rejects an off-vocabulary --lifetime', () => {
+    const res = withCapture(() =>
+      runTeamCmd('create', [undefined], {
+        slug: 'rogue',
+        teamType: 'platform',
+        lifetime: 'forever',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('unknown --lifetime');
+  });
+
+  test('show returns the JSON row, exit 0', () => {
+    withCapture(() =>
+      runTeamCmd('create', [undefined], {
+        slug: 'payments',
+        teamType: 'stream_aligned',
+        workspaceRoot: workspace,
+      }),
+    );
+    const res = withCapture(() => runTeamCmd('show', ['payments'], { workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    expect((JSON.parse(res.stdout.trim()) as TeamRow).slug).toBe('payments');
+  });
+
+  test('show on an unknown slug exits 1 with null on stdout', () => {
+    const res = withCapture(() => runTeamCmd('show', ['ghost'], { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    expect(res.stdout.trim()).toBe('null');
+    expect(res.stderr).toContain("no team 'ghost'");
+  });
+
+  test('list returns the registered teams as JSON, ordered by slug', () => {
+    withCapture(() =>
+      runTeamCmd('create', [undefined], {
+        slug: 'zeta',
+        teamType: 'platform',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runTeamCmd('create', [undefined], {
+        slug: 'alpha',
+        teamType: 'enabling',
+        workspaceRoot: workspace,
+      }),
+    );
+    const res = withCapture(() => runTeamCmd('list', [undefined], { workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const rows = JSON.parse(res.stdout.trim()) as TeamRow[];
+    expect(rows.map((r) => r.slug)).toEqual(['alpha', 'zeta']);
+  });
+
+  test('unknown sub-action exits 1', () => {
+    const res = withCapture(() =>
+      runTeamCmd('frobnicate', [undefined], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('unknown team action');
   });
 });
