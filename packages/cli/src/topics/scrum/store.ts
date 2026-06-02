@@ -24,6 +24,7 @@ import {
   prepareAgentWorktree,
   verifyBashCriterion,
 } from './criterion-verify';
+import { globsOverlap } from './glob-overlap';
 import { SCRUM_SCHEMA_VERSION, ensureScrumSchemaRegistered } from './schemas';
 import type {
   Acceptance,
@@ -54,7 +55,10 @@ import type {
   TaskStatus,
   Team,
   TeamLifetime,
+  TeamScopeKind,
+  TeamScopes,
   TeamType,
+  TeamWriteScopeConflict,
   VerificationRecord,
 } from './types';
 import type { CreateTeamInput } from './types';
@@ -2281,6 +2285,126 @@ export class ScrumStore {
   }
 
   // ==========================================================================
+  // Team scope globs (v15)
+  // ==========================================================================
+
+  /**
+   * Replace a team's scope globs (the read and write path-glob sets), inside one
+   * transaction. The team's prior scope rows are deleted and the new ones
+   * inserted, so this is a full REPLACE, not a merge — passing `{ read: [],
+   * write: [] }` clears the team's scopes.
+   *
+   * Before writing, the WRITE side is validated against the single-writer-per-path
+   * rule: across the whole registry, no two teams may declare write globs that
+   * could match the same path (see `validateTeamWriteScopes`). The candidate
+   * write set for THIS team is the proposed `write` array; every OTHER team's
+   * write set is read from the store. On any overlap the method throws with a
+   * message naming BOTH conflicting teams and the overlapping globs, and nothing
+   * is written. READ globs are never checked — they may overlap freely.
+   *
+   * The team must exist (the FK target) — an unknown slug throws. Input globs are
+   * deduped before write; `kind` values are guarded against the closed
+   * `TeamScopeKind` set.
+   */
+  setTeamScopes(slug: string, scopes: TeamScopes): TeamScopes {
+    if (this.getTeam(slug) === null) {
+      throw new Error(`setTeamScopes: unknown team '${slug}'`);
+    }
+    const read = dedupeGlobs(scopes.read);
+    const write = dedupeGlobs(scopes.write);
+
+    // Validate the candidate write set against every OTHER team's write set
+    // before mutating, so a rejected set leaves the store untouched.
+    const conflict = this.findWriteScopeConflict(slug, write);
+    if (conflict !== null) {
+      throw new Error(formatWriteScopeConflict(conflict));
+    }
+
+    const replace = this.db.transaction(() => {
+      this.prep('DELETE FROM scrum_team_scopes WHERE team_slug = ?').run(slug);
+      const insert = this.prep(
+        'INSERT INTO scrum_team_scopes (team_slug, kind, glob) VALUES (?, ?, ?)',
+      );
+      for (const glob of read) insert.run(slug, 'read' satisfies TeamScopeKind, glob);
+      for (const glob of write) insert.run(slug, 'write' satisfies TeamScopeKind, glob);
+    });
+    replace();
+
+    return this.getTeamScopes(slug);
+  }
+
+  /**
+   * Fetch a team's scope globs, grouped by side. Returns
+   * `{ read: [], write: [] }` for a team with no declared scopes (and also for an
+   * unknown slug — the absence reads as "no scopes" rather than an error, matching
+   * the unscoped default). Both arrays are sorted for a canonical shape.
+   */
+  getTeamScopes(slug: string): TeamScopes {
+    const rows = this.prep(
+      'SELECT kind, glob FROM scrum_team_scopes WHERE team_slug = ? ORDER BY kind ASC, glob ASC',
+    ).all(slug) as Array<{ kind: string; glob: string }>;
+    const read: string[] = [];
+    const write: string[] = [];
+    for (const row of rows) {
+      if (row.kind === 'write') write.push(row.glob);
+      else read.push(row.glob);
+    }
+    return { read, write };
+  }
+
+  /**
+   * Validate the WRITE scopes of every team against the single-writer-per-path
+   * rule and return the first cross-team overlap, or null when all write scopes
+   * are pairwise disjoint. The load-time check a caller runs over the whole
+   * registry; `setTeamScopes` runs the same check scoped to one mutating team.
+   *
+   * Teams are compared in slug order so the returned conflict is deterministic.
+   * READ scopes are never inspected — only write-vs-write overlap matters.
+   */
+  validateTeamWriteScopes(): TeamWriteScopeConflict | null {
+    const teams = this.listTeams().map((t) => t.slug);
+    const writeBySlug = new Map<string, string[]>();
+    for (const slug of teams) writeBySlug.set(slug, this.getTeamScopes(slug).write);
+
+    for (let i = 0; i < teams.length; i++) {
+      for (let j = i + 1; j < teams.length; j++) {
+        const slugA = teams[i] as string;
+        const slugB = teams[j] as string;
+        const conflict = firstGlobOverlap(
+          slugA,
+          writeBySlug.get(slugA) ?? [],
+          slugB,
+          writeBySlug.get(slugB) ?? [],
+        );
+        if (conflict !== null) return conflict;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Find the first write-scope overlap between a candidate team's proposed write
+   * globs and every OTHER team's stored write globs, or null when the candidate
+   * set is disjoint from all of them. The single-team scoping of
+   * `validateTeamWriteScopes`, used by `setTeamScopes` to reject a write set
+   * before persisting it. The candidate team is excluded from the comparison so a
+   * team's existing rows (about to be replaced) never conflict with its own
+   * proposed set.
+   */
+  private findWriteScopeConflict(
+    candidateSlug: string,
+    candidateWrite: string[],
+  ): TeamWriteScopeConflict | null {
+    for (const team of this.listTeams()) {
+      if (team.slug === candidateSlug) continue;
+      const otherWrite = this.getTeamScopes(team.slug).write;
+      const conflict = firstGlobOverlap(candidateSlug, candidateWrite, team.slug, otherWrite);
+      if (conflict !== null) return conflict;
+    }
+    return null;
+  }
+
+  // ==========================================================================
   // Internals
   // ==========================================================================
 
@@ -2596,6 +2720,52 @@ function assertAcceptanceUnfrozen(task: ScrumTask, method: string): void {
       `${method}: acceptance criteria are frozen while task '${task.id}' is in_progress; interrupt the worker (move it off in_progress) before amending criteria`,
     );
   }
+}
+
+/**
+ * Dedupe a glob array, dropping empty entries, preserving the canonical sorted
+ * order the store guarantees on read. A blank glob is meaningless on either
+ * scope side, so it is filtered rather than stored.
+ */
+function dedupeGlobs(globs: string[]): string[] {
+  return [...new Set(globs.filter((g) => g.length > 0))].sort();
+}
+
+/**
+ * The first overlapping (globA, globB) pair between two teams' write-glob sets,
+ * or null when every pair is disjoint. Globs are compared in sorted order so the
+ * returned conflict is deterministic. Team slugs are ordered (`teamA <= teamB`)
+ * on the result for stable reporting.
+ */
+function firstGlobOverlap(
+  slugA: string,
+  writeA: string[],
+  slugB: string,
+  writeB: string[],
+): TeamWriteScopeConflict | null {
+  for (const globA of [...writeA].sort()) {
+    for (const globB of [...writeB].sort()) {
+      if (globsOverlap(globA, globB)) {
+        return slugA <= slugB
+          ? { teamA: slugA, teamB: slugB, globA, globB }
+          : { teamA: slugB, teamB: slugA, globA: globB, globB: globA };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Render a write-scope conflict into an actionable error message naming both
+ * conflicting teams and the overlapping globs — the single-writer-per-path
+ * violation surfaced to the operator.
+ */
+function formatWriteScopeConflict(conflict: TeamWriteScopeConflict): string {
+  const globs =
+    conflict.globA === conflict.globB
+      ? `glob '${conflict.globA}'`
+      : `globs '${conflict.globA}' and '${conflict.globB}'`;
+  return `write-scope overlap: team '${conflict.teamA}' and team '${conflict.teamB}' both claim ${globs} — write scopes must be disjoint (single writer per path)`;
 }
 
 /** Closed top-level key set for `TaskBounds`. */

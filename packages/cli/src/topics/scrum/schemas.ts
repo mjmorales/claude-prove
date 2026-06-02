@@ -524,6 +524,45 @@ CREATE TABLE scrum_teams (
 CREATE INDEX idx_scrum_teams_type ON scrum_teams(team_type);
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v15 — per-team read/write scope globs (scrum_team_scopes)
+// ---------------------------------------------------------------------------
+
+/**
+ * v15: per-team scope globs — the path globs a team reads from and writes to.
+ * A new table (not columns on `scrum_teams`) because scope is one-to-many: a
+ * team carries an arbitrary number of read and write globs, so each is its own
+ * row rather than a column on the registry. Mirrors how the operator position
+ * history landed as its own table rather than a column on the contributor.
+ *
+ *   scrum_team_scopes — one row per (team, kind, glob). `team_slug` is an FK to
+ *                       `scrum_teams.slug` — the owning team. `kind` is the
+ *                       scope side (`read`/`write`); the column carries no CHECK,
+ *                       so this closed set is documented on the `TeamScopeKind`
+ *                       type and enforced at the store boundary, matching the
+ *                       v2–v14 forward-compatible-TEXT convention. `glob` is a
+ *                       single path glob (e.g. `src/auth/**`).
+ *
+ * Single-writer-per-path is the standing rule on the WRITE side: across the
+ * whole registry, no two teams may declare write globs that could match the
+ * same path. READ globs may overlap freely. The disjointness is validated at
+ * the store boundary (a load-time cross-team check), not by a SQL constraint —
+ * glob overlap is not expressible as a UNIQUE index.
+ *
+ * Index backs the per-team scope fetch (`team_slug`). Table and index names
+ * carry the `scrum_` / `idx_scrum_` prefix per the domain-namespacing contract
+ * established in v1.
+ */
+export const SCRUM_MIGRATION_V15_SQL = `
+CREATE TABLE scrum_team_scopes (
+    team_slug TEXT NOT NULL REFERENCES scrum_teams(slug),
+    kind TEXT NOT NULL,
+    glob TEXT NOT NULL
+);
+
+CREATE INDEX idx_scrum_team_scopes_team ON scrum_team_scopes(team_slug);
+`;
+
 /**
  * Current scrum-domain store version — the highest migration version this
  * module registers. Stamped as the per-artifact `schema_version` on the
@@ -531,12 +570,12 @@ CREATE INDEX idx_scrum_teams_type ON scrum_teams(team_type);
  * scrum row reports the schema it was read under. Bump in lockstep with the
  * top migration version on every additive hop.
  */
-export const SCRUM_SCHEMA_VERSION = 14;
+export const SCRUM_SCHEMA_VERSION = 15;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that have hit `clearRegistry()` — both
- * paths land a single scrum/{v1..v14} entry set. Matches
+ * paths land a single scrum/{v1..v15} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -653,6 +692,14 @@ export function ensureScrumSchemaRegistered(): void {
         description: 'create scrum_teams (team registry) + idx_scrum_teams_type',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V14_SQL);
+        },
+      },
+      {
+        version: 15,
+        description:
+          'create scrum_team_scopes (per-team read/write scope globs) + idx_scrum_team_scopes_team',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V15_SQL);
         },
       },
     ],

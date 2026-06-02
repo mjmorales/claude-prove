@@ -10,19 +10,31 @@
  *                              exits 1 when the slug is unknown.
  *   list                       [--human]
  *                              List the registry, ordered by slug.
+ *   scope-set <slug>           [--read csv] [--write csv]
+ *                              Replace a team's read/write scope globs (full
+ *                              REPLACE, not merge — omit a flag to clear that
+ *                              side). Rejects with exit 1 when the proposed write
+ *                              globs overlap another team's write globs (the
+ *                              single-writer-per-path rule), naming both teams and
+ *                              the overlapping glob(s). On success, reflects the
+ *                              scopes into the `teams/<slug>.md` artifact.
+ *   scope-show <slug>          Print a team's scope globs as
+ *                              `{ read: [...], write: [...] }`, or exit 1 when the
+ *                              slug is unknown.
  *
  * Stdout contract: JSON result per action on stdout; one-line human summary on
  * stderr. `list` returns a JSON array (or a table with `--human`).
  *
  * Exit codes:
  *   0  success
- *   1  usage error, unknown action, invalid enum value, duplicate slug, or a
- *      `show` miss
+ *   1  usage error, unknown action, invalid enum value, duplicate slug, a
+ *      `show`/`scope-show` miss, or a write-scope overlap on `scope-set`
  *
  * On-disk reconciliation: `create` writes a `teams/<slug>.md` artifact carrying
  * a YAML frontmatter `schema_version` + `team:` block that embeds the
  * `{slug, team_type, charter, lifetime}` registry fields, so the file mirrors
- * the row.
+ * the row. `scope-set` rewrites the same artifact with a `scope:` block carrying
+ * the team's `read`/`write` glob arrays.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -30,7 +42,7 @@ import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
 import { SCRUM_SCHEMA_VERSION } from '../schemas';
 import { type ScrumStore, openScrumStore } from '../store';
-import type { Team, TeamLifetime, TeamType } from '../types';
+import type { Team, TeamLifetime, TeamScopes, TeamType } from '../types';
 import { TEAM_LIFETIMES, TEAM_TYPES } from '../types';
 
 export interface TeamCmdFlags {
@@ -38,13 +50,15 @@ export interface TeamCmdFlags {
   teamType?: string;
   charter?: string;
   lifetime?: string;
+  read?: string;
+  write?: string;
   human?: boolean;
   workspaceRoot?: string;
 }
 
-export type TeamAction = 'create' | 'show' | 'list';
+export type TeamAction = 'create' | 'show' | 'list' | 'scope-set' | 'scope-show';
 
-const TEAM_ACTIONS: TeamAction[] = ['create', 'show', 'list'];
+const TEAM_ACTIONS: TeamAction[] = ['create', 'show', 'list', 'scope-set', 'scope-show'];
 
 export function runTeamCmd(
   action: string,
@@ -71,6 +85,10 @@ export function runTeamCmd(
         return doShow(store, args[0]);
       case 'list':
         return doList(store, flags);
+      case 'scope-set':
+        return doScopeSet(store, workspaceRoot, args[0], flags);
+      case 'scope-show':
+        return doScopeShow(store, args[0]);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -112,7 +130,8 @@ function doCreate(store: ScrumStore, workspaceRoot: string, flags: TeamCmdFlags)
     lifetime,
   });
 
-  const artifactPath = writeTeamArtifact(workspaceRoot, row);
+  const scopes = store.getTeamScopes(row.slug);
+  const artifactPath = writeTeamArtifact(workspaceRoot, row, scopes);
   process.stdout.write(`${JSON.stringify(row)}\n`);
   process.stderr.write(`scrum team create: ${row.slug} (${row.team_type}) -> ${artifactPath}\n`);
   return 0;
@@ -166,23 +185,24 @@ function emptyToNull(raw: string | undefined): string | null {
 /**
  * Write (overwrite) the on-disk `teams/<slug>.md` artifact that mirrors the
  * registry row: a YAML frontmatter `schema_version` + `team:` block carrying the
- * `{slug, team_type, charter, lifetime}` fields, plus a human skeleton body.
- * Returns the written path.
+ * `{slug, team_type, charter, lifetime}` fields plus a `scope:` block carrying
+ * the team's read/write glob arrays, plus a human skeleton body. Returns the
+ * written path.
  */
-function writeTeamArtifact(workspaceRoot: string, row: Team): string {
+function writeTeamArtifact(workspaceRoot: string, row: Team, scopes: TeamScopes): string {
   const dir = join(workspaceRoot, 'teams');
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${row.slug}.md`);
-  writeFileSync(path, renderTeamArtifact(row), 'utf8');
+  writeFileSync(path, renderTeamArtifact(row, scopes), 'utf8');
   return path;
 }
 
 /**
- * Render the team artifact: a YAML frontmatter `team:` block mirroring the row,
- * plus a human skeleton body. The `team:` block is the file's mirror of the
- * `scrum_teams` row.
+ * Render the team artifact: a YAML frontmatter `team:` + `scope:` block mirroring
+ * the row and its scope globs, plus a human skeleton body. The frontmatter is the
+ * file's mirror of the `scrum_teams` row and its `scrum_team_scopes` rows.
  */
-function renderTeamArtifact(row: Team): string {
+function renderTeamArtifact(row: Team, scopes: TeamScopes): string {
   const frontmatter = [
     '---',
     `schema_version: ${SCRUM_SCHEMA_VERSION}`,
@@ -192,6 +212,9 @@ function renderTeamArtifact(row: Team): string {
     `  charter: ${yamlValue(row.charter)}`,
     `  lifetime: ${row.lifetime}`,
     `  created_at: ${row.created_at}`,
+    'scope:',
+    `  read: ${yamlGlobList(scopes.read)}`,
+    `  write: ${yamlGlobList(scopes.write)}`,
     '---',
   ].join('\n');
   const body = [
@@ -206,6 +229,11 @@ function renderTeamArtifact(row: Team): string {
     `- Interaction archetype: ${row.team_type}`,
     `- Lifetime: ${row.lifetime}`,
     '',
+    '## Scope',
+    '',
+    `- Read globs: ${scopes.read.length > 0 ? scopes.read.join(', ') : '<!-- none -->'}`,
+    `- Write globs: ${scopes.write.length > 0 ? scopes.write.join(', ') : '<!-- none -->'}`,
+    '',
   ].join('\n');
   return `${frontmatter}\n\n${body}`;
 }
@@ -213,6 +241,11 @@ function renderTeamArtifact(row: Team): string {
 /** Render a nullable scalar as a YAML value (`null` when absent). */
 function yamlValue(value: string | null): string {
   return value === null ? 'null' : value;
+}
+
+/** Render a glob array as a YAML flow sequence (`[]` when empty). */
+function yamlGlobList(globs: string[]): string {
+  return globs.length === 0 ? '[]' : `[${globs.map((g) => JSON.stringify(g)).join(', ')}]`;
 }
 
 // ---------------------------------------------------------------------------
@@ -260,4 +293,71 @@ function renderHumanTable(rows: Team[]): string {
     cells.map((c, i) => c.padEnd(widths[i] ?? c.length)).join('  ');
   const lines = [format(header), ...body.map(format)];
   return `${lines.join('\n')}\n`;
+}
+
+// ---------------------------------------------------------------------------
+// scope-set / scope-show
+// ---------------------------------------------------------------------------
+
+function doScopeSet(
+  store: ScrumStore,
+  workspaceRoot: string,
+  slug: string | undefined,
+  flags: TeamCmdFlags,
+): number {
+  if (slug === undefined || slug.length === 0) {
+    process.stderr.write('scrum team scope-set: <slug> is required\n');
+    return 1;
+  }
+  const scopes: TeamScopes = {
+    read: parseCsvGlobs(flags.read),
+    write: parseCsvGlobs(flags.write),
+  };
+
+  // setTeamScopes throws on an unknown slug AND on a cross-team write overlap;
+  // both surface as exit 1 via the runTeamCmd catch. The overlap message names
+  // both teams and the offending glob(s).
+  const saved = store.setTeamScopes(slug, scopes);
+
+  const row = store.getTeam(slug);
+  if (row === null) {
+    process.stderr.write(`scrum team scope-set: no team '${slug}'\n`);
+    return 1;
+  }
+  const artifactPath = writeTeamArtifact(workspaceRoot, row, saved);
+  process.stdout.write(`${JSON.stringify(saved)}\n`);
+  process.stderr.write(
+    `scrum team scope-set: ${slug} read=${saved.read.length} write=${saved.write.length} -> ${artifactPath}\n`,
+  );
+  return 0;
+}
+
+function doScopeShow(store: ScrumStore, slug: string | undefined): number {
+  if (slug === undefined || slug.length === 0) {
+    process.stderr.write('scrum team scope-show: <slug> is required\n');
+    return 1;
+  }
+  if (store.getTeam(slug) === null) {
+    process.stdout.write('null\n');
+    process.stderr.write(`scrum team scope-show: no team '${slug}'\n`);
+    return 1;
+  }
+  const scopes = store.getTeamScopes(slug);
+  process.stdout.write(`${JSON.stringify(scopes)}\n`);
+  process.stderr.write(
+    `scrum team scope-show: ${slug} read=${scopes.read.length} write=${scopes.write.length}\n`,
+  );
+  return 0;
+}
+
+/**
+ * Split a comma-separated `--read`/`--write` flag into trimmed, non-empty globs.
+ * An absent or blank flag yields an empty array (clears that scope side).
+ */
+function parseCsvGlobs(raw: string | undefined): string[] {
+  if (raw === undefined || raw.length === 0) return [];
+  return raw
+    .split(',')
+    .map((g) => g.trim())
+    .filter((g) => g.length > 0);
 }

@@ -49,6 +49,8 @@
  *   claude-prove scrum team create               --slug S --team-type T [--charter C] [--lifetime persistent|terminates_on_milestone]
  *   claude-prove scrum team show <slug>
  *   claude-prove scrum team list                 [--human]
+ *   claude-prove scrum team scope-set <slug>     [--read csv] [--write csv]   (REPLACE read/write globs; rejects cross-team write overlap)
+ *   claude-prove scrum team scope-show <slug>
  *   claude-prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
  *   claude-prove scrum hook <event>              (event: session-start | subagent-stop | stop)
  *
@@ -176,6 +178,9 @@ interface ScrumFlags {
   teamType?: string;
   charter?: string;
   lifetime?: string;
+  // `team scope-set` read/write glob CSVs (v15).
+  read?: string;
+  write?: string;
 }
 
 export function register(cli: CAC): void {
@@ -259,6 +264,14 @@ export function register(cli: CAC): void {
     .option(
       '--lifetime <l>',
       'team create: expected longevity (persistent | terminates_on_milestone); default persistent',
+    )
+    .option(
+      '--read <csv>',
+      'team scope-set: comma-separated read globs (REPLACE; omit to clear). Read scopes may overlap across teams',
+    )
+    .option(
+      '--write <csv>',
+      'team scope-set: comma-separated write globs (REPLACE; omit to clear). Write scopes must be disjoint across teams (single writer per path)',
     )
     .option(
       '--workspace-root <w>',
@@ -456,7 +469,9 @@ function dispatch(
 
     case 'team':
       if (arg1 === undefined) {
-        console.error('error: scrum team: sub-action required (one of: create | show | list)');
+        console.error(
+          'error: scrum team: sub-action required (one of: create | show | list | scope-set | scope-show)',
+        );
         return 1;
       }
       return runTeamCmd(arg1, [arg2], {
@@ -464,6 +479,8 @@ function dispatch(
         teamType: flags.teamType,
         charter: flags.charter,
         lifetime: flags.lifetime,
+        read: flags.read,
+        write: flags.write,
         human: flags.human,
         workspaceRoot: flags.workspaceRoot,
       });
