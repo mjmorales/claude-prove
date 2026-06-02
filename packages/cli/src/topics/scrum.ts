@@ -53,6 +53,11 @@
  *   claude-prove scrum team scope-show <slug>
  *   claude-prove scrum team rotate <slug>        --role tech_lead|engineer|implementer --contributor CT-UUID [--reason text]   (rotate a role slot; warns on multi-slot, never rejects)
  *   claude-prove scrum team roster <slug>        (current holder per role)
+ *   claude-prove scrum team accept-add <slug>    --ask-type KEBAB   (append a closed kebab-case ask type the team handles)
+ *   claude-prove scrum team accept-supersede <slug> --id ID --reason R [--by NEW-ID]   (retire an accept entry in place; never deletes)
+ *   claude-prove scrum team expose-add <slug>    --name N --schema-ref R   (append an exposed output other teams consume)
+ *   claude-prove scrum team expose-supersede <slug> --id ID --reason R [--by NEW-ID]   (retire an expose entry in place; never deletes)
+ *   claude-prove scrum team interface <slug>     (active accepts[] + exposes[])
  *   claude-prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
  *   claude-prove scrum hook <event>              (event: session-start | subagent-stop | stop)
  *
@@ -187,6 +192,14 @@ interface ScrumFlags {
   // `contributor` (shared with operator above) is the new holder; `reason`
   // (shared with decision supersede above) is the rotation rationale.
   role?: string;
+  // `team accept-add`/`expose-add` + `*-supersede` interface fields (v17).
+  // `askType` is the kebab-case ask type; `name`/`schemaRef` an exposed output;
+  // `id` the interface row to supersede; `by` (shared with decision supersede
+  // above) the replacement row id; `reason` (shared above) the supersession
+  // rationale.
+  askType?: string;
+  name?: string;
+  schemaRef?: string;
 }
 
 export function register(cli: CAC): void {
@@ -280,6 +293,12 @@ export function register(cli: CAC): void {
       'team scope-set: comma-separated write globs (REPLACE; omit to clear). Write scopes must be disjoint across teams (single writer per path)',
     )
     .option('--role <r>', 'team rotate: role slot to rotate (tech_lead | engineer | implementer)')
+    .option(
+      '--ask-type <a>',
+      'team accept-add: closed kebab-case ask type the team handles (e.g. schema-change)',
+    )
+    .option('--name <n>', 'team expose-add: handle of the exposed output')
+    .option('--schema-ref <r>', "team expose-add: pointer to the exposed output's shape")
     .option(
       '--workspace-root <w>',
       'Main worktree root; pins store to <root>/.prove/prove.db (default: git common-dir)',
@@ -477,7 +496,7 @@ function dispatch(
     case 'team':
       if (arg1 === undefined) {
         console.error(
-          'error: scrum team: sub-action required (one of: create | show | list | scope-set | scope-show | rotate | roster)',
+          'error: scrum team: sub-action required (one of: create | show | list | scope-set | scope-show | rotate | roster | accept-add | accept-supersede | expose-add | expose-supersede | interface)',
         );
         return 1;
       }
@@ -491,6 +510,11 @@ function dispatch(
         role: flags.role,
         contributor: flags.contributor,
         reason: flags.reason,
+        askType: flags.askType,
+        name: flags.name,
+        schemaRef: flags.schemaRef,
+        id: flags.id,
+        by: flags.by,
         human: flags.human,
         workspaceRoot: flags.workspaceRoot,
       });

@@ -456,7 +456,7 @@ describe('runTaskCmd', () => {
       expect(shown.task.run_id).toBe('feat-prov');
       expect(shown.task.provenance.worker_id).toBe('worker-42');
       expect(shown.task.provenance.run_id).toBe('feat-prov');
-      expect(shown.task.provenance.schema_version).toBe(16);
+      expect(shown.task.provenance.schema_version).toBe(17);
     } finally {
       restoreEnv('PROVE_WORKER_ID', savedWorker);
       restoreEnv('PROVE_RUN_SLUG', savedSlug);
@@ -2485,7 +2485,7 @@ describe('runTeamCmd', () => {
     const artifact = join(workspace, 'teams', 'payments.md');
     expect(existsSync(artifact)).toBe(true);
     const content = readFileSync(artifact, 'utf8');
-    expect(content).toContain('schema_version: 16');
+    expect(content).toContain('schema_version: 17');
     expect(content).toContain('team:');
     expect(content).toContain('slug: payments');
     expect(content).toContain('team_type: stream_aligned');
@@ -2499,6 +2499,10 @@ describe('runTeamCmd', () => {
     expect(content).toContain('tech_lead: null');
     expect(content).toContain('engineer: null');
     expect(content).toContain('implementer: null');
+    // v17 interface block mirrors the (empty) accept/expose rows of a fresh team.
+    expect(content).toContain('interface:');
+    expect(content).toContain('accepts: []');
+    expect(content).toContain('exposes:');
   });
 
   test('create honors an explicit --lifetime', () => {
@@ -2826,6 +2830,208 @@ describe('runTeamCmd', () => {
 
   test('roster on an unknown slug exits 1 with null on stdout', () => {
     const res = withCapture(() => runTeamCmd('roster', ['ghost'], { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    expect(res.stdout.trim()).toBe('null');
+    expect(res.stderr).toContain("no team 'ghost'");
+  });
+
+  // --- accept-add / accept-supersede / expose-add / expose-supersede / interface (v17) ---
+
+  interface AcceptRow {
+    id: number;
+    team_slug: string;
+    ask_type: string;
+    status: string;
+    superseded_by: number | null;
+    reason: string | null;
+  }
+
+  interface ExposeRow {
+    id: number;
+    team_slug: string;
+    name: string;
+    schema_ref: string;
+    status: string;
+  }
+
+  interface InterfaceResult {
+    slug: string;
+    accepts: AcceptRow[];
+    exposes: ExposeRow[];
+  }
+
+  test('accept-add appends an active row, prints JSON, reflects the artifact', () => {
+    createTeamFixture('payments');
+    const res = withCapture(() =>
+      runTeamCmd('accept-add', ['payments'], {
+        askType: 'schema-change',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as AcceptRow;
+    expect(row.ask_type).toBe('schema-change');
+    expect(row.status).toBe('active');
+
+    const content = readFileSync(join(workspace, 'teams', 'payments.md'), 'utf8');
+    expect(content).toContain('interface:');
+    expect(content).toContain('schema-change');
+  });
+
+  test('accept-add without --ask-type exits 1', () => {
+    createTeamFixture('payments');
+    const res = withCapture(() =>
+      runTeamCmd('accept-add', ['payments'], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--ask-type');
+  });
+
+  test('accept-add rejects a non-kebab-case ask type', () => {
+    createTeamFixture('payments');
+    const res = withCapture(() =>
+      runTeamCmd('accept-add', ['payments'], { askType: 'SchemaChange', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('invalid ask_type');
+  });
+
+  test('accept-add on an unknown team exits 1', () => {
+    const res = withCapture(() =>
+      runTeamCmd('accept-add', ['ghost'], { askType: 'api-review', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown team 'ghost'");
+  });
+
+  test('accept-supersede retires an entry in place (status + reason), exit 0', () => {
+    createTeamFixture('payments');
+    const added = withCapture(() =>
+      runTeamCmd('accept-add', ['payments'], {
+        askType: 'schema-change',
+        workspaceRoot: workspace,
+      }),
+    );
+    const id = (JSON.parse(added.stdout.trim()) as AcceptRow).id;
+    const res = withCapture(() =>
+      runTeamCmd('accept-supersede', ['payments'], {
+        id: String(id),
+        reason: 'renamed',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as AcceptRow;
+    expect(row.status).toBe('superseded');
+    expect(row.reason).toBe('renamed');
+
+    // The active interface no longer carries the retired entry.
+    const iface = withCapture(() =>
+      runTeamCmd('interface', ['payments'], { workspaceRoot: workspace }),
+    );
+    expect((JSON.parse(iface.stdout.trim()) as InterfaceResult).accepts).toEqual([]);
+  });
+
+  test('accept-supersede without --reason exits 1', () => {
+    createTeamFixture('payments');
+    const res = withCapture(() =>
+      runTeamCmd('accept-supersede', ['payments'], { id: '1', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--reason');
+  });
+
+  test('accept-supersede on an unknown id exits 1', () => {
+    createTeamFixture('payments');
+    const res = withCapture(() =>
+      runTeamCmd('accept-supersede', ['payments'], {
+        id: '9999',
+        reason: 'gone',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown accept id '9999'");
+  });
+
+  test('expose-add appends an active row, prints JSON', () => {
+    createTeamFixture('payments');
+    const res = withCapture(() =>
+      runTeamCmd('expose-add', ['payments'], {
+        name: 'PaymentEvent',
+        schemaRef: 'schemas/payment-event.json',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as ExposeRow;
+    expect(row.name).toBe('PaymentEvent');
+    expect(row.schema_ref).toBe('schemas/payment-event.json');
+    expect(row.status).toBe('active');
+  });
+
+  test('expose-add without --name or --schema-ref exits 1', () => {
+    createTeamFixture('payments');
+    const noName = withCapture(() =>
+      runTeamCmd('expose-add', ['payments'], { schemaRef: 'x.json', workspaceRoot: workspace }),
+    );
+    expect(noName.exit).toBe(1);
+    expect(noName.stderr).toContain('--name');
+    const noRef = withCapture(() =>
+      runTeamCmd('expose-add', ['payments'], { name: 'X', workspaceRoot: workspace }),
+    );
+    expect(noRef.exit).toBe(1);
+    expect(noRef.stderr).toContain('--schema-ref');
+  });
+
+  test('expose-supersede retires an entry in place, exit 0', () => {
+    createTeamFixture('payments');
+    const added = withCapture(() =>
+      runTeamCmd('expose-add', ['payments'], {
+        name: 'Old',
+        schemaRef: 'old.json',
+        workspaceRoot: workspace,
+      }),
+    );
+    const id = (JSON.parse(added.stdout.trim()) as ExposeRow).id;
+    const res = withCapture(() =>
+      runTeamCmd('expose-supersede', ['payments'], {
+        id: String(id),
+        reason: 'deprecated',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    expect((JSON.parse(res.stdout.trim()) as ExposeRow).status).toBe('superseded');
+  });
+
+  test('interface prints active accepts[] + exposes[], exit 0', () => {
+    createTeamFixture('payments');
+    withCapture(() =>
+      runTeamCmd('accept-add', ['payments'], {
+        askType: 'schema-change',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runTeamCmd('expose-add', ['payments'], {
+        name: 'PaymentEvent',
+        schemaRef: 'pe.json',
+        workspaceRoot: workspace,
+      }),
+    );
+    const res = withCapture(() =>
+      runTeamCmd('interface', ['payments'], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+    const iface = JSON.parse(res.stdout.trim()) as InterfaceResult;
+    expect(iface.slug).toBe('payments');
+    expect(iface.accepts.map((a) => a.ask_type)).toEqual(['schema-change']);
+    expect(iface.exposes.map((e) => e.name)).toEqual(['PaymentEvent']);
+  });
+
+  test('interface on an unknown slug exits 1 with null on stdout', () => {
+    const res = withCapture(() => runTeamCmd('interface', ['ghost'], { workspaceRoot: workspace }));
     expect(res.exit).toBe(1);
     expect(res.stdout.trim()).toBe('null');
     expect(res.stderr).toContain("no team 'ghost'");

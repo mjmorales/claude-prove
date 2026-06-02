@@ -2303,7 +2303,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 16,
+      schema_version: 17,
     });
   });
 
@@ -2316,7 +2316,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(16);
+    expect(updated.provenance.schema_version).toBe(17);
   });
 });
 
@@ -2810,5 +2810,117 @@ describe('ScrumStore — team roster (v16)', () => {
     expect(roster.history?.tech_lead.map((m) => m.contributor_id)).toEqual(['ct-jane', 'ct-bob']);
     expect(roster.history?.engineer).toEqual([]);
     expect(roster.history?.implementer).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// Team interface — accepts / exposes, append-only with supersession (v17)
+// ===========================================================================
+
+describe('ScrumStore — team interface (v17)', () => {
+  beforeEach(() => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+  });
+
+  test('addTeamAccept inserts an active row and validates the team', () => {
+    const accept = store.addTeamAccept('payments', 'schema-change');
+    expect(accept.team_slug).toBe('payments');
+    expect(accept.ask_type).toBe('schema-change');
+    expect(accept.status).toBe('active');
+    expect(accept.superseded_by).toBeNull();
+    expect(accept.reason).toBeNull();
+
+    // An unknown team is rejected rather than recorded.
+    expect(() => store.addTeamAccept('ghost', 'api-review')).toThrow(/unknown team 'ghost'/);
+  });
+
+  test('addTeamAccept rejects a non-kebab-case ask type', () => {
+    expect(() => store.addTeamAccept('payments', 'SchemaChange')).toThrow(/invalid ask_type/);
+    expect(() => store.addTeamAccept('payments', 'schema_change')).toThrow(/invalid ask_type/);
+    expect(() => store.addTeamAccept('payments', '-leading')).toThrow(/invalid ask_type/);
+    expect(() => store.addTeamAccept('payments', 'trailing-')).toThrow(/invalid ask_type/);
+    expect(() => store.addTeamAccept('payments', 'double--hyphen')).toThrow(/invalid ask_type/);
+    // Single-segment and multi-segment kebab are accepted.
+    expect(store.addTeamAccept('payments', 'db').ask_type).toBe('db');
+    expect(store.addTeamAccept('payments', 'api-review-v2').ask_type).toBe('api-review-v2');
+  });
+
+  test('addTeamExpose inserts an active row and validates the team', () => {
+    const expose = store.addTeamExpose('payments', {
+      name: 'PaymentEvent',
+      schemaRef: 'schemas/payment-event.json',
+    });
+    expect(expose.name).toBe('PaymentEvent');
+    expect(expose.schema_ref).toBe('schemas/payment-event.json');
+    expect(expose.status).toBe('active');
+    expect(expose.superseded_by).toBeNull();
+
+    expect(() => store.addTeamExpose('ghost', { name: 'X', schemaRef: 'y' })).toThrow(
+      /unknown team 'ghost'/,
+    );
+  });
+
+  test('supersedeTeamAccept flips status + records reason, never deletes the row', () => {
+    const original = store.addTeamAccept('payments', 'schema-change');
+    const replacement = store.addTeamAccept('payments', 'schema-change-v2');
+    const retired = store.supersedeTeamAccept(original.id, 'renamed to v2', replacement.id);
+    expect(retired.status).toBe('superseded');
+    expect(retired.reason).toBe('renamed to v2');
+    expect(retired.superseded_by).toBe(replacement.id);
+
+    // The retired row is retained in full history — never hard-deleted.
+    const all = store.listTeamAccepts('payments', { includeSuperseded: true });
+    expect(all.map((a) => a.id)).toEqual([original.id, replacement.id]);
+    // The active view filters the superseded row out.
+    const active = store.listTeamAccepts('payments');
+    expect(active.map((a) => a.ask_type)).toEqual(['schema-change-v2']);
+  });
+
+  test('supersedeTeamAccept rejects an unknown id and an already-superseded target', () => {
+    expect(() => store.supersedeTeamAccept(9999, 'gone')).toThrow(/unknown accept id '9999'/);
+    const accept = store.addTeamAccept('payments', 'api-review');
+    store.supersedeTeamAccept(accept.id, 'first');
+    expect(() => store.supersedeTeamAccept(accept.id, 'again')).toThrow(/already superseded/);
+  });
+
+  test('supersedeTeamExpose flips status + records reason, never deletes the row', () => {
+    const original = store.addTeamExpose('payments', { name: 'Old', schemaRef: 'old.json' });
+    const retired = store.supersedeTeamExpose(original.id, 'deprecated');
+    expect(retired.status).toBe('superseded');
+    expect(retired.reason).toBe('deprecated');
+    expect(retired.superseded_by).toBeNull();
+
+    expect(store.listTeamExposes('payments', { includeSuperseded: true })).toHaveLength(1);
+    expect(store.listTeamExposes('payments')).toEqual([]);
+  });
+
+  test('supersedeTeamExpose rejects an unknown id and an already-superseded target', () => {
+    expect(() => store.supersedeTeamExpose(9999, 'gone')).toThrow(/unknown expose id '9999'/);
+    const expose = store.addTeamExpose('payments', { name: 'E', schemaRef: 'e.json' });
+    store.supersedeTeamExpose(expose.id, 'first');
+    expect(() => store.supersedeTeamExpose(expose.id, 'again')).toThrow(/already superseded/);
+  });
+
+  test('getTeamInterface returns active-by-default, full history on request', () => {
+    const a1 = store.addTeamAccept('payments', 'schema-change');
+    store.addTeamAccept('payments', 'api-review');
+    store.addTeamExpose('payments', { name: 'PaymentEvent', schemaRef: 'pe.json' });
+    store.supersedeTeamAccept(a1.id, 'consolidated');
+
+    const active = store.getTeamInterface('payments');
+    expect(active.slug).toBe('payments');
+    expect(active.accepts.map((a) => a.ask_type)).toEqual(['api-review']);
+    expect(active.exposes.map((e) => e.name)).toEqual(['PaymentEvent']);
+
+    const full = store.getTeamInterface('payments', { includeSuperseded: true });
+    expect(full.accepts.map((a) => a.ask_type)).toEqual(['schema-change', 'api-review']);
+  });
+
+  test('getTeamInterface tolerates an unknown slug (empty accepts + exposes)', () => {
+    expect(store.getTeamInterface('ghost')).toEqual({
+      slug: 'ghost',
+      accepts: [],
+      exposes: [],
+    });
   });
 });

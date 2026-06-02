@@ -619,6 +619,71 @@ CREATE TABLE scrum_team_members (
 CREATE INDEX idx_scrum_team_members_team_role ON scrum_team_members(team_slug, role);
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v17 — per-team accept/expose interface, append-only with
+//                 supersession (scrum_team_accepts + scrum_team_exposes)
+// ---------------------------------------------------------------------------
+
+/**
+ * v17: a team's published interface — the ask types it ACCEPTS and the outputs
+ * it EXPOSES. Two new tables (not columns on `scrum_teams`) because the
+ * interface is one-to-many: a team accepts an arbitrary number of ask types and
+ * exposes an arbitrary number of outputs, so each is its own row rather than a
+ * column on the registry. Mirrors how the scope globs landed as their own table.
+ *
+ *   scrum_team_accepts — one row per (team, ask_type) the team handles.
+ *                        `team_slug` is an FK to `scrum_teams.slug` — the owning
+ *                        team. `ask_type` is a closed kebab-case ask type
+ *                        (e.g. `schema-change`, `api-review`); the FORMAT is
+ *                        validated at the store boundary (`^[a-z0-9]+(-[a-z0-9]+)*$`),
+ *                        not by a SQL constraint.
+ *   scrum_team_exposes — one row per (team, name, schema_ref) output other teams
+ *                        consume. `team_slug` is the FK; `name` is the output's
+ *                        handle and `schema_ref` points at its shape — both free
+ *                        text.
+ *
+ * Both tables are APPEND-ONLY WITH SUPERSESSION: a published interface entry is
+ * never hard-deleted — removing it is an explicit edit that flips `status` from
+ * `active` to `superseded`, records a `reason`, and optionally points
+ * `superseded_by` at a replacement row's id. The retired row stays for audit,
+ * mirroring the supersession discipline on `scrum_decisions` and the per-task
+ * acceptance criteria. Removing a published interface is a backward-compatibility
+ * hazard, so the history must survive. `status` is a closed `active | superseded`
+ * enum guarded at the store boundary; the column carries no SQL CHECK, matching
+ * the v2–v16 forward-compatible-TEXT convention.
+ *
+ * `id` is an AUTOINCREMENT surrogate (a team may accept the same ask type across
+ * several supersession generations). `created_at` records when the row was
+ * appended. Indexes back the per-team interface fetch (`team_slug`). Table and
+ * index names carry the `scrum_` / `idx_scrum_` prefix per the domain-namespacing
+ * contract established in v1.
+ */
+export const SCRUM_MIGRATION_V17_SQL = `
+CREATE TABLE scrum_team_accepts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_slug TEXT NOT NULL REFERENCES scrum_teams(slug),
+    ask_type TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    superseded_by INTEGER REFERENCES scrum_team_accepts(id),
+    reason TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE scrum_team_exposes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    team_slug TEXT NOT NULL REFERENCES scrum_teams(slug),
+    name TEXT NOT NULL,
+    schema_ref TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    superseded_by INTEGER REFERENCES scrum_team_exposes(id),
+    reason TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_scrum_team_accepts_team ON scrum_team_accepts(team_slug);
+CREATE INDEX idx_scrum_team_exposes_team ON scrum_team_exposes(team_slug);
+`;
+
 /**
  * Current scrum-domain store version — the highest migration version this
  * module registers. Stamped as the per-artifact `schema_version` on the
@@ -626,12 +691,12 @@ CREATE INDEX idx_scrum_team_members_team_role ON scrum_team_members(team_slug, r
  * scrum row reports the schema it was read under. Bump in lockstep with the
  * top migration version on every additive hop.
  */
-export const SCRUM_SCHEMA_VERSION = 16;
+export const SCRUM_SCHEMA_VERSION = 17;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that have hit `clearRegistry()` — both
- * paths land a single scrum/{v1..v16} entry set. Matches
+ * paths land a single scrum/{v1..v17} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -764,6 +829,14 @@ export function ensureScrumSchemaRegistered(): void {
           'create scrum_team_members (per-team three-role roster + position history) + idx_scrum_team_members_team_role',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V16_SQL);
+        },
+      },
+      {
+        version: 17,
+        description:
+          'create scrum_team_accepts + scrum_team_exposes (per-team accept/expose interface, append-only with supersession) + idx_scrum_team_accepts_team + idx_scrum_team_exposes_team',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V17_SQL);
         },
       },
     ],

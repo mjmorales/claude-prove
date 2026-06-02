@@ -35,6 +35,25 @@
  *                              `{ slug, current: { tech_lead, engineer,
  *                              implementer } }`, or exit 1 with null when the slug
  *                              is unknown.
+ *   accept-add <slug>          --ask-type <kebab>
+ *                              Add a closed kebab-case ask type the team handles.
+ *                              Append-only: a new `active` row. Rejects a
+ *                              non-kebab ask type and an unknown team. Reflects
+ *                              the active interface into the artifact.
+ *   accept-supersede <slug>    --id <id> --reason <text> [--by <id>]
+ *                              Retire an accept entry in place — flips its status
+ *                              to superseded, records the reason, optionally
+ *                              points at a replacement id. Never deletes. Rejects
+ *                              an unknown id and an already-superseded entry.
+ *   expose-add <slug>          --name <n> --schema-ref <r>
+ *                              Add an output the team exposes (a `{name,
+ *                              schema_ref}` other teams consume). Append-only.
+ *   expose-supersede <slug>    --id <id> --reason <text> [--by <id>]
+ *                              Retire an expose entry in place, mirroring
+ *                              accept-supersede.
+ *   interface <slug>           Print the team's ACTIVE accepts[] + exposes[] as
+ *                              `{ slug, accepts, exposes }`, or exit 1 with null
+ *                              when the slug is unknown.
  *
  * Stdout contract: JSON result per action on stdout; one-line human summary on
  * stderr. `list` returns a JSON array (or a table with `--human`).
@@ -42,15 +61,19 @@
  * Exit codes:
  *   0  success
  *   1  usage error, unknown action, invalid enum value, duplicate slug, a
- *      `show`/`scope-show`/`roster` miss, a write-scope overlap on `scope-set`,
- *      or an unknown team / invalid role on `rotate`
+ *      `show`/`scope-show`/`roster`/`interface` miss, a write-scope overlap on
+ *      `scope-set`, an unknown team / invalid role on `rotate`, a non-kebab
+ *      ask type on `accept-add`, or an unknown / already-superseded interface id
+ *      on `accept-supersede`/`expose-supersede`
  *
  * On-disk reconciliation: `create` writes a `teams/<slug>.md` artifact carrying
  * a YAML frontmatter `schema_version` + `team:` block that embeds the
  * `{slug, team_type, charter, lifetime}` registry fields, so the file mirrors
  * the row. `scope-set` rewrites the same artifact with a `scope:` block carrying
  * the team's `read`/`write` glob arrays. `rotate` rewrites it with a `roster:`
- * block carrying the current holder per role.
+ * block carrying the current holder per role. The accept/expose actions rewrite
+ * it with an `interface:` block carrying the team's ACTIVE accepts + exposes
+ * (superseded entries are omitted from the artifact, retained in the store).
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -58,7 +81,15 @@ import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
 import { SCRUM_SCHEMA_VERSION } from '../schemas';
 import { type ScrumStore, openScrumStore } from '../store';
-import type { Team, TeamLifetime, TeamRole, TeamRoster, TeamScopes, TeamType } from '../types';
+import type {
+  Team,
+  TeamInterface,
+  TeamLifetime,
+  TeamRole,
+  TeamRoster,
+  TeamScopes,
+  TeamType,
+} from '../types';
 import { TEAM_LIFETIMES, TEAM_ROLES, TEAM_TYPES } from '../types';
 
 export interface TeamCmdFlags {
@@ -71,6 +102,12 @@ export interface TeamCmdFlags {
   role?: string;
   contributor?: string;
   reason?: string;
+  // `accept-add` / `accept-supersede` + `expose-add` / `expose-supersede` (v17).
+  askType?: string;
+  name?: string;
+  schemaRef?: string;
+  id?: string;
+  by?: string;
   human?: boolean;
   workspaceRoot?: string;
 }
@@ -82,7 +119,12 @@ export type TeamAction =
   | 'scope-set'
   | 'scope-show'
   | 'rotate'
-  | 'roster';
+  | 'roster'
+  | 'accept-add'
+  | 'accept-supersede'
+  | 'expose-add'
+  | 'expose-supersede'
+  | 'interface';
 
 const TEAM_ACTIONS: TeamAction[] = [
   'create',
@@ -92,6 +134,11 @@ const TEAM_ACTIONS: TeamAction[] = [
   'scope-show',
   'rotate',
   'roster',
+  'accept-add',
+  'accept-supersede',
+  'expose-add',
+  'expose-supersede',
+  'interface',
 ];
 
 export function runTeamCmd(
@@ -127,6 +174,16 @@ export function runTeamCmd(
         return doRotate(store, workspaceRoot, args[0], flags);
       case 'roster':
         return doRoster(store, args[0]);
+      case 'accept-add':
+        return doAcceptAdd(store, workspaceRoot, args[0], flags);
+      case 'accept-supersede':
+        return doAcceptSupersede(store, workspaceRoot, args[0], flags);
+      case 'expose-add':
+        return doExposeAdd(store, workspaceRoot, args[0], flags);
+      case 'expose-supersede':
+        return doExposeSupersede(store, workspaceRoot, args[0], flags);
+      case 'interface':
+        return doInterface(store, args[0]);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -221,30 +278,40 @@ function emptyToNull(raw: string | undefined): string | null {
 
 /**
  * Reconcile the on-disk `teams/<slug>.md` artifact against the current store
- * state: fetch the team's scope globs and role roster, then write the artifact
- * mirroring all three (registry row + scopes + current roster). The single
- * reconciliation point every mutating action (`create`/`scope-set`/`rotate`)
- * routes through, so the file always carries the latest of every block. Returns
- * the written path.
+ * state: fetch the team's scope globs, role roster, and ACTIVE accept/expose
+ * interface, then write the artifact mirroring all four (registry row + scopes +
+ * current roster + active interface). The single reconciliation point every
+ * mutating action (`create`/`scope-set`/`rotate`/`accept-*`/`expose-*`) routes
+ * through, so the file always carries the latest of every block. Returns the
+ * written path.
  */
 function reconcileTeamArtifact(store: ScrumStore, workspaceRoot: string, row: Team): string {
   const scopes = store.getTeamScopes(row.slug);
   const roster = store.getTeamRoster(row.slug);
+  const iface = store.getTeamInterface(row.slug);
   const dir = join(workspaceRoot, 'teams');
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${row.slug}.md`);
-  writeFileSync(path, renderTeamArtifact(row, scopes, roster), 'utf8');
+  writeFileSync(path, renderTeamArtifact(row, scopes, roster, iface), 'utf8');
   return path;
 }
 
 /**
- * Render the team artifact: a YAML frontmatter `team:` + `scope:` + `roster:`
- * block mirroring the row, its scope globs, and the current holder per role,
- * plus a human skeleton body. The frontmatter is the file's mirror of the
- * `scrum_teams` row, its `scrum_team_scopes` rows, and its open
- * `scrum_team_members` rows.
+ * Render the team artifact: a YAML frontmatter `team:` + `scope:` + `roster:` +
+ * `interface:` block mirroring the row, its scope globs, the current holder per
+ * role, and its ACTIVE accept/expose interface, plus a human skeleton body. The
+ * frontmatter is the file's mirror of the `scrum_teams` row, its
+ * `scrum_team_scopes` rows, its open `scrum_team_members` rows, and its active
+ * `scrum_team_accepts` / `scrum_team_exposes` rows.
  */
-function renderTeamArtifact(row: Team, scopes: TeamScopes, roster: TeamRoster): string {
+function renderTeamArtifact(
+  row: Team,
+  scopes: TeamScopes,
+  roster: TeamRoster,
+  iface: TeamInterface,
+): string {
+  const acceptList = iface.accepts.map((a) => a.ask_type);
+  const exposeList = iface.exposes.map((e) => `${e.name}=${e.schema_ref}`);
   const frontmatter = [
     '---',
     `schema_version: ${SCRUM_SCHEMA_VERSION}`,
@@ -261,6 +328,15 @@ function renderTeamArtifact(row: Team, scopes: TeamScopes, roster: TeamRoster): 
     ...TEAM_ROLES.map(
       (role) => `  ${role}: ${yamlValue(roster.current[role]?.contributor_id ?? null)}`,
     ),
+    'interface:',
+    `  accepts: ${yamlGlobList(acceptList)}`,
+    '  exposes:',
+    ...(iface.exposes.length === 0
+      ? ['    []']
+      : iface.exposes.map(
+          (e) =>
+            `    - { name: ${JSON.stringify(e.name)}, schema_ref: ${JSON.stringify(e.schema_ref)} }`,
+        )),
     '---',
   ].join('\n');
   const body = [
@@ -286,6 +362,11 @@ function renderTeamArtifact(row: Team, scopes: TeamScopes, roster: TeamRoster): 
       (role) => `- ${role}: ${roster.current[role]?.contributor_id ?? '<!-- vacant -->'}`,
     ),
     '',
+    '## Interface',
+    '',
+    `- Accepts: ${acceptList.length > 0 ? acceptList.join(', ') : '<!-- none -->'}`,
+    `- Exposes: ${exposeList.length > 0 ? exposeList.join(', ') : '<!-- none -->'}`,
+    '',
   ].join('\n');
   return `${frontmatter}\n\n${body}`;
 }
@@ -295,7 +376,7 @@ function yamlValue(value: string | null): string {
   return value === null ? 'null' : value;
 }
 
-/** Render a glob array as a YAML flow sequence (`[]` when empty). */
+/** Render a string array as a YAML flow sequence (`[]` when empty). */
 function yamlGlobList(globs: string[]): string {
   return globs.length === 0 ? '[]' : `[${globs.map((g) => JSON.stringify(g)).join(', ')}]`;
 }
@@ -497,4 +578,185 @@ function normalizeRole(raw: string | undefined): TeamRole | undefined | typeof I
     return INVALID_ENUM;
   }
   return lower as TeamRole;
+}
+
+// ---------------------------------------------------------------------------
+// accept-add / accept-supersede / expose-add / expose-supersede / interface (v17)
+// ---------------------------------------------------------------------------
+
+function doAcceptAdd(
+  store: ScrumStore,
+  workspaceRoot: string,
+  slug: string | undefined,
+  flags: TeamCmdFlags,
+): number {
+  if (slug === undefined || slug.length === 0) {
+    process.stderr.write('scrum team accept-add: <slug> is required\n');
+    return 1;
+  }
+  if (flags.askType === undefined || flags.askType.length === 0) {
+    process.stderr.write('scrum team accept-add: --ask-type <kebab> is required\n');
+    return 1;
+  }
+
+  // addTeamAccept throws on an unknown team AND on a non-kebab ask type; both
+  // surface as exit 1 via the runTeamCmd catch.
+  const accept = store.addTeamAccept(slug, flags.askType);
+
+  const team = store.getTeam(slug);
+  const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+  process.stdout.write(`${JSON.stringify(accept)}\n`);
+  const where = artifactPath !== null ? ` -> ${artifactPath}` : '';
+  process.stderr.write(
+    `scrum team accept-add: ${slug} accepts '${accept.ask_type}' (id ${accept.id})${where}\n`,
+  );
+  return 0;
+}
+
+function doAcceptSupersede(
+  store: ScrumStore,
+  workspaceRoot: string,
+  slug: string | undefined,
+  flags: TeamCmdFlags,
+): number {
+  if (slug === undefined || slug.length === 0) {
+    process.stderr.write('scrum team accept-supersede: <slug> is required\n');
+    return 1;
+  }
+  const id = parseId(flags.id, 'accept-supersede');
+  if (id === null) return 1;
+  if (flags.reason === undefined || flags.reason.length === 0) {
+    process.stderr.write('scrum team accept-supersede: --reason <text> is required\n');
+    return 1;
+  }
+  const by = parseOptionalId(flags.by, 'accept-supersede');
+  if (by === INVALID_ENUM) return 1;
+
+  // supersedeTeamAccept throws on an unknown id and an already-superseded
+  // target; both surface as exit 1 via the runTeamCmd catch.
+  const accept = store.supersedeTeamAccept(id, flags.reason, by);
+
+  const team = store.getTeam(slug);
+  const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+  process.stdout.write(`${JSON.stringify(accept)}\n`);
+  const where = artifactPath !== null ? ` -> ${artifactPath}` : '';
+  process.stderr.write(
+    `scrum team accept-supersede: ${slug} retired accept id ${accept.id} ('${accept.ask_type}')${where}\n`,
+  );
+  return 0;
+}
+
+function doExposeAdd(
+  store: ScrumStore,
+  workspaceRoot: string,
+  slug: string | undefined,
+  flags: TeamCmdFlags,
+): number {
+  if (slug === undefined || slug.length === 0) {
+    process.stderr.write('scrum team expose-add: <slug> is required\n');
+    return 1;
+  }
+  if (flags.name === undefined || flags.name.length === 0) {
+    process.stderr.write('scrum team expose-add: --name <n> is required\n');
+    return 1;
+  }
+  if (flags.schemaRef === undefined || flags.schemaRef.length === 0) {
+    process.stderr.write('scrum team expose-add: --schema-ref <r> is required\n');
+    return 1;
+  }
+
+  const expose = store.addTeamExpose(slug, { name: flags.name, schemaRef: flags.schemaRef });
+
+  const team = store.getTeam(slug);
+  const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+  process.stdout.write(`${JSON.stringify(expose)}\n`);
+  const where = artifactPath !== null ? ` -> ${artifactPath}` : '';
+  process.stderr.write(
+    `scrum team expose-add: ${slug} exposes '${expose.name}' (id ${expose.id})${where}\n`,
+  );
+  return 0;
+}
+
+function doExposeSupersede(
+  store: ScrumStore,
+  workspaceRoot: string,
+  slug: string | undefined,
+  flags: TeamCmdFlags,
+): number {
+  if (slug === undefined || slug.length === 0) {
+    process.stderr.write('scrum team expose-supersede: <slug> is required\n');
+    return 1;
+  }
+  const id = parseId(flags.id, 'expose-supersede');
+  if (id === null) return 1;
+  if (flags.reason === undefined || flags.reason.length === 0) {
+    process.stderr.write('scrum team expose-supersede: --reason <text> is required\n');
+    return 1;
+  }
+  const by = parseOptionalId(flags.by, 'expose-supersede');
+  if (by === INVALID_ENUM) return 1;
+
+  const expose = store.supersedeTeamExpose(id, flags.reason, by);
+
+  const team = store.getTeam(slug);
+  const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+  process.stdout.write(`${JSON.stringify(expose)}\n`);
+  const where = artifactPath !== null ? ` -> ${artifactPath}` : '';
+  process.stderr.write(
+    `scrum team expose-supersede: ${slug} retired expose id ${expose.id} ('${expose.name}')${where}\n`,
+  );
+  return 0;
+}
+
+function doInterface(store: ScrumStore, slug: string | undefined): number {
+  if (slug === undefined || slug.length === 0) {
+    process.stderr.write('scrum team interface: <slug> is required\n');
+    return 1;
+  }
+  if (store.getTeam(slug) === null) {
+    process.stdout.write('null\n');
+    process.stderr.write(`scrum team interface: no team '${slug}'\n`);
+    return 1;
+  }
+  const iface = store.getTeamInterface(slug);
+  process.stdout.write(`${JSON.stringify(iface)}\n`);
+  process.stderr.write(
+    `scrum team interface: ${slug} accepts=${iface.accepts.length} exposes=${iface.exposes.length}\n`,
+  );
+  return 0;
+}
+
+/**
+ * Parse a required `--id` flag to a positive integer. Writes a usage error and
+ * returns null when absent or non-numeric — the caller turns null into exit 1.
+ */
+function parseId(raw: string | undefined, action: string): number | null {
+  if (raw === undefined || raw.length === 0) {
+    process.stderr.write(`scrum team ${action}: --id <id> is required\n`);
+    return null;
+  }
+  const id = Number(raw);
+  if (!Number.isInteger(id) || id <= 0) {
+    process.stderr.write(`scrum team ${action}: --id must be a positive integer, got '${raw}'\n`);
+    return null;
+  }
+  return id;
+}
+
+/**
+ * Parse an optional `--by` replacement id. Returns `undefined` when absent (no
+ * named replacement), the integer when valid, or the `INVALID_ENUM` sentinel
+ * (after a usage error) when present but non-numeric.
+ */
+function parseOptionalId(
+  raw: string | undefined,
+  action: string,
+): number | undefined | typeof INVALID_ENUM {
+  if (raw === undefined || raw.length === 0) return undefined;
+  const id = Number(raw);
+  if (!Number.isInteger(id) || id <= 0) {
+    process.stderr.write(`scrum team ${action}: --by must be a positive integer, got '${raw}'\n`);
+    return INVALID_ENUM;
+  }
+  return id;
 }
