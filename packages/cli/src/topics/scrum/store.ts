@@ -46,6 +46,7 @@ import type {
   MilestoneStatus,
   NextReadyRow,
   OperatorHistoryRow,
+  PromoteLoreToCodexInput,
   Provenance,
   RecordLoreInput,
   RecordLoreResult,
@@ -315,12 +316,21 @@ const TEAM_EXPOSE_COLUMNS =
 /** Canonical `scrum_lores` SELECT column list (v19); maps 1:1 to `LoreRow`. */
 const LORE_COLUMNS = 'id, team_slug, body, author_contributor_id, created_at';
 
+/**
+ * The Codex subtype a Lore→Codex promotion defaults to (v22). A generalized team
+ * convention reads as a `pattern` — a gated kind, so the promotion lands as a
+ * DRAFT awaiting a human approve gate rather than a durably-accepted decision.
+ * Routing through a gated kind is the whole point: a promotion PROPOSES, it never
+ * silently accepts.
+ */
+const PROMOTION_DEFAULT_KIND = 'pattern';
+
 /** Canonical `scrum_annotations` SELECT column list (v20); maps 1:1 to `AnnotationRow`. */
 const ANNOTATION_COLUMNS = 'id, target_kind, target_ref, body, author, created_at';
 
-/** Canonical `scrum_decisions` SELECT column list (v2/v4/v8/v21); maps 1:1 to `DecisionRow`. */
+/** Canonical `scrum_decisions` SELECT column list (v2/v4/v8/v21/v22); maps 1:1 to `DecisionRow`. */
 const DECISION_COLUMNS =
-  'id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason, kind, write_status, gate_responder, gate_responded_at';
+  'id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason, kind, write_status, gate_responder, gate_responded_at, source_lore_id';
 
 /**
  * Kebab-case ask-type format: one or more lowercase-alphanumeric segments
@@ -2011,14 +2021,18 @@ export class ScrumStore {
       write_status: writeStatus,
       gate_responder: null,
       gate_responded_at: null,
+      // Provenance is set ONLY by `promoteLoreToCodex` (which records then
+      // stamps it in one transaction). A bare `recordDecision` carries no
+      // source Lore — direct authorship, the common case.
+      source_lore_id: null,
     };
 
     // All binds are named ($-prefixed) so the supersession-preserve flag
     // ($assertsStatus) and every column value survive a future reorder of the
     // INSERT column list — no positional `?N` to silently misalign.
     this.prep(
-      `INSERT INTO scrum_decisions (id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason, kind, write_status, gate_responder, gate_responded_at)
-       VALUES ($id, $title, $topic, $status, $content, $source_path, $content_sha, $recorded_at, $recorded_by_agent, $superseded_by, $reason, $kind, $write_status, $gate_responder, $gate_responded_at)
+      `INSERT INTO scrum_decisions (id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason, kind, write_status, gate_responder, gate_responded_at, source_lore_id)
+       VALUES ($id, $title, $topic, $status, $content, $source_path, $content_sha, $recorded_at, $recorded_by_agent, $superseded_by, $reason, $kind, $write_status, $gate_responder, $gate_responded_at, $source_lore_id)
        ON CONFLICT(id) DO UPDATE SET
          title = excluded.title,
          topic = excluded.topic,
@@ -2063,6 +2077,16 @@ export class ScrumStore {
            WHEN scrum_decisions.status = 'superseded' AND $assertsStatus = 0
              THEN scrum_decisions.gate_responded_at
            ELSE excluded.gate_responded_at
+         END,
+         -- Preserve a promotion's provenance across a bare re-record. A plain
+         -- recordDecision never carries a source Lore ($source_lore_id IS NULL),
+         -- so re-recording a promoted decision's body must not erase the
+         -- back-pointer to its origin Lore -- keep the existing one. Only a write
+         -- that itself supplies a source_lore_id (the promote path) sets it.
+         source_lore_id = CASE
+           WHEN $source_lore_id IS NULL
+             THEN scrum_decisions.source_lore_id
+           ELSE excluded.source_lore_id
          END`,
     ).run({
       $id: row.id,
@@ -2080,6 +2104,7 @@ export class ScrumStore {
       $write_status: row.write_status,
       $gate_responder: row.gate_responder,
       $gate_responded_at: row.gate_responded_at,
+      $source_lore_id: row.source_lore_id,
       $assertsStatus: assertsStatus,
     });
 
@@ -2990,11 +3015,18 @@ export class ScrumStore {
         slug,
       );
 
-      // SEAM: promote generally-applicable Lore -> Codex here once the
-      // memory-layers Lore/Codex capability exists. A disbanding team's durable,
-      // generally-applicable learnings should be lifted into shared long-term
-      // memory before the team goes inactive; that promotion has no API in this
-      // codebase yet, so it is intentionally omitted from the disband.
+      // Promote the disbanding team's Lore into the Codex as gated DRAFTS — a
+      // disbanding team's durable, generally-applicable learnings are lifted into
+      // shared long-term memory before the team goes inactive. Each promotion is
+      // a PROPOSAL (a draft awaiting a separate approve gate), never an
+      // auto-acceptance. `promoteLoreToCodex` uses a deterministic decision id
+      // per Lore, so a re-promotion upserts rather than duplicates — but the
+      // disband itself never re-runs (an already-inactive team throws above), so
+      // double-promotion cannot happen on this path. The promotion's inner
+      // transaction nests as a SAVEPOINT inside this disband transaction.
+      for (const lore of this.listLores(slug)) {
+        this.promoteLoreToCodex({ loreId: lore.id });
+      }
 
       // SEAM: cascade-cancel this team's in-flight epics once a task<->team
       // ownership link exists. A disband should terminate the team's still-open
@@ -3096,6 +3128,60 @@ export class ScrumStore {
       id,
     ) as LoreRow | null;
     return row ?? null;
+  }
+
+  /**
+   * Promote one generally-applicable team Lore entry into the Codex
+   * (`scrum_decisions`) THROUGH the gated write protocol — the Lore→Codex lift.
+   * The promotion PROPOSES: it records a Codex DRAFT (`write_status = 'draft'`,
+   * `status = 'draft'`) under a gated `kind` and stamps `source_lore_id` back at
+   * the origin Lore. It NEVER auto-approves — accepting the draft is a separate
+   * `approveDecision` gate (a human / tech_lead step), so the engine proposes and
+   * the model/operator decides. The source Lore is untouched (append-only).
+   *
+   * `kind` defaults to `pattern` (a gated kind — a generalized team convention);
+   * any gated kind keeps the draft. `decisionId` is deterministic
+   * (`lore-promotion-<team>-<loreId>` by default) so a re-promotion upserts the
+   * same row rather than duplicating. Throws on an unknown `loreId`.
+   *
+   * Runs in ONE transaction: the `recordDecision` (a single upsert) and the
+   * `source_lore_id` stamp are atomic, so a decision is never observed without
+   * its provenance. The whole method nests cleanly inside an outer transaction
+   * (e.g. the disband path inside `teamTerminate`) — `recordDecision` itself
+   * opens no transaction, and this wrapper's transaction becomes a SAVEPOINT.
+   */
+  promoteLoreToCodex(input: PromoteLoreToCodexInput): DecisionRow {
+    const lore = this.getLore(input.loreId);
+    if (lore === null) {
+      throw new Error(`promoteLoreToCodex: unknown lore id '${input.loreId}'`);
+    }
+    const decisionId = input.decisionId ?? `lore-promotion-${lore.team_slug}-${lore.id}`;
+    const kind = input.kind ?? PROMOTION_DEFAULT_KIND;
+    const title = input.title ?? `Promoted Lore from team ${lore.team_slug}`;
+    // The provenance line keeps the origin readable in the decision body itself,
+    // in addition to the structured `source_lore_id` column — the model refines
+    // the body later; the engine just surfaces a faithful starting point.
+    const content = `Promoted from team '${lore.team_slug}' Lore entry ${lore.id} (authored by ${lore.author_contributor_id}).\n\n${lore.body}`;
+
+    const promote = this.db.transaction(() => {
+      // Record THROUGH the gate: a gated kind lands as a DRAFT, not accepted.
+      this.recordDecision({
+        id: decisionId,
+        title,
+        content,
+        kind,
+        recordedByAgent: input.recordedByAgent ?? null,
+      });
+      // Stamp provenance back at the source Lore. A separate UPDATE (rather than
+      // a recordDecision arg) keeps the draft/gate semantics of recordDecision
+      // untouched — provenance is orthogonal to the write-gate state.
+      this.prep('UPDATE scrum_decisions SET source_lore_id = ? WHERE id = ?').run(
+        lore.id,
+        decisionId,
+      );
+      return this.requireDecision(decisionId, 'promoteLoreToCodex');
+    });
+    return promote();
   }
 
   // ==========================================================================

@@ -101,6 +101,8 @@ describe('ScrumStore — decisions: schema materialization', () => {
       'write_status:TEXT:0',
       'gate_responder:TEXT:0',
       'gate_responded_at:TEXT:0',
+      // v22 appends the Lore→Codex promotion provenance, NULL default.
+      'source_lore_id:INTEGER:0',
     ]);
   });
 });

@@ -123,6 +123,17 @@ export interface MilestoneCurationResult {
   skippedNoFindings: number;
   /** Tasks skipped because a `curation_proposed` event already existed. */
   skippedAlreadyEmitted: number;
+  /**
+   * Milestone-close journal compaction (v22). One Lore summary is rolled up per
+   * team TERMINATING on this milestone (`terminates_on_milestone === <id>`) from
+   * the milestone journal — the curation candidates gathered across the
+   * milestone's tasks. Empty when no team terminates on this milestone (a no-op
+   * that leaves the per-task curation flow unchanged). Idempotent: a re-close
+   * skips a team that already carries the compaction summary.
+   */
+  compactedTeams: Array<{ teamSlug: string; loreId: number; candidateCount: number }>;
+  /** Terminating teams skipped because their compaction Lore already exists. */
+  skippedAlreadyCompacted: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -300,6 +311,14 @@ export function sweepUnreconciled(
  * event for this milestone is skipped, so a re-close never double-emits;
  * (2) a task with zero findings is a no-op. `projectDir` resolves repo-relative
  * run paths (defaults to `process.cwd()`); the CLI passes the workspace root.
+ *
+ * Milestone-close journal compaction (v22): in the SAME close transition, the
+ * milestone journal — every curation candidate gathered across the milestone's
+ * tasks — is rolled up into ONE Lore summary per team TERMINATING on this
+ * milestone (`terminates_on_milestone === milestoneId`). When no team terminates
+ * on the milestone, this is a no-op and the per-task curation flow above is
+ * unchanged. The rollup is a deterministic concatenation the engine surfaces; the
+ * model refines it later.
  */
 export function reconcileMilestoneClosed(
   milestoneId: string,
@@ -312,14 +331,22 @@ export function reconcileMilestoneClosed(
     emitted: [],
     skippedNoFindings: 0,
     skippedAlreadyEmitted: 0,
+    compactedTeams: [],
+    skippedAlreadyCompacted: 0,
   };
 
+  // The full milestone journal — every curation candidate across every task —
+  // is gathered once, both to drive the per-task curation events and to feed the
+  // per-terminating-team Lore compaction below.
+  const journal: CurationCandidate[] = [];
+
   for (const task of store.listTasks({ milestoneId })) {
+    const candidates = collectCurationCandidates(store, task.id, root);
+    journal.push(...candidates);
     if (hasCurationEventForMilestone(store, task.id, milestoneId)) {
       result.skippedAlreadyEmitted++;
       continue;
     }
-    const candidates = collectCurationCandidates(store, task.id, root);
     if (candidates.length === 0) {
       result.skippedNoFindings++;
       continue;
@@ -329,7 +356,94 @@ export function reconcileMilestoneClosed(
     result.emitted.push({ taskId: task.id, candidateCount: candidates.length });
   }
 
+  compactJournalForTerminatingTeams(milestoneId, journal, store, result);
+
   return result;
+}
+
+/**
+ * Deterministic marker embedded in a milestone-close compaction Lore body, used
+ * as the per-(team, milestone) idempotency key. A re-close skips a terminating
+ * team that already carries a Lore entry whose body opens with this marker, so
+ * compaction never double-writes — mirroring the per-task `curation_proposed`
+ * dedup that guards the curation flow.
+ */
+function compactionMarker(milestoneId: string): string {
+  return `[milestone-close-summary:${milestoneId}]`;
+}
+
+/**
+ * Author id stamped on an engine-written compaction Lore. After a milestone
+ * close, a terminating team's roster is vacated, so no tech_lead is seated to
+ * author against — `recordLore` warn-allows the write (the team-of-one /
+ * bootstrapping tolerance). A fixed, recognizable id marks the rollup as
+ * engine-surfaced rather than a human-authored convention.
+ */
+const COMPACTION_AUTHOR_ID = 'ct-engine-compaction';
+
+/**
+ * Roll the milestone journal into one Lore summary per team terminating on this
+ * milestone. The terminating set is determinable from the team registry alone:
+ * every team whose `terminates_on_milestone` names this milestone, regardless of
+ * its current status (after a close the matching teams are already `inactive`,
+ * but they are still the right rollup targets). No terminating team → no-op.
+ *
+ * Idempotent: a team already carrying a compaction Lore for this milestone (its
+ * body opens with {@link compactionMarker}) is skipped, so a re-close never
+ * double-writes. The rollup body is a deterministic concatenation of the
+ * journal's candidate bodies — the engine surfaces a faithful starting point;
+ * the model refines it later.
+ */
+function compactJournalForTerminatingTeams(
+  milestoneId: string,
+  journal: CurationCandidate[],
+  store: ScrumStore,
+  result: MilestoneCurationResult,
+): void {
+  const marker = compactionMarker(milestoneId);
+  const terminating = store
+    .listTeams()
+    .filter((team) => team.terminates_on_milestone === milestoneId);
+
+  for (const team of terminating) {
+    if (store.listLores(team.slug).some((lore) => lore.body.startsWith(marker))) {
+      result.skippedAlreadyCompacted++;
+      continue;
+    }
+    const body = renderCompactionLore(marker, team.slug, journal);
+    const { row } = store.recordLore({
+      teamSlug: team.slug,
+      body,
+      authorContributorId: COMPACTION_AUTHOR_ID,
+    });
+    result.compactedTeams.push({
+      teamSlug: team.slug,
+      loreId: row.id,
+      candidateCount: journal.length,
+    });
+  }
+}
+
+/**
+ * Render the deterministic milestone-close compaction Lore body for one team. The
+ * body opens with the idempotency marker, then concatenates each journal
+ * candidate as a typed bullet. An empty journal still produces a valid summary
+ * (the marker plus a "no findings" line) so the rollup is recorded for every
+ * terminating team — the model can prune it later.
+ */
+function renderCompactionLore(
+  marker: string,
+  teamSlug: string,
+  journal: CurationCandidate[],
+): string {
+  const header = `${marker} Journal compaction for team '${teamSlug}' at milestone close.`;
+  if (journal.length === 0) {
+    return `${header}\n\n(no curation-relevant findings in the milestone journal)`;
+  }
+  const bullets = journal
+    .map((candidate) => `- [${candidate.type}] ${candidate.body} (from ${candidate.run_path})`)
+    .join('\n');
+  return `${header}\n\n${bullets}`;
 }
 
 // ---------------------------------------------------------------------------

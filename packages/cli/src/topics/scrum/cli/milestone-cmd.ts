@@ -163,7 +163,11 @@ function doClose(store: ScrumStore, id: string | undefined, workspaceRoot: strin
     // <id>`; here we just report how many constituent stories it will roll up
     // so the operator knows the rollup is available.
     const stories = gatherMilestoneStories(id, store, workspaceRoot);
-    closeNote = ` (curation: ${curation.emitted.length} task(s) proposed; milestone brief: ${stories.length} stor(ies) — render via 'acb milestone-brief render --milestone ${id}')`;
+    const compactNote =
+      curation.compactedTeams.length > 0
+        ? `; journal compaction: ${curation.compactedTeams.length} terminating team(s) summarized`
+        : '';
+    closeNote = ` (curation: ${curation.emitted.length} task(s) proposed${compactNote}; milestone brief: ${stories.length} stor(ies) — render via 'acb milestone-brief render --milestone ${id}')`;
   }
 
   process.stdout.write(`${JSON.stringify(milestone)}\n`);
