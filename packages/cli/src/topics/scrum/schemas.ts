@@ -892,6 +892,57 @@ export const SCRUM_MIGRATION_V22_SQL = `
 ALTER TABLE scrum_decisions ADD COLUMN source_lore_id INTEGER REFERENCES scrum_lores(id);
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v23 — cross-team ask protocol (scrum_asks)
+// ---------------------------------------------------------------------------
+
+/**
+ * v23: the cross-team ask protocol — one row per ask a team files against a
+ * sibling team. An ask is the request a worker raises when its work is blocked
+ * on another team's published interface: "team A needs team B to handle ask type
+ * T, and A's artifact ART is blocked until B does". A new table (not a column on
+ * an existing one) because an ask is its own entity, relating two teams and a
+ * blocking artifact rather than being owned by any single one:
+ *
+ *   scrum_asks — one row per filed ask. `from_team` and `to_team` are both
+ *                `scrum_teams.slug` FKs — the team raising the ask and the
+ *                sibling it is asking. `ask_type` is the kebab-case interface
+ *                type the ask targets; at filing time it MUST be one of
+ *                `to_team`'s ACTIVE `scrum_team_accepts` rows — a team can only
+ *                be asked for what it has published it accepts. `blocking_artifact`
+ *                is the `scrum_tasks.id` of the artifact blocked on the ask — the
+ *                FK guarantees the cited artifact exists. `state` is the ask
+ *                lifecycle; a freshly-filed ask is always `'filed'`.
+ *
+ * Validation that spans tables (the `ask_type ∈ to_team.accepts` membership
+ * rule) is enforced at the store boundary in `fileAsk`, NOT by a SQL constraint
+ * — it reads the sibling team's active accept interface, which is not expressible
+ * as a column CHECK. The two team FKs and the artifact FK ARE expressed in the
+ * schema, so an unknown team or artifact is rejected by the engine even before
+ * the boundary check runs.
+ *
+ * `id` is an AUTOINCREMENT surrogate. `state` carries no CHECK — the column stays
+ * forward-compatible TEXT, matching the v2–v22 convention; the closed `AskState`
+ * vocabulary is documented on the `AskRow` type in `types.ts`. Indexes back the
+ * per-recipient fetch (`to_team`) and the per-artifact fetch (`blocking_artifact`).
+ * Table and index names carry the `scrum_` / `idx_scrum_` prefix per the
+ * domain-namespacing contract established in v1.
+ */
+export const SCRUM_MIGRATION_V23_SQL = `
+CREATE TABLE scrum_asks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_team TEXT NOT NULL REFERENCES scrum_teams(slug),
+    to_team TEXT NOT NULL REFERENCES scrum_teams(slug),
+    ask_type TEXT NOT NULL,
+    blocking_artifact TEXT NOT NULL REFERENCES scrum_tasks(id),
+    state TEXT NOT NULL DEFAULT 'filed',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_scrum_asks_to_team ON scrum_asks(to_team);
+CREATE INDEX idx_scrum_asks_blocking_artifact ON scrum_asks(blocking_artifact);
+`;
+
 /**
  * Current scrum-domain store version — the highest migration version this
  * module registers. Stamped as the per-artifact `schema_version` on the
@@ -899,12 +950,12 @@ ALTER TABLE scrum_decisions ADD COLUMN source_lore_id INTEGER REFERENCES scrum_l
  * scrum row reports the schema it was read under. Bump in lockstep with the
  * top migration version on every additive hop.
  */
-export const SCRUM_SCHEMA_VERSION = 22;
+export const SCRUM_SCHEMA_VERSION = 23;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that have hit `clearRegistry()` — both
- * paths land a single scrum/{v1..v21} entry set. Matches
+ * paths land a single scrum/{v1..v23} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -1085,6 +1136,14 @@ export function ensureScrumSchemaRegistered(): void {
           'add scrum_decisions.source_lore_id (nullable self-FK to scrum_lores) for Lore→Codex promotion provenance',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V22_SQL);
+        },
+      },
+      {
+        version: 23,
+        description:
+          'create scrum_asks (cross-team ask protocol) + idx_scrum_asks_to_team + idx_scrum_asks_blocking_artifact',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V23_SQL);
         },
       },
     ],

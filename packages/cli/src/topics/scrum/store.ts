@@ -33,6 +33,8 @@ import type {
   AddAnnotationInput,
   AnnotationRow,
   AnnotationTargetKind,
+  AskRow,
+  AskState,
   Contributor,
   ContributorStatus,
   DecisionRow,
@@ -41,6 +43,7 @@ import type {
   EscalationPayload,
   EscalationType,
   EventKind,
+  FileAskInput,
   GateVerdict,
   LoreRow,
   Manifest,
@@ -314,6 +317,9 @@ const TEAM_ACCEPT_COLUMNS = 'id, team_slug, ask_type, status, superseded_by, rea
 /** Canonical `scrum_team_exposes` SELECT column list (v17); maps 1:1 to `TeamExposeRow`. */
 const TEAM_EXPOSE_COLUMNS =
   'id, team_slug, name, schema_ref, status, superseded_by, reason, created_at';
+
+/** Canonical `scrum_asks` SELECT column list (v23); maps 1:1 to `AskRow`. */
+const ASK_COLUMNS = 'id, from_team, to_team, ask_type, blocking_artifact, state, created_at';
 
 /** Canonical `scrum_lores` SELECT column list (v19); maps 1:1 to `LoreRow`. */
 const LORE_COLUMNS = 'id, team_slug, body, author_contributor_id, created_at';
@@ -2954,6 +2960,83 @@ export class ScrumStore {
     return this.prep(
       `SELECT ${TEAM_EXPOSE_COLUMNS} FROM scrum_team_exposes WHERE ${where} ORDER BY id ASC`,
     ).all(slug) as TeamExposeRow[];
+  }
+
+  // ==========================================================================
+  // Cross-team ask protocol (v23)
+  // ==========================================================================
+
+  /**
+   * File a cross-team ask — record one `'filed'` row in `scrum_asks`. The ask is
+   * the request a worker raises when its work is blocked on a sibling team's
+   * published interface: `fromTeam` needs `toTeam` to handle `askType`, and
+   * `blockingArtifact` stays blocked until it does.
+   *
+   * Three validations run at this boundary, each throwing a domain error rather
+   * than landing a malformed row:
+   *   1. `toTeam` must resolve — an unknown target team is rejected.
+   *   2. `askType` must be one of `toTeam`'s ACTIVE accepted ask types — a team
+   *      can only be asked for what it has published it accepts.
+   *   3. `blockingArtifact` must be an existing task id.
+   * `fromTeam` is validated too (it is an FK target), but the spec-bearing checks
+   * are the three above. The insert and the `ask_filed` audit event ride one
+   * transaction, so a failure leaves the store untouched. Returns the new row.
+   */
+  fileAsk(input: FileAskInput): AskRow {
+    if (this.getTeam(input.fromTeam) === null) {
+      throw new Error(`fileAsk: unknown from_team '${input.fromTeam}'`);
+    }
+    if (this.getTeam(input.toTeam) === null) {
+      throw new Error(`fileAsk: unknown to_team '${input.toTeam}'`);
+    }
+    const accepted = this.listTeamAccepts(input.toTeam).map((a) => a.ask_type);
+    if (!accepted.includes(input.askType)) {
+      throw new Error(
+        `fileAsk: ask_type '${input.askType}' is not accepted by to_team '${input.toTeam}'; accepted: ${accepted.length > 0 ? accepted.join(', ') : '(none)'}`,
+      );
+    }
+    if (this.getTask(input.blockingArtifact) === null) {
+      throw new Error(`fileAsk: unknown blocking_artifact '${input.blockingArtifact}'`);
+    }
+
+    const createdAt = input.createdAt ?? isoNow();
+    const tx = this.db.transaction(() => {
+      const result = this.prep(
+        'INSERT INTO scrum_asks (from_team, to_team, ask_type, blocking_artifact, state, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ).run(
+        input.fromTeam,
+        input.toTeam,
+        input.askType,
+        input.blockingArtifact,
+        'filed' satisfies AskState,
+        createdAt,
+      );
+      const id = Number(result.lastInsertRowid);
+      // Audit the filing against the blocking artifact's event timeline so the
+      // task that triggered the ask carries the cross-team request in its history.
+      this.appendEvent({
+        taskId: input.blockingArtifact,
+        kind: 'ask_filed',
+        ts: createdAt,
+        payload: {
+          ask_id: id,
+          from_team: input.fromTeam,
+          to_team: input.toTeam,
+          ask_type: input.askType,
+        },
+      });
+      return id;
+    });
+    const askId = tx();
+    return this.prep(`SELECT ${ASK_COLUMNS} FROM scrum_asks WHERE id = ?`).get(askId) as AskRow;
+  }
+
+  /** Fetch one ask by id, or null if missing. */
+  getAsk(id: number): AskRow | null {
+    const row = this.prep(`SELECT ${ASK_COLUMNS} FROM scrum_asks WHERE id = ?`).get(
+      id,
+    ) as AskRow | null;
+    return row ?? null;
   }
 
   // ==========================================================================

@@ -2303,7 +2303,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 22,
+      schema_version: 23,
     });
   });
 
@@ -2316,7 +2316,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(22);
+    expect(updated.provenance.schema_version).toBe(23);
   });
 });
 
@@ -3701,5 +3701,133 @@ describe('ScrumStore — teamTerminate Lore→Codex promotion (v22)', () => {
     expect(promos).toHaveLength(1);
     expect(promos[0]?.write_status).toBe('draft');
     expect(promos[0]?.content).toContain('squad wisdom');
+  });
+});
+
+// ===========================================================================
+// Cross-team ask protocol (v23)
+// ===========================================================================
+
+describe('ScrumStore — cross-team ask protocol (v23)', () => {
+  beforeEach(() => {
+    // Two sibling teams; `identity` accepts a published ask type, plus a blocked
+    // artifact the requesting team owns.
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.createTeam({ slug: 'identity', teamType: 'platform' });
+    store.addTeamAccept('identity', 'schema-change');
+    seedTask('blocked-1');
+  });
+
+  test('fileAsk persists a filed row and round-trips through getAsk', () => {
+    const ask = store.fileAsk({
+      fromTeam: 'payments',
+      toTeam: 'identity',
+      askType: 'schema-change',
+      blockingArtifact: 'blocked-1',
+      createdAt: '2026-01-01T00:00:00Z',
+    });
+    expect(ask).toEqual({
+      id: ask.id,
+      from_team: 'payments',
+      to_team: 'identity',
+      ask_type: 'schema-change',
+      blocking_artifact: 'blocked-1',
+      state: 'filed',
+      created_at: '2026-01-01T00:00:00Z',
+    });
+    expect(store.getAsk(ask.id)).toEqual(ask);
+  });
+
+  test('fileAsk appends an ask_filed event on the blocking artifact', () => {
+    const ask = store.fileAsk({
+      fromTeam: 'payments',
+      toTeam: 'identity',
+      askType: 'schema-change',
+      blockingArtifact: 'blocked-1',
+    });
+    const events = store.listEventsForTask('blocked-1');
+    const filed = events.find((e) => e.kind === 'ask_filed');
+    expect(filed).toBeDefined();
+    expect(filed?.payload).toEqual({
+      ask_id: ask.id,
+      from_team: 'payments',
+      to_team: 'identity',
+      ask_type: 'schema-change',
+    });
+  });
+
+  test('fileAsk rejects an unknown to_team (exit-bearing domain error)', () => {
+    expect(() =>
+      store.fileAsk({
+        fromTeam: 'payments',
+        toTeam: 'ghost',
+        askType: 'schema-change',
+        blockingArtifact: 'blocked-1',
+      }),
+    ).toThrow(/unknown to_team 'ghost'/);
+  });
+
+  test('fileAsk rejects an ask_type the to_team does not accept', () => {
+    expect(() =>
+      store.fileAsk({
+        fromTeam: 'payments',
+        toTeam: 'identity',
+        askType: 'api-review',
+        blockingArtifact: 'blocked-1',
+      }),
+    ).toThrow(/ask_type 'api-review' is not accepted by to_team 'identity'/);
+  });
+
+  test('fileAsk rejects a missing blocking_artifact', () => {
+    expect(() =>
+      store.fileAsk({
+        fromTeam: 'payments',
+        toTeam: 'identity',
+        askType: 'schema-change',
+        blockingArtifact: 'no-such-task',
+      }),
+    ).toThrow(/unknown blocking_artifact 'no-such-task'/);
+  });
+
+  test('fileAsk rejects an unknown from_team', () => {
+    expect(() =>
+      store.fileAsk({
+        fromTeam: 'phantom',
+        toTeam: 'identity',
+        askType: 'schema-change',
+        blockingArtifact: 'blocked-1',
+      }),
+    ).toThrow(/unknown from_team 'phantom'/);
+  });
+
+  test('fileAsk ignores a superseded accept (only ACTIVE accepts qualify)', () => {
+    const accept = store.addTeamAccept('identity', 'api-review');
+    store.supersedeTeamAccept(accept.id, 'retired');
+    expect(() =>
+      store.fileAsk({
+        fromTeam: 'payments',
+        toTeam: 'identity',
+        askType: 'api-review',
+        blockingArtifact: 'blocked-1',
+      }),
+    ).toThrow(/not accepted by to_team 'identity'/);
+  });
+
+  test('a failed fileAsk leaves no ask row and no event (transactional)', () => {
+    expect(() =>
+      store.fileAsk({
+        fromTeam: 'payments',
+        toTeam: 'identity',
+        askType: 'schema-change',
+        blockingArtifact: 'no-such-task',
+      }),
+    ).toThrow();
+    expect(store.getAsk(1)).toBeNull();
+    const filed = store.listEventsForTask('blocked-1').filter((e) => e.kind === 'ask_filed');
+    expect(filed).toHaveLength(0);
+  });
+
+  test('getAsk returns null for an unknown id', () => {
+    expect(store.getAsk(9999)).toBeNull();
   });
 });

@@ -85,6 +85,7 @@
 import type { CAC } from 'cac';
 import { runAlertsCmd } from './scrum/cli/alerts-cmd';
 import { runAnnotationCmd } from './scrum/cli/annotation-cmd';
+import { runAskCmd } from './scrum/cli/ask-cmd';
 import { runCompilePlanCmd } from './scrum/cli/compile-plan-cmd';
 import { runContributorCmd } from './scrum/cli/contributor-cmd';
 import { runDecisionCmd } from './scrum/cli/decision-cmd';
@@ -119,6 +120,7 @@ type ScrumAction =
   | 'lore'
   | 'annotation'
   | 'manifest'
+  | 'ask'
   | 'link-run'
   | 'hook';
 
@@ -139,6 +141,7 @@ const SCRUM_ACTIONS: ScrumAction[] = [
   'lore',
   'annotation',
   'manifest',
+  'ask',
   'link-run',
   'hook',
 ];
@@ -230,6 +233,12 @@ interface ScrumFlags {
   // specific target within that class.
   targetKind?: string;
   target?: string;
+  // `ask file` (v23). `fromTeam` raises the ask, `toTeam` is the sibling asked
+  // (must accept `askType`, shared with the team interface flags above), and
+  // `blockingArtifact` is the task id blocked on the ask.
+  fromTeam?: string;
+  toTeam?: string;
+  blockingArtifact?: string;
 }
 
 export function register(cli: CAC): void {
@@ -348,6 +357,15 @@ export function register(cli: CAC): void {
     .option(
       '--target <ref>',
       'annotation add/list: the target identifier within its class (a soft reference — existence is not checked)',
+    )
+    .option('--from-team <slug>', 'ask file: the team raising the ask')
+    .option(
+      '--to-team <slug>',
+      'ask file: the sibling team asked (must accept the --ask-type in its active interface)',
+    )
+    .option(
+      '--blocking-artifact <task-id>',
+      'ask file: the task id blocked on the ask (must be an existing task)',
     )
     .option(
       '--workspace-root <w>',
@@ -602,6 +620,20 @@ function dispatch(
         return 1;
       }
       return runManifestCmd(arg1, {
+        human: flags.human,
+        workspaceRoot: flags.workspaceRoot,
+      });
+
+    case 'ask':
+      if (arg1 === undefined) {
+        console.error('error: scrum ask: sub-action required (one of: file)');
+        return 1;
+      }
+      return runAskCmd(arg1, {
+        fromTeam: flags.fromTeam,
+        toTeam: flags.toTeam,
+        askType: flags.askType,
+        blockingArtifact: flags.blockingArtifact,
         human: flags.human,
         workspaceRoot: flags.workspaceRoot,
       });

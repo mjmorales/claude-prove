@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import { appendEntry } from '../../acb/reasoning-log-store';
 import { runAlertsCmd } from './alerts-cmd';
 import { runAnnotationCmd } from './annotation-cmd';
+import { runAskCmd } from './ask-cmd';
 import { runContributorCmd } from './contributor-cmd';
 import { parseDecisionFile, runDecisionCmd } from './decision-cmd';
 import { runGateCmd } from './gate-cmd';
@@ -459,7 +460,7 @@ describe('runTaskCmd', () => {
       expect(shown.task.run_id).toBe('feat-prov');
       expect(shown.task.provenance.worker_id).toBe('worker-42');
       expect(shown.task.provenance.run_id).toBe('feat-prov');
-      expect(shown.task.provenance.schema_version).toBe(22);
+      expect(shown.task.provenance.schema_version).toBe(23);
     } finally {
       restoreEnv('PROVE_WORKER_ID', savedWorker);
       restoreEnv('PROVE_RUN_SLUG', savedSlug);
@@ -2602,7 +2603,7 @@ describe('runTeamCmd', () => {
     const artifact = join(workspace, 'teams', 'payments.md');
     expect(existsSync(artifact)).toBe(true);
     const content = readFileSync(artifact, 'utf8');
-    expect(content).toContain('schema_version: 22');
+    expect(content).toContain('schema_version: 23');
     expect(content).toContain('team:');
     expect(content).toContain('slug: payments');
     expect(content).toContain('team_type: stream_aligned');
@@ -3718,5 +3719,135 @@ describe('runManifestCmd', () => {
     const res = withCapture(() => runManifestCmd('bogus', { workspaceRoot: workspace }));
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('unknown manifest action');
+  });
+});
+
+describe('runAskCmd', () => {
+  interface AskJson {
+    id: number;
+    from_team: string;
+    to_team: string;
+    ask_type: string;
+    blocking_artifact: string;
+    state: string;
+  }
+
+  /** Seed two sibling teams (identity accepts schema-change) + a blocked task. */
+  function seedAskFixture(): void {
+    withCapture(() =>
+      runTeamCmd('create', [undefined], {
+        slug: 'payments',
+        teamType: 'stream_aligned',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runTeamCmd('create', [undefined], {
+        slug: 'identity',
+        teamType: 'platform',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runTeamCmd('accept-add', ['identity'], {
+        askType: 'schema-change',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], {
+        title: 'Blocked work',
+        id: 'blocked-1',
+        workspaceRoot: workspace,
+      }),
+    );
+  }
+
+  test('file persists a filed row, prints JSON + the id, exit 0', () => {
+    seedAskFixture();
+    const res = withCapture(() =>
+      runAskCmd('file', {
+        fromTeam: 'payments',
+        toTeam: 'identity',
+        askType: 'schema-change',
+        blockingArtifact: 'blocked-1',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const lines = res.stdout.trim().split('\n');
+    const row = JSON.parse(lines[0] ?? '') as AskJson;
+    expect(row.from_team).toBe('payments');
+    expect(row.to_team).toBe('identity');
+    expect(row.ask_type).toBe('schema-change');
+    expect(row.blocking_artifact).toBe('blocked-1');
+    expect(row.state).toBe('filed');
+    // The final stdout line is the bare new ask id.
+    expect(lines[lines.length - 1]).toBe(String(row.id));
+  });
+
+  test('file without --from-team exits 1', () => {
+    seedAskFixture();
+    const res = withCapture(() =>
+      runAskCmd('file', {
+        toTeam: 'identity',
+        askType: 'schema-change',
+        blockingArtifact: 'blocked-1',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--from-team');
+  });
+
+  test('file on an unknown to_team exits 1', () => {
+    seedAskFixture();
+    const res = withCapture(() =>
+      runAskCmd('file', {
+        fromTeam: 'payments',
+        toTeam: 'ghost',
+        askType: 'schema-change',
+        blockingArtifact: 'blocked-1',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown to_team 'ghost'");
+  });
+
+  test('file with a non-accepted ask_type exits 1', () => {
+    seedAskFixture();
+    const res = withCapture(() =>
+      runAskCmd('file', {
+        fromTeam: 'payments',
+        toTeam: 'identity',
+        askType: 'api-review',
+        blockingArtifact: 'blocked-1',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("not accepted by to_team 'identity'");
+  });
+
+  test('file with a missing blocking_artifact exits 1', () => {
+    seedAskFixture();
+    const res = withCapture(() =>
+      runAskCmd('file', {
+        fromTeam: 'payments',
+        toTeam: 'identity',
+        askType: 'schema-change',
+        blockingArtifact: 'no-such-task',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown blocking_artifact 'no-such-task'");
+  });
+
+  test('an unknown ask action exits 1', () => {
+    const res = withCapture(() => runAskCmd('bogus', { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('unknown ask action');
   });
 });

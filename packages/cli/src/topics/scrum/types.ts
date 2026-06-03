@@ -50,7 +50,8 @@ export type EventKind =
   | 'note'
   | 'unlinked_run_detected'
   | 'curation_proposed'
-  | 'gate_responded';
+  | 'gate_responded'
+  | 'ask_filed';
 
 /**
  * Dependency direction. Pinned by a CHECK constraint on `scrum_deps.kind`;
@@ -1167,6 +1168,67 @@ export interface ManifestAsk {
   from_team: string;
   to_team: string;
   ask_type: string;
+}
+
+/**
+ * The lifecycle state of a cross-team ask (v23). A freshly-filed ask is always
+ * `'filed'`; later protocol steps (accept, resolve, withdraw) extend this closed
+ * set via a schema-version bump, never a silent value. Matches `scrum_asks.state`;
+ * the column has no CHECK constraint, so this union documents the canonical
+ * closed set without pinning the schema. Enforced at the store boundary in
+ * `fileAsk`.
+ *
+ *   filed — the ask has been recorded against the target team; no response yet.
+ */
+export type AskState = 'filed';
+
+/** Runtime-checkable list of the closed `AskState` set, in canonical order. */
+export const ASK_STATES: AskState[] = ['filed'];
+
+/**
+ * One row of the `scrum_asks` table (v23) — a single cross-team ask a worker
+ * files against a sibling team. An ask is the request raised when work is blocked
+ * on another team's published interface: `from_team` needs `to_team` to handle
+ * `ask_type`, and `blocking_artifact` stays blocked until it does.
+ *
+ *   id                — AUTOINCREMENT surrogate.
+ *   from_team         — the requesting team's slug, a `scrum_teams.slug`.
+ *   to_team           — the target team's slug, a `scrum_teams.slug`. At filing
+ *                       time `ask_type` MUST be one of this team's ACTIVE
+ *                       `scrum_team_accepts` rows — a team can only be asked for
+ *                       what it has published it accepts. Enforced at the store
+ *                       boundary in `fileAsk`.
+ *   ask_type          — the kebab-case interface type requested.
+ *   blocking_artifact — the `scrum_tasks.id` of the artifact blocked on the ask;
+ *                       the FK guarantees the cited artifact exists.
+ *   state             — the ask lifecycle state (see `AskState`); a freshly-filed
+ *                       ask is `'filed'`.
+ *   created_at        — when the ask was filed (ISO-8601).
+ */
+export interface AskRow {
+  id: number;
+  from_team: string;
+  to_team: string;
+  ask_type: string;
+  blocking_artifact: string;
+  state: AskState;
+  created_at: string;
+}
+
+/**
+ * Input to `fileAsk` (v23). `fromTeam` and `toTeam` must both be registered
+ * teams (guarded at the store boundary). `askType` MUST be one of `toTeam`'s
+ * ACTIVE accepted ask types, and `blockingArtifact` MUST be an existing task id
+ * — both are validated at the boundary, with each failure throwing a domain
+ * error. `createdAt` defaults to now().
+ */
+export interface FileAskInput {
+  fromTeam: string;
+  toTeam: string;
+  askType: string;
+  blockingArtifact: string;
+  /** ISO-8601 timestamp; defaults to now(). */
+  createdAt?: string;
 }
 
 /**
