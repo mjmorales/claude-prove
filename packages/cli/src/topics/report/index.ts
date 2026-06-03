@@ -7,6 +7,7 @@
  *   claude-prove report milestone-brief --file <mb.json>    [--out <path>]
  *   claude-prove report timeline        --file <state.json> [--out <path>]
  *   claude-prove report status          [--workspace-root <p>] [--out <path>]
+ *   claude-prove report decompose-preview --file <children.json> [--out <path>]
  *
  * A report document (see `blocks.ts`) is the closed block model every HTML
  * surface compiles to; the vendored static renderer (`render.ts`) maps it to a
@@ -31,11 +32,19 @@ import { buildSnapshot } from '../scrum/cli/status-cmd';
 import { openScrumStore } from '../scrum/store';
 import { type ReportDocument, validateReportDocument } from './blocks';
 import { milestoneBriefToReportDocument, reviewBriefToReportDocument } from './from-brief';
+import { type DecomposeList, decomposeListToReportDocument } from './from-decompose';
 import { runStateToReportDocument } from './from-run-state';
 import { statusSnapshotToReportDocument } from './from-status';
 import { renderReportDocument } from './render';
 
-type ReportAction = 'render' | 'validate' | 'brief' | 'milestone-brief' | 'timeline' | 'status';
+type ReportAction =
+  | 'render'
+  | 'validate'
+  | 'brief'
+  | 'milestone-brief'
+  | 'timeline'
+  | 'status'
+  | 'decompose-preview';
 
 const REPORT_ACTIONS: ReportAction[] = [
   'render',
@@ -44,6 +53,7 @@ const REPORT_ACTIONS: ReportAction[] = [
   'milestone-brief',
   'timeline',
   'status',
+  'decompose-preview',
 ];
 
 interface ReportFlags {
@@ -138,6 +148,8 @@ function compileDocument(action: Exclude<ReportAction, 'status'>, value: unknown
       return milestoneBriefToReportDocument(value as MilestoneBrief);
     case 'timeline':
       return runStateToReportDocument(value as StateData);
+    case 'decompose-preview':
+      return decomposeListToReportDocument(value as DecomposeList);
     default:
       return value as ReportDocument;
   }
