@@ -97,6 +97,206 @@ export interface EscalationPayload {
 }
 
 // ---------------------------------------------------------------------------
+// Escalation protocol — walk-up chain + state machine + resolution modes
+// ---------------------------------------------------------------------------
+
+/**
+ * The fixed escalation ladder a typed escalation walks UP, one layer per step.
+ * A first-class chain distinct from the per-team `TeamRole` roster: the roster
+ * names who fills a team's three slots, whereas this ladder is the org-wide
+ * authority chain an escalation climbs until someone resolves it. The order is
+ * canonical and total — `implementer` is the lowest rung (where work happens),
+ * `human` is the top (the terminal authority that cannot be walked past).
+ *
+ *   implementer — the worker that raised the escalation; the bottom rung.
+ *   engineer    — the next rung up; owns the immediate technical decision.
+ *   tech_lead   — owns the team's technical direction.
+ *   pm          — owns scope and priority for the body of work.
+ *   strategy    — owns cross-cutting direction above any single team.
+ *   human       — the terminal authority; an escalation at `human` has nowhere
+ *                 higher to walk, so a re-escalate at this rung is rejected.
+ */
+export type EscalationLayer =
+  | 'implementer'
+  | 'engineer'
+  | 'tech_lead'
+  | 'pm'
+  | 'strategy'
+  | 'human';
+
+/**
+ * The walk-up chain in canonical bottom-to-top order. The single source of
+ * truth for "one layer up": `nextEscalationLayer` indexes this array, so an
+ * escalation advances EXACTLY one rung and never skips. The array order IS the
+ * chain — reordering it reorders the ladder.
+ */
+export const ESCALATION_CHAIN: EscalationLayer[] = [
+  'implementer',
+  'engineer',
+  'tech_lead',
+  'pm',
+  'strategy',
+  'human',
+];
+
+/**
+ * The layer exactly one rung above `layer`, or null when `layer` is the top
+ * (`human`) and there is nowhere higher to walk. The store's walk-up uses this
+ * to advance an escalation by exactly one rung — there is no skip-ahead path.
+ */
+export function nextEscalationLayer(layer: EscalationLayer): EscalationLayer | null {
+  const idx = ESCALATION_CHAIN.indexOf(layer);
+  if (idx < 0 || idx + 1 >= ESCALATION_CHAIN.length) return null;
+  return ESCALATION_CHAIN[idx + 1] ?? null;
+}
+
+/**
+ * Lifecycle of one escalation. A closed four-state machine matching the
+ * `scrum_escalations.state` column; the column carries no CHECK, so this union
+ * documents the closed set and the store boundary enforces every transition.
+ *
+ *   open         — the escalation is awaiting its current layer's resolution;
+ *                  the state a fresh escalation is raised in.
+ *   resolved     — the current layer resolved it (`resolve`). TERMINAL.
+ *   re_escalated — the current layer kicked it one rung higher (`re_escalate`):
+ *                  this escalation row is closed `re_escalated` and a NEW `open`
+ *                  row is appended at the next layer up. TERMINAL for THIS row.
+ *   auto_bubbled — the escalation aged past its threshold without a resolution
+ *                  and was bubbled one rung higher by the staleness floor rather
+ *                  than by an explicit receiver action. TERMINAL for THIS row;
+ *                  like `re_escalated`, it closes this row and opens the next.
+ */
+export type EscalationState = 'open' | 'resolved' | 're_escalated' | 'auto_bubbled';
+
+/** Runtime-checkable list of the closed `EscalationState` set. */
+export const ESCALATION_STATES: EscalationState[] = [
+  'open',
+  'resolved',
+  're_escalated',
+  'auto_bubbled',
+];
+
+/**
+ * How a receiver resolves an `open` escalation — the `escalation_resolution`
+ * mode. A closed set: the receiver at the escalation's current layer applies
+ * exactly one of these, and the store transitions the row's state accordingly.
+ *
+ *   resolve       — the receiver answered the escalation. The row → `resolved`.
+ *   re_decompose  — the escalation cannot be answered as-posed; it needs the
+ *                   work re-decomposed. The row → `resolved` (this escalation is
+ *                   discharged) AND `re_decompose_triggered` is set on the
+ *                   result, the signal the driver uses to force re-decomposition
+ *                   of the owning task. No walk-up — re-decomposition happens at
+ *                   the SAME layer that received it.
+ *   re_escalate   — the receiver cannot resolve at this layer and kicks it one
+ *                   rung up. The row → `re_escalated` and a NEW `open` row is
+ *                   appended at `nextEscalationLayer`. Rejected when the current
+ *                   layer is already `human` (the top — nowhere higher to walk).
+ */
+export type EscalationResolutionMode = 'resolve' | 're_decompose' | 're_escalate';
+
+/** Runtime-checkable list of the closed `EscalationResolutionMode` set. */
+export const ESCALATION_RESOLUTION_MODES: EscalationResolutionMode[] = [
+  'resolve',
+  're_decompose',
+  're_escalate',
+];
+
+/**
+ * A row of `scrum_escalations` — one typed escalation at one layer of the
+ * walk-up chain. Walk-up is APPEND-ONLY: a `re_escalate` / `auto_bubble` does
+ * not move a row up, it CLOSES this row (state `re_escalated` / `auto_bubbled`)
+ * and APPENDS a fresh `open` row at the next layer that points back here via
+ * `walked_up_from`. The whole chain a single escalation climbed is therefore
+ * reconstructable by following `walked_up_from` back to the root (`null`).
+ *
+ *   id              — AUTOINCREMENT surrogate.
+ *   task_id         — the owning task; a SOFT reference (no FK) so an escalation
+ *                     may name a task the store does not verify, matching how the
+ *                     roster and annotations hold their referents.
+ *   escalation_type — the closed `EscalationType` (blocked | ambiguous |
+ *                     conflict | missing_context); guarded at the store boundary.
+ *   layer           — the rung of the walk-up chain this row sits at (see
+ *                     `EscalationLayer`); guarded at the store boundary.
+ *   state           — the closed `EscalationState` (open | resolved |
+ *                     re_escalated | auto_bubbled).
+ *   summary         — the attention-bearing prose the receiver reads.
+ *   raised_by       — who raised this escalation (an identifier — typically a
+ *                     CT-UUID). Recorded for provenance.
+ *   resolution_mode — the `EscalationResolutionMode` applied to close it, or
+ *                     NULL while still `open`.
+ *   resolution_note — the receiver's free-text rationale on resolution, or NULL.
+ *   resolved_by     — who resolved it, or NULL while still `open`.
+ *   walked_up_from  — the `scrum_escalations.id` this row was walked up FROM, or
+ *                     NULL for a root escalation (the first rung). The back-pointer
+ *                     that reconstructs the chain.
+ *   created_at      — when this row was raised/appended (ISO-8601).
+ *   resolved_at     — when this row left `open` (ISO-8601), or NULL while open.
+ */
+export interface EscalationRow {
+  id: number;
+  task_id: string;
+  escalation_type: EscalationType;
+  layer: EscalationLayer;
+  state: EscalationState;
+  summary: string;
+  raised_by: string | null;
+  resolution_mode: EscalationResolutionMode | null;
+  resolution_note: string | null;
+  resolved_by: string | null;
+  walked_up_from: number | null;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+/**
+ * Input to `raiseEscalation`. `escalationType` must be a member of the closed
+ * `EscalationType` set; `layer` defaults to `implementer` (the bottom rung —
+ * where a worker raises). Both are guarded at the store boundary. `taskId` is a
+ * soft reference (existence not checked). `createdAt` defaults to now().
+ */
+export interface RaiseEscalationInput {
+  taskId: string;
+  escalationType: EscalationType;
+  summary: string;
+  /** The rung this escalation is raised at; defaults to `implementer`. */
+  layer?: EscalationLayer;
+  raisedBy?: string | null;
+  /** ISO-8601 timestamp; defaults to now(). */
+  createdAt?: string;
+}
+
+/**
+ * Input to `resolveEscalation`. `id` names the `open` escalation row to act on;
+ * `mode` is the `EscalationResolutionMode` the receiver applies (guarded at the
+ * store boundary). `note`/`resolvedBy` are recorded for provenance.
+ * `resolvedAt` defaults to now().
+ */
+export interface ResolveEscalationInput {
+  id: number;
+  mode: EscalationResolutionMode;
+  note?: string | null;
+  resolvedBy?: string | null;
+  /** ISO-8601 timestamp; defaults to now(). */
+  resolvedAt?: string;
+}
+
+/**
+ * The result of `resolveEscalation`. `row` is the (now-closed) escalation row
+ * the resolution acted on. `walkedUpTo` is the freshly-appended `open` row at
+ * the next layer when `mode` was `re_escalate` (otherwise null).
+ * `reDecomposeTriggered` is true ONLY for `re_decompose` — the signal the driver
+ * reads to force re-decomposition of the owning task. Exactly one of
+ * (`walkedUpTo` set) / (`reDecomposeTriggered` true) / (neither, for `resolve`)
+ * holds.
+ */
+export interface ResolveEscalationResult {
+  row: EscalationRow;
+  walkedUpTo: EscalationRow | null;
+  reDecomposeTriggered: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Acceptance criteria (v5)
 // ---------------------------------------------------------------------------
 

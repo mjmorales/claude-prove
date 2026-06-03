@@ -38,7 +38,11 @@ import type {
   DecisionRow,
   DecisionWriteStatus,
   DepKind,
+  EscalationLayer,
   EscalationPayload,
+  EscalationResolutionMode,
+  EscalationRow,
+  EscalationState,
   EscalationType,
   EventKind,
   GateVerdict,
@@ -50,8 +54,11 @@ import type {
   OperatorHistoryRow,
   PromoteLoreToCodexInput,
   Provenance,
+  RaiseEscalationInput,
   RecordLoreInput,
   RecordLoreResult,
+  ResolveEscalationInput,
+  ResolveEscalationResult,
   RotateTeamMemberInput,
   RotateTeamMemberResult,
   ScrumContextBundle,
@@ -86,6 +93,8 @@ import type { AddTeamExposeInput, CreateTeamInput } from './types';
 import {
   ACCEPTANCE_SCOPES,
   ANNOTATION_TARGET_KINDS,
+  ESCALATION_CHAIN,
+  ESCALATION_RESOLUTION_MODES,
   ESCALATION_TYPES,
   GATED_DECISION_KINDS,
   GATE_VERDICTS,
@@ -94,6 +103,7 @@ import {
   TEAM_TYPES,
   TECH_LEAD_REVIEW_KIND,
   VERIFICATION_VERDICTS,
+  nextEscalationLayer,
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -329,6 +339,10 @@ const PROMOTION_DEFAULT_KIND = 'pattern';
 
 /** Canonical `scrum_annotations` SELECT column list (v20); maps 1:1 to `AnnotationRow`. */
 const ANNOTATION_COLUMNS = 'id, target_kind, target_ref, body, author, created_at';
+
+/** Canonical `scrum_escalations` SELECT column list (v23); maps 1:1 to `EscalationRow`. */
+const ESCALATION_COLUMNS =
+  'id, task_id, escalation_type, layer, state, summary, raised_by, resolution_mode, resolution_note, resolved_by, walked_up_from, created_at, resolved_at';
 
 /** Canonical `scrum_decisions` SELECT column list (v2/v4/v8/v21/v22); maps 1:1 to `DecisionRow`. */
 const DECISION_COLUMNS =
@@ -3259,6 +3273,279 @@ export class ScrumStore {
     return this.prep(
       `SELECT ${ANNOTATION_COLUMNS} FROM scrum_annotations WHERE target_kind = ? AND target_ref = ? ORDER BY id ASC`,
     ).all(targetKind, targetRef) as AnnotationRow[];
+  }
+
+  // ==========================================================================
+  // Escalation protocol (v23) — typed walk-up chain + resolution modes
+  // ==========================================================================
+
+  /**
+   * Raise one typed escalation at a rung of the walk-up chain. The bottom-rung
+   * entry point: a worker raises a `blocked` / `ambiguous` / `conflict` /
+   * `missing_context` escalation, which lands `open` at `layer` (default
+   * `implementer`) awaiting that layer's receiver.
+   *
+   * `escalationType` MUST be a member of the closed `EscalationType` set and
+   * `layer` a member of the closed `EscalationChain` — both throw WITHOUT
+   * writing on an off-vocabulary value (the boundary guard matching
+   * `addAnnotation`/`createTeam`). `taskId` is a SOFT reference: the store does
+   * NOT verify the task exists (it carries no FK, matching the annotation's
+   * `target_ref`). A root escalation carries `walked_up_from = NULL`; the
+   * append-on-walk-up path (`resolveEscalation` / `autoBubbleEscalation`) is the
+   * only writer that sets it.
+   */
+  raiseEscalation(input: RaiseEscalationInput): EscalationRow {
+    if (!(ESCALATION_TYPES as string[]).includes(input.escalationType)) {
+      throw new Error(
+        `raiseEscalation: invalid escalation_type '${input.escalationType}'; expected one of: ${ESCALATION_TYPES.join(', ')}`,
+      );
+    }
+    const layer = input.layer ?? 'implementer';
+    if (!(ESCALATION_CHAIN as string[]).includes(layer)) {
+      throw new Error(
+        `raiseEscalation: invalid layer '${layer}'; expected one of: ${ESCALATION_CHAIN.join(', ')}`,
+      );
+    }
+    return this.insertEscalation({
+      taskId: input.taskId,
+      escalationType: input.escalationType,
+      layer,
+      summary: input.summary,
+      raisedBy: input.raisedBy ?? null,
+      walkedUpFrom: null,
+      createdAt: input.createdAt ?? isoNow(),
+    });
+  }
+
+  /** Fetch one escalation by id, or null when no such row exists. */
+  getEscalation(id: number): EscalationRow | null {
+    const row = this.prep(`SELECT ${ESCALATION_COLUMNS} FROM scrum_escalations WHERE id = ?`).get(
+      id,
+    ) as EscalationRow | null;
+    return row ?? null;
+  }
+
+  /**
+   * A task's escalations, oldest-first (raise order). The read surface a driver
+   * consults to see the full escalation history — every rung, open and closed —
+   * for a task. Tolerates a task with no escalations: returns an empty array.
+   */
+  listEscalationsForTask(taskId: string): EscalationRow[] {
+    return this.prep(
+      `SELECT ${ESCALATION_COLUMNS} FROM scrum_escalations WHERE task_id = ? ORDER BY id ASC`,
+    ).all(taskId) as EscalationRow[];
+  }
+
+  /**
+   * Every currently-`open` escalation across all tasks, oldest-first — the
+   * driver's worklist of escalations awaiting a receiver's resolution.
+   */
+  listOpenEscalationRows(): EscalationRow[] {
+    return this.prep(
+      `SELECT ${ESCALATION_COLUMNS} FROM scrum_escalations WHERE state = 'open' ORDER BY id ASC`,
+    ).all() as EscalationRow[];
+  }
+
+  /**
+   * Reconstruct the full walk-up chain a single escalation climbed, bottom rung
+   * first. Follows `walked_up_from` from any row in the chain back to the root
+   * (`null`), then returns the rows root-first. The list reads as the escalation's
+   * journey up the ladder: each entry is one rung, with its closing state and
+   * resolution. A visited-set guards against an accidental self-link cycle.
+   */
+  getEscalationChain(id: number): EscalationRow[] {
+    // Walk DOWN to the root via walked_up_from, collecting the rung at each hop.
+    const chainDown: EscalationRow[] = [];
+    const visited = new Set<number>();
+    let cursor: number | null = id;
+    while (cursor !== null && !visited.has(cursor)) {
+      visited.add(cursor);
+      const row = this.getEscalation(cursor);
+      if (row === null) break;
+      chainDown.push(row);
+      cursor = row.walked_up_from;
+    }
+    // chainDown is top-rung-first (we started at `id` and walked toward the root);
+    // reverse so the caller reads it root-first (bottom rung → top).
+    return chainDown.reverse();
+  }
+
+  /**
+   * Apply a receiver's resolution to an `open` escalation. The receiver at the
+   * escalation's current layer chooses exactly one `EscalationResolutionMode`,
+   * and this method transitions the row accordingly — the per-receiver half of
+   * the protocol. Runs in ONE transaction so a `re_escalate` never leaves the
+   * closed row without its walked-up successor (or vice versa).
+   *
+   *   resolve      — the receiver answered it. The row → `resolved`. No walk-up.
+   *   re_decompose — the escalation needs the work re-decomposed. The row →
+   *                  `resolved` (it is discharged at THIS layer) and the result's
+   *                  `reDecomposeTriggered` is set — the signal the driver reads
+   *                  to force re-decomposition. No walk-up.
+   *   re_escalate  — the receiver cannot resolve at this layer. The row →
+   *                  `re_escalated` AND a fresh `open` row is appended at the next
+   *                  rung (`nextEscalationLayer`) carrying `walked_up_from = <this
+   *                  row id>`. Advances EXACTLY one rung. REJECTED when the current
+   *                  layer is already `human` (the top — nowhere higher to walk).
+   *
+   * Throws WITHOUT writing on: an unknown id, a row that is not `open` (already
+   * terminal — every transition is one-shot), an off-vocabulary `mode`, or a
+   * `re_escalate` at the top of the chain.
+   */
+  resolveEscalation(input: ResolveEscalationInput): ResolveEscalationResult {
+    if (!(ESCALATION_RESOLUTION_MODES as string[]).includes(input.mode)) {
+      throw new Error(
+        `resolveEscalation: invalid mode '${input.mode}'; expected one of: ${ESCALATION_RESOLUTION_MODES.join(', ')}`,
+      );
+    }
+    const existing = this.getEscalation(input.id);
+    if (existing === null) {
+      throw new Error(`resolveEscalation: unknown escalation id '${input.id}'`);
+    }
+    if (existing.state !== 'open') {
+      throw new Error(
+        `resolveEscalation: escalation ${input.id} is '${existing.state}', not 'open'; only an open escalation can be resolved`,
+      );
+    }
+
+    const mode = input.mode as EscalationResolutionMode;
+    const resolvedAt = input.resolvedAt ?? isoNow();
+    const resolvedBy = input.resolvedBy ?? null;
+    const note = input.note ?? null;
+
+    // A re_escalate at the top rung has nowhere higher to walk — reject BEFORE
+    // mutating, so the row stays open.
+    const nextLayer = nextEscalationLayer(existing.layer);
+    if (mode === 're_escalate' && nextLayer === null) {
+      throw new Error(
+        `resolveEscalation: escalation ${input.id} is already at the top of the chain ('${existing.layer}'); cannot re_escalate past 'human'`,
+      );
+    }
+
+    const apply = this.db.transaction((): ResolveEscalationResult => {
+      // `resolve` and `re_decompose` both DISCHARGE the row → `resolved`; only the
+      // result flag differs. `re_escalate` closes it → `re_escalated`.
+      const closedState: EscalationState = mode === 're_escalate' ? 're_escalated' : 'resolved';
+      this.closeEscalationRow(existing.id, closedState, mode, note, resolvedBy, resolvedAt);
+
+      let walkedUpTo: EscalationRow | null = null;
+      if (mode === 're_escalate' && nextLayer !== null) {
+        walkedUpTo = this.insertEscalation({
+          taskId: existing.task_id,
+          escalationType: existing.escalation_type,
+          layer: nextLayer,
+          summary: existing.summary,
+          raisedBy: resolvedBy,
+          walkedUpFrom: existing.id,
+          createdAt: resolvedAt,
+        });
+      }
+
+      const row = this.requireEscalation(existing.id, 'resolveEscalation');
+      return { row, walkedUpTo, reDecomposeTriggered: mode === 're_decompose' };
+    });
+    return apply();
+  }
+
+  /**
+   * Bubble an aged `open` escalation one rung up by the staleness floor — the
+   * engine's escalation-of-last-resort when no receiver acted. Identical
+   * append-on-walk-up mechanics to a `re_escalate`, but the closing state is
+   * `auto_bubbled` (the row was advanced by the clock, not by a receiver) and no
+   * `resolution_mode` is recorded. REJECTED at the top of the chain (nowhere
+   * higher) and on a non-`open` row. Returns the freshly-appended `open` row at
+   * the next rung.
+   */
+  autoBubbleEscalation(id: number, bubbledAt?: string): EscalationRow {
+    const existing = this.getEscalation(id);
+    if (existing === null) {
+      throw new Error(`autoBubbleEscalation: unknown escalation id '${id}'`);
+    }
+    if (existing.state !== 'open') {
+      throw new Error(
+        `autoBubbleEscalation: escalation ${id} is '${existing.state}', not 'open'; only an open escalation can be auto-bubbled`,
+      );
+    }
+    const nextLayer = nextEscalationLayer(existing.layer);
+    if (nextLayer === null) {
+      throw new Error(
+        `autoBubbleEscalation: escalation ${id} is already at the top of the chain ('${existing.layer}'); cannot bubble past 'human'`,
+      );
+    }
+    const ts = bubbledAt ?? isoNow();
+    const bubble = this.db.transaction((): EscalationRow => {
+      this.closeEscalationRow(existing.id, 'auto_bubbled', null, null, null, ts);
+      return this.insertEscalation({
+        taskId: existing.task_id,
+        escalationType: existing.escalation_type,
+        layer: nextLayer,
+        summary: existing.summary,
+        raisedBy: null,
+        walkedUpFrom: existing.id,
+        createdAt: ts,
+      });
+    });
+    return bubble();
+  }
+
+  /**
+   * Insert one `open` escalation row and return it. The single low-level writer
+   * shared by `raiseEscalation` (root row) and the walk-up paths
+   * (`resolveEscalation` / `autoBubbleEscalation`, which pass `walkedUpFrom`).
+   * Closed-enum guarding is the caller's job — this writes what it is given.
+   */
+  private insertEscalation(args: {
+    taskId: string;
+    escalationType: EscalationType;
+    layer: EscalationLayer;
+    summary: string;
+    raisedBy: string | null;
+    walkedUpFrom: number | null;
+    createdAt: string;
+  }): EscalationRow {
+    const result = this.prep(
+      `INSERT INTO scrum_escalations
+         (task_id, escalation_type, layer, state, summary, raised_by, walked_up_from, created_at)
+       VALUES (?, ?, ?, 'open', ?, ?, ?, ?)`,
+    ).run(
+      args.taskId,
+      args.escalationType,
+      args.layer,
+      args.summary,
+      args.raisedBy,
+      args.walkedUpFrom,
+      args.createdAt,
+    );
+    return this.requireEscalation(Number(result.lastInsertRowid), 'insertEscalation');
+  }
+
+  /**
+   * Flip an escalation row out of `open` into a terminal state, stamping the
+   * resolution provenance. The single low-level closer shared by every walk-up
+   * and resolution path.
+   */
+  private closeEscalationRow(
+    id: number,
+    state: EscalationState,
+    mode: EscalationResolutionMode | null,
+    note: string | null,
+    resolvedBy: string | null,
+    resolvedAt: string,
+  ): void {
+    this.prep(
+      `UPDATE scrum_escalations
+         SET state = ?, resolution_mode = ?, resolution_note = ?, resolved_by = ?, resolved_at = ?
+       WHERE id = ?`,
+    ).run(state, mode, note, resolvedBy, resolvedAt, id);
+  }
+
+  /** Fetch an escalation by id or throw — the post-write read-back guard. */
+  private requireEscalation(id: number, ctx: string): EscalationRow {
+    const row = this.getEscalation(id);
+    if (row === null) {
+      throw new Error(`${ctx}: escalation ${id} vanished after write`);
+    }
+    return row;
   }
 
   // ==========================================================================

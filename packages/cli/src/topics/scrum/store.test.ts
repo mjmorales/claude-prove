@@ -15,7 +15,12 @@ import { join } from 'node:path';
 import { appendEntry } from '../acb/reasoning-log-store';
 import type { AssertContext } from './assert-grammar';
 import { type ScrumStore, criterionSatisfied, openScrumStore } from './store';
-import type { Acceptance, AcceptanceCriterion, TaskBounds } from './types';
+import type {
+  Acceptance,
+  AcceptanceCriterion,
+  EscalationRow as EscalationRowT,
+  TaskBounds,
+} from './types';
 
 let store: ScrumStore;
 
@@ -2303,7 +2308,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 22,
+      schema_version: 23,
     });
   });
 
@@ -2316,7 +2321,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(22);
+    expect(updated.provenance.schema_version).toBe(23);
   });
 });
 
@@ -3701,5 +3706,269 @@ describe('ScrumStore — teamTerminate Lore→Codex promotion (v22)', () => {
     expect(promos).toHaveLength(1);
     expect(promos[0]?.write_status).toBe('draft');
     expect(promos[0]?.content).toContain('squad wisdom');
+  });
+});
+
+describe('ScrumStore — escalation protocol (v23)', () => {
+  test('raiseEscalation lands open at the bottom rung by default, with a null walk-up back-pointer', () => {
+    const row = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'cannot satisfy dep',
+      raisedBy: 'CT-impl',
+      createdAt: '2026-01-01T00:00:00Z',
+    });
+    expect(row.task_id).toBe('t1');
+    expect(row.escalation_type).toBe('blocked');
+    expect(row.layer).toBe('implementer');
+    expect(row.state).toBe('open');
+    expect(row.walked_up_from).toBeNull();
+    expect(row.resolution_mode).toBeNull();
+    expect(row.resolved_at).toBeNull();
+    expect(row.raised_by).toBe('CT-impl');
+    expect(row.id).toBeGreaterThan(0);
+  });
+
+  test('raiseEscalation accepts an explicit starting layer', () => {
+    const row = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'conflict',
+      summary: 'two specs contradict',
+      layer: 'tech_lead',
+    });
+    expect(row.layer).toBe('tech_lead');
+    expect(row.state).toBe('open');
+  });
+
+  test('raiseEscalation rejects an escalation_type outside the closed enum, naming the set', () => {
+    expect(() =>
+      store.raiseEscalation({
+        taskId: 't1',
+        // @ts-expect-error — exercising the runtime boundary guard with an off-enum type.
+        escalationType: 'bogus',
+        summary: 'x',
+      }),
+    ).toThrow(
+      /invalid escalation_type 'bogus'; expected one of: blocked, ambiguous, conflict, missing_context/,
+    );
+    expect(store.listEscalationsForTask('t1')).toEqual([]);
+  });
+
+  test('raiseEscalation rejects a layer outside the closed walk-up chain, naming the set', () => {
+    expect(() =>
+      store.raiseEscalation({
+        taskId: 't1',
+        escalationType: 'blocked',
+        summary: 'x',
+        // @ts-expect-error — exercising the runtime boundary guard with an off-chain layer.
+        layer: 'ceo',
+      }),
+    ).toThrow(
+      /invalid layer 'ceo'; expected one of: implementer, engineer, tech_lead, pm, strategy, human/,
+    );
+    expect(store.listEscalationsForTask('t1')).toEqual([]);
+  });
+
+  test('task_id is a soft reference — the task need not exist', () => {
+    const row = store.raiseEscalation({
+      taskId: 'ghost-task',
+      escalationType: 'missing_context',
+      summary: 'no such task',
+    });
+    expect(row.task_id).toBe('ghost-task');
+    expect(store.listEscalationsForTask('ghost-task').map((e) => e.id)).toEqual([row.id]);
+  });
+
+  // --- resolution mode: resolve -------------------------------------------
+
+  test('resolve transitions open → resolved with no walk-up and no re-decompose signal', () => {
+    const raised = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'ambiguous',
+      summary: 'spec unclear',
+    });
+    const result = store.resolveEscalation({
+      id: raised.id,
+      mode: 'resolve',
+      note: 'answered inline',
+      resolvedBy: 'CT-eng',
+      resolvedAt: '2026-01-02T00:00:00Z',
+    });
+    expect(result.row.state).toBe('resolved');
+    expect(result.row.resolution_mode).toBe('resolve');
+    expect(result.row.resolution_note).toBe('answered inline');
+    expect(result.row.resolved_by).toBe('CT-eng');
+    expect(result.row.resolved_at).toBe('2026-01-02T00:00:00Z');
+    expect(result.walkedUpTo).toBeNull();
+    expect(result.reDecomposeTriggered).toBe(false);
+    // No new row appended — the chain has exactly one rung.
+    expect(store.listEscalationsForTask('t1')).toHaveLength(1);
+  });
+
+  // --- resolution mode: re_decompose --------------------------------------
+
+  test('re_decompose discharges the escalation (→ resolved) and raises the re-decompose signal, no walk-up', () => {
+    const raised = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'needs re-splitting',
+    });
+    const result = store.resolveEscalation({ id: raised.id, mode: 're_decompose' });
+    expect(result.row.state).toBe('resolved');
+    expect(result.row.resolution_mode).toBe('re_decompose');
+    expect(result.reDecomposeTriggered).toBe(true);
+    expect(result.walkedUpTo).toBeNull();
+    expect(store.listEscalationsForTask('t1')).toHaveLength(1);
+  });
+
+  // --- resolution mode: re_escalate ---------------------------------------
+
+  test('re_escalate closes the row (→ re_escalated) and appends a fresh open row exactly one rung up', () => {
+    const raised = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'conflict',
+      summary: 'cannot decide here',
+    });
+    const result = store.resolveEscalation({
+      id: raised.id,
+      mode: 're_escalate',
+      resolvedBy: 'CT-impl',
+    });
+    // The receiving row is closed re_escalated.
+    expect(result.row.state).toBe('re_escalated');
+    expect(result.row.resolution_mode).toBe('re_escalate');
+    expect(result.reDecomposeTriggered).toBe(false);
+    // A NEW open row appears exactly one rung up, linked back to the closed row.
+    expect(result.walkedUpTo).not.toBeNull();
+    expect(result.walkedUpTo?.layer).toBe('engineer');
+    expect(result.walkedUpTo?.state).toBe('open');
+    expect(result.walkedUpTo?.escalation_type).toBe('conflict');
+    expect(result.walkedUpTo?.summary).toBe('cannot decide here');
+    expect(result.walkedUpTo?.walked_up_from).toBe(raised.id);
+    expect(store.listEscalationsForTask('t1')).toHaveLength(2);
+  });
+
+  test('re_escalate walks exactly one layer per step along the full chain, never skipping', () => {
+    let current = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'climb the ladder',
+    });
+    // The full chain bottom-to-top. Each re_escalate must advance to the NEXT rung.
+    const expectedAfterEach = ['engineer', 'tech_lead', 'pm', 'strategy', 'human'];
+    const walked: string[] = [];
+    for (let i = 0; i < expectedAfterEach.length; i++) {
+      const result = store.resolveEscalation({ id: current.id, mode: 're_escalate' });
+      expect(result.row.state).toBe('re_escalated');
+      expect(result.walkedUpTo).not.toBeNull();
+      const next = result.walkedUpTo as NonNullable<typeof result.walkedUpTo>;
+      walked.push(next.layer);
+      current = next;
+    }
+    expect(walked).toEqual(expectedAfterEach);
+    // The escalation now sits open at 'human' (the top).
+    expect(current.layer).toBe('human');
+    expect(current.state).toBe('open');
+  });
+
+  test('re_escalate at the top of the chain (human) is rejected; the row stays open', () => {
+    const raised = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'top rung',
+      layer: 'human',
+    });
+    expect(() => store.resolveEscalation({ id: raised.id, mode: 're_escalate' })).toThrow(
+      /already at the top of the chain \('human'\); cannot re_escalate past 'human'/,
+    );
+    // Untouched: still open at human.
+    expect(store.getEscalation(raised.id)?.state).toBe('open');
+    expect(store.listEscalationsForTask('t1')).toHaveLength(1);
+  });
+
+  // --- state-machine guards -----------------------------------------------
+
+  test('resolveEscalation rejects a mode outside the closed enum, naming the set', () => {
+    const raised = store.raiseEscalation({ taskId: 't1', escalationType: 'blocked', summary: 'x' });
+    expect(() =>
+      // @ts-expect-error — exercising the runtime boundary guard with an off-enum mode.
+      store.resolveEscalation({ id: raised.id, mode: 'ignore' }),
+    ).toThrow(/invalid mode 'ignore'; expected one of: resolve, re_decompose, re_escalate/);
+    expect(store.getEscalation(raised.id)?.state).toBe('open');
+  });
+
+  test('resolveEscalation rejects an unknown id', () => {
+    expect(() => store.resolveEscalation({ id: 999, mode: 'resolve' })).toThrow(
+      /unknown escalation id '999'/,
+    );
+  });
+
+  test('an already-terminal escalation cannot be resolved again (one-shot transitions)', () => {
+    const raised = store.raiseEscalation({ taskId: 't1', escalationType: 'blocked', summary: 'x' });
+    store.resolveEscalation({ id: raised.id, mode: 'resolve' });
+    expect(() => store.resolveEscalation({ id: raised.id, mode: 'resolve' })).toThrow(
+      /is 'resolved', not 'open'/,
+    );
+  });
+
+  // --- auto-bubble (the staleness floor's fourth state) --------------------
+
+  test('autoBubbleEscalation closes the row auto_bubbled and appends an open row one rung up', () => {
+    const raised = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'aged out',
+    });
+    const bubbled = store.autoBubbleEscalation(raised.id, '2026-03-01T00:00:00Z');
+    expect(store.getEscalation(raised.id)?.state).toBe('auto_bubbled');
+    expect(store.getEscalation(raised.id)?.resolution_mode).toBeNull();
+    expect(bubbled.layer).toBe('engineer');
+    expect(bubbled.state).toBe('open');
+    expect(bubbled.walked_up_from).toBe(raised.id);
+  });
+
+  test('autoBubbleEscalation at the top of the chain is rejected', () => {
+    const raised = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'x',
+      layer: 'human',
+    });
+    expect(() => store.autoBubbleEscalation(raised.id)).toThrow(
+      /already at the top of the chain \('human'\); cannot bubble past 'human'/,
+    );
+  });
+
+  // --- chain reconstruction -----------------------------------------------
+
+  test('getEscalationChain reconstructs the full walk-up path root-rung-first', () => {
+    const root = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'ambiguous',
+      summary: 'walk it up',
+    });
+    const r1 = store.resolveEscalation({ id: root.id, mode: 're_escalate' }).walkedUpTo;
+    const r2 = store.resolveEscalation({
+      id: (r1 as EscalationRowT).id,
+      mode: 're_escalate',
+    }).walkedUpTo;
+    // From the topmost rung, the chain reads bottom-to-top across the three rungs.
+    const chain = store.getEscalationChain((r2 as EscalationRowT).id);
+    expect(chain.map((e) => e.layer)).toEqual(['implementer', 'engineer', 'tech_lead']);
+    expect(chain.map((e) => e.state)).toEqual(['re_escalated', 're_escalated', 'open']);
+    // Querying from a middle rung yields the same root-first prefix up to that rung.
+    const partial = store.getEscalationChain((r1 as EscalationRowT).id);
+    expect(partial.map((e) => e.layer)).toEqual(['implementer', 'engineer']);
+  });
+
+  test('listOpenEscalationRows surfaces only open rows across the walk-up', () => {
+    const a = store.raiseEscalation({ taskId: 't1', escalationType: 'blocked', summary: 'a' });
+    store.raiseEscalation({ taskId: 't2', escalationType: 'conflict', summary: 'b' });
+    // Walk `a` up once: its root row closes, a fresh open row appears at engineer.
+    store.resolveEscalation({ id: a.id, mode: 're_escalate' });
+    const open = store.listOpenEscalationRows();
+    // The closed root of `a` is excluded; its walked-up successor + `b` remain.
+    expect(open.map((e) => e.summary).sort()).toEqual(['a', 'b']);
+    expect(open.find((e) => e.summary === 'a')?.layer).toBe('engineer');
   });
 });
