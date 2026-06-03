@@ -19,6 +19,7 @@
  *   claude-prove scrum task remove-dep <from> <to> [--kind blocks|blocked_by]
  *   claude-prove scrum task acceptance add <id>    --text T --verifies-by K --check C [--idempotent] [--timeout 30s] [--criterion ID]
  *   claude-prove scrum task acceptance list <id>
+ *   claude-prove scrum task acceptance verify <id> --verdict verified|failed [--criterion ID] [--reason R] [--by WHO]
  *   claude-prove scrum task acceptance supersede <id> --criterion ID --reason R [--by NEW-ID]
  *   claude-prove scrum task bounds set <id>      --bounds JSON   (pass --bounds '' to clear)
  *   claude-prove scrum task bounds show <id>
@@ -397,7 +398,7 @@ export function register(cli: CAC): void {
     )
     .option(
       '--verdict <v>',
-      'ask respond: the triage verdict (accept | reject | counter); accept wires a child + dep, reject/counter record --comment only',
+      'ask respond: the triage verdict (accept | reject | counter; accept wires a child + dep, reject/counter record --comment only); task acceptance verify: the recorded verdict (verified | failed)',
     )
     .option(
       '--type <t>',
@@ -498,6 +499,7 @@ function dispatch(
         scope: flags.scope,
         timeout: flags.timeout,
         criterion: flags.criterion,
+        verdict: flags.verdict,
         reason: flags.reason,
         by: flags.by,
         bounds: flags.bounds,

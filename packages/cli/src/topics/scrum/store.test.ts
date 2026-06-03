@@ -1583,6 +1583,73 @@ describe('ScrumStore — recordCriterionVerdict + record option', () => {
     // The child's inherited copy carries NO recorded verdict — it must re-verify.
     expect(child.acceptance?.criteria[0]?.verification).toBeUndefined();
   });
+
+  test('explicit verifiedBy is stamped as the verification contributor', () => {
+    seedTask('t', {
+      acceptance: { criteria: [ac('a', { verifies_by: 'agent', check: 'reviewer confirms' })] },
+    });
+    store.recordCriterionVerdict('t', 'a', true, null, 'alice');
+    expect(store.getTask('t')?.acceptance?.criteria[0]?.verification?.verified_by).toBe('alice');
+  });
+});
+
+// recordTaskVerdict — the whole-task verify form
+// ===========================================================================
+
+describe('ScrumStore — recordTaskVerdict', () => {
+  test('stamps every active, applies-to-self, non-gate criterion in one call', () => {
+    seedTask('t', {
+      acceptance: {
+        criteria: [
+          ac('a', { verifies_by: 'agent', check: 'reviewer confirms A' }),
+          ac('b', { verifies_by: 'bash', check: 'exit 0' }),
+        ],
+      },
+    });
+    const { criterionIds } = store.recordTaskVerdict('t', true, 'looks good', 'bob');
+    expect(criterionIds).toEqual(['a', 'b']);
+    const criteria = store.getTask('t')?.acceptance?.criteria ?? [];
+    expect(criteria.every((c) => c.verification?.verdict === 'verified')).toBe(true);
+    expect(criteria.every((c) => c.verification?.verified_by === 'bob')).toBe(true);
+  });
+
+  test('skips gate, superseded, and descendants-scoped criteria', () => {
+    seedTask('t', {
+      acceptance: {
+        criteria: [
+          ac('keep', { verifies_by: 'agent', check: 'judge it' }),
+          gateAc('g'),
+          ac('old', { verifies_by: 'bash', check: 'x', status: 'superseded' }),
+          ac('sub', { verifies_by: 'bash', check: 'x', scope: 'descendants' }),
+        ],
+      },
+    });
+    const { criterionIds } = store.recordTaskVerdict('t', true);
+    expect(criterionIds).toEqual(['keep']);
+    const byId = new Map((store.getTask('t')?.acceptance?.criteria ?? []).map((c) => [c.id, c]));
+    expect(byId.get('g')?.verification).toBeUndefined();
+    expect(byId.get('sub')?.verification).toBeUndefined();
+  });
+
+  test('a failed verdict records failed with the shared reason', () => {
+    seedTask('t', {
+      acceptance: { criteria: [ac('a', { verifies_by: 'agent', check: 'judge it' })] },
+    });
+    store.recordTaskVerdict('t', false, 'reviewer found a regression');
+    const c = store.getTask('t')?.acceptance?.criteria[0];
+    expect(c?.verification?.verdict).toBe('failed');
+    expect(c?.verification?.reason).toBe('reviewer found a regression');
+  });
+
+  test('a task with no applicable non-gate criterion stamps nothing', () => {
+    seedTask('t', { acceptance: { criteria: [gateAc('g')] } });
+    const { criterionIds } = store.recordTaskVerdict('t', true);
+    expect(criterionIds).toEqual([]);
+  });
+
+  test('rejects an unknown task id', () => {
+    expect(() => store.recordTaskVerdict('nope', true)).toThrow(/unknown task 'nope'/);
+  });
 });
 
 // Pending-gate surfacing (out-of-turn pull path)
@@ -1918,6 +1985,17 @@ describe('ScrumStore — story close-floor acceptance-satisfaction gate', () => 
       ac('d', { verifies_by: 'bash', check: 'false', scope: 'descendants' }),
     ]);
     expect(() => store.updateTaskStatus('s', 'done')).not.toThrow();
+  });
+
+  test('an agent criterion deadlocks at close until its driver-side verdict is recorded', () => {
+    // The orchestrator close-floor gap: an agent criterion stays pending (judged
+    // driver-side, never auto-stamped), so the close is blocked until the driver
+    // records the verdict — the `scrum task acceptance verify` path.
+    seedStoryForClose([ac('j', { verifies_by: 'agent', check: 'reviewer confirms behavior' })]);
+    expect(() => store.updateTaskStatus('s', 'done')).toThrow(/cannot close.*j \(agent\)/);
+    store.recordTaskVerdict('s', true, null, 'reviewer');
+    expect(() => store.updateTaskStatus('s', 'done')).not.toThrow();
+    expect(store.getTask('s')?.status).toBe('done');
   });
 });
 

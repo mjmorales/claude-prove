@@ -959,7 +959,7 @@ export class ScrumStore {
     if (unsatisfied.length > 0) {
       const detail = unsatisfied.map((c) => `${c.id} (${c.verifies_by})`).join(', ');
       throw new Error(
-        `updateTaskStatus: story '${task.id}' cannot close — unsatisfied acceptance criteria: ${detail}. Approve gate criteria (\`scrum gate respond\`) and record heavy-kind verdicts at the orchestrator validation gate before '${next}'.`,
+        `updateTaskStatus: story '${task.id}' cannot close — unsatisfied acceptance criteria: ${detail}. Approve gate criteria (\`scrum gate respond\`) and record assert/bash/agent verdicts (\`scrum task acceptance verify ${task.id} --verdict verified|failed [--criterion ID]\`, or inline at the orchestrator validation gate) before '${next}'.`,
       );
     }
   }
@@ -1389,18 +1389,22 @@ export class ScrumStore {
 
   /**
    * Stamp a recorded verification verdict onto a criterion's `verification`
-   * field (append-style in-place, like `respondGate` for `gate`). The
-   * orchestrator validation gate calls this for `assert`/`bash`/`agent`
-   * outcomes so the close floor can later read `verified`/`failed` without
-   * re-running the check. `ok` maps to `verified`/`failed`; `verified_by`/`_at`
-   * are stamped from the run env. Rejects unknown task/criterion ids and a
-   * `gate`-kind criterion (whose verdict lives in `gate.verdict`).
+   * field (append-style in-place, like `respondGate` for `gate`). Two callers:
+   * the orchestrator validation gate records `assert`/`bash` outcomes inline,
+   * and `scrum task acceptance verify` records the driver-side `agent` (or any
+   * heavy-kind) verdict out-of-turn — both so the close floor can later read
+   * `verified`/`failed` without re-running the check. `ok` maps to
+   * `verified`/`failed`. `verified_by` is the verification contributor of
+   * record: the explicit `verifiedBy` (the CLI's `--by`) when given, else the
+   * run env (`PROVE_WORKER_ID`), else NULL. Rejects unknown task/criterion ids
+   * and a `gate`-kind criterion (whose verdict lives in `gate.verdict`).
    */
   recordCriterionVerdict(
     taskId: string,
     criterionId: string,
     ok: boolean,
     reason: string | null = null,
+    verifiedBy?: string | null,
   ): ScrumTask {
     const task = this.getTask(taskId);
     if (!task) throw new Error(`recordCriterionVerdict: unknown task '${taskId}'`);
@@ -1423,7 +1427,7 @@ export class ScrumStore {
     const verification: VerificationRecord = {
       verdict: ok ? 'verified' : 'failed',
       reason: reason && reason.length > 0 ? reason : null,
-      verified_by: workerId,
+      verified_by: verifiedBy && verifiedBy.length > 0 ? verifiedBy : workerId,
       verified_at: isoNow(),
     };
     const criteria = task.acceptance.criteria.map((c) =>
@@ -1434,6 +1438,35 @@ export class ScrumStore {
       : { criteria };
     this.writeAcceptance(taskId, next);
     return this.requireTask(taskId, 'recordCriterionVerdict');
+  }
+
+  /**
+   * Stamp the same verdict onto every criterion the story-close floor reads for
+   * this task — `status === 'active'`, applies-to-self (`appliesToSelf`), and
+   * NOT `gate` kind (a gate's verdict lives in `gate.verdict`, resolved via
+   * `respondGate`). This is the whole-task form behind `scrum task acceptance
+   * verify <task>` with no `--criterion`: a reviewer confirms (or fails) all of
+   * the task's heavy-kind goalposts in one call. Returns the stamped criterion
+   * ids; an empty list means the task carried no floor-applicable non-gate
+   * criterion to record. `verifiedBy` is forwarded per criterion. Throws on an
+   * unknown task id.
+   */
+  recordTaskVerdict(
+    taskId: string,
+    ok: boolean,
+    reason: string | null = null,
+    verifiedBy?: string | null,
+  ): { task: ScrumTask; criterionIds: string[] } {
+    const task = this.getTask(taskId);
+    if (!task) throw new Error(`recordTaskVerdict: unknown task '${taskId}'`);
+    const targets = (task.acceptance?.criteria ?? []).filter(
+      (c) => c.status === 'active' && c.verifies_by !== 'gate' && appliesToSelf(c.scope),
+    );
+    let current = task;
+    for (const criterion of targets) {
+      current = this.recordCriterionVerdict(taskId, criterion.id, ok, reason, verifiedBy);
+    }
+    return { task: current, criterionIds: targets.map((c) => c.id) };
   }
 
   /**

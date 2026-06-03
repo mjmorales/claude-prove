@@ -16,6 +16,7 @@
  *   acceptance add <id>     --text T --verifies-by K --check C [--idempotent]
  *                              [--scope descendants|self|both] [--timeout 30s] [--criterion ID]
  *   acceptance list <id>
+ *   acceptance verify <id>  --verdict verified|failed [--criterion ID] [--reason R] [--by WHO]
  *   acceptance supersede <id> --criterion ID --reason R [--by NEW-ID]
  *   bounds set <id>          --bounds JSON   (pass --bounds '' to clear)
  *   bounds show <id>
@@ -68,6 +69,8 @@ export interface TaskCmdFlags {
   scope?: string;
   timeout?: string;
   criterion?: string;
+  // `acceptance verify` recorded verdict (verified | failed).
+  verdict?: string;
   reason?: string;
   by?: string;
   // Declared bounds (v6) — JSON blob for `task create` + `task bounds set`.
@@ -111,6 +114,9 @@ const TASK_ACTIONS: TaskAction[] = [
 const VALID_DEP_KINDS: DepKind[] = ['blocks', 'blocked_by'];
 
 const VALID_VERIFIES_BY: AcceptanceVerifiesBy[] = ['bash', 'assert', 'gate', 'agent'];
+
+/** Closed verdict set `acceptance verify` records onto a criterion. */
+const VALID_VERIFY_VERDICTS = ['verified', 'failed'] as const;
 
 const VALID_SCOPES: AcceptanceScope[] = ACCEPTANCE_SCOPES;
 
@@ -539,20 +545,25 @@ function resolveDepKind(raw: string | undefined, action: 'add-dep' | 'remove-dep
 }
 
 // ---------------------------------------------------------------------------
-// acceptance — author/list/supersede acceptance criteria (v5)
+// acceptance — author/list/verify/supersede acceptance criteria (v5)
 //
 //   task acceptance add <task-id> --text T --verifies-by K --check C
 //                                 [--idempotent] [--scope descendants|self|both]
 //                                 [--timeout 30s] [--criterion ID]
 //   task acceptance list <task-id>
+//   task acceptance verify <task-id> --verdict verified|failed
+//                                    [--criterion ID] [--reason R] [--by WHO]
 //   task acceptance supersede <task-id> --criterion ID --reason R [--by NEW-ID]
 //
 // Append-only: `supersede` flips a criterion's status, never removing it.
+// `verify` stamps a recorded verdict the story-close floor reads — it is the
+// out-of-turn path for driver-side `agent` (and any heavy-kind) verdicts that
+// no other CLI records; `gate` criteria resolve via `scrum gate respond`.
 // ---------------------------------------------------------------------------
 
-type AcceptanceSubAction = 'add' | 'list' | 'supersede';
+type AcceptanceSubAction = 'add' | 'list' | 'verify' | 'supersede';
 
-const ACCEPTANCE_SUB_ACTIONS: AcceptanceSubAction[] = ['add', 'list', 'supersede'];
+const ACCEPTANCE_SUB_ACTIONS: AcceptanceSubAction[] = ['add', 'list', 'verify', 'supersede'];
 
 function doAcceptance(
   store: ScrumStore,
@@ -575,6 +586,8 @@ function doAcceptance(
       return doAcceptanceAdd(store, taskId, flags);
     case 'list':
       return doAcceptanceList(store, taskId);
+    case 'verify':
+      return doAcceptanceVerify(store, taskId, flags);
     case 'supersede':
       return doAcceptanceSupersede(store, taskId, flags);
   }
@@ -638,6 +651,51 @@ function doAcceptanceList(store: ScrumStore, taskId: string): number {
   const criteria = task.acceptance?.criteria ?? [];
   process.stdout.write(`${JSON.stringify(criteria)}\n`);
   process.stderr.write(`scrum task acceptance list: ${taskId} (${criteria.length} criteria)\n`);
+  return 0;
+}
+
+/**
+ * Record a `verified`/`failed` verdict the story-close floor reads. With
+ * `--criterion` it stamps one criterion (`recordCriterionVerdict`); without, it
+ * stamps every active, applies-to-self, non-`gate` criterion on the task
+ * (`recordTaskVerdict`) — the whole-task form. `--by` is the verification
+ * contributor of record (else the run env, else NULL); `--reason` carries the
+ * failing detail. Store rejections (unknown task/criterion, `gate` criterion)
+ * surface via the caller's try/catch as exit 1.
+ */
+function doAcceptanceVerify(store: ScrumStore, taskId: string, flags: TaskCmdFlags): number {
+  const verdict = flags.verdict;
+  if (verdict === undefined || !(VALID_VERIFY_VERDICTS as readonly string[]).includes(verdict)) {
+    process.stderr.write(
+      `scrum task acceptance verify: --verdict must be one of: ${VALID_VERIFY_VERDICTS.join(', ')}\n`,
+    );
+    return 1;
+  }
+  const ok = verdict === 'verified';
+  const reason = flags.reason && flags.reason.length > 0 ? flags.reason : null;
+  const by = flags.by && flags.by.length > 0 ? flags.by : null;
+
+  if (flags.criterion !== undefined && flags.criterion.length > 0) {
+    const task = store.recordCriterionVerdict(taskId, flags.criterion, ok, reason, by);
+    process.stdout.write(`${JSON.stringify(task)}\n`);
+    process.stderr.write(
+      `scrum task acceptance verify: ${taskId} / ${flags.criterion} -> ${verdict}${by ? ` (by ${by})` : ''}\n`,
+    );
+    return 0;
+  }
+
+  const { task, criterionIds } = store.recordTaskVerdict(taskId, ok, reason, by);
+  if (criterionIds.length === 0) {
+    process.stderr.write(
+      `scrum task acceptance verify: ${taskId} has no active non-gate criterion to verify (gate criteria resolve via \`scrum gate respond\`); pass --criterion to target one explicitly\n`,
+    );
+    return 1;
+  }
+  process.stdout.write(`${JSON.stringify(task)}\n`);
+  const plural = criterionIds.length === 1 ? 'criterion' : 'criteria';
+  process.stderr.write(
+    `scrum task acceptance verify: ${taskId} -> ${verdict} on ${criterionIds.length} ${plural} (${criterionIds.join(', ')})${by ? ` (by ${by})` : ''}\n`,
+  );
   return 0;
 }
 

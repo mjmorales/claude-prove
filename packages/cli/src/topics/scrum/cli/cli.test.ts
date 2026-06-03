@@ -967,6 +967,127 @@ describe('runTaskCmd acceptance', () => {
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('sub-action required');
   });
+
+  function readCriteria(taskId = 'at') {
+    const list = withCapture(() => runTaskCmd('acceptance', ['list', taskId], {}));
+    return JSON.parse(list.stdout.trim()) as Array<{
+      id: string;
+      verification?: { verdict: string; reason?: string; verified_by?: string };
+    }>;
+  }
+
+  test('verify --criterion stamps one recorded verdict the close floor reads', () => {
+    seedAcTask();
+    withCapture(() =>
+      runTaskCmd('acceptance', ['add', 'at'], {
+        text: 'reviewer confirms',
+        verifiesBy: 'agent',
+        check: 'judge it',
+        criterion: 'c1',
+      }),
+    );
+    const res = withCapture(() =>
+      runTaskCmd('acceptance', ['verify', 'at'], {
+        verdict: 'verified',
+        criterion: 'c1',
+        by: 'alice',
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const v = readCriteria().find((c) => c.id === 'c1')?.verification;
+    expect(v?.verdict).toBe('verified');
+    expect(v?.verified_by).toBe('alice');
+  });
+
+  test('verify without --criterion stamps every applicable non-gate criterion', () => {
+    seedAcTask();
+    withCapture(() =>
+      runTaskCmd('acceptance', ['add', 'at'], {
+        text: 'a',
+        verifiesBy: 'agent',
+        check: 'x',
+        criterion: 'c1',
+      }),
+    );
+    withCapture(() =>
+      runTaskCmd('acceptance', ['add', 'at'], {
+        text: 'b',
+        verifiesBy: 'bash',
+        check: 'true',
+        criterion: 'c2',
+      }),
+    );
+    const res = withCapture(() =>
+      runTaskCmd('acceptance', ['verify', 'at'], { verdict: 'verified' }),
+    );
+    expect(res.exit).toBe(0);
+    expect(res.stderr).toContain('c1, c2');
+    expect(readCriteria().every((c) => c.verification?.verdict === 'verified')).toBe(true);
+  });
+
+  test('verify failed records a failed verdict with --reason', () => {
+    seedAcTask();
+    withCapture(() =>
+      runTaskCmd('acceptance', ['add', 'at'], {
+        text: 'a',
+        verifiesBy: 'agent',
+        check: 'x',
+        criterion: 'c1',
+      }),
+    );
+    const res = withCapture(() =>
+      runTaskCmd('acceptance', ['verify', 'at'], {
+        verdict: 'failed',
+        criterion: 'c1',
+        reason: 'regression found',
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const v = readCriteria().find((c) => c.id === 'c1')?.verification;
+    expect(v?.verdict).toBe('failed');
+    expect(v?.reason).toBe('regression found');
+  });
+
+  test('verify rejects an invalid --verdict', () => {
+    seedAcTask();
+    const res = withCapture(() => runTaskCmd('acceptance', ['verify', 'at'], { verdict: 'maybe' }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--verdict must be one of');
+  });
+
+  test('verify on a gate criterion is rejected (verdict lives in gate.verdict)', () => {
+    seedAcTask();
+    withCapture(() =>
+      runTaskCmd('acceptance', ['add', 'at'], {
+        text: 'operator approves',
+        verifiesBy: 'gate',
+        check: 'approve',
+        criterion: 'g1',
+      }),
+    );
+    const res = withCapture(() =>
+      runTaskCmd('acceptance', ['verify', 'at'], { verdict: 'verified', criterion: 'g1' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('is a gate');
+  });
+
+  test('verify with no applicable non-gate criterion exits 1 with guidance', () => {
+    seedAcTask();
+    withCapture(() =>
+      runTaskCmd('acceptance', ['add', 'at'], {
+        text: 'operator approves',
+        verifiesBy: 'gate',
+        check: 'approve',
+        criterion: 'g1',
+      }),
+    );
+    const res = withCapture(() =>
+      runTaskCmd('acceptance', ['verify', 'at'], { verdict: 'verified' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('no active non-gate criterion');
+  });
 });
 
 // ---------------------------------------------------------------------------
