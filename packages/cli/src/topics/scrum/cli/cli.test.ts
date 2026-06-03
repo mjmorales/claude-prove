@@ -559,6 +559,14 @@ describe('runTaskCmd', () => {
     expect(res.stderr).toContain("invalid status 'bogus'");
   });
 
+  test('status: accepts the proposed/accepted decomposition-review states', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'R', id: 'r' }));
+    expect(withCapture(() => runTaskCmd('status', ['r', 'proposed'], {})).exit).toBe(0);
+    const accepted = withCapture(() => runTaskCmd('status', ['r', 'accepted'], {}));
+    expect(accepted.exit).toBe(0);
+    expect((JSON.parse(accepted.stdout.trim()) as { status: string }).status).toBe('accepted');
+  });
+
   test('status: surfaces invalid-transition errors from the store', () => {
     withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'S3', id: 's3' }));
     // backlog -> done is not allowed; must go through ready/in_progress first

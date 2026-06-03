@@ -36,7 +36,15 @@ export interface StatusCmdFlags {
 
 const RECENT_EVENT_LIMIT = 20;
 
-const ACTIVE_STATUSES: TaskStatus[] = ['backlog', 'ready', 'in_progress', 'review', 'blocked'];
+const ACTIVE_STATUSES: TaskStatus[] = [
+  'backlog',
+  'proposed',
+  'accepted',
+  'ready',
+  'in_progress',
+  'review',
+  'blocked',
+];
 
 export function runStatusCmd(flags: StatusCmdFlags): number {
   const workspaceRoot =

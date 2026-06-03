@@ -150,6 +150,28 @@ describe('ScrumStore — tasks', () => {
     expect(() => store.updateTaskStatus('missing', 'ready')).toThrow(/unknown task/);
   });
 
+  test('decomposition-review path: backlog → proposed → accepted → ready', () => {
+    seedTask('t1');
+    expect(store.updateTaskStatus('t1', 'proposed').status).toBe('proposed');
+    expect(store.updateTaskStatus('t1', 'accepted').status).toBe('accepted');
+    expect(store.updateTaskStatus('t1', 'ready').status).toBe('ready');
+  });
+
+  test('proposed → backlog is the review-kickback edge; accepted may start work directly', () => {
+    seedTask('kick', { status: 'proposed' });
+    expect(store.updateTaskStatus('kick', 'backlog').status).toBe('backlog');
+    seedTask('go', { status: 'accepted' });
+    expect(store.updateTaskStatus('go', 'in_progress').status).toBe('in_progress');
+  });
+
+  test('review-state transitions are gated: backlog skips proposed, proposed has no →done/→ready', () => {
+    seedTask('a');
+    expect(() => store.updateTaskStatus('a', 'accepted')).toThrow(/invalid transition/);
+    seedTask('b', { status: 'proposed' });
+    expect(() => store.updateTaskStatus('b', 'ready')).toThrow(/invalid transition/);
+    expect(() => store.updateTaskStatus('b', 'done')).toThrow(/invalid transition/);
+  });
+
   test('softDeleteTask throws on unknown task', () => {
     expect(() => store.softDeleteTask('missing')).toThrow(/unknown task/);
   });
@@ -315,6 +337,26 @@ describe('ScrumStore — containment tree', () => {
     seedTask('y1', { parentId: 'ready-story', status: 'ready' });
     seedTask('y2', { parentId: 'ready-story', status: 'backlog' });
     expect(store.derivedStatus('ready-story')).toBe('ready');
+  });
+
+  test('derivedStatus precedence: ready over accepted over proposed over backlog', () => {
+    seedTask('ap-story', { layer: 'story' });
+    seedTask('ap1', { parentId: 'ap-story', status: 'accepted' });
+    seedTask('ap2', { parentId: 'ap-story', status: 'proposed' });
+    seedTask('ap3', { parentId: 'ap-story', status: 'backlog' });
+    // accepted outranks proposed/backlog when no later state is present.
+    expect(store.derivedStatus('ap-story')).toBe('accepted');
+
+    seedTask('p-story', { layer: 'story' });
+    seedTask('p1', { parentId: 'p-story', status: 'proposed' });
+    seedTask('p2', { parentId: 'p-story', status: 'backlog' });
+    expect(store.derivedStatus('p-story')).toBe('proposed');
+
+    // A single ready child still outranks an accepted sibling.
+    seedTask('mixed', { layer: 'story' });
+    seedTask('m1', { parentId: 'mixed', status: 'ready' });
+    seedTask('m2', { parentId: 'mixed', status: 'accepted' });
+    expect(store.derivedStatus('mixed')).toBe('ready');
   });
 
   test('derivedStatus folds DERIVED (not authored) child statuses post-order', () => {

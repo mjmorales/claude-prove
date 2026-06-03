@@ -124,6 +124,8 @@ const VALID_LAYERS: TaskLayer[] = ['epic', 'story', 'task'];
 
 const VALID_STATUSES: TaskStatus[] = [
   'backlog',
+  'proposed',
+  'accepted',
   'ready',
   'in_progress',
   'review',

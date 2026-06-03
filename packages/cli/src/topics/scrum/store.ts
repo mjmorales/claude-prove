@@ -287,9 +287,17 @@ export interface ResolveContributorKey {
 /**
  * Allowed forward transitions. Terminal statuses (`done`, `cancelled`)
  * reject every outgoing edge. Keep in sync with the task lifecycle contract.
+ *
+ * The decomposition-review states `proposed`/`accepted` slot ahead of `ready`:
+ * `backlog → proposed` (decomposed) → `accepted` (review passed — the gate that
+ * fires next-layer decompose) → `ready`. `proposed → backlog` is the
+ * review-kickback edge. The direct `backlog → ready|in_progress` edges remain
+ * for tasks that need no decomposition review.
  */
 const ALLOWED_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
-  backlog: ['ready', 'in_progress', 'cancelled'],
+  backlog: ['proposed', 'ready', 'in_progress', 'cancelled'],
+  proposed: ['accepted', 'backlog', 'cancelled'],
+  accepted: ['ready', 'in_progress', 'backlog', 'cancelled'],
   ready: ['in_progress', 'blocked', 'cancelled', 'backlog'],
   in_progress: ['review', 'blocked', 'done', 'cancelled', 'ready'],
   review: ['in_progress', 'done', 'cancelled'],
@@ -1044,6 +1052,8 @@ export class ScrumStore {
    *   done        — ≥1 non-cancelled child AND every non-cancelled child done
    *   review      — any child review
    *   ready       — any child ready
+   *   accepted    — any child accepted (decomposition review passed)
+   *   proposed    — any child proposed (decomposed, awaiting review)
    *   backlog     — otherwise (incl. all-cancelled subtree)
    *
    * Cancelled children are excluded from the `done` quorum so a fully
@@ -4524,10 +4534,12 @@ function validateAcceptance(acceptance: Acceptance): void {
 /**
  * Fold a parent's children's DERIVED statuses into the parent's rolled-up
  * status. Precedence (see `derivedStatus`): in_progress > blocked > done >
- * review > ready > backlog. `done` requires a non-empty non-cancelled quorum
- * where every non-cancelled child is done, so an all-cancelled subtree rolls
- * up to backlog rather than done. Invariant: callers only invoke this for a
- * parent with ≥1 live child.
+ * review > ready > accepted > proposed > backlog. `done` requires a non-empty
+ * non-cancelled quorum where every non-cancelled child is done, so an
+ * all-cancelled subtree rolls up to backlog rather than done. The review states
+ * `accepted`/`proposed` sit just above `backlog`, in lifecycle order, so a
+ * subtree mid-decomposition-review surfaces that progress. Invariant: callers
+ * only invoke this for a parent with ≥1 live child.
  */
 function foldChildStatuses(childStatuses: TaskStatus[]): TaskStatus {
   const anyOf = (s: TaskStatus): boolean => childStatuses.includes(s);
@@ -4539,6 +4551,8 @@ function foldChildStatuses(childStatuses: TaskStatus[]): TaskStatus {
 
   if (anyOf('review')) return 'review';
   if (anyOf('ready')) return 'ready';
+  if (anyOf('accepted')) return 'accepted';
+  if (anyOf('proposed')) return 'proposed';
   return 'backlog';
 }
 

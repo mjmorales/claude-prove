@@ -11,9 +11,23 @@
 // Enum string-literal unions
 // ---------------------------------------------------------------------------
 
-/** Task lifecycle. Matches `scrum_tasks.status` column values. */
+/**
+ * Task lifecycle. Matches `scrum_tasks.status` column values. The column is
+ * plain TEXT with no CHECK constraint, so this union extends freely and older
+ * databases stay forward-compatible — no DB migration is needed to add a state.
+ *
+ * Canonical order: `backlog → proposed → accepted → ready → in_progress →
+ * review → done`, with `blocked`/`cancelled` reachable from the active states.
+ *
+ *   proposed — decomposed into children, awaiting the decomposition review.
+ *   accepted — the decomposition review passed; this is the gate that fires the
+ *              next layer's decompose. Distinct from `ready` (deps cleared,
+ *              implementation may start), which the two states used to conflate.
+ */
 export type TaskStatus =
   | 'backlog'
+  | 'proposed'
+  | 'accepted'
   | 'ready'
   | 'in_progress'
   | 'review'
