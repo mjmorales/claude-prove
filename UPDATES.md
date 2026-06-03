@@ -6,6 +6,31 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.7.0 — Inter-agent communication: cross-team asks, escalations, handoff enforcement
+
+A cross-team request protocol, a typed escalation chain with staleness auto-promotion, and an enforced end-of-session declaration — so blocked work routes to the team that owns the interface, unresolved blockers climb the authority chain on their own, and no worker session ends without recording its outcome.
+
+- **Scrum store** (`.prove/prove.db`): advances **v22 → v26** across four additive migrations — **auto-migrates** on the next `claude-prove scrum …` command (or `claude-prove store migrate`); no manual step, no data loss (every migration is `CREATE TABLE` / `ALTER TABLE ADD COLUMN`, nullable).
+  - **v23** — `scrum_asks` (the cross-team ask table).
+  - **v24** — `scrum_escalations` (the escalation table + four-state machine).
+  - **v25** — `scrum_asks.mapped_artifact` / `rejected_reason` / `counter_proposal` (ask-response provenance).
+  - **v26** — `scrum_escalations.attributes` (the staleness auto-bubble marker).
+
+**Cross-team ask protocol — `scrum ask file|respond|await`.** A worker whose artifact is blocked on another team's interface files an ask against that team:
+- `scrum ask file --from-team A --to-team B --ask-type T --blocking-artifact ART` — persists a `filed` ask. Validates that team `B` resolves, that `T` is in `B`'s active accepted interface, and that `ART` exists; each failure exits non-zero.
+- `scrum ask respond <ask-id> --verdict accept|reject|counter [--comment TEXT] [--by ID]` — mechanically applies a triage verdict. `accept` creates one child task under the responding team (tagged with its slug), sets `mapped_artifact`, and adds a `blocked_by` dep from the filing artifact onto that child; `reject` records the reason; `counter` records the counter-proposal. Every verdict emits an `ask_responded` event. The triage *judgment* is the driver's; the CLI only records it (no model is spawned).
+- `scrum ask await <ask-id>` — a read-only status probe returning a closed-enum phase (`pending` | `waiting` | `ready` | `rejected` | `countered`) plus, on `ready`, the responding team's exposed outputs. The single `terminal` flag tells a polling loop when to stop.
+
+**Escalation protocol — `scrum escalation raise|show|list|resolve|chain`.** A typed escalation (`blocked` | `ambiguous` | `conflict` | `missing_context`) walks up a fixed authority chain (`implementer → engineer → tech_lead → pm → strategy → human`) exactly one rung at a time. The receiver resolves it (`resolve` | `re_decompose` | `re_escalate`); `re_escalate` appends a fresh open escalation one rung up, linked to the closed one, so a single escalation that climbs the chain is a traversable series of rows rather than an in-place mutation.
+
+**Escalation staleness auto-bubble.** An open escalation older than the staleness threshold (24h) auto-promotes one rung — a fresh escalation is filed up-chain and the original flips to `auto_bubbled` with a forward pointer. There is **no resident loop**: the sweep runs inside the session-start reconciler hook and surfaces bubbled escalations through `scrum alerts` and `scrum next-ready` ranking.
+
+**Enforced end-of-session handoff/synthesis declaration.** *(Behavior change.)* `scrum hook stop` and `scrum hook subagent-stop` now **block** a session that touched an artifact unless it logged either a `synthesis` entry with `outcome: completed` or a `synthesis` entry plus a `handoff` entry carrying a reason from the closed set (`context_budget` | `blocked` | `checkpoint` | `scope_boundary` | `needs_decision`). The block emits actionable remediation telling the worker exactly what to log; sessions that touched nothing, or that already declared an outcome, pass unchanged.
+
+**Workflow sugar — `kind:<team-slug>` step.** The workflow skill documents a step form that composes the above: file an ask → the responding team triages → poll `scrum ask await` until terminal → collect the exposed outputs on accept; reject/counter surface a terminal result rather than hanging.
+
+**Auto-adoption.** The store migration is automatic on the next scrum command. The only behavior you must be aware of is the end-of-session gate: a worker session that edits files must now declare a `synthesis` outcome (or a `synthesis` + `handoff`) before it ends, or the stop hook will block and tell it what to write.
+
 ## v3.6.0 — User-level config: project-root → default contributor
 
 A per-user (home-directory) config that maps a project root to a default contributor CT-UUID, so the active contributor is **implicit per project** — callers resolve "who am I driving as here?" without passing it on every invocation.
