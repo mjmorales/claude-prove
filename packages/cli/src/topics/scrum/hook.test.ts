@@ -79,6 +79,40 @@ function writeRun(
   return runDir;
 }
 
+/** Write a reasoning-log entry under `<runDir>/log/<agent>/<id>.json`. */
+function writeLogEntry(runDir: string, agent: string, entry: Record<string, unknown>): void {
+  const dir = join(runDir, 'log', agent);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${String(entry.id)}.json`), `${JSON.stringify(entry, null, 2)}\n`);
+}
+
+/** A mechanical `capture` entry naming a mutating tool — marks "artifact touched". */
+function writeCapture(runDir: string, id: string, tool: string, target: string): void {
+  writeLogEntry(runDir, 'capture', {
+    id,
+    ts: `2026-04-23T10:0${id.length}:00Z`,
+    type: 'capture',
+    agent: 'capture',
+    run_path: runDir,
+    body: `${tool} ${target}`,
+    tool,
+    target,
+  });
+}
+
+/** A `synthesis` entry with the given outcome declaration. */
+function writeSynthesis(runDir: string, id: string, outcome: string): void {
+  writeLogEntry(runDir, 'general-purpose', {
+    id,
+    ts: `2026-04-23T11:0${id.length}:00Z`,
+    type: 'synthesis',
+    agent: 'general-purpose',
+    run_path: runDir,
+    body: 'episode summary',
+    outcome,
+  });
+}
+
 // ===========================================================================
 // onSessionStart
 // ===========================================================================
@@ -204,6 +238,79 @@ describe('onSubagentStop', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('');
   });
+
+  test('BLOCKS a worker that touched an artifact but logged no synthesis', () => {
+    seedStore((store) => {
+      store.createTask({ id: 'gate-t1', title: 'Gate task' });
+    });
+    const runDir = writeRun('feature-gate', 'demo', 'gate-t1');
+    writeCapture(runDir, 'c1', 'Write', 'packages/cli/src/x.ts');
+
+    const result = onSubagentStop({
+      cwd: runDir,
+      subagent_type: 'general-purpose',
+    });
+
+    expect(result.exitCode).toBe(0);
+    const payload = JSON.parse(result.stdout) as { decision?: string; reason?: string };
+    expect(payload.decision).toBe('block');
+    expect(payload.reason).toContain('BLOCKED');
+    expect(payload.reason).toContain('completed');
+    expect(payload.reason).toContain('handoff:');
+    expect(payload.reason).toContain('acb log append');
+
+    // Blocked before reconcile — no run_completed event should have landed.
+    const store = openScrumStore({ cwd: project });
+    try {
+      const events = store.listEventsForTask('gate-t1');
+      expect(events.some((e) => e.kind === 'run_completed')).toBe(false);
+    } finally {
+      store.close();
+    }
+  });
+
+  test('passes a worker whose synthesis declares completed, then reconciles', () => {
+    seedStore((store) => {
+      store.createTask({ id: 'gate-t2', title: 'Gate task 2' });
+    });
+    const runDir = writeRun('feature-gate', 'ok', 'gate-t2');
+    writeCapture(runDir, 'c1', 'Edit', 'packages/cli/src/y.ts');
+    writeSynthesis(runDir, 's1', 'completed');
+
+    const result = onSubagentStop({
+      cwd: runDir,
+      subagent_type: 'general-purpose',
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('scrum: reconciled');
+
+    const store = openScrumStore({ cwd: project });
+    try {
+      const events = store.listEventsForTask('gate-t2');
+      expect(events.some((e) => e.kind === 'run_completed')).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
+  test('BLOCKS a worker whose synthesis outcome is an invalid declaration', () => {
+    seedStore((store) => {
+      store.createTask({ id: 'gate-t3', title: 'Gate task 3' });
+    });
+    const runDir = writeRun('feature-gate', 'bad', 'gate-t3');
+    writeCapture(runDir, 'c1', 'Write', 'packages/cli/src/z.ts');
+    writeSynthesis(runDir, 's1', 'made some progress');
+
+    const result = onSubagentStop({
+      cwd: runDir,
+      subagent_type: 'general-purpose',
+    });
+
+    const payload = JSON.parse(result.stdout) as { decision?: string; reason?: string };
+    expect(payload.decision).toBe('block');
+    expect(payload.reason).toContain('made some progress');
+  });
 });
 
 // ===========================================================================
@@ -261,5 +368,52 @@ describe('onStop', () => {
     } finally {
       rmSync(broken, { recursive: true, force: true });
     }
+  });
+
+  // The gate resolves the active run via the run slug. PROVE_RUN_SLUG (tier-1
+  // resolution) pins it deterministically; cleared after each gate test so the
+  // sweep tests above keep resolving to "no active run". The computed-key
+  // delete form keeps biome's noDelete rule satisfied.
+  describe('end-of-session gate', () => {
+    afterEach(() => {
+      const key = 'PROVE_RUN_SLUG';
+      if (key in process.env) delete process.env[key];
+    });
+
+    test('BLOCKS the session when the active run touched an artifact with no synthesis', () => {
+      const runDir = writeRun('feature-stop-gate', 'block-me', null);
+      writeCapture(runDir, 'c1', 'Write', 'packages/cli/src/q.ts');
+      process.env.PROVE_RUN_SLUG = 'block-me';
+
+      const result = onStop({ cwd: project });
+
+      expect(result.exitCode).toBe(0);
+      const payload = JSON.parse(result.stdout) as { decision?: string; reason?: string };
+      expect(payload.decision).toBe('block');
+      expect(payload.reason).toContain('BLOCKED');
+      expect(payload.reason).toContain('acb log append');
+
+      // Blocked before the sweep — the last-sweep cursor must not advance.
+      const cursorPath = join(project, '.prove', 'scrum', 'last-sweep.json');
+      expect(() => readFileSync(cursorPath, 'utf8')).toThrow();
+    });
+
+    test('passes the session and sweeps when the active run declared completed', () => {
+      seedStore((store) => {
+        store.createTask({ id: 'stop-ok', title: 'Stop OK' });
+      });
+      const runDir = writeRun('feature-stop-gate', 'pass-me', 'stop-ok');
+      writeCapture(runDir, 'c1', 'Edit', 'packages/cli/src/r.ts');
+      writeSynthesis(runDir, 's1', 'completed');
+      process.env.PROVE_RUN_SLUG = 'pass-me';
+
+      const result = onStop({ cwd: project });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).not.toContain('"decision": "block"');
+      // Sweep ran — cursor written.
+      const body = readFileSync(join(project, '.prove', 'scrum', 'last-sweep.json'), 'utf8');
+      expect((JSON.parse(body) as { ts: number }).ts).toBeGreaterThan(0);
+    });
   });
 });
