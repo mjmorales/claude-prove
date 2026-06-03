@@ -35,6 +35,7 @@ import type {
   AnnotationTargetKind,
   AskRow,
   AskState,
+  AskVerdict,
   Contributor,
   ContributorStatus,
   DecisionRow,
@@ -62,6 +63,7 @@ import type {
   RecordLoreResult,
   ResolveEscalationInput,
   ResolveEscalationResult,
+  RespondAskInput,
   RotateTeamMemberInput,
   RotateTeamMemberResult,
   ScrumContextBundle,
@@ -96,6 +98,8 @@ import type { AddTeamExposeInput, CreateTeamInput } from './types';
 import {
   ACCEPTANCE_SCOPES,
   ANNOTATION_TARGET_KINDS,
+  ASK_VERDICTS,
+  ASK_VERDICT_STATE,
   ESCALATION_CHAIN,
   ESCALATION_RESOLUTION_MODES,
   ESCALATION_TYPES,
@@ -328,8 +332,9 @@ const TEAM_ACCEPT_COLUMNS = 'id, team_slug, ask_type, status, superseded_by, rea
 const TEAM_EXPOSE_COLUMNS =
   'id, team_slug, name, schema_ref, status, superseded_by, reason, created_at';
 
-/** Canonical `scrum_asks` SELECT column list (v23); maps 1:1 to `AskRow`. */
-const ASK_COLUMNS = 'id, from_team, to_team, ask_type, blocking_artifact, state, created_at';
+/** Canonical `scrum_asks` SELECT column list (v23 + v25); maps 1:1 to `AskRow`. */
+const ASK_COLUMNS =
+  'id, from_team, to_team, ask_type, blocking_artifact, state, mapped_artifact, rejected_reason, counter_proposal, created_at';
 
 /** Canonical `scrum_lores` SELECT column list (v19); maps 1:1 to `LoreRow`. */
 const LORE_COLUMNS = 'id, team_slug, body, author_contributor_id, created_at';
@@ -3051,6 +3056,118 @@ export class ScrumStore {
       id,
     ) as AskRow | null;
     return row ?? null;
+  }
+
+  /**
+   * Apply a triage verdict to a `filed` ask — the MECHANICAL response step. The
+   * driver (a skill, a native Agent-tool subagent, or an interactive gate) makes
+   * the accept/reject/counter judgment elsewhere; THIS method spawns no model
+   * and invokes no Agent — it applies `input.verdict` deterministically. Each
+   * verdict and its effect:
+   *
+   *   accept  — create exactly ONE child task under the to-team's tree (a
+   *             `story` by default, or `epic`), tagged with the to-team slug so
+   *             a reader can find which team owns it (teams carry no root-task
+   *             anchor, so the tag IS the team linkage). Set the ask's
+   *             `mapped_artifact` to the child id, and add a `blocked_by` dep
+   *             from the from-team's `blocking_artifact` onto the child — the
+   *             blocking artifact stays blocked until the new child completes.
+   *             State → `accepted`.
+   *   reject  — record `rejected_reason` (the `comment`); mutate NOTHING in the
+   *             tree or deps. State → `rejected`.
+   *   counter — record `counter_proposal` (the `comment`); mutate NOTHING in the
+   *             tree or deps. State → `countered`.
+   *
+   * Every effect rides ONE transaction (child create + dep + ask update + the
+   * `ask_responded` event), so a failure leaves the store untouched. The
+   * `ask_responded` event lands on the blocking artifact's timeline, mirroring
+   * how `fileAsk` audits `ask_filed` there. Rejects: an unknown id, an
+   * off-vocabulary verdict, and a non-`filed` ask (an ask is responded to
+   * exactly once). Returns the updated row.
+   */
+  respondAsk(input: RespondAskInput): AskRow {
+    if (!(ASK_VERDICTS as string[]).includes(input.verdict)) {
+      throw new Error(
+        `respondAsk: invalid verdict '${input.verdict}'; expected one of: ${ASK_VERDICTS.join(', ')}`,
+      );
+    }
+    const existing = this.getAsk(input.id);
+    if (existing === null) {
+      throw new Error(`respondAsk: unknown ask id '${input.id}'`);
+    }
+    if (existing.state !== 'filed') {
+      throw new Error(
+        `respondAsk: ask ${input.id} is '${existing.state}', not 'filed'; only a filed ask can be responded to`,
+      );
+    }
+
+    const verdict: AskVerdict = input.verdict;
+    const nextState: AskState = ASK_VERDICT_STATE[verdict];
+    const respondedAt = input.respondedAt ?? isoNow();
+    const comment = input.comment ?? null;
+    const childLayer = input.childLayer ?? 'story';
+
+    const apply = this.db.transaction((): AskRow => {
+      let mappedArtifact: string | null = null;
+      let rejectedReason: string | null = null;
+      let counterProposal: string | null = null;
+
+      if (verdict === 'accept') {
+        // Create exactly one child under the to-team's tree. Teams carry no
+        // root-task anchor, so the child is a standalone layered task tagged
+        // with the to-team slug (the team linkage the existing model allows).
+        const childId =
+          input.childId !== undefined && input.childId.length > 0
+            ? input.childId
+            : `ask-${existing.id}-${childLayer}-${randomUUID().slice(0, 8)}`;
+        const childTitle =
+          input.childTitle !== undefined && input.childTitle.length > 0
+            ? input.childTitle
+            : `${existing.to_team}: ${existing.ask_type} (ask ${existing.id})`;
+        this.createTask({
+          id: childId,
+          title: childTitle,
+          layer: childLayer,
+          tags: [existing.to_team],
+          createdByAgent: input.respondedBy ?? null,
+          createdAt: respondedAt,
+        });
+        // The from-team's blocking artifact is blocked_by the new child: it
+        // stays blocked until the child completes.
+        this.addDep(existing.blocking_artifact, childId, 'blocked_by');
+        mappedArtifact = childId;
+      } else if (verdict === 'reject') {
+        rejectedReason = comment;
+      } else {
+        counterProposal = comment;
+      }
+
+      this.prep(
+        'UPDATE scrum_asks SET state = ?, mapped_artifact = ?, rejected_reason = ?, counter_proposal = ? WHERE id = ?',
+      ).run(nextState, mappedArtifact, rejectedReason, counterProposal, existing.id);
+
+      // Audit the response against the blocking artifact's event timeline, the
+      // same timeline `fileAsk` recorded `ask_filed` on.
+      this.appendEvent({
+        taskId: existing.blocking_artifact,
+        kind: 'ask_responded',
+        ts: respondedAt,
+        agent: input.respondedBy ?? null,
+        payload: {
+          ask_id: existing.id,
+          verdict,
+          state: nextState,
+          mapped_artifact: mappedArtifact,
+          rejected_reason: rejectedReason,
+          counter_proposal: counterProposal,
+        },
+      });
+
+      return this.prep(`SELECT ${ASK_COLUMNS} FROM scrum_asks WHERE id = ?`).get(
+        existing.id,
+      ) as AskRow;
+    });
+    return apply();
   }
 
   // ==========================================================================

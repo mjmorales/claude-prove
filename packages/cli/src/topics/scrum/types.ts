@@ -51,7 +51,8 @@ export type EventKind =
   | 'unlinked_run_detected'
   | 'curation_proposed'
   | 'gate_responded'
-  | 'ask_filed';
+  | 'ask_filed'
+  | 'ask_responded';
 
 /**
  * Dependency direction. Pinned by a CHECK constraint on `scrum_deps.kind`;
@@ -1371,19 +1372,54 @@ export interface ManifestAsk {
 }
 
 /**
- * The lifecycle state of a cross-team ask (v23). A freshly-filed ask is always
- * `'filed'`; later protocol steps (accept, resolve, withdraw) extend this closed
- * set via a schema-version bump, never a silent value. Matches `scrum_asks.state`;
- * the column has no CHECK constraint, so this union documents the canonical
- * closed set without pinning the schema. Enforced at the store boundary in
- * `fileAsk`.
+ * The lifecycle state of a cross-team ask. A freshly-filed ask is always
+ * `'filed'` (v23); the triage/respond step (v25) discharges it to exactly one of
+ * three terminal verdicts. Later protocol steps extend this closed set via a
+ * schema-version bump, never a silent value. Matches `scrum_asks.state`; the
+ * column has no CHECK constraint, so this union documents the canonical closed
+ * set without pinning the schema. Enforced at the store boundary in `fileAsk`
+ * (the `filed` seed) and `respondAsk` (the verdict transition).
  *
- *   filed — the ask has been recorded against the target team; no response yet.
+ *   filed     — the ask has been recorded against the target team; no response
+ *               yet. The only state from which `respondAsk` may transition.
+ *   accepted  — the accepting team agreed: it created one child task under its
+ *               tree (`mapped_artifact`) and the from-team's blocking artifact
+ *               now `blocked_by` that child.
+ *   rejected  — the team declined the ask; `rejected_reason` records why. No
+ *               tree or dependency mutation.
+ *   countered — the team proposed a different artifact/scope/interface;
+ *               `counter_proposal` records it. No tree or dependency mutation.
  */
-export type AskState = 'filed';
+export type AskState = 'filed' | 'accepted' | 'rejected' | 'countered';
 
 /** Runtime-checkable list of the closed `AskState` set, in canonical order. */
-export const ASK_STATES: AskState[] = ['filed'];
+export const ASK_STATES: AskState[] = ['filed', 'accepted', 'rejected', 'countered'];
+
+/**
+ * A triage verdict the driver produces for a filed ask, passed to `respondAsk`.
+ * The driver (a skill, a native Agent-tool subagent, or an `AskUserQuestion`
+ * gate) makes the judgment; the CLI applies the verdict MECHANICALLY with no
+ * model invocation. A closed set, one per terminal `AskState`:
+ *
+ *   accept  — create one child task under the to-team's tree, set the ask's
+ *             `mapped_artifact` to it, and add a `blocked_by` dep from the
+ *             from-team's blocking artifact onto the child. State → `accepted`.
+ *   reject  — record `rejected_reason`; mutate nothing in the tree or deps.
+ *             State → `rejected`.
+ *   counter — record `counter_proposal`; mutate nothing in the tree or deps.
+ *             State → `countered`.
+ */
+export type AskVerdict = 'accept' | 'reject' | 'counter';
+
+/** Runtime-checkable list of the closed `AskVerdict` set, in canonical order. */
+export const ASK_VERDICTS: AskVerdict[] = ['accept', 'reject', 'counter'];
+
+/** The terminal `AskState` each verdict transitions a filed ask into. */
+export const ASK_VERDICT_STATE: Record<AskVerdict, AskState> = {
+  accept: 'accepted',
+  reject: 'rejected',
+  counter: 'countered',
+};
 
 /**
  * One row of the `scrum_asks` table (v23) — a single cross-team ask a worker
@@ -1402,7 +1438,15 @@ export const ASK_STATES: AskState[] = ['filed'];
  *   blocking_artifact — the `scrum_tasks.id` of the artifact blocked on the ask;
  *                       the FK guarantees the cited artifact exists.
  *   state             — the ask lifecycle state (see `AskState`); a freshly-filed
- *                       ask is `'filed'`.
+ *                       ask is `'filed'`, and `respondAsk` discharges it to
+ *                       `accepted` | `rejected` | `countered`.
+ *   mapped_artifact   — the `scrum_tasks.id` of the child task created to satisfy
+ *                       an ACCEPTED ask (v25); NULL while `filed` and on
+ *                       reject/counter. A soft reference.
+ *   rejected_reason   — the responder's rationale on a REJECTED ask (v25); NULL
+ *                       otherwise.
+ *   counter_proposal  — the responder's counter on a COUNTERED ask (v25); NULL
+ *                       otherwise.
  *   created_at        — when the ask was filed (ISO-8601).
  */
 export interface AskRow {
@@ -1412,6 +1456,9 @@ export interface AskRow {
   ask_type: string;
   blocking_artifact: string;
   state: AskState;
+  mapped_artifact: string | null;
+  rejected_reason: string | null;
+  counter_proposal: string | null;
   created_at: string;
 }
 
@@ -1429,6 +1476,38 @@ export interface FileAskInput {
   blockingArtifact: string;
   /** ISO-8601 timestamp; defaults to now(). */
   createdAt?: string;
+}
+
+/**
+ * Input to `respondAsk` (v25) — the MECHANICAL application of a triage verdict
+ * the driver already produced. The store performs no judgment: it applies
+ * `verdict` deterministically and spawns no model. `id` names a `filed` ask
+ * (a non-`filed` ask is rejected — an ask is responded to exactly once).
+ *
+ *   id      — the `scrum_asks.id` to respond to; must be in state `filed`.
+ *   verdict — the closed `AskVerdict` (accept | reject | counter), guarded at
+ *             the boundary against the closed set.
+ *   comment — verdict-specific free text: the `rejected_reason` on `reject`, the
+ *             `counter_proposal` on `counter`. Ignored on `accept`. Optional.
+ *   childTitle  — title for the child task created on `accept`; defaults to a
+ *                 derived title naming the ask type. Ignored on reject/counter.
+ *   childLayer  — containment tier of the `accept` child: `story` (the default)
+ *                 or `epic`. Ignored on reject/counter.
+ *   childId     — explicit id for the `accept` child; defaults to a generated id.
+ *                 Ignored on reject/counter.
+ *   respondedBy — who produced the verdict (recorded on the `ask_responded`
+ *                 event for provenance). Optional.
+ */
+export interface RespondAskInput {
+  id: number;
+  verdict: AskVerdict;
+  comment?: string | null;
+  childTitle?: string;
+  childLayer?: Extract<TaskLayer, 'epic' | 'story'>;
+  childId?: string;
+  respondedBy?: string | null;
+  /** ISO-8601 timestamp; defaults to now(). */
+  respondedAt?: string;
 }
 
 /**

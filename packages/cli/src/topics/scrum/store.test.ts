@@ -2308,7 +2308,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 24,
+      schema_version: 25,
     });
   });
 
@@ -2321,7 +2321,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(24);
+    expect(updated.provenance.schema_version).toBe(25);
   });
 });
 
@@ -3738,6 +3738,9 @@ describe('ScrumStore — cross-team ask protocol (v23)', () => {
       ask_type: 'schema-change',
       blocking_artifact: 'blocked-1',
       state: 'filed',
+      mapped_artifact: null,
+      rejected_reason: null,
+      counter_proposal: null,
       created_at: '2026-01-01T00:00:00Z',
     });
     expect(store.getAsk(ask.id)).toEqual(ask);
@@ -3834,6 +3837,149 @@ describe('ScrumStore — cross-team ask protocol (v23)', () => {
 
   test('getAsk returns null for an unknown id', () => {
     expect(store.getAsk(9999)).toBeNull();
+  });
+});
+
+// ===========================================================================
+// Ask triage/respond — accept | reject | counter (v25)
+// ===========================================================================
+
+describe('ScrumStore — ask triage/respond (v25)', () => {
+  /** Seed teams + a blocked artifact, then file one ask; return the filed row. */
+  function fileFixtureAsk(): ReturnType<ScrumStore['fileAsk']> {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.createTeam({ slug: 'identity', teamType: 'platform' });
+    store.addTeamAccept('identity', 'schema-change');
+    seedTask('blocked-1');
+    return store.fileAsk({
+      fromTeam: 'payments',
+      toTeam: 'identity',
+      askType: 'schema-change',
+      blockingArtifact: 'blocked-1',
+    });
+  }
+
+  test('accept creates exactly one child under the to-team tree and sets mapped_artifact', () => {
+    const ask = fileFixtureAsk();
+    const before = store.listTasks({}).length;
+
+    const responded = store.respondAsk({ id: ask.id, verdict: 'accept' });
+
+    expect(responded.state).toBe('accepted');
+    expect(responded.mapped_artifact).not.toBeNull();
+    expect(responded.rejected_reason).toBeNull();
+    expect(responded.counter_proposal).toBeNull();
+
+    // Exactly ONE child was created.
+    expect(store.listTasks({}).length).toBe(before + 1);
+    const child = store.getTask(responded.mapped_artifact as string);
+    expect(child).not.toBeNull();
+    // It is a story tagged with the to-team slug (the team-tree linkage).
+    expect(child?.layer).toBe('story');
+    expect(store.listTagsForTask(child?.id as string).map((t) => t.tag)).toContain('identity');
+  });
+
+  test('accept wires a blocked_by dep from the blocking artifact onto the child', () => {
+    const ask = fileFixtureAsk();
+    const responded = store.respondAsk({ id: ask.id, verdict: 'accept' });
+    const child = responded.mapped_artifact as string;
+
+    // `blocked-1` is blocked_by `child`: stored canonically as `child blocks blocked-1`.
+    const blockedBy = store.getBlockedBy('blocked-1');
+    expect(blockedBy.some((d) => d.from_task_id === child)).toBe(true);
+    expect(store.getBlocking(child).some((d) => d.to_task_id === 'blocked-1')).toBe(true);
+  });
+
+  test('accept fires an ask_responded event on the blocking artifact', () => {
+    const ask = fileFixtureAsk();
+    const responded = store.respondAsk({ id: ask.id, verdict: 'accept', respondedBy: 'tl-1' });
+    const events = store.listEventsForTask('blocked-1');
+    const event = events.find((e) => e.kind === 'ask_responded');
+    expect(event).toBeDefined();
+    expect(event?.payload).toEqual({
+      ask_id: ask.id,
+      verdict: 'accept',
+      state: 'accepted',
+      mapped_artifact: responded.mapped_artifact,
+      rejected_reason: null,
+      counter_proposal: null,
+    });
+  });
+
+  test('reject records rejected_reason, fires ask_responded, and mutates no tree/deps', () => {
+    const ask = fileFixtureAsk();
+    const before = store.listTasks({}).length;
+
+    const responded = store.respondAsk({
+      id: ask.id,
+      verdict: 'reject',
+      comment: 'out of scope this milestone',
+    });
+
+    expect(responded.state).toBe('rejected');
+    expect(responded.rejected_reason).toBe('out of scope this milestone');
+    expect(responded.mapped_artifact).toBeNull();
+    expect(responded.counter_proposal).toBeNull();
+    // No child, no dep.
+    expect(store.listTasks({}).length).toBe(before);
+    expect(store.getBlockedBy('blocked-1')).toHaveLength(0);
+    // The event still fires.
+    expect(store.listEventsForTask('blocked-1').some((e) => e.kind === 'ask_responded')).toBe(true);
+  });
+
+  test('counter records counter_proposal, fires ask_responded, and mutates no tree/deps', () => {
+    const ask = fileFixtureAsk();
+    const before = store.listTasks({}).length;
+
+    const responded = store.respondAsk({
+      id: ask.id,
+      verdict: 'counter',
+      comment: 'expose a read-only view instead',
+    });
+
+    expect(responded.state).toBe('countered');
+    expect(responded.counter_proposal).toBe('expose a read-only view instead');
+    expect(responded.mapped_artifact).toBeNull();
+    expect(responded.rejected_reason).toBeNull();
+    expect(store.listTasks({}).length).toBe(before);
+    expect(store.getBlockedBy('blocked-1')).toHaveLength(0);
+    expect(store.listEventsForTask('blocked-1').some((e) => e.kind === 'ask_responded')).toBe(true);
+  });
+
+  test('respondAsk honors an explicit childId, childTitle, and epic layer on accept', () => {
+    const ask = fileFixtureAsk();
+    const responded = store.respondAsk({
+      id: ask.id,
+      verdict: 'accept',
+      childId: 'identity-schema-epic',
+      childTitle: 'Identity schema change',
+      childLayer: 'epic',
+    });
+    expect(responded.mapped_artifact).toBe('identity-schema-epic');
+    const child = store.getTask('identity-schema-epic');
+    expect(child?.title).toBe('Identity schema change');
+    expect(child?.layer).toBe('epic');
+  });
+
+  test('respondAsk rejects an unknown ask id', () => {
+    expect(() => store.respondAsk({ id: 9999, verdict: 'accept' })).toThrow(
+      /unknown ask id '9999'/,
+    );
+  });
+
+  test('respondAsk rejects an off-vocabulary verdict', () => {
+    const ask = fileFixtureAsk();
+    expect(() => store.respondAsk({ id: ask.id, verdict: 'maybe' as never })).toThrow(
+      /invalid verdict 'maybe'/,
+    );
+  });
+
+  test('respondAsk rejects a second response (an ask is responded to exactly once)', () => {
+    const ask = fileFixtureAsk();
+    store.respondAsk({ id: ask.id, verdict: 'reject', comment: 'no' });
+    expect(() => store.respondAsk({ id: ask.id, verdict: 'accept' })).toThrow(
+      /is 'rejected', not 'filed'/,
+    );
   });
 });
 

@@ -461,7 +461,7 @@ describe('runTaskCmd', () => {
       expect(shown.task.run_id).toBe('feat-prov');
       expect(shown.task.provenance.worker_id).toBe('worker-42');
       expect(shown.task.provenance.run_id).toBe('feat-prov');
-      expect(shown.task.provenance.schema_version).toBe(24);
+      expect(shown.task.provenance.schema_version).toBe(25);
     } finally {
       restoreEnv('PROVE_WORKER_ID', savedWorker);
       restoreEnv('PROVE_RUN_SLUG', savedSlug);
@@ -2604,7 +2604,7 @@ describe('runTeamCmd', () => {
     const artifact = join(workspace, 'teams', 'payments.md');
     expect(existsSync(artifact)).toBe(true);
     const content = readFileSync(artifact, 'utf8');
-    expect(content).toContain('schema_version: 24');
+    expect(content).toContain('schema_version: 25');
     expect(content).toContain('team:');
     expect(content).toContain('slug: payments');
     expect(content).toContain('team_type: stream_aligned');
@@ -4038,6 +4038,23 @@ describe('runAskCmd', () => {
     ask_type: string;
     blocking_artifact: string;
     state: string;
+    mapped_artifact: string | null;
+    rejected_reason: string | null;
+    counter_proposal: string | null;
+  }
+
+  /** File one ask and return its parsed JSON row (assumes seedAskFixture ran). */
+  function fileOneAsk(): AskJson {
+    const res = withCapture(() =>
+      runAskCmd('file', [undefined], {
+        fromTeam: 'payments',
+        toTeam: 'identity',
+        askType: 'schema-change',
+        blockingArtifact: 'blocked-1',
+        workspaceRoot: workspace,
+      }),
+    );
+    return JSON.parse(res.stdout.trim().split('\n')[0] ?? '') as AskJson;
   }
 
   /** Seed two sibling teams (identity accepts schema-change) + a blocked task. */
@@ -4074,7 +4091,7 @@ describe('runAskCmd', () => {
   test('file persists a filed row, prints JSON + the id, exit 0', () => {
     seedAskFixture();
     const res = withCapture(() =>
-      runAskCmd('file', {
+      runAskCmd('file', [undefined], {
         fromTeam: 'payments',
         toTeam: 'identity',
         askType: 'schema-change',
@@ -4097,7 +4114,7 @@ describe('runAskCmd', () => {
   test('file without --from-team exits 1', () => {
     seedAskFixture();
     const res = withCapture(() =>
-      runAskCmd('file', {
+      runAskCmd('file', [undefined], {
         toTeam: 'identity',
         askType: 'schema-change',
         blockingArtifact: 'blocked-1',
@@ -4111,7 +4128,7 @@ describe('runAskCmd', () => {
   test('file on an unknown to_team exits 1', () => {
     seedAskFixture();
     const res = withCapture(() =>
-      runAskCmd('file', {
+      runAskCmd('file', [undefined], {
         fromTeam: 'payments',
         toTeam: 'ghost',
         askType: 'schema-change',
@@ -4126,7 +4143,7 @@ describe('runAskCmd', () => {
   test('file with a non-accepted ask_type exits 1', () => {
     seedAskFixture();
     const res = withCapture(() =>
-      runAskCmd('file', {
+      runAskCmd('file', [undefined], {
         fromTeam: 'payments',
         toTeam: 'identity',
         askType: 'api-review',
@@ -4141,7 +4158,7 @@ describe('runAskCmd', () => {
   test('file with a missing blocking_artifact exits 1', () => {
     seedAskFixture();
     const res = withCapture(() =>
-      runAskCmd('file', {
+      runAskCmd('file', [undefined], {
         fromTeam: 'payments',
         toTeam: 'identity',
         askType: 'schema-change',
@@ -4153,8 +4170,115 @@ describe('runAskCmd', () => {
     expect(res.stderr).toContain("unknown blocking_artifact 'no-such-task'");
   });
 
+  test('respond accept creates a mapped child, sets state, prints the row, exit 0', () => {
+    seedAskFixture();
+    const filed = fileOneAsk();
+    const res = withCapture(() =>
+      runAskCmd('respond', [String(filed.id)], {
+        verdict: 'accept',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim().split('\n')[0] ?? '') as AskJson;
+    expect(row.state).toBe('accepted');
+    expect(row.mapped_artifact).not.toBeNull();
+    expect(row.rejected_reason).toBeNull();
+    expect(row.counter_proposal).toBeNull();
+    // The mapped child is a real `story` task tagged with the to-team slug.
+    const show = withCapture(() =>
+      runTaskCmd('show', [row.mapped_artifact as string, undefined], { workspaceRoot: workspace }),
+    );
+    expect(show.exit).toBe(0);
+    const child = JSON.parse(show.stdout.trim()) as {
+      task: { id: string; layer: string | null };
+      tags: Array<{ tag: string }>;
+    };
+    expect(child.task.id).toBe(row.mapped_artifact);
+    expect(child.task.layer).toBe('story');
+    expect(child.tags.map((t) => t.tag)).toContain('identity');
+    // The from-team's blocking artifact is now blocked_by the new child.
+    const blockedShow = withCapture(() =>
+      runTaskCmd('show', ['blocked-1', undefined], { workspaceRoot: workspace }),
+    );
+    const blocked = JSON.parse(blockedShow.stdout.trim()) as {
+      blocked_by: Array<{ from_task_id: string; to_task_id: string }>;
+      events: Array<{ kind: string }>;
+    };
+    expect(blocked.blocked_by.some((d) => d.from_task_id === row.mapped_artifact)).toBe(true);
+    expect(blocked.events.some((e) => e.kind === 'ask_responded')).toBe(true);
+  });
+
+  test('respond reject records --comment as rejected_reason, no child, exit 0', () => {
+    seedAskFixture();
+    const filed = fileOneAsk();
+    const res = withCapture(() =>
+      runAskCmd('respond', [String(filed.id)], {
+        verdict: 'reject',
+        comment: 'out of scope this milestone',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim().split('\n')[0] ?? '') as AskJson;
+    expect(row.state).toBe('rejected');
+    expect(row.rejected_reason).toBe('out of scope this milestone');
+    expect(row.mapped_artifact).toBeNull();
+    expect(row.counter_proposal).toBeNull();
+  });
+
+  test('respond counter records --comment as counter_proposal, no child, exit 0', () => {
+    seedAskFixture();
+    const filed = fileOneAsk();
+    const res = withCapture(() =>
+      runAskCmd('respond', [String(filed.id)], {
+        verdict: 'counter',
+        comment: 'expose a read-only view instead',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim().split('\n')[0] ?? '') as AskJson;
+    expect(row.state).toBe('countered');
+    expect(row.counter_proposal).toBe('expose a read-only view instead');
+    expect(row.mapped_artifact).toBeNull();
+    expect(row.rejected_reason).toBeNull();
+  });
+
+  test('respond without a valid --verdict exits 1', () => {
+    seedAskFixture();
+    const filed = fileOneAsk();
+    const res = withCapture(() =>
+      runAskCmd('respond', [String(filed.id)], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--verdict');
+  });
+
+  test('respond on an unknown ask id exits 1', () => {
+    seedAskFixture();
+    const res = withCapture(() =>
+      runAskCmd('respond', ['9999'], { verdict: 'accept', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown ask id '9999'");
+  });
+
+  test('respond twice on the same ask exits 1 (already responded)', () => {
+    seedAskFixture();
+    const filed = fileOneAsk();
+    withCapture(() =>
+      runAskCmd('respond', [String(filed.id)], { verdict: 'reject', workspaceRoot: workspace }),
+    );
+    const res = withCapture(() =>
+      runAskCmd('respond', [String(filed.id)], { verdict: 'accept', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("not 'filed'");
+  });
+
   test('an unknown ask action exits 1', () => {
-    const res = withCapture(() => runAskCmd('bogus', { workspaceRoot: workspace }));
+    const res = withCapture(() => runAskCmd('bogus', [undefined], { workspaceRoot: workspace }));
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('unknown ask action');
   });

@@ -16,36 +16,61 @@
  *                              `{from_team, to_team, ask_type, blocking_artifact,
  *                              state:'filed'}`, prints the JSON row on stdout, and
  *                              prints the new ask id on its own final stdout line.
+ *   respond <ask-id> --verdict accept|reject|counter [--comment TEXT] [--by ID]
+ *                              MECHANICALLY apply a triage verdict the driver
+ *                              already produced — this path spawns NO model and
+ *                              invokes no Agent. `accept` creates exactly one
+ *                              child task under the to-team's tree, sets the ask's
+ *                              `mapped_artifact`, and adds a `blocked_by` dep from
+ *                              the from-team's blocking artifact onto the child.
+ *                              `reject` records `--comment` as `rejected_reason`;
+ *                              `counter` records it as `counter_proposal`; neither
+ *                              mutates the tree or deps. Fires an `ask_responded`
+ *                              event. Exits 1 on an unknown id, a missing/invalid
+ *                              `--verdict`, or an already-responded (non-`filed`)
+ *                              ask. Prints the updated JSON row.
  *
- * Stdout contract: the JSON ask row, then a final line carrying the new ask id
- * (so a caller can capture the id without parsing JSON). A one-line human summary
+ * Stdout contract: the JSON ask row. On `file`, a final line carries the new ask
+ * id (so a caller can capture it without parsing JSON). A one-line human summary
  * goes to stderr.
  *
  * Exit codes:
  *   0  success
  *   1  usage error (a missing required flag), unknown action, an unknown
- *      from_team / to_team, an ask_type the to_team does not accept, or a missing
- *      blocking_artifact
+ *      from_team / to_team, an ask_type the to_team does not accept, a missing
+ *      blocking_artifact, an unknown ask id, an invalid verdict, or a non-`filed`
+ *      ask on respond
  */
 
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
 import { type ScrumStore, openScrumStore } from '../store';
+import { ASK_VERDICTS, type AskVerdict } from '../types';
 
 export interface AskCmdFlags {
   fromTeam?: string;
   toTeam?: string;
   askType?: string;
   blockingArtifact?: string;
+  /** `respond`: the triage verdict (accept | reject | counter). */
+  verdict?: string;
+  /** `respond`: verdict-specific rationale (rejected_reason / counter_proposal). */
+  comment?: string;
+  /** `respond`: who produced the verdict (recorded for provenance). */
+  by?: string;
   human?: boolean;
   workspaceRoot?: string;
 }
 
-export type AskAction = 'file';
+export type AskAction = 'file' | 'respond';
 
-const ASK_ACTIONS: AskAction[] = ['file'];
+const ASK_ACTIONS: AskAction[] = ['file', 'respond'];
 
-export function runAskCmd(action: string, flags: AskCmdFlags): number {
+export function runAskCmd(
+  action: string,
+  args: Array<string | undefined>,
+  flags: AskCmdFlags,
+): number {
   if (!isAskAction(action)) {
     process.stderr.write(
       `error: unknown ask action '${action}'. expected one of: ${ASK_ACTIONS.join(', ')}\n`,
@@ -62,6 +87,8 @@ export function runAskCmd(action: string, flags: AskCmdFlags): number {
     switch (action) {
       case 'file':
         return doFile(store, flags);
+      case 'respond':
+        return doRespond(store, args[0], flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -74,6 +101,23 @@ export function runAskCmd(action: string, flags: AskCmdFlags): number {
 
 function isAskAction(value: string): value is AskAction {
   return (ASK_ACTIONS as string[]).includes(value);
+}
+
+/**
+ * Narrow a raw `--verdict` flag to the closed `AskVerdict` set, or null when
+ * unset/invalid. The store re-guards on write; this gives the CLI a clean usage
+ * error before reaching it.
+ */
+function asAskVerdict(raw: string | undefined): AskVerdict | null {
+  if (raw === undefined || raw.length === 0) return null;
+  return (ASK_VERDICTS as string[]).includes(raw) ? (raw as AskVerdict) : null;
+}
+
+/** Parse a positional ask-id arg to a positive integer, or null when missing/invalid. */
+function asAskId(raw: string | undefined): number | null {
+  if (raw === undefined || raw.length === 0) return null;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -113,5 +157,43 @@ function doFile(store: ScrumStore, flags: AskCmdFlags): number {
   process.stderr.write(
     `scrum ask file: ${ask.from_team} -> ${ask.to_team} '${ask.ask_type}' blocking ${ask.blocking_artifact} (id ${ask.id})\n`,
   );
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// respond
+// ---------------------------------------------------------------------------
+
+function doRespond(store: ScrumStore, idArg: string | undefined, flags: AskCmdFlags): number {
+  const id = asAskId(idArg);
+  if (id === null) {
+    process.stderr.write('scrum ask respond: a positive integer <ask-id> is required\n');
+    return 1;
+  }
+  const verdict = asAskVerdict(flags.verdict);
+  if (verdict === null) {
+    process.stderr.write(`scrum ask respond: --verdict <${ASK_VERDICTS.join('|')}> is required\n`);
+    return 1;
+  }
+
+  // respondAsk throws on an unknown id, an off-vocabulary verdict, and a
+  // non-`filed` ask; each surfaces as exit 1 via the runAskCmd catch with the
+  // store's domain message. The CLI performs no judgment — it forwards the
+  // driver's verdict for mechanical application.
+  const ask = store.respondAsk({
+    id,
+    verdict,
+    comment: flags.comment ?? null,
+    respondedBy: flags.by ?? null,
+  });
+
+  process.stdout.write(`${JSON.stringify(ask)}\n`);
+  const tail =
+    ask.state === 'accepted'
+      ? `mapped ${ask.mapped_artifact} (blocks ${ask.blocking_artifact})`
+      : ask.state === 'rejected'
+        ? 'rejected'
+        : 'countered';
+  process.stderr.write(`scrum ask respond: ${id} ${verdict} -> ${ask.state} ${tail}\n`);
   return 0;
 }
