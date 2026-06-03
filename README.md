@@ -1,6 +1,6 @@
 # prove
 
-A Claude Code plugin that adds a complete plan-to-implementation lifecycle: autonomous task execution with validation gates, structured code review, and agentic task management. Designed for engineering teams that want Claude to do real work — not just answer questions.
+A Claude Code plugin that adds a complete plan-to-implementation lifecycle: layered decomposition (charter → epic → story → task) with acceptance-gated closes, autonomous task execution with validation gates, structured code review, and agentic task management. Designed for engineering teams that want Claude to do real work — not just answer questions.
 
 ## Installation
 
@@ -26,6 +26,9 @@ Restart Claude Code after installation for the plugin to take effect.
 # Execute the plan autonomously with validation gates
 /prove:orchestrator
 
+# Or run a whole milestone's task tree as parallel waves
+/prove:workflow <milestone-id>
+
 # Inspect agent-generated diffs and record verdicts
 /prove:review-ui
 ```
@@ -35,7 +38,8 @@ Restart Claude Code after installation for the plugin to take effect.
 | Subsystem | Entry Point | What It Does |
 |-----------|-------------|--------------|
 | **Orchestrator** | `/prove:orchestrator` | Executes a task plan step-by-step. Runs build/lint/test validators after each step. Auto-scales: 1-3 steps run sequentially; 4+ steps use parallel git worktrees with mandatory principal-architect review before merge. |
-| **Scrum** | `/prove:scrum` | Agentic task management backed by `.prove/prove.db`. Tasks, milestones, tags, dependency graph, a layered containment tree (epic/story/task), and first-class acceptance criteria. The `decompose` skill drives top-down planning (charter → epic → story → task) over these primitives. SessionStart/SubagentStop/Stop hooks reconcile state at task boundaries; orchestrator runs link via `task_id` in `plan.json`. |
+| **Scrum** | `/prove:scrum` | Agentic task management backed by `.prove/prove.db`. Tasks, milestones, tags, dependency graph, a layered containment tree (epic/story/task), and first-class acceptance criteria. SessionStart/SubagentStop/Stop hooks reconcile state at task boundaries; orchestrator runs link via `task_id` in `plan.json`. |
+| **Methodology** | `/prove:decompose` | Top-down decompose ladder (charter/milestone → epic → story → task) with a human gate per layer, AC-gated story close (each acceptance criterion dispatched by kind: bash / assert / gate / agent), risk-forward review briefs synthesized from the run's reasoning log, and milestone-close curation that promotes findings into the durable decision store. Intake forms (`/prove:intake`) and self-contained HTML report surfaces (`claude-prove report`) render the same data for operators. |
 | **ACB** (Agent Change Brief) | `/prove:review-ui` | Every feature-branch commit carries an ACB v0.2 intent manifest written by a PostToolUse hook at commit time. The review UI (React + Fastify, Docker) surfaces intent-grouped diffs for structured review with verdicts: accepted / rejected / needs_discussion / rework. |
 
 ## Command Reference
@@ -45,9 +49,20 @@ Restart Claude Code after installation for the plugin to take effect.
 | Command | Description |
 |---------|-------------|
 | `/prove:orchestrator [--autopilot \| --full]` | Unified orchestrator entry point. `--autopilot` runs an existing plan hands-off; `--full` starts from a description (PRD-first); no flag auto-detects. |
+| `/prove:workflow <milestone-id \| plan.json>` | Execute a whole milestone or task tree as parallel waves through orchestrator full-mode machinery (worktrees, validators, review, sequential merge), mirroring status back to scrum. |
 | `/prove:plan [--task <desc> \| --step <id>]` | Plan a task (produces `prd.json` + `plan.json`) or drill into a numbered step from the active plan. No args prompts interactively. |
 | `/prove:task <handoff\|pickup\|progress\|complete\|cleanup> [slug]` | Task lifecycle dispatcher. `handoff` captures context before ending a session; `pickup` resumes in a fresh session. |
 | `/prove:brainstorm` | Explore options, weigh trade-offs, record decisions to `.prove/decisions/`. |
+
+### Methodology
+
+| Command | Description |
+|---------|-------------|
+| `/prove:decompose [target]` | Drive the decompose ladder: a planning subagent proposes each layer's children, a human gate promotes them, and the ladder recurses charter → epic → story → task. Also runs AC-gated story close. |
+| `/prove:intake [charter \| team \| decompose]` | Gather charter/team/decomposition answers through a self-contained HTML form; the validated payload drives the same writer the conversational interview drives. |
+| `/prove:reasoning-brief` | Synthesize the 7-section risk-forward Review Brief from a run's reasoning log, with mechanical preservation checks and a prose-quality judge. |
+| `/prove:curate` | Milestone-close curation pass: classify reasoning-log findings (ADR / glossary / pattern) and promote them into the durable scrum decision store behind a human gate. |
+| `/prove:run-migrate` | Operator-invoked content migration for stored run artifacts that sit behind the current schema (the deterministic structural chain is `claude-prove run-state migrate`). |
 
 ### Review & Quality
 
@@ -85,6 +100,9 @@ Restart Claude Code after installation for the plugin to take effect.
 | `/prove:update` | Validate configs, detect schema drift, and apply migrations with approval. |
 | `/prove:install-skills` | Install recommended community skills from external repos into `~/.claude/skills/`. |
 | `/prove:report-issue [description]` | File a bug report or feature request against the prove plugin via `gh` CLI. |
+| `/prove:remember <directive>` | Append or update a directive in `CLAUDE.md` outside the prove-managed section. |
+| `/prove:commit` | Semantic commit assistant: groups changes into logical units and creates conventional commits using the scopes in `.claude/.prove.json`. |
+| `/prove:prep-permissions` | Analyze the active plan and config to scope `.claude/settings.local.json` permission rules before an autonomous run. |
 
 ## Configuration
 
@@ -92,7 +110,7 @@ Run `/prove:init` to auto-detect your tech stack and generate `.claude/.prove.js
 
 ```json
 {
-  "schema_version": "1",
+  "schema_version": "9",
   "validators": [
     { "name": "build", "command": "go build ./...", "phase": "build" },
     { "name": "lint",  "command": "go vet ./...",   "phase": "lint" },
