@@ -238,6 +238,30 @@ function findProveBlock(
 }
 
 /**
+ * Report whether the first hook entry in a prove-owned block is already in
+ * sync with `spec` and `desiredCommand`.
+ *
+ * The `entry.if === spec.if` check is sound even when both are `undefined`
+ * because buildHookEntry omits the `if` key entirely when `spec.if` is
+ * undefined — so `undefined === undefined` is the correct equality for the
+ * "both absent" case. Do NOT replace this with `'if' in entry` / `'if' in spec`:
+ * spec is a plain object where `'if' in spec` is true regardless of the value,
+ * which would break the comparison for specs without a conditional.
+ */
+function entryInSync(
+  entry: HookEntry | undefined,
+  spec: ProveHookSpec,
+  desiredCommand: string,
+): boolean {
+  return (
+    entry !== undefined &&
+    entry.command === desiredCommand &&
+    entry.timeout === spec.timeout &&
+    entry.if === spec.if // equality is sound because buildHookEntry omits the key when spec.if is undefined
+  );
+}
+
+/**
  * Merge prove-owned hook blocks into `settingsPath`.
  *
  * Behavior:
@@ -291,14 +315,7 @@ export function writeSettingsHooks(
     }
 
     if (existing) {
-      const entry = existing.hooks[0];
-      const inSync =
-        entry !== undefined &&
-        entry.command === desiredCommand &&
-        entry.timeout === spec.timeout &&
-        entry.if === spec.if;
-
-      if (inSync && !opts.force) continue;
+      if (entryInSync(existing.hooks[0], spec, desiredCommand) && !opts.force) continue;
 
       // Rewrite the single hook entry while preserving any extra keys on
       // the outer block (e.g. future metadata users may add alongside

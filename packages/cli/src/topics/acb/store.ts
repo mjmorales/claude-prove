@@ -481,12 +481,31 @@ export class AcbStore {
     ]);
   }
 
+  /**
+   * Delete all verdict rows for `slug`. Call this from the slug-retirement
+   * path (wave cleanup, run teardown) rather than relying on branch cleanup —
+   * `acb_group_verdicts` has no `branch` column (it is keyed by `(slug,
+   * group_id)`), so branch-scoped deletion is structurally inapplicable.
+   * Returns the number of rows deleted.
+   */
+  clearVerdictsForSlug(slug: string): number {
+    const db = this.store.getDb();
+    const stmt = db.prepare<unknown, [string]>('DELETE FROM acb_group_verdicts WHERE slug = ?');
+    const result = stmt.run(slug);
+    return Number(result.changes);
+  }
+
   // -- Cleanup ------------------------------------------------------------
 
   /**
-   * Delete every row for `branch` across all three acb_* tables.
-   * Returned counts are keyed by the acb-prefixed table names; the unified
-   * store namespaces all domain tables with the `acb_` prefix.
+   * Delete every row for `branch` across the three branch-keyed acb_* tables:
+   * `acb_manifests`, `acb_acb_documents`, and `acb_review_state`.
+   * Returned counts are keyed by the acb-prefixed table names.
+   *
+   * `acb_group_verdicts` is intentionally excluded: it has no `branch` column
+   * and cannot be branch-scoped. Verdict GC is slug-scoped via
+   * `clearVerdictsForSlug`, which the caller must invoke separately when
+   * retiring a slug.
    */
   cleanBranch(branch: string): CleanBranchCounts {
     return {
@@ -496,7 +515,13 @@ export class AcbStore {
     };
   }
 
-  /** Sorted unique branch names across manifests + documents + review state. */
+  /**
+   * Sorted unique branch names across the three branch-keyed acb_* tables:
+   * `acb_manifests`, `acb_acb_documents`, and `acb_review_state`.
+   *
+   * `acb_group_verdicts` is intentionally excluded: it has no `branch` column
+   * and cannot contribute a branch-based enumeration.
+   */
   branches(): string[] {
     const tables = ['acb_manifests', 'acb_acb_documents', 'acb_review_state'] as const;
     const seen = new Set<string>();

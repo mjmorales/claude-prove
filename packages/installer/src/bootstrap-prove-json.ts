@@ -78,6 +78,12 @@ function freshConfig(detected: StoredValidator[]): ProveConfig {
 /**
  * Preserve user-custom validators and all non-validators top-level keys
  * while replacing the auto-detected entries.
+ *
+ * Schema version policy: bootstrap never migrates. If the on-disk version is
+ * older than the CLI's current version, preserve it so `schema migrate` can
+ * own the transform. If the on-disk version is newer, the running CLI is too
+ * old to safely touch the file — throw to prevent a silent downgrade that
+ * would cause `schema migrate` to start from the wrong hop.
  */
 function mergeWithExisting(path: string, detected: StoredValidator[]): ProveConfig {
   const raw = readFileSync(path, 'utf8');
@@ -87,6 +93,23 @@ function mergeWithExisting(path: string, detected: StoredValidator[]): ProveConf
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`Failed to parse existing .prove.json — file may be corrupt: ${msg}`);
+  }
+
+  const existingVersion =
+    typeof existing.schema_version === 'string' ? existing.schema_version : undefined;
+
+  // Guard against downgrade: if the on-disk version is numerically newer than
+  // what this CLI knows about, stamping CURRENT_SCHEMA_VERSION would label the
+  // file with a lower version while the body still contains newer-shape fields,
+  // causing `schema migrate` to start from the wrong hop.
+  if (
+    existingVersion !== undefined &&
+    Number.parseInt(existingVersion, 10) > Number.parseInt(CURRENT_SCHEMA_VERSION, 10)
+  ) {
+    throw new Error(
+      `Cannot bootstrap: existing .prove.json schema_version (${existingVersion}) is newer than ` +
+        `this CLI's version (${CURRENT_SCHEMA_VERSION}). Upgrade the CLI before re-running init.`,
+    );
   }
 
   const existingValidators = Array.isArray(existing.validators)
@@ -99,7 +122,8 @@ function mergeWithExisting(path: string, detected: StoredValidator[]): ProveConf
 
   return {
     ...existing,
-    schema_version: CURRENT_SCHEMA_VERSION,
+    // Preserve the existing version; let `schema migrate` own the upgrade path.
+    schema_version: existingVersion ?? CURRENT_SCHEMA_VERSION,
     validators: [...detected, ...userCustom],
     reporters: Array.isArray(existing.reporters) ? existing.reporters : [],
   };

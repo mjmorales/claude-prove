@@ -7,7 +7,7 @@
  */
 
 import { mkdirSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import {
   detectMode,
   resolveBinaryPath,
@@ -32,10 +32,12 @@ export function runInitHooks(opts: InitHooksOptions): number {
 
   // Ensure the settings directory exists before writeSettingsHooks stages
   // its sibling `.tmp`.
-  mkdirSync(dirname(settingsPath), { recursive: true });
-  // Project root is the parent of `.claude/` — read tool toggles from its
-  // `.claude/.prove.json` so disabled tools' hook blocks are not installed.
-  const projectRoot = dirname(dirname(settingsPath));
+  const settingsDir = dirname(settingsPath);
+  mkdirSync(settingsDir, { recursive: true });
+  // Derive the project root only when settingsPath is actually nested under
+  // `.claude/` — an unusual --settings path should read the cwd config rather
+  // than a phantom sibling directory that has no .prove.json.
+  const projectRoot = basename(settingsDir) === '.claude' ? dirname(settingsDir) : process.cwd();
   const disabledTools = disabledToolsFromConfig(projectRoot);
   const wrote = writeSettingsHooks(settingsPath, prefix, { force: opts.force, disabledTools });
   console.log(

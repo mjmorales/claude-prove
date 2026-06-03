@@ -107,21 +107,34 @@ async function fetchBinary(url: string): Promise<ArrayBuffer> {
     throw new Error(`fetch failed: ${res.status} ${res.statusText} (${url})`);
   }
   // Guard against CDN/proxy returning an HTML error page with 200 OK.
-  // Release assets must be a binary-ish content type.
-  const contentType = res.headers.get('content-type') ?? '';
-  if (!isBinaryContentType(contentType)) {
-    throw new Error(`unexpected content-type from release URL: ${contentType}`);
-  }
+  // Peek at the first 256 bytes to detect an HTML body regardless of the
+  // content-type header value (proxies sometimes serve text/plain for errors).
   const bytes = await res.arrayBuffer();
+  const head = new TextDecoder().decode(bytes.slice(0, 256));
+  const contentType = res.headers.get('content-type') ?? '';
+  if (looksLikeHtmlError(contentType, head)) {
+    throw new Error(`unexpected HTML response from release URL: ${contentType}`);
+  }
   if (bytes.byteLength === 0) {
     throw new Error(`empty binary at ${url}`);
   }
   return bytes;
 }
 
-function isBinaryContentType(contentType: string): boolean {
-  const lower = contentType.toLowerCase();
-  return lower.startsWith('application/octet-stream') || lower.startsWith('application/x-sh');
+/**
+ * Denylist for HTML error pages served with 200 OK by CDNs or auth proxies.
+ * Accepts any content-type except known HTML/XHTML types, and additionally
+ * rejects a body that opens with an HTML doctype regardless of header — the
+ * combination catches both correctly-labeled and mislabeled error pages.
+ * A denylist is used (rather than an allowlist) so that a CDN content-type
+ * change from `application/octet-stream` to another binary-ish type does not
+ * silently break every upgrade.
+ */
+function looksLikeHtmlError(contentType: string, bodyHead: string): boolean {
+  const ct = contentType.toLowerCase();
+  if (ct.startsWith('text/html') || ct.startsWith('application/xhtml+xml')) return true;
+  const trimmed = bodyHead.trimStart().toLowerCase();
+  return trimmed.startsWith('<!doctype html') || trimmed.startsWith('<html');
 }
 
 function tryUnlink(path: string): void {

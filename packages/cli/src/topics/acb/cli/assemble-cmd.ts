@@ -20,7 +20,7 @@
  *
  * Exit codes:
  *   0  ACB document persisted (manifest count may be 0)
- *   1  base ref unresolvable, or HEAD unresolvable
+ *   1  base ref unresolvable, HEAD unresolvable, or assemble/save/clear failed
  */
 
 import { join } from 'node:path';
@@ -59,31 +59,32 @@ export function runAssemble(opts: AssembleOpts): number {
   ensureLegacyImported(workspaceRoot);
 
   const store = openAcbStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
-  let groups: number;
-  let uncovered: number;
-  let cleared: number;
-  let manifestCount: number;
   try {
     const acb = assemble({ store, branch, baseRef: baseSha, headRef: head });
     store.saveAcb(branch, acb);
-    cleared = store.clearManifests(branch);
-    manifestCount = acb.manifest_count;
-    groups = acb.intent_groups.length;
-    uncovered = acb.uncovered_files.length;
+    const cleared = store.clearManifests(branch);
+    const manifestCount = acb.manifest_count;
+    const groups = acb.intent_groups.length;
+    const uncovered = acb.uncovered_files.length;
+
+    process.stderr.write(`Assembled ${manifestCount} manifests → ${groups} intent groups\n`);
+    if (uncovered > 0) {
+      process.stderr.write(`  ${uncovered} files not covered by any manifest\n`);
+    }
+    if (cleared > 0) {
+      process.stderr.write(`  Cleared ${cleared} manifests from store\n`);
+    }
+
+    process.stdout.write(`${JSON.stringify({ branch, groups, uncovered })}\n`);
+    return 0;
+  } catch (err) {
+    process.stderr.write(
+      `Error: assemble failed: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    return 1;
   } finally {
     store.close();
   }
-
-  process.stderr.write(`Assembled ${manifestCount} manifests → ${groups} intent groups\n`);
-  if (uncovered > 0) {
-    process.stderr.write(`  ${uncovered} files not covered by any manifest\n`);
-  }
-  if (cleared > 0) {
-    process.stderr.write(`  Cleared ${cleared} manifests from store\n`);
-  }
-
-  process.stdout.write(`${JSON.stringify({ branch, groups, uncovered })}\n`);
-  return 0;
 }
 
 /** Resolve `base` to a full SHA via `git rev-parse`; null on failure. */

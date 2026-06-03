@@ -13,8 +13,8 @@
  *     lexicographic order.
  *   - `loadManifestsFromStore` warn-logs invalid manifests and skips them;
  *     the assembled doc's manifest count reflects valid-only.
- *   - `mergeIntentGroups` mutates the first-seen ref dicts in place when
- *     adding novel ranges.
+ *   - `mergeIntentGroups` deep-copies FileRef objects so the assembled result
+ *     owns its own data and input manifests are never aliased or mutated.
  */
 
 import { createHash, randomUUID } from 'node:crypto';
@@ -177,7 +177,13 @@ function cloneGroupShell(gid: string, raw: Record<string, unknown>): IntentGroup
     classification: asString(raw.classification) ?? '',
     ambiguity_tags: [...asStringArray(raw.ambiguity_tags)],
     task_grounding: asString(raw.task_grounding) ?? '',
-    file_refs: [...asFileRefArray(raw.file_refs)],
+    // Deep-copy each FileRef so the cloned group owns its own objects;
+    // callers that retain references to the source manifest won't observe
+    // mutations made during subsequent merges.
+    file_refs: asFileRefArray(raw.file_refs).map((r) => ({
+      ...r,
+      ranges: r.ranges ? [...r.ranges] : undefined,
+    })),
     annotations: [...asAnnotationArray(raw.annotations)],
   };
 }
@@ -188,7 +194,9 @@ function mergeFileRefs(existing: IntentGroup, incoming: Record<string, unknown>)
 
   for (const ref of incomingRefs) {
     if (!existingPaths.has(ref.path)) {
-      existing.file_refs.push(ref);
+      // Push a copy so the merged result owns its own objects and the caller's
+      // input manifests are not aliased into the assembled document.
+      existing.file_refs.push({ ...ref, ranges: ref.ranges ? [...ref.ranges] : undefined });
       existingPaths.add(ref.path);
       continue;
     }

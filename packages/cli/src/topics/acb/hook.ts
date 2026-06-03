@@ -321,11 +321,17 @@ function block(reason: string): HookOutput {
 }
 
 /**
- * Check the unified store for a manifest keyed to `commitSha`. Errors
- * (missing db, migration failure) coerce to `false` so a store problem never
- * accidentally unblocks a commit. The catch is warn-logged so infra issues
- * surface in hook stderr instead of silently forcing every commit into the
- * block-and-ask-for-manifest path.
+ * Check the unified store for a manifest keyed to `commitSha`. Returns `true`
+ * when a manifest exists (commit passes silently); returns `false` otherwise.
+ *
+ * Errors (missing db, migration failure) coerce to `false`, which routes the
+ * commit into the block-and-ask-for-manifest path — the conservative default.
+ * A store problem therefore never silently lets an unmanifested commit pass;
+ * it forces the agent to save a manifest instead.
+ *
+ * The catch emits a warn so an operator can distinguish a genuine missing
+ * manifest from a corrupt/inaccessible store when every commit is being
+ * intercepted.
  */
 function manifestExists(workspaceRoot: string, commitSha: string, runSlug: string | null): boolean {
   try {

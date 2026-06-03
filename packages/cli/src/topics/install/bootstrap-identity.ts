@@ -193,10 +193,18 @@ export function renderProvenanceFrontmatter(now: string = new Date().toISOString
  * canonical holder history lives in the `scrum_operator_history` table; this
  * frontmatter field is the file-side mirror of the current (open) interval's
  * holder, kept in sync when the holder is transferred.
+ *
+ * Anchors the search on "\n---" so the opening fence (which has no preceding
+ * newline) can never match. Throws when no closing fence is found so a
+ * caller-supplied malformed frontmatter is surfaced cleanly rather than
+ * silently producing invalid YAML.
  */
 function spliceCharterFrontmatter(frontmatter: string, operatorOfRecord: string | null): string {
-  const closing = frontmatter.lastIndexOf('---');
-  const head = frontmatter.slice(0, closing);
+  const closingIdx = frontmatter.lastIndexOf('\n---');
+  if (closingIdx === -1) {
+    throw new Error('spliceCharterFrontmatter: frontmatter is missing its closing --- fence');
+  }
+  const head = frontmatter.slice(0, closingIdx + 1); // keep the newline before ---
   const value = operatorOfRecord === null ? 'null' : operatorOfRecord;
   return `${head}operator_of_record: ${value}\n---`;
 }
@@ -271,6 +279,23 @@ export function bootstrapIdentity(opts: BootstrapIdentityOptions): BootstrapIden
 
   if (preflightFailures.length > 0) {
     return { ok: false, preflightFailures, artifacts: [] };
+  }
+
+  // Reject a contributor artifact request with no id before any file I/O.
+  // An empty id would produce `contributors/.md` — an unaddressable dotfile
+  // that cannot be reconciled to the intended `<slug>.md` on a re-run.
+  if (opts.artifacts.has('contributor') && !opts.contributorId?.trim()) {
+    return {
+      ok: false,
+      preflightFailures: [
+        {
+          check: 'contributor-id',
+          detail: 'contributor artifact requested without a contributor id',
+          fix: 'pass a non-empty contributor slug via --contributor-id',
+        },
+      ],
+      artifacts: [],
+    };
   }
 
   const now = new Date().toISOString();

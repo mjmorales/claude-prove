@@ -183,14 +183,25 @@ function checkSettingsHookPaths(cwd: string): CheckResult[] {
 /**
  * Extract every hook block tagged with `_tool` (prove-owned). User-authored
  * blocks without `_tool` are skipped — we never audit them.
+ *
+ * Guards against non-array and non-object values because settings.json is
+ * user-editable and a malformed hook-event value (e.g. a number) would
+ * cause an uncaught TypeError from `for...of` — exactly the wrong failure
+ * mode when the user is already running doctor to diagnose a suspect file.
  */
 function collectProveBlocks(settings: SettingsFile): HookBlock[] {
   const result: HookBlock[] = [];
   const hooks = settings.hooks ?? {};
   for (const blocks of Object.values(hooks)) {
-    if (!blocks) continue;
+    if (!Array.isArray(blocks)) continue;
     for (const block of blocks) {
-      if (typeof block._tool === 'string') result.push(block);
+      if (
+        block &&
+        typeof block === 'object' &&
+        typeof (block as Record<string, unknown>)._tool === 'string'
+      ) {
+        result.push(block as HookBlock);
+      }
     }
   }
   return result;
