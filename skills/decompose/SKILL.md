@@ -244,15 +244,29 @@ before promoting — accept then `ready` would push it to a state the floor reje
 criteria-less story (criteria are enforced at `→ ready`, the state the accepted child enters
 once its deps clear).
 
+**Decomposition preview** (before the gate). For a gated tier, render the proposed children
+to a visual preview the operator reviews before promotion — write the proposed children
+(`title`, `description`, `blocked_by`, `acceptance`) plus the target `layer` to a JSON file
+and render it:
+
+```bash
+claude-prove report decompose-preview --file <children.json> --out <preview.html>
+```
+
+The preview is a self-contained report/v1 HTML page (one numbered section per proposed
+child, with its description, `blocked_by` deps, and acceptance criteria). Open it for the
+operator, then run the accept gate below. Skip the preview when the tier is auto-accepted —
+there is no gate to inform.
+
 **Accept gate** (`proposed → accepted` — the decomposition review). Acceptance is the trigger
 that fires the next tier's decompose; it does NOT itself start work (`accepted → ready`
 happens once deps clear):
 
 - If `--auto-accept-through <layer>` covers this tier → auto-promote each child
   `proposed → accepted` (`claude-prove scrum task status <id> accepted`) and log the decision.
-- Else → one `AskUserQuestion` (header `"Accept"`, options `Accept all` / `Revise`).
-  On `Accept all`, promote each child `proposed → accepted`. On `Revise`, collect free-form
-  feedback, re-run Phase L2 for that parent, and re-gate. See
+- Else → render the preview above, then one `AskUserQuestion` (header `"Accept"`, options
+  `Accept all` / `Revise`). On `Accept all`, promote each child `proposed → accepted`. On
+  `Revise`, collect free-form feedback, re-run Phase L2 for that parent, and re-gate. See
   `references/interaction-patterns.md` (Approval Gate).
 
 Only `accepted` children recurse.
@@ -521,6 +535,9 @@ const childrenSchema = {
 // this recursive driver starts at a milestone root and walks the task tiers below it.
 const TIERS = ["epic", "story", "task"]; // milestone root feeds the first tier
 
+// Any writable directory for the per-tier decomposition-preview artifacts (json + html).
+const scratch = ".prove/scratch";
+
 // Layer persona keyed by the child layer being produced (see "Layer personas"). The
 // strategy@initiative persona drives the initiative→milestone pre-step, not this recursion.
 const LAYER_PERSONAS = {
@@ -603,6 +620,25 @@ async function decompose(parent, tierIndex, { milestone, autoAcceptThrough, maxF
     autoAcceptThrough && tierIndex <= TIERS.indexOf(autoAcceptThrough);
   let accepted = created;
   if (!tierAutoAccepted) {
+    // Decomposition preview: render the proposed children to a self-contained
+    // report/v1 HTML page the operator reviews before the gate (skipped when
+    // auto-accepted — there is no gate to inform). `scratch` is any writable path.
+    const previewJson = `${scratch}/preview-${parent.id}-${layer}.json`;
+    await writeFile(
+      previewJson,
+      JSON.stringify({
+        layer,
+        children: created.map((c) => ({
+          title: c.srcTitle,
+          description: c.description,
+          blocked_by: c.blocked_by,
+          acceptance: c.acceptance,
+        })),
+      }),
+    ); // native Write
+    await sh(
+      `claude-prove report decompose-preview --file ${previewJson} --out ${scratch}/preview-${parent.id}-${layer}.html`,
+    );
     const verdict = await AskUserQuestion({
       header: "Accept",
       question: `Accept these ${created.length} ${layer} children of "${parent.title}"?`,
