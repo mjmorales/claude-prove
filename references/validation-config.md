@@ -24,6 +24,87 @@ Source of truth for validators and reporters. If present, auto-detection is skip
 }
 ```
 
+### Complete Example (every key)
+
+A fully-featured `.claude/.prove.json` exercising every top-level key the schema defines. All keys except `schema_version` are optional — start minimal and add blocks as you adopt features.
+
+```json
+{
+  "schema_version": "9",
+  "dev_mode": false,
+  "scopes": {
+    "api": "src/api/",
+    "auth": "src/auth/",
+    "db": "src/models/",
+    "docs": "docs/"
+  },
+  "validators": [
+    { "name": "build", "command": "go build ./...", "phase": "build" },
+    { "name": "lint", "command": "go vet ./...", "phase": "lint" },
+    { "name": "tests", "command": "go test ./...", "phase": "test" },
+    { "name": "migrations", "command": "./scripts/check-migrations.sh", "phase": "custom" },
+    { "name": "doc-quality", "prompt": ".prove/prompts/doc-quality.md", "phase": "llm" },
+    { "name": "comment-audit", "skill": "claude-skills:comment-audit", "phase": "llm" }
+  ],
+  "reporters": [
+    { "name": "slack", "command": "./.prove/notify-slack.sh", "events": ["step-complete", "step-halted", "execution-complete"] },
+    { "name": "discord", "command": "./.prove/notify-discord.sh", "events": ["review-approved", "review-rejected"] }
+  ],
+  "triggers": [
+    { "on": "accepted", "workflow": "decompose", "description": "fire the next-layer decompose" },
+    { "on": "blocked", "workflow": "re-plan", "description": "surface re-decomposition on a discovered dependency" }
+  ],
+  "claude_md": {
+    "references": [
+      { "path": "references/llm-coding-standards.md", "label": "LLM-Optimized Coding Standards" },
+      { "path": "~/team/conventions.md", "label": "Team Conventions" }
+    ]
+  },
+  "tools": {
+    "cafi": {
+      "enabled": true,
+      "scope": "user",
+      "config": { "excludes": ["vendor/", "generated/"], "max_file_size": 102400, "concurrency": 3 }
+    },
+    "acb": {
+      "enabled": true,
+      "scope": "user",
+      "config": { "base_branch": "main", "review_ui_port": 5174, "review_ui_image": "ghcr.io/mjmorales/claude-prove/review-ui", "review_ui_tag": "latest" }
+    },
+    "pcd": { "enabled": true },
+    "run_state": { "enabled": true, "scope": "user" },
+    "scrum": { "enabled": true, "scope": "user", "config": {} }
+  },
+  "brief": {
+    "single_pass_token_threshold": 8000,
+    "max_synthesis_retries": 2,
+    "prose_judge_on": true
+  },
+  "memory": {
+    "stale_threshold_days": 90
+  },
+  "decomposition": {
+    "auto_accept_through": "none"
+  }
+}
+```
+
+| Key | Purpose | Default |
+|-----|---------|---------|
+| `schema_version` | Config format version for migration tracking (`schema migrate` owns transitions) | current version |
+| `dev_mode` | `true` makes codegen emit `bun run <pluginDir>/packages/cli/bin/run.ts` instead of bare `claude-prove` — plugin developers working from a checkout only | `false` |
+| `scopes` | Commit scope name → directory prefix; consumed by the commit skill and conventional-commit validation | — |
+| `validators` | Ordered checks run after each orchestrator step (see Validator Fields) | — |
+| `reporters` | Shell commands fired on lifecycle events (see Reporter Fields) | — |
+| `triggers` | Status-transition → bound next-action table the scrum reconciler surfaces (see Trigger Bindings) | — |
+| `claude_md.references` | Files included in generated `CLAUDE.md` via `@` references (`~` expands) | `[]` |
+| `tools` | Per-tool activation, each `{ enabled, scope?, config? }`; `enabled: false` omits the tool's hooks at install time | enabled |
+| `brief.single_pass_token_threshold` | Episode-token budget splitting single-pass from chunked multipass brief synthesis | `8000` |
+| `brief.max_synthesis_retries` | Retry budget for the brief synthesis stage | `2` |
+| `brief.prose_judge_on` | Run the advisory (non-blocking) prose-quality judge on synthesized briefs | `true` |
+| `memory.stale_threshold_days` | Age past which `scrum decision review-stale` reports a decision (report-only, never prunes) | `90` |
+| `decomposition.auto_accept_through` | Decompose layer (`epic`/`story`/`task`) through which children auto-promote without the human accept gate; `none` gates every layer | `"none"` |
+
 ### Schema Version
 
 Tracks config format for migration. Missing field = v0 (pre-schema). Run `/prove:update` to migrate.
