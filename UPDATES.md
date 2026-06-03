@@ -6,6 +6,28 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.7.4 — Trigger binding table honored by the reconciler (config schema v8→v9)
+
+*(Additive — one-time `/prove:update` stamp; absent `triggers` preserves current behavior.)* A declared trigger table maps a **status-transition → bound next-action**, and the scrum reconciler consults it on session transitions — realizing the common cases of passive triggers without a resident evaluator.
+
+**New config field — `triggers`** in `.claude/.prove.json` (`PROVE_SCHEMA`): a list of bindings, each `{ on, workflow, description? }`:
+
+```jsonc
+"triggers": [
+  { "on": "accepted", "workflow": "decompose", "description": "fire the next-layer decompose" },
+  { "on": "ready",    "workflow": "orchestrate" }
+]
+```
+
+- **`on`** — the task status whose entry fires the binding (closed enum: `backlog` `proposed` `accepted` `ready` `in_progress` `review` `blocked` `done` `cancelled`).
+- **`workflow`** — the bound next-action the reconciler surfaces (a workflow name or short label).
+
+**How it's honored.** The session-start scrum hook consults the table and surfaces a **bound next-actions** section in its digest: every non-terminal task currently sitting in a triggering status yields one pending next-action the next driver should take. There is **no resident evaluator** — bindings fire only when a session reconciles; intra-run, a workflow script branches directly. A malformed or absent config yields no bindings (the hook never breaks).
+
+**Migration — config schema v8 → v9:** `CURRENT_SCHEMA_VERSION` `'8' → '9'`. The hop is a pure version bump (`triggers` is optional; absent = no bindings, the v8 behavior). Run `/prove:update` (or `claude-prove schema migrate --file .claude/.prove.json`) at the repo root; commit the updated file and delete the generated `.bak`.
+
+---
+
 ## v3.7.3 — Durable workflow run records: retry/loop/fanout/on_fail/singleton (run-state schema v3→v4)
 
 *(Additive — run-state plan schema `v3 → v4`; a pure version bump, absent block preserves current behavior.)* A plan task gains an optional `execution` block of declarative directives the workflow/orchestrator driver honors and the durable run record persists:
