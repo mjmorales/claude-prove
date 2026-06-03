@@ -6,6 +6,18 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.7.5 — Passive triggers & opt-in unattended-execution recipe
+
+*(Docs — no schema change, nothing to adopt.)* A new reference, `references/passive-triggers.md`, documents the three-mechanism trigger model and the opt-in unattended-execution recipe:
+
+- **Intra-run** — the trigger is the next `/workflows` statement (deterministic control flow).
+- **Cross-session** — the scrum reconciler *surfaces* (does not auto-execute) bound next-actions from the `triggers[]` table via the session-start digest and `scrum next-ready` / `scrum alerts`.
+- **Opt-in unattended** — a `/loop` (same machine, session open) or scheduled-remote-agent (`/schedule`, recurring) driver that drains `claude-prove scrum next-ready` hands-off. prove ships no scheduler of its own — both recipes use Claude Code's own scheduling primitives.
+
+Explicit trade: **no autonomous progression between sessions unless the opt-in driver is configured** — prove trades unattended firing for zero operational surface (no resident daemon).
+
+---
+
 ## v3.7.4 — Trigger binding table honored by the reconciler (config schema v8→v9)
 
 *(Additive — one-time `/prove:update` stamp; absent `triggers` preserves current behavior.)* A declared trigger table maps a **status-transition → bound next-action**, and the scrum reconciler consults it on session transitions — realizing the common cases of passive triggers without a resident evaluator.
