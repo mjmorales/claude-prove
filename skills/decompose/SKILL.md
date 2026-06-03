@@ -66,6 +66,7 @@ Parse `$ARGUMENTS`. First non-flag token selects the methodology:
 
 | Target | Mode | Path |
 |--------|------|------|
+| An initiative name (the `--initiative` grouping) | **Ladder** (B1), initiative pre-step | Phase L1 (pre-step) → L2–L4 per milestone |
 | A milestone id, or `VISION.md` / a charter path | **Ladder** (B1) | Phase L1–L4 |
 | A story task id (a `layer: story` task) | **Story-close** (B2) | Phase C1–C6 |
 | *(none)* | Ask. Offer open milestones (`scrum status`) for the ladder, or `scrum next-ready --status review` stories for close. | — |
@@ -74,7 +75,7 @@ Flags:
 
 | Flag | Default | Effect |
 |------|---------|--------|
-| `--auto-accept-through <layer>` | off | Auto-promote `backlog→ready` (skip the accept gate) for every layer at or above the named tier (`epic`/`story`/`task`). The gate still fires for tiers *below* it. |
+| `--auto-accept-through <layer>` | off | Auto-accept cascade: auto-promote `proposed→accepted` (skip the accept gate) for every layer at or above the named tier (`epic`/`story`/`task`). `<layer>` names the **deepest hands-free layer** — the gate still fires for tiers *below* it. E.g. `--auto-accept-through epic` runs the epic tier hands-free and gates story/task (the milestone root has no task-status accept gate). |
 | `--milestone <id>` | inferred | Milestone all ladder children attach to (`scrum task create --milestone`). |
 | `--max-fanout <n>` | 8 | Cap on parallel planning/verification subagents per batch. |
 
@@ -82,35 +83,53 @@ Flags:
 
 ## B1 — The decompose ladder
 
-The ladder walks `epic → story → task`. Charter/`planning/VISION.md` or a milestone is
-the **root input**, not a layer you create. Per layer you (1) spawn a planning subagent
-with a structured-output schema, (2) write each returned child as a layered scrum task,
-(3) gate accept, (4) recurse into the next tier.
+The ladder walks `initiative → milestone → epic → story → task`. An initiative, a
+charter/`planning/VISION.md`, or a milestone is the **root input** — you enter the ladder at
+whichever tier your root sits above. Per layer you (1) spawn a planning subagent with a
+structured-output schema, (2) write each returned child (a milestone entity at the
+initiative tier; a layered scrum task at the rest), (3) gate accept (`proposed → accepted`),
+(4) recurse into the next tier. Each layer's decompose **fires when its parent reaches
+`accepted`** — the accept gate of one tier is the trigger for the next tier's decompose.
 
 ### Layer personas
 
 Each planning subagent gets a **layer-appropriate persona** so it decomposes at the right
 altitude — a PM thinking in capabilities produces different epics than a generic planner.
-The persona is keyed by the **child layer being produced**.
+The persona is keyed by the **parent layer being decomposed** (equivalently, by the child
+layer it produces one tier down).
 
-**Three personas are active for this ladder** — exactly the `epic → story → task` tiers it
-produces. Spawn only these:
+**Four personas are active across the full ladder** — `initiative → milestone → epic →
+story → task`. Each fires when its parent reaches `accepted` (the decomposition-review gate
+that promotes `proposed → accepted`), and produces the next tier down. Spawn only these:
 
-| Child layer produced | Planning persona | Decomposition frame |
-|----------------------|------------------|---------------------|
-| `epic` | **pm@milestone** | Product manager splitting a milestone into epics — coherent user-facing capabilities, each a scoped slice of the milestone outcome. |
-| `story` | **tech_lead@epic** | Tech lead splitting an epic into stories — architectural seams + integration order; each story independently shippable and verifiable. |
-| `task` | **engineer@story** | Engineer splitting a story into tasks — concrete PR-sized implementation units, each with a clear acceptance check. |
+| Parent decomposed | Child produced | Planning persona | Decomposition frame |
+|-------------------|----------------|------------------|---------------------|
+| `initiative` | `milestone` | **strategy@initiative** | Strategy lead splitting an initiative into milestones — each a coherent outcome slice with a target state, sharing the initiative grouping. Produces `scrum_milestones` (via `scrum milestone create --initiative`), not tasks. |
+| `milestone` | `epic` | **pm@milestone** | Product manager splitting a milestone into epics — coherent user-facing capabilities, each a scoped slice of the milestone outcome. |
+| `epic` | `story` | **tech_lead@epic** | Tech lead splitting an epic into stories — architectural seams + integration order; each story independently shippable and verifiable. |
+| `story` | `task` | **engineer@story** | Engineer splitting a story into tasks — concrete PR-sized implementation units, each with a clear acceptance check. |
 
-**Two personas are NOT decomposition planners** — never spawn them from this ladder:
+**Two shapes, not one.** The `initiative → milestone` tier creates milestone *entities*
+(`scrum milestone create --initiative <init>`); the `milestone → epic → story → task` tiers
+create layered *tasks* (`scrum task create --parent --layer`). The initiative tier is the
+pre-step that seeds the per-milestone ladders; the recursion below it has the single
+task-create shape.
+
+**One persona is excluded** — never spawn it from this ladder:
 
 | Persona | Why it is excluded |
 |---------|--------------------|
-| **strategy@initiative** | Reserved. The initiative tier above `milestone` is not currently modeled; the milestone/VISION is the ladder's root, not a layer this ladder produces. Activate only if that tier lands. |
 | **implementer@task** | The leaf executor, not a planner. A `task` is the leaf — it is never decomposed further; the implementer executes it under story-close / orchestrator full-mode. |
 
 ### Phase L1: Resolve the root input
 
+- **Initiative root** (the pre-step): with a `strategy@initiative` planning subagent, split
+  the initiative into milestones and create each as a milestone entity
+  (`claude-prove scrum milestone create --title "<m>" --target-state "<...>" --initiative
+  <init>`). Milestones carry no `proposed`/`accepted` task-status, so this tier has no
+  store-level accept gate — the operator decides which milestone's ladder to run next. Then
+  enter the recursion at each milestone root below. This pre-step is out of the recursive
+  task-tier driver (the embedded `/workflows` script starts at a milestone root).
 - **Milestone root**: read `claude-prove scrum task list --milestone <id>` and
   `claude-prove scrum status` for existing structure. The first layer you produce is
   `epic` (or `story` if the milestone is small — your judgment).
@@ -187,14 +206,21 @@ check in mind, but only `story` children are obligated to.
 
 ### Phase L3: Write children + accept gate
 
-For each returned child, create a layered scrum task (status defaults to `backlog`, the
-proposed-but-not-yet-accepted state):
+For each returned child below the initiative tier, create a layered scrum task, then move it
+to `proposed` — the decomposed-but-not-yet-reviewed state (a fresh task is `backlog`; the act
+of decomposing it INTO existence is what makes it `proposed`):
 
 ```bash
 claude-prove scrum task create \
   --milestone <m> --parent <parent-id> --layer <epic|story|task> \
   --title "<child.title>" --description "<child.description>"
+claude-prove scrum task status <child-id> proposed
 ```
+
+(At the `initiative → milestone` tier the child is a milestone entity instead:
+`claude-prove scrum milestone create --title "<child.title>" --target-state "<...>"
+--initiative <init>` — milestones carry no `proposed`/`accepted` task-status, so their accept
+gate is the operator's decision to start the milestone's own ladder.)
 
 Capture each new id. After all children of a parent exist, record sibling ordering with
 `claude-prove scrum task add-dep <child> <blocked-child> --kind blocked_by` for every
@@ -214,25 +240,28 @@ criterion carries none. Authoring criteria here is what makes a `story` born alr
 satisfying the close floor: B2 story-close reads these exact criteria to verify the story,
 so the ladder that creates the story owns its criteria and close never has to invent them.
 If a `story` child returned an empty `acceptance` array, re-run Phase L2 for that parent
-before promoting — the accept gate below pushes children to `ready`, a state the floor
-rejects for a criteria-less story.
+before promoting — accept then `ready` would push it to a state the floor rejects for a
+criteria-less story (criteria are enforced at `→ ready`, the state the accepted child enters
+once its deps clear).
 
-**Accept gate** (`proposed→accepted`):
+**Accept gate** (`proposed → accepted` — the decomposition review). Acceptance is the trigger
+that fires the next tier's decompose; it does NOT itself start work (`accepted → ready`
+happens once deps clear):
 
 - If `--auto-accept-through <layer>` covers this tier → auto-promote each child
-  `backlog→ready` (`claude-prove scrum task status <id> ready`) and log the decision.
+  `proposed → accepted` (`claude-prove scrum task status <id> accepted`) and log the decision.
 - Else → one `AskUserQuestion` (header `"Accept"`, options `Accept all` / `Revise`).
-  On `Accept all`, promote each child to `ready`. On `Revise`, collect free-form
+  On `Accept all`, promote each child `proposed → accepted`. On `Revise`, collect free-form
   feedback, re-run Phase L2 for that parent, and re-gate. See
   `references/interaction-patterns.md` (Approval Gate).
 
-Only `ready` children recurse.
+Only `accepted` children recurse.
 
 ### Phase L4: Recurse + forced bubble-up
 
 For each accepted child whose tier is above `task`, recurse into Phase L2 with that child
-as the new parent and the next tier down. `epic → story → task` then stops; `task` is the
-leaf.
+as the new parent and the next tier down. `initiative → milestone → epic → story → task`
+then stops; `task` is the leaf.
 
 **Forced bubble-up** — two paths, both mandatory, never opt-in:
 
@@ -487,9 +516,13 @@ const childrenSchema = {
   },
 };
 
-const TIERS = ["epic", "story", "task"]; // root (milestone/VISION) feeds the first tier
+// Task-tier ladder. The `initiative → milestone` tier is the pre-step that seeds each
+// milestone (a different shape — `scrum milestone create --initiative`, no task status), so
+// this recursive driver starts at a milestone root and walks the task tiers below it.
+const TIERS = ["epic", "story", "task"]; // milestone root feeds the first tier
 
-// Layer persona keyed by the child layer being produced (see "Layer personas").
+// Layer persona keyed by the child layer being produced (see "Layer personas"). The
+// strategy@initiative persona drives the initiative→milestone pre-step, not this recursion.
 const LAYER_PERSONAS = {
   epic:  "You are a product manager (pm@milestone). Split this milestone into epics — coherent user-facing capabilities, each a scoped slice of the milestone outcome.",
   story: "You are a tech lead (tech_lead@epic). Split this epic into stories — architectural seams and integration order; each story independently shippable and verifiable.",
@@ -518,7 +551,8 @@ async function decompose(parent, tierIndex, { milestone, autoAcceptThrough, maxF
     return decompose(parent, tierIndex, { milestone, autoAcceptThrough, maxFanout });
   }
 
-  // L3: write each child as a layered scrum task (backlog = proposed, not yet accepted).
+  // L3: write each child as a layered scrum task, then move it to `proposed` (decomposed,
+  // awaiting the accept review).
   const created = [];
   for (const c of children) {
     const out = await sh(
@@ -526,8 +560,10 @@ async function decompose(parent, tierIndex, { milestone, autoAcceptThrough, maxF
       `--parent ${parent.id} --layer ${layer} ` +
       `--title ${q(c.title)} --description ${q(c.description)}`,
     );
+    const task = JSON.parse(out.stdout);
+    await sh(`claude-prove scrum task status ${task.id} proposed`);
     created.push({
-      ...JSON.parse(out.stdout),
+      ...task,
       blocked_by: c.blocked_by,
       acceptance: c.acceptance ?? [],
       srcTitle: c.title,
@@ -559,16 +595,19 @@ async function decompose(parent, tierIndex, { milestone, autoAcceptThrough, maxF
     }
   }
 
-  // Accept gate (proposed→accepted): auto or AskUserQuestion.
+  // Accept gate (proposed→accepted) — the decomposition review that fires the next tier.
+  // auto_accept_through names the DEEPEST hands-free layer: every tier from the top down
+  // THROUGH it auto-accepts; tiers BELOW it gate. So this tier is hands-free when its depth
+  // is at or above the named layer's depth (tierIndex <= indexOf), else it gates.
   const tierAutoAccepted =
-    autoAcceptThrough && TIERS.indexOf(autoAcceptThrough) <= tierIndex;
+    autoAcceptThrough && tierIndex <= TIERS.indexOf(autoAcceptThrough);
   let accepted = created;
   if (!tierAutoAccepted) {
     const verdict = await AskUserQuestion({
       header: "Accept",
       question: `Accept these ${created.length} ${layer} children of "${parent.title}"?`,
       options: [
-        { label: "Accept all", description: `Promote all ${layer} children backlog→ready` },
+        { label: "Accept all", description: `Promote all ${layer} children proposed→accepted` },
         { label: "Revise", description: "Give feedback; re-plan this parent" },
       ],
     });
@@ -576,7 +615,8 @@ async function decompose(parent, tierIndex, { milestone, autoAcceptThrough, maxF
       return decompose(parent, tierIndex, { milestone, autoAcceptThrough, maxFanout });
     }
   }
-  for (const child of accepted) await sh(`claude-prove scrum task status ${child.id} ready`);
+  // Accept fires the next tier's decompose; `accepted → ready` happens later once deps clear.
+  for (const child of accepted) await sh(`claude-prove scrum task status ${child.id} accepted`);
 
   // L4: recurse into the next tier, fanned out within the cap.
   await parallel(
