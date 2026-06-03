@@ -6,6 +6,20 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.8.0 — HTML rendering surface: report/v1 block-document renderer
+
+*(Additive — new `report` CLI topic, nothing to adopt.)* A single closed **report/v1** block-document model that every HTML surface compiles to, plus a vendored static renderer that maps blocks → a self-contained HTML page. Authors emit blocks, never markup — one renderer covers every surface (Review Brief, status dashboard, run timeline, decomposition preview, intake).
+
+**The model.** A `ReportDocument` is `{ schema_version: "1", title, blocks[] }` over a **closed** block set: `heading` · `paragraph` · `list` · `table` · `badge` · `keyValue` · `callout` · `section` (nests) · `divider`. Badges and callouts carry a closed `tone` (`neutral` · `info` · `success` · `warn` · `danger`). Adding a block kind is a deliberate model change.
+
+**New CLI — `report render|validate`:**
+- `claude-prove report render --file <doc.json> [--out <path>]` — renders a report/v1 document to a complete self-contained HTML page (inline CSS, no network, every text node HTML-escaped, byte-stable output); writes to `--out` or stdout.
+- `claude-prove report validate --file <doc.json>` — validates a document against the closed model, reporting every problem with a JSON-path.
+
+This is the foundation the milestone's other surfaces (brief HTML, `scrum status --html` / `run-state show --html`, decomposition preview, intake forms) compile into.
+
+---
+
 ## v3.7.5 — Passive triggers & opt-in unattended-execution recipe
 
 *(Docs — no schema change, nothing to adopt.)* A new reference, `references/passive-triggers.md`, documents the three-mechanism trigger model and the opt-in unattended-execution recipe:
