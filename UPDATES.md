@@ -6,6 +6,20 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.7.3 — Durable workflow run records: retry/loop/fanout/on_fail/singleton (run-state schema v3→v4)
+
+*(Additive — run-state plan schema `v3 → v4`; a pure version bump, absent block preserves current behavior.)* A plan task gains an optional `execution` block of declarative directives the workflow/orchestrator driver honors and the durable run record persists:
+
+- **`retry: { max: N }`** — re-dispatch on terminal failure up to `N` times before halt-and-drain.
+- **`loop: { max_iterations: N }`** — repeat the task body until its exit condition or `N` iterations (`N` is the runaway floor, not a target).
+- **`fanout: { batch_size: N }`** — fan the task's sub-work out `N`-wide; larger sets split into sequential batches at the cap.
+- **`on_fail: <task-id>`** — branch to the named task on terminal failure instead of halting the branch.
+- **`concurrency: parallel | singleton`** — `singleton` caps the task at one in-flight instance across the run (a story-close task runs `singleton`); `parallel` imposes no limit.
+
+Absent block = run-once / no-retry / no-loop / fan-out 1 / halt-on-fail / parallel — exactly the pre-v4 behavior, so existing runs are unaffected. **Migration:** run-state artifacts hop `v3 → v4` via `claude-prove run-state migrate` (a pure version bump — no field is injected); new runs emit `v4`. The driver patterns for honoring each directive live in the workflow skill (`skills/workflow/SKILL.md`).
+
+---
+
 ## v3.7.2 — `proposed`/`accepted` decomposition-review task states
 
 *(Additive — no migration, nothing to adopt.)* Two new `TaskStatus` values split apart what `backlog` and `ready` used to conflate:

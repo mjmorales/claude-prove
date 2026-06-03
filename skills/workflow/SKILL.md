@@ -115,6 +115,28 @@ One delta this skill applies beyond the schedule:
 
 ---
 
+## Durable execution directives (`execution` block)
+
+A plan task carries an optional `execution` block of declarative directives the driver
+honors and the run record persists. The engine **records** them; the driver **executes**
+them — they are control flow, not judgment.
+
+| Directive | Shape | Driver behavior |
+|-----------|-------|-----------------|
+| `retry` | `{ max: N }` | On a task's terminal failure, re-dispatch it up to `N` times before halt-and-drain. Rebuild on the current integration HEAD (the same reset path a merge-conflict rebound uses). |
+| `loop` | `{ max_iterations: N }` | Repeat the task body until its own exit condition or `N` iterations — `N` is the runaway floor, NOT a target; the body decides early exit. |
+| `fanout` | `{ batch_size: N }` | Fan the task's sub-work out `N`-wide; split larger sets into sequential batches at the cap (the same batching `wave-plan` applies per wave). |
+| `on_fail` | `<task-id>` | On terminal failure, branch to the named task instead of halting the branch. Absent = halt-and-drain (the default). |
+| `concurrency` | `parallel \| singleton` | `singleton` = at most one in-flight instance of this task across the run; a second dispatch waits for the first to reach a terminal state. `parallel` = no limit. (A story-close task runs `singleton`.) |
+
+Absent block = run-once, no retry, no loop, fan-out 1, halt-on-fail, parallel — the
+pre-directive behavior. The directives compose: a retried task that still fails takes its
+`on_fail` branch; a `singleton` task's retries never overlap. Because they live in the
+durable run record, a re-dispatch after a session break reads the same directives — the run's
+retry/loop/fanout/branch policy survives the handoff rather than resetting.
+
+---
+
 ## Cross-team step: `kind:<team-slug>`
 
 A plan step whose `kind` names a **team slug** (rather than a normal implementation
