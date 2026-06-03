@@ -74,6 +74,7 @@
  *   claude-prove scrum manifest show             [--human]   (cross-team contracts: every team's active accepts[] + exposes[], both-teams-visible)
  *   claude-prove scrum ask file                  --from-team A --to-team B --ask-type T --blocking-artifact ART   (file a cross-team ask; to-team must accept T; ART must exist)
  *   claude-prove scrum ask respond <ask-id>      --verdict accept|reject|counter [--comment TEXT] [--by ID]   (mechanically apply a triage verdict: accept wires a child + blocked_by dep; reject/counter record --comment; no model spawn)
+ *   claude-prove scrum ask await <ask-id>        (mechanical poll for the team-as-workflow-kind sugar: reports phase pending|waiting|ready|rejected|countered + to-team outputs on ready; no model spawn)
  *   claude-prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
  *   claude-prove scrum hook <event>              (event: session-start | subagent-stop | stop)
  *
@@ -686,7 +687,7 @@ function dispatch(
 
     case 'ask':
       if (arg1 === undefined) {
-        console.error('error: scrum ask: sub-action required (one of: file | respond)');
+        console.error('error: scrum ask: sub-action required (one of: file | respond | await)');
         return 1;
       }
       return runAskCmd(arg1, [arg2], {

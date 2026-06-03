@@ -3983,6 +3983,139 @@ describe('ScrumStore — ask triage/respond (v25)', () => {
   });
 });
 
+// ===========================================================================
+// awaitAsk — the team-as-workflow-kind mechanical poll primitive
+// ===========================================================================
+
+describe('ScrumStore — awaitAsk (team-as-workflow-kind sugar)', () => {
+  /**
+   * Seed two sibling teams (identity accepts schema-change AND exposes two
+   * outputs) + a blocked artifact, then file one ask; return the filed row. The
+   * exposes are what `ready` returns — the to-team's published outputs.
+   */
+  function fileFixtureAsk(): ReturnType<ScrumStore['fileAsk']> {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.createTeam({ slug: 'identity', teamType: 'platform' });
+    store.addTeamAccept('identity', 'schema-change');
+    store.addTeamExpose('identity', { name: 'UserRecord', schemaRef: 'schemas/user.json' });
+    store.addTeamExpose('identity', { name: 'AuthToken', schemaRef: 'schemas/token.json' });
+    seedTask('blocked-1');
+    return store.fileAsk({
+      fromTeam: 'payments',
+      toTeam: 'identity',
+      askType: 'schema-change',
+      blockingArtifact: 'blocked-1',
+    });
+  }
+
+  /** Drive a task to `done` via the allowed backlog -> in_progress -> done chain. */
+  function driveToDone(id: string): void {
+    store.updateTaskStatus(id, 'in_progress');
+    store.updateTaskStatus(id, 'done');
+  }
+
+  test('a filed (un-responded) ask reports phase=pending, non-terminal, no outputs', () => {
+    const ask = fileFixtureAsk();
+    const report = store.awaitAsk(ask.id);
+    expect(report.phase).toBe('pending');
+    expect(report.terminal).toBe(false);
+    expect(report.state).toBe('filed');
+    expect(report.mapped_artifact).toBeNull();
+    expect(report.artifact_status).toBeNull();
+    expect(report.to_team).toBe('identity');
+    expect(report.outputs).toEqual([]);
+    expect(report.reason).toBeNull();
+  });
+
+  test('an accepted ask whose child is NOT done reports phase=waiting, non-terminal', () => {
+    const ask = fileFixtureAsk();
+    // Epic layer dodges the story-layer done floors — the mapped child sits at
+    // backlog, the exact "accepted but not yet delivered" case `waiting` names.
+    const responded = store.respondAsk({ id: ask.id, verdict: 'accept', childLayer: 'epic' });
+    const report = store.awaitAsk(ask.id);
+    expect(report.phase).toBe('waiting');
+    expect(report.terminal).toBe(false);
+    expect(report.state).toBe('accepted');
+    expect(report.mapped_artifact).toBe(responded.mapped_artifact);
+    expect(report.artifact_status).toBe('backlog');
+    expect(report.outputs).toEqual([]);
+    expect(report.reason).toBeNull();
+  });
+
+  test('an accepted ask whose child IS done reports phase=ready with the to-team exposes', () => {
+    const ask = fileFixtureAsk();
+    const responded = store.respondAsk({ id: ask.id, verdict: 'accept', childLayer: 'epic' });
+    driveToDone(responded.mapped_artifact as string);
+
+    const report = store.awaitAsk(ask.id);
+    expect(report.phase).toBe('ready');
+    expect(report.terminal).toBe(true);
+    expect(report.state).toBe('accepted');
+    expect(report.artifact_status).toBe('done');
+    // The outputs are the to-team's ACTIVE exposes — the value the step returns.
+    expect(report.outputs.map((e) => e.name)).toEqual(['UserRecord', 'AuthToken']);
+    expect(report.outputs.every((e) => e.team_slug === 'identity')).toBe(true);
+    expect(report.reason).toBeNull();
+  });
+
+  test('ready outputs exclude a superseded expose (only ACTIVE outputs surface)', () => {
+    const ask = fileFixtureAsk();
+    // Retire one of identity's exposes before the child completes.
+    const stale = store.addTeamExpose('identity', { name: 'LegacyView', schemaRef: 'old.json' });
+    store.supersedeTeamExpose(stale.id, 'replaced by UserRecord');
+    const responded = store.respondAsk({ id: ask.id, verdict: 'accept', childLayer: 'epic' });
+    driveToDone(responded.mapped_artifact as string);
+
+    const report = store.awaitAsk(ask.id);
+    expect(report.phase).toBe('ready');
+    expect(report.outputs.map((e) => e.name)).toEqual(['UserRecord', 'AuthToken']);
+  });
+
+  test('a rejected ask reports phase=rejected, terminal, reason=rejected_reason, no outputs', () => {
+    const ask = fileFixtureAsk();
+    store.respondAsk({ id: ask.id, verdict: 'reject', comment: 'out of scope this milestone' });
+    const report = store.awaitAsk(ask.id);
+    expect(report.phase).toBe('rejected');
+    expect(report.terminal).toBe(true);
+    expect(report.state).toBe('rejected');
+    expect(report.reason).toBe('out of scope this milestone');
+    expect(report.mapped_artifact).toBeNull();
+    expect(report.artifact_status).toBeNull();
+    expect(report.outputs).toEqual([]);
+  });
+
+  test('a countered ask reports phase=countered, terminal, reason=counter_proposal, no outputs', () => {
+    const ask = fileFixtureAsk();
+    store.respondAsk({
+      id: ask.id,
+      verdict: 'counter',
+      comment: 'expose a read-only view instead',
+    });
+    const report = store.awaitAsk(ask.id);
+    expect(report.phase).toBe('countered');
+    expect(report.terminal).toBe(true);
+    expect(report.state).toBe('countered');
+    expect(report.reason).toBe('expose a read-only view instead');
+    expect(report.mapped_artifact).toBeNull();
+    expect(report.outputs).toEqual([]);
+  });
+
+  test('the full pending -> waiting -> ready arc tracks the ask through its lifecycle', () => {
+    const ask = fileFixtureAsk();
+    expect(store.awaitAsk(ask.id).phase).toBe('pending');
+
+    const responded = store.respondAsk({ id: ask.id, verdict: 'accept', childLayer: 'epic' });
+    expect(store.awaitAsk(ask.id).phase).toBe('waiting');
+
+    driveToDone(responded.mapped_artifact as string);
+    expect(store.awaitAsk(ask.id).phase).toBe('ready');
+  });
+
+  test('awaitAsk rejects an unknown ask id (the one error path)', () => {
+    expect(() => store.awaitAsk(9999)).toThrow(/unknown ask id '9999'/);
+  });
+});
+
 describe('ScrumStore — escalation protocol (v24)', () => {
   test('raiseEscalation lands open at the bottom rung by default, with a null walk-up back-pointer', () => {
     const row = store.raiseEscalation({

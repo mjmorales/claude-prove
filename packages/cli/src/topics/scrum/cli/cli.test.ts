@@ -4107,6 +4107,13 @@ describe('runAskCmd', () => {
       }),
     );
     withCapture(() =>
+      runTeamCmd('expose-add', ['identity'], {
+        name: 'UserRecord',
+        schemaRef: 'schemas/user.json',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
       runTaskCmd('create', [undefined, undefined], {
         title: 'Blocked work',
         id: 'blocked-1',
@@ -4302,6 +4309,100 @@ describe('runAskCmd', () => {
     );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain("not 'filed'");
+  });
+
+  // --- await: the team-as-workflow-kind mechanical poll ---
+
+  interface AwaitJson {
+    ask_id: number;
+    phase: string;
+    terminal: boolean;
+    state: string;
+    mapped_artifact: string | null;
+    artifact_status: string | null;
+    to_team: string;
+    outputs: Array<{ name: string; team_slug: string }>;
+    reason: string | null;
+  }
+
+  /** Run `ask await <id>` and return the parsed JSON report. */
+  function awaitAsk(id: number): { res: Captured; report: AwaitJson } {
+    const res = withCapture(() => runAskCmd('await', [String(id)], { workspaceRoot: workspace }));
+    return { res, report: JSON.parse(res.stdout.trim().split('\n')[0] ?? '') as AwaitJson };
+  }
+
+  test('await on a filed ask reports phase=pending, non-terminal, exit 0', () => {
+    seedAskFixture();
+    const filed = fileOneAsk();
+    const { res, report } = awaitAsk(filed.id);
+    expect(res.exit).toBe(0);
+    expect(report.phase).toBe('pending');
+    expect(report.terminal).toBe(false);
+    expect(report.to_team).toBe('identity');
+    expect(report.outputs).toEqual([]);
+  });
+
+  test('await on an accepted-but-not-done ask reports phase=waiting, non-terminal', () => {
+    seedAskFixture();
+    const filed = fileOneAsk();
+    withCapture(() =>
+      runAskCmd('respond', [String(filed.id)], { verdict: 'accept', workspaceRoot: workspace }),
+    );
+    const { res, report } = awaitAsk(filed.id);
+    expect(res.exit).toBe(0);
+    expect(report.phase).toBe('waiting');
+    expect(report.terminal).toBe(false);
+    expect(report.mapped_artifact).not.toBeNull();
+    expect(report.outputs).toEqual([]);
+  });
+
+  test('await on a rejected ask surfaces phase=rejected with the reason (no hang), exit 0', () => {
+    seedAskFixture();
+    const filed = fileOneAsk();
+    withCapture(() =>
+      runAskCmd('respond', [String(filed.id)], {
+        verdict: 'reject',
+        comment: 'out of scope this milestone',
+        workspaceRoot: workspace,
+      }),
+    );
+    const { res, report } = awaitAsk(filed.id);
+    expect(res.exit).toBe(0);
+    expect(report.phase).toBe('rejected');
+    expect(report.terminal).toBe(true);
+    expect(report.reason).toBe('out of scope this milestone');
+    expect(report.outputs).toEqual([]);
+  });
+
+  test('await on a countered ask surfaces phase=countered with the reason (no hang), exit 0', () => {
+    seedAskFixture();
+    const filed = fileOneAsk();
+    withCapture(() =>
+      runAskCmd('respond', [String(filed.id)], {
+        verdict: 'counter',
+        comment: 'expose a read-only view instead',
+        workspaceRoot: workspace,
+      }),
+    );
+    const { res, report } = awaitAsk(filed.id);
+    expect(res.exit).toBe(0);
+    expect(report.phase).toBe('countered');
+    expect(report.terminal).toBe(true);
+    expect(report.reason).toBe('expose a read-only view instead');
+  });
+
+  test('await without a valid <ask-id> exits 1', () => {
+    seedAskFixture();
+    const res = withCapture(() => runAskCmd('await', [undefined], { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('<ask-id>');
+  });
+
+  test('await on an unknown ask id exits 1', () => {
+    seedAskFixture();
+    const res = withCapture(() => runAskCmd('await', ['9999'], { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown ask id '9999'");
   });
 
   test('an unknown ask action exits 1', () => {

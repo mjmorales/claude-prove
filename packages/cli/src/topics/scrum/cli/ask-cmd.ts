@@ -29,10 +29,24 @@
  *                              event. Exits 1 on an unknown id, a missing/invalid
  *                              `--verdict`, or an already-responded (non-`filed`)
  *                              ask. Prints the updated JSON row.
+ *   await <ask-id>             MECHANICAL poll of a filed ask — the read primitive
+ *                              the `kind:<team-slug>` workflow sugar composes. It
+ *                              spawns NO model and never mutates: it derives the
+ *                              ask's phase from its state plus, on accept, the
+ *                              mapped child's status, and on `ready` carries the
+ *                              to-team's exposed outputs. Phases: `pending` (still
+ *                              filed), `waiting` (accepted, child not `done`),
+ *                              `ready` (accepted, child `done`; outputs present),
+ *                              `rejected` / `countered` (terminal, `reason` set).
+ *                              `terminal` is true on ready/rejected/countered so a
+ *                              polling loop knows to stop. Prints the JSON report;
+ *                              exit 0 on every existing ask (the report — not the
+ *                              exit code — carries the phase), exit 1 only on an
+ *                              unknown id.
  *
- * Stdout contract: the JSON ask row. On `file`, a final line carries the new ask
- * id (so a caller can capture it without parsing JSON). A one-line human summary
- * goes to stderr.
+ * Stdout contract: the JSON ask row (`file`/`respond`) or the JSON await report
+ * (`await`). On `file`, a final line carries the new ask id (so a caller can
+ * capture it without parsing JSON). A one-line human summary goes to stderr.
  *
  * Exit codes:
  *   0  success
@@ -62,9 +76,9 @@ export interface AskCmdFlags {
   workspaceRoot?: string;
 }
 
-export type AskAction = 'file' | 'respond';
+export type AskAction = 'file' | 'respond' | 'await';
 
-const ASK_ACTIONS: AskAction[] = ['file', 'respond'];
+const ASK_ACTIONS: AskAction[] = ['file', 'respond', 'await'];
 
 export function runAskCmd(
   action: string,
@@ -89,6 +103,8 @@ export function runAskCmd(
         return doFile(store, flags);
       case 'respond':
         return doRespond(store, args[0], flags);
+      case 'await':
+        return doAwait(store, args[0]);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -195,5 +211,36 @@ function doRespond(store: ScrumStore, idArg: string | undefined, flags: AskCmdFl
         ? 'rejected'
         : 'countered';
   process.stderr.write(`scrum ask respond: ${id} ${verdict} -> ${ask.state} ${tail}\n`);
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// await — mechanical poll for the team-as-workflow-kind sugar
+// ---------------------------------------------------------------------------
+
+function doAwait(store: ScrumStore, idArg: string | undefined): number {
+  const id = asAskId(idArg);
+  if (id === null) {
+    process.stderr.write('scrum ask await: a positive integer <ask-id> is required\n');
+    return 1;
+  }
+
+  // awaitAsk throws only on an unknown id; every existing ask yields a report,
+  // so a terminal reject/counter SURFACES as a phase in the JSON (the calling
+  // script never hangs) rather than as a non-zero exit.
+  const report = store.awaitAsk(id);
+
+  process.stdout.write(`${JSON.stringify(report)}\n`);
+  const detail =
+    report.phase === 'ready'
+      ? `${report.outputs.length} output(s) from '${report.to_team}'`
+      : report.phase === 'rejected' || report.phase === 'countered'
+        ? (report.reason ?? '(no reason)')
+        : report.phase === 'waiting'
+          ? `child ${report.mapped_artifact} is ${report.artifact_status}`
+          : 'awaiting response';
+  process.stderr.write(
+    `scrum ask await: ${id} ${report.phase}${report.terminal ? ' (terminal)' : ''} -> ${detail}\n`,
+  );
   return 0;
 }

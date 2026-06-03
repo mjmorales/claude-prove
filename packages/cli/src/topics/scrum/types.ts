@@ -1544,6 +1544,84 @@ export interface RespondAskInput {
 }
 
 /**
+ * The mechanical phase a filed ask is in when polled by `awaitAsk` — the closed
+ * vocabulary the team-as-workflow-kind sugar branches on. A NON-terminal phase
+ * (`pending`, `waiting`) means the calling script should poll again later; a
+ * TERMINAL phase (`ready`, `rejected`, `countered`) means the step resolves now.
+ * Derived purely from the ask's `state` plus, on `accepted`, its
+ * `mapped_artifact` task's `status`; computing it spawns no model. New phases
+ * extend this closed set via a schema-version bump, never a silent value.
+ *
+ *   pending   — the ask is still `filed`; the responder has not triaged it yet.
+ *               NON-terminal: poll again.
+ *   waiting   — the ask is `accepted` but its `mapped_artifact` child task has
+ *               not reached `done`. NON-terminal: poll again.
+ *   ready     — the ask is `accepted` AND its `mapped_artifact` child is `done`;
+ *               the to-team's exposed outputs are available. TERMINAL (success).
+ *   rejected  — the ask is `rejected`; `reason` carries the responder's
+ *               `rejected_reason`. TERMINAL (the step surfaces the rejection,
+ *               never hangs).
+ *   countered — the ask is `countered`; `reason` carries the responder's
+ *               `counter_proposal`. TERMINAL (the step surfaces the counter,
+ *               never hangs).
+ */
+export type AskAwaitPhase = 'pending' | 'waiting' | 'ready' | 'rejected' | 'countered';
+
+/** Runtime-checkable list of the closed `AskAwaitPhase` set, in canonical order. */
+export const ASK_AWAIT_PHASES: AskAwaitPhase[] = [
+  'pending',
+  'waiting',
+  'ready',
+  'rejected',
+  'countered',
+];
+
+/** The `AskAwaitPhase` values from which the team-as-workflow-kind step resolves. */
+export const ASK_AWAIT_TERMINAL_PHASES: AskAwaitPhase[] = ['ready', 'rejected', 'countered'];
+
+/**
+ * The structured status report `awaitAsk` returns for one ask — the MECHANICAL
+ * primitive the `kind:<team-slug>` workflow sugar composes. It reports whether a
+ * filed ask has been responded to and, on accept, whether its mapped child has
+ * reached `done`; on `ready` it carries the to-team's exposed outputs. A pure
+ * read: computing the report spawns no model and never mutates. The driver
+ * branches on `phase` — re-poll on a NON-terminal phase, resolve the step on a
+ * TERMINAL one (return `outputs` on `ready`, surface `reason` on
+ * `rejected`/`countered` so the calling script never hangs).
+ *
+ *   ask_id          — the polled `scrum_asks.id`.
+ *   phase           — the closed `AskAwaitPhase` (see its doc).
+ *   terminal        — true on `ready` | `rejected` | `countered`; false on
+ *                     `pending` | `waiting`. The single boolean the calling loop
+ *                     checks to stop polling.
+ *   state           — the ask's current `AskState`, echoed for context.
+ *   mapped_artifact — the accepted ask's child task id, or NULL when the ask is
+ *                     not accepted.
+ *   artifact_status — the `mapped_artifact` task's `TaskStatus` on `waiting` /
+ *                     `ready`, else NULL. Distinguishes "child not done yet"
+ *                     (`waiting`) from "child done" (`ready`).
+ *   to_team         — the responding team's slug (the `exposes` owner).
+ *   outputs         — the to-team's ACTIVE exposed outputs, present and populated
+ *                     ONLY on `ready` (empty array on every other phase). This is
+ *                     the value the `kind:<team-slug>` step returns.
+ *   reason          — the responder's rationale on a TERMINAL non-success phase:
+ *                     `rejected_reason` on `rejected`, `counter_proposal` on
+ *                     `countered`. NULL otherwise. The surfaced terminal result
+ *                     that prevents a silent hang.
+ */
+export interface AskAwaitReport {
+  ask_id: number;
+  phase: AskAwaitPhase;
+  terminal: boolean;
+  state: AskState;
+  mapped_artifact: string | null;
+  artifact_status: TaskStatus | null;
+  to_team: string;
+  outputs: TeamExposeRow[];
+  reason: string | null;
+}
+
+/**
  * One row of the `scrum_lores` table (v19) — a single Lore entry, the
  * accumulated convention or wisdom a team writes down for itself. Readable by
  * all, written only by the team's current `tech_lead`. Append-only: a
