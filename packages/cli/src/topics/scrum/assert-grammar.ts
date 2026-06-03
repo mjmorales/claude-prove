@@ -511,19 +511,30 @@ function evalComparison(
 ): boolean {
   const left = operandValue(node.left, ctx);
   const right = operandValue(node.right, ctx);
+  // == / != compare by value (string-normalized); the ordering operators
+  // coerce both operands to numbers via a single numericPair call per arm so
+  // the throw path for a non-numeric operand is evaluated once, not twice.
   switch (node.op) {
     case '==':
       return equalsValue(left, right);
     case '!=':
       return !equalsValue(left, right);
-    case '<':
-      return numericPair(left, right, node.op)[0] < numericPair(left, right, node.op)[1];
-    case '<=':
-      return numericPair(left, right, node.op)[0] <= numericPair(left, right, node.op)[1];
-    case '>':
-      return numericPair(left, right, node.op)[0] > numericPair(left, right, node.op)[1];
-    case '>=':
-      return numericPair(left, right, node.op)[0] >= numericPair(left, right, node.op)[1];
+    case '<': {
+      const [a, b] = numericPair(left, right, node.op);
+      return a < b;
+    }
+    case '<=': {
+      const [a, b] = numericPair(left, right, node.op);
+      return a <= b;
+    }
+    case '>': {
+      const [a, b] = numericPair(left, right, node.op);
+      return a > b;
+    }
+    case '>=': {
+      const [a, b] = numericPair(left, right, node.op);
+      return a >= b;
+    }
   }
 }
 

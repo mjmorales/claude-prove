@@ -4541,7 +4541,7 @@ function validateAcceptance(acceptance: Acceptance): void {
  * subtree mid-decomposition-review surfaces that progress. Invariant: callers
  * only invoke this for a parent with ≥1 live child.
  */
-function foldChildStatuses(childStatuses: TaskStatus[]): TaskStatus {
+export function foldChildStatuses(childStatuses: TaskStatus[]): TaskStatus {
   const anyOf = (s: TaskStatus): boolean => childStatuses.includes(s);
   if (anyOf('in_progress')) return 'in_progress';
   if (anyOf('blocked')) return 'blocked';

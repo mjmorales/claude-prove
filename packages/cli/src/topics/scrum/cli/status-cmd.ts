@@ -26,7 +26,7 @@
 
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
-import { type ScrumStore, openScrumStore } from '../store';
+import { type ScrumStore, foldChildStatuses, openScrumStore } from '../store';
 import type { ScrumTask, TaskLayer, TaskStatus } from '../types';
 
 export interface StatusCmdFlags {
@@ -98,7 +98,7 @@ export function buildSnapshot(store: ScrumStore): Snapshot {
   const recent = store.listRecentEvents(RECENT_EVENT_LIMIT);
   return {
     active_tasks: active,
-    task_tree: buildTaskTree(store, allTasks),
+    task_tree: buildTaskTree(allTasks),
     milestones,
     total_milestones: allMilestones.length,
     recent_events: recent,
@@ -106,17 +106,53 @@ export function buildSnapshot(store: ScrumStore): Snapshot {
 }
 
 /**
- * Assemble the `parent_id` forest from the full non-deleted task list. Roots
- * are the parent-less tasks; each node's children come from `getChildren`
- * (already `created_at`-ordered) and its `derived_status` from
- * `derivedStatus`. Tasks are kept in `created_at` order so root ordering is
- * stable. A `seen` set prevents a malformed `parent_id` cycle from looping.
+ * Assemble the `parent_id` forest from the full non-deleted task list in a
+ * single pass. `allTasks` already excludes soft-deleted rows and is
+ * `created_at`-ordered, so a one-shot in-memory children index reproduces
+ * exactly what per-node `getChildren` would return (same rows, same order)
+ * without re-querying per node, and `derivedStatus` is folded from that index
+ * instead of re-descending the subtree per node — turning the prior
+ * O(N x depth) query fan-out into a single O(N) walk.
+ *
+ * Roots are the parent-less tasks; each node's children stay `created_at`-
+ * ordered and its `derived_status` is the rollup over its subtree (equal to
+ * `status` for a leaf). A `seen` set prevents a malformed `parent_id` cycle
+ * from looping the tree build; `derivedStatus` carries its own independent
+ * cycle guard, matching the store's per-node rollup, so a cycle still yields a
+ * defined status rather than recursing forever.
  */
-function buildTaskTree(store: ScrumStore, allTasks: ScrumTask[]): TreeNode[] {
+function buildTaskTree(allTasks: ScrumTask[]): TreeNode[] {
+  const childrenByParent = new Map<string, ScrumTask[]>();
+  for (const task of allTasks) {
+    if (task.parent_id === null) continue;
+    const siblings = childrenByParent.get(task.parent_id);
+    if (siblings) siblings.push(task);
+    else childrenByParent.set(task.parent_id, [task]);
+  }
+
+  // Rollup over the subtree of `id`, replicating the store's `rollupStatus`:
+  // a leaf returns its authored status; a parent folds its children's DERIVED
+  // statuses by precedence. `visited` is the ancestor chain on the current
+  // path — re-entering a node (a `parent_id` cycle) short-circuits to its
+  // authored status, identical to the store's per-node guard.
+  const byId = new Map(allTasks.map((t) => [t.id, t] as const));
+  const derivedStatus = (id: string, visited: Set<string>): TaskStatus => {
+    const task = byId.get(id);
+    // Every child id resolves from `allTasks`, so this is unreachable in
+    // practice; the fallback keeps the lookup total for a defensive call.
+    if (!task) return 'backlog';
+    if (visited.has(id)) return task.status;
+    const children = childrenByParent.get(id);
+    if (children === undefined || children.length === 0) return task.status;
+    visited.add(id);
+    const childStatuses = children.map((c) => derivedStatus(c.id, visited));
+    visited.delete(id);
+    return foldChildStatuses(childStatuses);
+  };
+
   const build = (task: ScrumTask, seen: Set<string>): TreeNode => {
     seen.add(task.id);
-    const children = store
-      .getChildren(task.id)
+    const children = (childrenByParent.get(task.id) ?? [])
       .filter((c) => !seen.has(c.id))
       .map((c) => build(c, seen));
     return {
@@ -124,7 +160,7 @@ function buildTaskTree(store: ScrumStore, allTasks: ScrumTask[]): TreeNode[] {
       title: task.title,
       layer: task.layer,
       status: task.status,
-      derived_status: store.derivedStatus(task.id),
+      derived_status: derivedStatus(task.id, new Set<string>()),
       children,
     };
   };
