@@ -559,9 +559,9 @@ describe('TestV4ToV5', () => {
 
     expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     // Changes reflect v4->v5 (version bump only, scrum already correct),
-    // v5->v6 (version bump + dev_mode add), v6->v7 (version bump only), and
-    // v7->v8 (version bump + brief/memory/decomposition seeds). No
-    // tools.scrum mutation.
+    // v5->v6 (version bump + dev_mode add), v6->v7 (version bump only),
+    // v7->v8 (version bump + brief/memory/decomposition seeds), and v8->v9
+    // (version bump only — triggers absent). No tools.scrum mutation.
     const paths = changes.map((c) => c.path);
     expect(paths).toEqual([
       'schema_version',
@@ -572,6 +572,7 @@ describe('TestV4ToV5', () => {
       'brief',
       'memory',
       'decomposition',
+      'schema_version',
     ]);
     // Keys outside the chain-seeded ones untouched.
     const chainSeeded = new Set([
@@ -747,6 +748,36 @@ describe('TestV7ToV8', () => {
     const errors = validateConfig(target as Record<string, unknown>, PROVE_SCHEMA);
     const errorCount = errors.filter((e) => e.severity === 'error').length;
     expect(errorCount).toBe(0);
+  });
+});
+
+describe('TestV8ToV9', () => {
+  test('v8 to v9 is a pure version bump — triggers absent, none seeded', () => {
+    const config = { schema_version: '8' };
+    const [target, changes] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect('triggers' in target).toBe(false);
+    // The only change this hop emits is the version bump.
+    expect(changes.map((c) => c.path)).toEqual(['schema_version']);
+  });
+
+  test('v8 to v9 preserves an existing triggers table byte-for-byte', () => {
+    const triggers = [{ on: 'accepted', workflow: 'decompose', description: 'fire next layer' }];
+    const config = { schema_version: '8', triggers };
+    const [target] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect(target.triggers).toEqual(triggers);
+  });
+
+  test('v9 config with a triggers table validates clean', () => {
+    const config = {
+      schema_version: '9',
+      triggers: [{ on: 'ready', workflow: 'orchestrate' }],
+    };
+    const errors = validateConfig(config, PROVE_SCHEMA);
+    expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
   });
 });
 

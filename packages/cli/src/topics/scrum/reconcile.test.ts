@@ -23,11 +23,14 @@ import { appendEntry } from '../acb/reasoning-log-store';
 import {
   type CurationProposedPayload,
   ORPHAN_TASK_ID,
+  type TriggerBinding,
   bubbleStaleEscalations,
   buildContextBundle,
+  computeBoundActions,
   reconcileMilestoneClosed,
   reconcileRunCompleted,
   sweepUnreconciled,
+  triggerBindingsForStatus,
 } from './reconcile';
 import { type ScrumStore, openScrumStore } from './store';
 import { STALENESS_THRESHOLD_HOURS } from './types';
@@ -883,5 +886,72 @@ describe('bubbleStaleEscalations', () => {
     expect(escalated?.rationale.escalation_boost).toBeGreaterThan(0);
     expect(escalated?.rationale.escalation_type).toBe('blocked');
     expect(escalated?.score ?? 0).toBeGreaterThan(plain?.score ?? 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Trigger bindings — declared status-transition -> bound next-action (1.4)
+// ---------------------------------------------------------------------------
+
+describe('triggerBindingsForStatus', () => {
+  const triggers: TriggerBinding[] = [
+    { on: 'accepted', workflow: 'decompose', description: 'fire next layer' },
+    { on: 'accepted', workflow: 'notify' },
+    { on: 'ready', workflow: 'orchestrate' },
+  ];
+
+  test('returns every binding whose `on` matches the status', () => {
+    expect(triggerBindingsForStatus(triggers, 'accepted').map((t) => t.workflow)).toEqual([
+      'decompose',
+      'notify',
+    ]);
+  });
+
+  test('returns [] when no binding fires for the status', () => {
+    expect(triggerBindingsForStatus(triggers, 'done')).toEqual([]);
+    expect(triggerBindingsForStatus([], 'accepted')).toEqual([]);
+  });
+});
+
+describe('computeBoundActions', () => {
+  const triggers: TriggerBinding[] = [
+    { on: 'accepted', workflow: 'decompose', description: 'fire next layer' },
+    { on: 'ready', workflow: 'orchestrate' },
+  ];
+
+  test('surfaces one bound action per task sitting in a triggering status', () => {
+    store.createTask({ id: 'a1', title: 'Accepted one', status: 'accepted' });
+    store.createTask({ id: 'r1', title: 'Ready one', status: 'ready' });
+    store.createTask({ id: 'b1', title: 'Backlog one', status: 'backlog' });
+
+    const actions = computeBoundActions(store, triggers, 10);
+    expect(actions).toEqual([
+      {
+        task_id: 'a1',
+        title: 'Accepted one',
+        status: 'accepted',
+        workflow: 'decompose',
+        description: 'fire next layer',
+      },
+      {
+        task_id: 'r1',
+        title: 'Ready one',
+        status: 'ready',
+        workflow: 'orchestrate',
+        description: '',
+      },
+    ]);
+  });
+
+  test('an empty trigger table yields no actions', () => {
+    store.createTask({ id: 'a1', title: 'Accepted', status: 'accepted' });
+    expect(computeBoundActions(store, [], 10)).toEqual([]);
+  });
+
+  test('honors the cap', () => {
+    store.createTask({ id: 'a1', title: 'A1', status: 'accepted' });
+    store.createTask({ id: 'a2', title: 'A2', status: 'accepted' });
+    store.createTask({ id: 'a3', title: 'A3', status: 'accepted' });
+    expect(computeBoundActions(store, triggers, 2)).toHaveLength(2);
   });
 });

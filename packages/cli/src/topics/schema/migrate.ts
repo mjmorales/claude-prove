@@ -368,6 +368,28 @@ function migrateV7ToV8(config: ProveConfig): [ProveConfig, MigrationChange[]] {
   return [result, changes];
 }
 
+/**
+ * v8 -> v9: add the OPTIONAL top-level `triggers` field (declared trigger
+ * bindings the scrum reconciler consults). Absent triggers = no bindings (the
+ * v8 behavior), so no key is seeded — this is a pure version bump. All other
+ * top-level keys pass through untouched.
+ *
+ * Hardcodes target version '9'. Do NOT reference CURRENT_SCHEMA_VERSION —
+ * migrations are frozen-in-time; later version bumps must not retroactively
+ * change what this migration does.
+ */
+function migrateV8ToV9(config: ProveConfig): [ProveConfig, MigrationChange[]] {
+  const result: ProveConfig = { ...config, schema_version: '9' };
+  const changes: MigrationChange[] = [
+    new MigrationChange(
+      'change',
+      'schema_version',
+      '"8" -> "9" (triggers added as optional — absent triggers preserves current behavior)',
+    ),
+  ];
+  return [result, changes];
+}
+
 export const MIGRATIONS: Record<string, MigrationFn> = {
   '0_to_1': migrateV0ToV1,
   '1_to_2': migrateV1ToV2,
@@ -377,6 +399,7 @@ export const MIGRATIONS: Record<string, MigrationFn> = {
   '5_to_6': migrateV5ToV6,
   '6_to_7': migrateV6ToV7,
   '7_to_8': migrateV7ToV8,
+  '8_to_9': migrateV8ToV9,
 };
 
 /**

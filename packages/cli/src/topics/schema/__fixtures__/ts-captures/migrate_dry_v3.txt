@@ -1,4 +1,4 @@
-Migration plan for <FIXTURE_PATH> (v3 -> v8):
+Migration plan for <FIXTURE_PATH> (v3 -> v9):
   ~ schema_version: "3" -> "4"
   - scopes.tools: tools registry lives under top-level tools.* since v3
   - tools.schema: schema CLI is built-in — no toggleable tool entry
@@ -11,3 +11,4 @@ Migration plan for <FIXTURE_PATH> (v3 -> v8):
   + brief: added brief synthesis defaults (single_pass_token_threshold 8000, max_synthesis_retries 2, prose_judge_on true)
   + memory: added durable-memory defaults (stale_threshold_days 90)
   + decomposition: added decompose-ladder defaults (auto_accept_through 'none' — accept gate fires at every layer)
+  ~ schema_version: "8" -> "9" (triggers added as optional — absent triggers preserves current behavior)

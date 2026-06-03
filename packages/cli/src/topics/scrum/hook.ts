@@ -25,9 +25,12 @@ import { pyJsonDump } from '../run-state/hooks/json-compat';
 import { EMPTY_HOOK_RESULT, type HookResult, readCwd } from '../run-state/hooks/types';
 import { type GateVerdict, evaluateSessionEndGate } from './handoff-gate';
 import {
+  type BoundAction,
   ORPHAN_TASK_ID,
   type StaleEscalationSweepResult,
+  type TriggerBinding,
   bubbleStaleEscalations,
+  computeBoundActions,
   reconcileRunCompleted,
   sweepUnreconciled,
 } from './reconcile';
@@ -57,6 +60,7 @@ const STALL_THRESHOLD_HOURS = 24;
 const DIGEST_MAX_ACTIVE = 10;
 const DIGEST_MAX_STALLED = 5;
 const DIGEST_MAX_RECENT = 15;
+const DIGEST_MAX_BOUND = 10;
 
 // ---------------------------------------------------------------------------
 // Public handlers
@@ -67,6 +71,8 @@ export interface SessionStartDigest {
   stalled_wip: Array<{ id: string; title: string; last_event_at: string | null }>;
   recent_events: Array<{ task_id: string; kind: string; ts: string }>;
   auto_bubbled: StaleEscalationSweepResult['bubbled'];
+  /** Pending bound next-actions from the declared trigger table (1.4). */
+  bound_actions: BoundAction[];
 }
 
 /**
@@ -84,7 +90,7 @@ export function onSessionStart(payload: Record<string, unknown> | null): HookRes
     const store = openScrumStore({ cwd: project });
     try {
       const sweep = bubbleStaleEscalations(store, Date.now());
-      const digest = computeDigest(store, sweep);
+      const digest = computeDigest(store, sweep, readTriggers(project));
       if (isEmptyDigest(digest)) return EMPTY_HOOK_RESULT;
       const body = pyJsonDump({
         hookSpecificOutput: {
@@ -205,7 +211,11 @@ export function onStop(payload: Record<string, unknown> | null): HookResult {
 // Session-start digest helpers
 // ---------------------------------------------------------------------------
 
-function computeDigest(store: ScrumStore, sweep: StaleEscalationSweepResult): SessionStartDigest {
+function computeDigest(
+  store: ScrumStore,
+  sweep: StaleEscalationSweepResult,
+  triggers: TriggerBinding[],
+): SessionStartDigest {
   const nowMs = Date.now();
   const stallCutoffMs = nowMs - STALL_THRESHOLD_HOURS * 3600 * 1000;
 
@@ -225,6 +235,7 @@ function computeDigest(store: ScrumStore, sweep: StaleEscalationSweepResult): Se
     stalled_wip: stalled,
     recent_events: recent,
     auto_bubbled: sweep.bubbled,
+    bound_actions: computeBoundActions(store, triggers, DIGEST_MAX_BOUND),
   };
 }
 
@@ -257,8 +268,33 @@ function isEmptyDigest(digest: SessionStartDigest): boolean {
     digest.active_tasks.length === 0 &&
     digest.stalled_wip.length === 0 &&
     digest.recent_events.length === 0 &&
-    digest.auto_bubbled.length === 0
+    digest.auto_bubbled.length === 0 &&
+    digest.bound_actions.length === 0
   );
+}
+
+/**
+ * Read the declared trigger bindings from `<project>/.claude/.prove.json`
+ * (`triggers[]`). Returns `[]` when the file is absent, unparseable, or carries
+ * no triggers — mirrors `readDevMode`'s tolerant config read so a malformed
+ * config never bricks the session-start hook.
+ */
+function readTriggers(projectDir: string): TriggerBinding[] {
+  try {
+    const configPath = join(projectDir, '.claude', '.prove.json');
+    if (!existsSync(configPath)) return [];
+    const config = JSON.parse(readFileSync(configPath, 'utf8')) as { triggers?: unknown };
+    if (!Array.isArray(config.triggers)) return [];
+    return config.triggers.filter(
+      (t): t is TriggerBinding =>
+        typeof t === 'object' &&
+        t !== null &&
+        typeof (t as TriggerBinding).on === 'string' &&
+        typeof (t as TriggerBinding).workflow === 'string',
+    );
+  } catch {
+    return [];
+  }
 }
 
 function formatDigest(digest: SessionStartDigest): string {
@@ -286,6 +322,15 @@ function formatDigest(digest: SessionStartDigest): string {
     for (const bubble of digest.auto_bubbled) {
       lines.push(
         `  - ${bubble.task_id}: ${bubble.from_layer} → ${bubble.to_layer} (aged ${bubble.age_hours}h, id ${bubble.from_id} → ${bubble.to_id})`,
+      );
+    }
+  }
+  if (digest.bound_actions.length > 0) {
+    lines.push(`- bound next-actions (${digest.bound_actions.length}):`);
+    for (const action of digest.bound_actions) {
+      const note = action.description ? ` — ${action.description}` : '';
+      lines.push(
+        `  - ${action.task_id} [${action.status}] → ${action.workflow}${note} (${action.title})`,
       );
     }
   }

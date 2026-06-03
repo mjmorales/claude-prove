@@ -29,7 +29,7 @@ import type { LogEntry } from '../acb/reasoning-log';
 import { listEntries } from '../acb/reasoning-log-store';
 import type { ScrumStore } from './store';
 import { STALENESS_THRESHOLD_HOURS } from './types';
-import type { EscalationRow, ScrumEvent, ScrumTask } from './types';
+import type { EscalationRow, ScrumEvent, ScrumTask, TaskStatus } from './types';
 
 // ---------------------------------------------------------------------------
 // Public constants
@@ -108,6 +108,71 @@ export interface StaleEscalationSweepResult {
    * mutated: a `human`-rung escalation is the terminal authority's worklist.
    */
   atTopOfChain: number;
+}
+
+// ---------------------------------------------------------------------------
+// Trigger bindings — declared status-transition -> bound next-action
+// ---------------------------------------------------------------------------
+
+/**
+ * A declared trigger binding (mirrors `PROVE_SCHEMA.triggers[]`). A task
+ * entering the `on` status surfaces `workflow` as a bound next-action. The
+ * reconciler consults the table on session transitions — there is no resident
+ * evaluator, so a binding fires only when a session reconciles.
+ */
+export interface TriggerBinding {
+  on: string;
+  workflow: string;
+  description?: string;
+}
+
+/** A pending bound next-action the reconciler surfaces for a task in `on`. */
+export interface BoundAction {
+  task_id: string;
+  title: string;
+  status: string;
+  workflow: string;
+  description: string;
+}
+
+/**
+ * The bindings whose `on` matches `status`. Pure consult over the declared
+ * table — no store, no model, no daemon. Empty when nothing fires.
+ */
+export function triggerBindingsForStatus(
+  triggers: TriggerBinding[],
+  status: string,
+): TriggerBinding[] {
+  return triggers.filter((t) => t.on === status);
+}
+
+/**
+ * Resolve the pending bound next-actions across the store: for every binding,
+ * every non-deleted task currently sitting in its `on` status yields one
+ * BoundAction. This is the session-transition surface — a task parked in a
+ * triggering status (e.g. `accepted`) has a pending bound action the next
+ * driver should take. Capped at `limit`; ordered by binding order then the
+ * store's task order. An empty `triggers` table yields no actions.
+ */
+export function computeBoundActions(
+  store: ScrumStore,
+  triggers: TriggerBinding[],
+  limit: number,
+): BoundAction[] {
+  const out: BoundAction[] = [];
+  for (const binding of triggers) {
+    for (const task of store.listTasks({ status: binding.on as TaskStatus })) {
+      if (out.length >= limit) return out;
+      out.push({
+        task_id: task.id,
+        title: task.title,
+        status: task.status,
+        workflow: binding.workflow,
+        description: binding.description ?? '',
+      });
+    }
+  }
+  return out;
 }
 
 /**

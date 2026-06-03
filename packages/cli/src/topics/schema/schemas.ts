@@ -40,7 +40,7 @@ export interface Schema {
   fields: Record<string, FieldSpec>;
 }
 
-export const CURRENT_SCHEMA_VERSION = '8';
+export const CURRENT_SCHEMA_VERSION = '9';
 
 /**
  * Shape of `tools.scrum` introduced in schema v5. The v4 -> v5 migration
@@ -293,6 +293,46 @@ export const PROVE_SCHEMA: Schema = {
         },
       },
       description: 'Decompose-ladder settings',
+    },
+    triggers: {
+      type: 'list',
+      required: false,
+      items: {
+        type: 'dict',
+        fields: {
+          on: {
+            type: 'str',
+            required: true,
+            enum: [
+              'backlog',
+              'proposed',
+              'accepted',
+              'ready',
+              'in_progress',
+              'review',
+              'blocked',
+              'done',
+              'cancelled',
+            ],
+            description:
+              'Task status whose entry fires this binding (the status-transition target — e.g. "accepted" fires the next-layer decompose)',
+          },
+          workflow: {
+            type: 'str',
+            required: true,
+            description:
+              'Bound next-action the reconciler surfaces when a task enters `on` (a workflow name or a short next-action label)',
+          },
+          description: {
+            type: 'str',
+            required: false,
+            description: 'Human-readable note on what this binding is for',
+            default: '',
+          },
+        },
+      },
+      description:
+        'Declared trigger bindings: status-transition -> bound next-action. The scrum reconciler consults this table on session transitions (session-start / subagent-stop / stop) and surfaces the bound action via the session-start digest and next-ready. No resident evaluator — bindings fire only when a session reconciles; intra-run, a workflow script branches directly.',
     },
   },
 };
