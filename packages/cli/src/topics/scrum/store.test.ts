@@ -2308,7 +2308,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 25,
+      schema_version: 26,
     });
   });
 
@@ -2321,7 +2321,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(25);
+    expect(updated.provenance.schema_version).toBe(26);
   });
 });
 
@@ -4211,6 +4211,55 @@ describe('ScrumStore — escalation protocol (v24)', () => {
     expect(() => store.autoBubbleEscalation(raised.id)).toThrow(
       /already at the top of the chain \('human'\); cannot bubble past 'human'/,
     );
+  });
+
+  test('autoBubbleEscalation stamps the closed row with attributes.auto_bubbled + linked_escalation pointing at the new rung', () => {
+    const raised = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'aged out',
+    });
+    const bubbled = store.autoBubbleEscalation(raised.id, '2026-03-01T00:00:00Z');
+    const closed = store.getEscalation(raised.id);
+    // The auto_bubbled marker + forward pointer ride on the CLOSED row.
+    expect(closed?.state).toBe('auto_bubbled');
+    expect(closed?.attributes).toEqual({ auto_bubbled: true, linked_escalation: bubbled.id });
+    // The forward pointer (closed → new) is the inverse of the new row's back-pointer.
+    expect(closed?.attributes?.linked_escalation).toBe(bubbled.id);
+    expect(bubbled.walked_up_from).toBe(raised.id);
+    // The fresh open row carries no marker — it is a normal open escalation.
+    expect(bubbled.attributes).toBeNull();
+  });
+
+  test('autoBubbleEscalation surfaces a blocker_raised event on an existing task (alerts/next-ready bridge)', () => {
+    seedTask('real-task');
+    const raised = store.raiseEscalation({
+      taskId: 'real-task',
+      escalationType: 'ambiguous',
+      summary: 'no receiver acted',
+    });
+    store.autoBubbleEscalation(raised.id, '2026-03-01T00:00:00Z');
+    const blockerEvents = store
+      .listEventsForTask('real-task')
+      .filter((e) => e.kind === 'blocker_raised');
+    expect(blockerEvents).toHaveLength(1);
+    expect(blockerEvents[0]?.payload).toMatchObject({
+      escalation_type: 'ambiguous',
+      summary: 'no receiver acted',
+    });
+  });
+
+  test('autoBubbleEscalation skips the event surface when the task does not exist (soft reference preserved)', () => {
+    const raised = store.raiseEscalation({
+      taskId: 'ghost-task',
+      escalationType: 'blocked',
+      summary: 'orphaned escalation',
+    });
+    // No throw, and the bubble still advances the chain.
+    const bubbled = store.autoBubbleEscalation(raised.id, '2026-03-01T00:00:00Z');
+    expect(bubbled.layer).toBe('engineer');
+    // appendEvent would have thrown on an unknown task; the guard prevents that.
+    expect(store.getEscalation(raised.id)?.state).toBe('auto_bubbled');
   });
 
   // --- chain reconstruction -----------------------------------------------

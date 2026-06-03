@@ -461,7 +461,7 @@ describe('runTaskCmd', () => {
       expect(shown.task.run_id).toBe('feat-prov');
       expect(shown.task.provenance.worker_id).toBe('worker-42');
       expect(shown.task.provenance.run_id).toBe('feat-prov');
-      expect(shown.task.provenance.schema_version).toBe(25);
+      expect(shown.task.provenance.schema_version).toBe(26);
     } finally {
       restoreEnv('PROVE_WORKER_ID', savedWorker);
       restoreEnv('PROVE_RUN_SLUG', savedSlug);
@@ -1435,6 +1435,33 @@ describe('runAlertsCmd', () => {
     const human = withCapture(() => runAlertsCmd({ workspaceRoot: workspace, human: true }));
     expect(human.stdout).toContain('Open escalations');
     expect(human.stdout).toContain('conflict');
+  });
+
+  test('an auto-bubbled escalation surfaces in alerts via the blocker_raised bridge', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'AB', id: 'ab' }));
+    withCapture(() => runTaskCmd('status', ['ab', 'ready'], {}));
+    // biome-ignore lint/suspicious/noExplicitAny: test-only store reach-in to seed + bubble an escalation.
+    const { openScrumStore } = require('../store') as any;
+    const s = openScrumStore({ override: join(workspace, '.prove', 'prove.db') });
+    try {
+      const raised = s.raiseEscalation({
+        taskId: 'ab',
+        escalationType: 'blocked',
+        summary: 'aged out, no receiver',
+        createdAt: '2026-01-01T00:00:00Z',
+      });
+      // Staleness floor promotes it one rung; this emits a blocker_raised event.
+      s.autoBubbleEscalation(raised.id, '2026-06-01T00:00:00Z');
+    } finally {
+      s.close();
+    }
+
+    const json = withCapture(() => runAlertsCmd({ workspaceRoot: workspace }));
+    const payload = JSON.parse(json.stdout.trim()) as {
+      stale_escalations: Array<{ id: string; escalation_type: string }>;
+    };
+    const e = payload.stale_escalations.find((x) => x.id === 'ab');
+    expect(e?.escalation_type).toBe('blocked');
   });
 
   test('--human table is produced when the flag is set', () => {
@@ -2604,7 +2631,7 @@ describe('runTeamCmd', () => {
     const artifact = join(workspace, 'teams', 'payments.md');
     expect(existsSync(artifact)).toBe(true);
     const content = readFileSync(artifact, 'utf8');
-    expect(content).toContain('schema_version: 25');
+    expect(content).toContain('schema_version: 26');
     expect(content).toContain('team:');
     expect(content).toContain('slug: payments');
     expect(content).toContain('team_type: stream_aligned');

@@ -205,6 +205,34 @@ export const ESCALATION_RESOLUTION_MODES: EscalationResolutionMode[] = [
 ];
 
 /**
+ * The fixed staleness threshold (hours) an `open` escalation may sit before the
+ * reconciler hook auto-bubbles it one rung up. A constant — not persisted — so
+ * the floor is uniform across every project and needs no schema or config
+ * surface. An escalation whose age (`now − created_at`) EXCEEDS this is stale;
+ * an escalation at exactly the threshold is not yet (strict `>`).
+ */
+export const STALENESS_THRESHOLD_HOURS = 24;
+
+/**
+ * Structured markers carried on `scrum_escalations.attributes` (the v25 JSON
+ * column). NULL on every raised / re-escalated / resolved row; set ONLY on a
+ * row the staleness floor auto-bubbles.
+ *
+ *   auto_bubbled       — true on a row advanced by the staleness clock (the
+ *                        engine), distinguishing it from a receiver-driven
+ *                        `re_escalate` without reading `resolution_mode`.
+ *   linked_escalation  — the `scrum_escalations.id` of the fresh `open` row this
+ *                        row was bubbled UP to. The FORWARD pointer (original →
+ *                        new), the inverse of the new row's `walked_up_from`
+ *                        BACK-pointer, so the staleness walk-up is traversable
+ *                        in either direction.
+ */
+export interface EscalationAttributes {
+  auto_bubbled?: boolean;
+  linked_escalation?: number;
+}
+
+/**
  * A row of `scrum_escalations` — one typed escalation at one layer of the
  * walk-up chain. Walk-up is APPEND-ONLY: a `re_escalate` / `auto_bubble` does
  * not move a row up, it CLOSES this row (state `re_escalated` / `auto_bubbled`)
@@ -232,6 +260,10 @@ export const ESCALATION_RESOLUTION_MODES: EscalationResolutionMode[] = [
  *   walked_up_from  — the `scrum_escalations.id` this row was walked up FROM, or
  *                     NULL for a root escalation (the first rung). The back-pointer
  *                     that reconstructs the chain.
+ *   attributes      — structured `EscalationAttributes` markers, or NULL. Set
+ *                     ONLY on a row the staleness floor auto-bubbled, carrying
+ *                     `auto_bubbled: true` and `linked_escalation` (the forward
+ *                     pointer to the fresh row one rung up).
  *   created_at      — when this row was raised/appended (ISO-8601).
  *   resolved_at     — when this row left `open` (ISO-8601), or NULL while open.
  */
@@ -247,6 +279,7 @@ export interface EscalationRow {
   resolution_note: string | null;
   resolved_by: string | null;
   walked_up_from: number | null;
+  attributes: EscalationAttributes | null;
   created_at: string;
   resolved_at: string | null;
 }
