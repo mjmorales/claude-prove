@@ -25,6 +25,7 @@ import { runAnnotationCmd } from './annotation-cmd';
 import { runAskCmd } from './ask-cmd';
 import { runContributorCmd } from './contributor-cmd';
 import { parseDecisionFile, runDecisionCmd } from './decision-cmd';
+import { runEscalationCmd } from './escalation-cmd';
 import { runGateCmd } from './gate-cmd';
 import { runHookCmd } from './hook-cmd';
 import { runInitCmd } from './init-cmd';
@@ -460,7 +461,7 @@ describe('runTaskCmd', () => {
       expect(shown.task.run_id).toBe('feat-prov');
       expect(shown.task.provenance.worker_id).toBe('worker-42');
       expect(shown.task.provenance.run_id).toBe('feat-prov');
-      expect(shown.task.provenance.schema_version).toBe(23);
+      expect(shown.task.provenance.schema_version).toBe(24);
     } finally {
       restoreEnv('PROVE_WORKER_ID', savedWorker);
       restoreEnv('PROVE_RUN_SLUG', savedSlug);
@@ -2603,7 +2604,7 @@ describe('runTeamCmd', () => {
     const artifact = join(workspace, 'teams', 'payments.md');
     expect(existsSync(artifact)).toBe(true);
     const content = readFileSync(artifact, 'utf8');
-    expect(content).toContain('schema_version: 23');
+    expect(content).toContain('schema_version: 24');
     expect(content).toContain('team:');
     expect(content).toContain('slug: payments');
     expect(content).toContain('team_type: stream_aligned');
@@ -3637,6 +3638,313 @@ describe('runAnnotationCmd', () => {
     );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('unknown annotation action');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runEscalationCmd — escalation protocol walk-up + resolution modes (v23)
+// ---------------------------------------------------------------------------
+
+interface EscalationRowJson {
+  id: number;
+  task_id: string;
+  escalation_type: string;
+  layer: string;
+  state: string;
+  summary: string;
+  resolution_mode: string | null;
+  walked_up_from: number | null;
+}
+
+interface ResolveResultJson {
+  row: EscalationRowJson;
+  walkedUpTo: EscalationRowJson | null;
+  reDecomposeTriggered: boolean;
+}
+
+describe('runEscalationCmd', () => {
+  test('raise lands an open escalation at the implementer rung and prints the JSON row', () => {
+    const res = withCapture(() =>
+      runEscalationCmd('raise', [undefined], {
+        task: 't1',
+        type: 'blocked',
+        summary: 'cannot satisfy dep',
+        by: 'CT-impl',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as EscalationRowJson;
+    expect(row.task_id).toBe('t1');
+    expect(row.escalation_type).toBe('blocked');
+    expect(row.layer).toBe('implementer');
+    expect(row.state).toBe('open');
+    expect(row.walked_up_from).toBeNull();
+  });
+
+  test('raise honors an explicit --layer', () => {
+    const res = withCapture(() =>
+      runEscalationCmd('raise', [undefined], {
+        task: 't1',
+        type: 'conflict',
+        summary: 's',
+        layer: 'tech_lead',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    expect((JSON.parse(res.stdout.trim()) as EscalationRowJson).layer).toBe('tech_lead');
+  });
+
+  test('raise requires --task, --type, and --summary', () => {
+    const noTask = withCapture(() =>
+      runEscalationCmd('raise', [undefined], {
+        type: 'blocked',
+        summary: 's',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(noTask.exit).toBe(1);
+    expect(noTask.stderr).toContain('--task');
+
+    const noType = withCapture(() =>
+      runEscalationCmd('raise', [undefined], {
+        task: 't1',
+        summary: 's',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(noType.exit).toBe(1);
+    expect(noType.stderr).toContain('--type');
+
+    const noSummary = withCapture(() =>
+      runEscalationCmd('raise', [undefined], {
+        task: 't1',
+        type: 'blocked',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(noSummary.exit).toBe(1);
+    expect(noSummary.stderr).toContain('--summary');
+  });
+
+  test('raise rejects an off-enum --type as a usage error', () => {
+    const res = withCapture(() =>
+      runEscalationCmd('raise', [undefined], {
+        task: 't1',
+        type: 'bogus',
+        summary: 's',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--type');
+  });
+
+  test('raise rejects an off-chain --layer as a usage error', () => {
+    const res = withCapture(() =>
+      runEscalationCmd('raise', [undefined], {
+        task: 't1',
+        type: 'blocked',
+        summary: 's',
+        layer: 'ceo',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("invalid --layer 'ceo'");
+  });
+
+  test('resolve with --mode resolve transitions the row to resolved, no walk-up', () => {
+    const raised = JSON.parse(
+      withCapture(() =>
+        runEscalationCmd('raise', [undefined], {
+          task: 't1',
+          type: 'ambiguous',
+          summary: 's',
+          workspaceRoot: workspace,
+        }),
+      ).stdout.trim(),
+    ) as EscalationRowJson;
+
+    const res = withCapture(() =>
+      runEscalationCmd('resolve', [String(raised.id)], {
+        mode: 'resolve',
+        note: 'answered',
+        by: 'CT-eng',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const result = JSON.parse(res.stdout.trim()) as ResolveResultJson;
+    expect(result.row.state).toBe('resolved');
+    expect(result.row.resolution_mode).toBe('resolve');
+    expect(result.walkedUpTo).toBeNull();
+    expect(result.reDecomposeTriggered).toBe(false);
+  });
+
+  test('resolve with --mode re_decompose discharges the row and flags re-decomposition', () => {
+    const raised = JSON.parse(
+      withCapture(() =>
+        runEscalationCmd('raise', [undefined], {
+          task: 't1',
+          type: 'blocked',
+          summary: 's',
+          workspaceRoot: workspace,
+        }),
+      ).stdout.trim(),
+    ) as EscalationRowJson;
+
+    const res = withCapture(() =>
+      runEscalationCmd('resolve', [String(raised.id)], {
+        mode: 're_decompose',
+        workspaceRoot: workspace,
+      }),
+    );
+    const result = JSON.parse(res.stdout.trim()) as ResolveResultJson;
+    expect(result.row.state).toBe('resolved');
+    expect(result.reDecomposeTriggered).toBe(true);
+    expect(result.walkedUpTo).toBeNull();
+  });
+
+  test('resolve with --mode re_escalate closes the row and walks one rung up', () => {
+    const raised = JSON.parse(
+      withCapture(() =>
+        runEscalationCmd('raise', [undefined], {
+          task: 't1',
+          type: 'conflict',
+          summary: 's',
+          workspaceRoot: workspace,
+        }),
+      ).stdout.trim(),
+    ) as EscalationRowJson;
+
+    const res = withCapture(() =>
+      runEscalationCmd('resolve', [String(raised.id)], {
+        mode: 're_escalate',
+        workspaceRoot: workspace,
+      }),
+    );
+    const result = JSON.parse(res.stdout.trim()) as ResolveResultJson;
+    expect(result.row.state).toBe('re_escalated');
+    expect(result.walkedUpTo?.layer).toBe('engineer');
+    expect(result.walkedUpTo?.state).toBe('open');
+    expect(result.walkedUpTo?.walked_up_from).toBe(raised.id);
+  });
+
+  test('resolve requires --mode and rejects an off-enum mode', () => {
+    const raised = JSON.parse(
+      withCapture(() =>
+        runEscalationCmd('raise', [undefined], {
+          task: 't1',
+          type: 'blocked',
+          summary: 's',
+          workspaceRoot: workspace,
+        }),
+      ).stdout.trim(),
+    ) as EscalationRowJson;
+
+    const noMode = withCapture(() =>
+      runEscalationCmd('resolve', [String(raised.id)], { workspaceRoot: workspace }),
+    );
+    expect(noMode.exit).toBe(1);
+    expect(noMode.stderr).toContain('--mode');
+
+    const badMode = withCapture(() =>
+      runEscalationCmd('resolve', [String(raised.id)], {
+        mode: 'ignore',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(badMode.exit).toBe(1);
+    expect(badMode.stderr).toContain('--mode');
+  });
+
+  test('resolve on an unknown id exits 1', () => {
+    const res = withCapture(() =>
+      runEscalationCmd('resolve', ['999'], { mode: 'resolve', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown escalation id '999'");
+  });
+
+  test('list --task shows a task full history; list without --task shows only open rows', () => {
+    const raised = JSON.parse(
+      withCapture(() =>
+        runEscalationCmd('raise', [undefined], {
+          task: 't1',
+          type: 'blocked',
+          summary: 's',
+          workspaceRoot: workspace,
+        }),
+      ).stdout.trim(),
+    ) as EscalationRowJson;
+    // Walk it up: the root closes, a fresh open row appears at engineer.
+    withCapture(() =>
+      runEscalationCmd('resolve', [String(raised.id)], {
+        mode: 're_escalate',
+        workspaceRoot: workspace,
+      }),
+    );
+
+    const perTask = withCapture(() =>
+      runEscalationCmd('list', [undefined], { task: 't1', workspaceRoot: workspace }),
+    );
+    const histRows = JSON.parse(perTask.stdout.trim()) as EscalationRowJson[];
+    expect(histRows.map((r) => r.state)).toEqual(['re_escalated', 'open']);
+
+    const openOnly = withCapture(() =>
+      runEscalationCmd('list', [undefined], { workspaceRoot: workspace }),
+    );
+    const openRows = JSON.parse(openOnly.stdout.trim()) as EscalationRowJson[];
+    expect(openRows.every((r) => r.state === 'open')).toBe(true);
+    expect(openRows).toHaveLength(1);
+    expect(openRows[0]?.layer).toBe('engineer');
+  });
+
+  test('chain reconstructs the full walk-up root-rung-first', () => {
+    const raised = JSON.parse(
+      withCapture(() =>
+        runEscalationCmd('raise', [undefined], {
+          task: 't1',
+          type: 'ambiguous',
+          summary: 's',
+          workspaceRoot: workspace,
+        }),
+      ).stdout.trim(),
+    ) as EscalationRowJson;
+    const walked = JSON.parse(
+      withCapture(() =>
+        runEscalationCmd('resolve', [String(raised.id)], {
+          mode: 're_escalate',
+          workspaceRoot: workspace,
+        }),
+      ).stdout.trim(),
+    ) as ResolveResultJson;
+
+    const res = withCapture(() =>
+      runEscalationCmd('chain', [String(walked.walkedUpTo?.id)], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+    const chain = JSON.parse(res.stdout.trim()) as EscalationRowJson[];
+    expect(chain.map((r) => r.layer)).toEqual(['implementer', 'engineer']);
+  });
+
+  test('show and chain on an unknown id exit 1', () => {
+    const show = withCapture(() => runEscalationCmd('show', ['999'], { workspaceRoot: workspace }));
+    expect(show.exit).toBe(1);
+    const chain = withCapture(() =>
+      runEscalationCmd('chain', ['999'], { workspaceRoot: workspace }),
+    );
+    expect(chain.exit).toBe(1);
+  });
+
+  test('an unknown escalation action exits 1', () => {
+    const res = withCapture(() =>
+      runEscalationCmd('bogus', [undefined], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('unknown escalation action');
   });
 });
 

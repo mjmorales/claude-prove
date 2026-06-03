@@ -943,6 +943,71 @@ CREATE INDEX idx_scrum_asks_to_team ON scrum_asks(to_team);
 CREATE INDEX idx_scrum_asks_blocking_artifact ON scrum_asks(blocking_artifact);
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v24 — escalation protocol (scrum_escalations)
+// ---------------------------------------------------------------------------
+
+/**
+ * v24: the escalation protocol — a typed escalation that walks UP a fixed
+ * authority chain one rung at a time, with per-receiver resolution modes. A new
+ * table (not columns on an existing one) because an escalation is its own
+ * entity referenced from many rows, and because the walk-up is append-only: a
+ * single escalation that climbs the chain materializes as a SERIES of rows, one
+ * per rung it touched, linked by `walked_up_from`.
+ *
+ *   scrum_escalations — one row per typed escalation AT one rung of the chain.
+ *                 `task_id` is the owning task — a SOFT reference (no FK), held
+ *                 exactly as the roster's `contributor_id` and the annotation's
+ *                 `target_ref` hold their referents. `escalation_type` is the
+ *                 closed kind (`blocked` | `ambiguous` | `conflict` |
+ *                 `missing_context`); `layer` is the rung of the walk-up chain
+ *                 (`implementer` → `engineer` → `tech_lead` → `pm` → `strategy`
+ *                 → `human`); `state` is the four-state lifecycle (`open` |
+ *                 `resolved` | `re_escalated` | `auto_bubbled`). None carry a SQL
+ *                 CHECK — the columns stay forward-compatible TEXT, matching the
+ *                 v2–v22 convention; the closed vocabularies are documented on
+ *                 the `EscalationType` / `EscalationLayer` / `EscalationState`
+ *                 types and enforced at the store boundary. `summary` is the
+ *                 receiver-facing prose. `raised_by` / `resolved_by` record
+ *                 provenance. `resolution_mode` is the `EscalationResolutionMode`
+ *                 applied to close the row (NULL while `open`); `resolution_note`
+ *                 is the receiver's rationale. `walked_up_from` is the
+ *                 `scrum_escalations.id` this row was kicked up FROM (NULL for a
+ *                 root) — the back-pointer that reconstructs the chain.
+ *
+ * Walk-up is APPEND-ONLY with explicit linkage, not an in-place layer bump: a
+ * `re_escalate` / `auto_bubble` closes the current row (`state` →
+ * `re_escalated` / `auto_bubbled`) and APPENDS a fresh `open` row at the next
+ * rung carrying `walked_up_from = <closed row id>`. The single-rung advance is
+ * enforced at the store boundary against the canonical `ESCALATION_CHAIN`, NOT
+ * by SQL — "one layer up, no skips" spans two rows and is not expressible as a
+ * column constraint.
+ *
+ * Indexes back the two hot reads: open escalations per task (`task_id, state`)
+ * and the chain back-link (`walked_up_from`). Table and index names carry the
+ * `scrum_` / `idx_scrum_` prefix per the domain-namespacing contract.
+ */
+export const SCRUM_MIGRATION_V24_SQL = `
+CREATE TABLE scrum_escalations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,
+    escalation_type TEXT NOT NULL,
+    layer TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'open',
+    summary TEXT NOT NULL,
+    raised_by TEXT,
+    resolution_mode TEXT,
+    resolution_note TEXT,
+    resolved_by TEXT,
+    walked_up_from INTEGER REFERENCES scrum_escalations(id),
+    created_at TEXT NOT NULL,
+    resolved_at TEXT
+);
+
+CREATE INDEX idx_scrum_escalations_task_state ON scrum_escalations(task_id, state);
+CREATE INDEX idx_scrum_escalations_walked_up_from ON scrum_escalations(walked_up_from);
+`;
+
 /**
  * Current scrum-domain store version — the highest migration version this
  * module registers. Stamped as the per-artifact `schema_version` on the
@@ -950,7 +1015,7 @@ CREATE INDEX idx_scrum_asks_blocking_artifact ON scrum_asks(blocking_artifact);
  * scrum row reports the schema it was read under. Bump in lockstep with the
  * top migration version on every additive hop.
  */
-export const SCRUM_SCHEMA_VERSION = 23;
+export const SCRUM_SCHEMA_VERSION = 24;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
@@ -1144,6 +1209,14 @@ export function ensureScrumSchemaRegistered(): void {
           'create scrum_asks (cross-team ask protocol) + idx_scrum_asks_to_team + idx_scrum_asks_blocking_artifact',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V23_SQL);
+        },
+      },
+      {
+        version: 24,
+        description:
+          'create scrum_escalations (typed escalation walk-up chain + four-state machine + resolution modes) + idx_scrum_escalations_task_state + idx_scrum_escalations_walked_up_from',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V24_SQL);
         },
       },
     ],
