@@ -73,7 +73,7 @@ export function runStatusCmd(flags: StatusCmdFlags): number {
  * status; `derived_status` is the rolled-up status over its subtree (equal to
  * `status` for a leaf). Children are nested depth-first in `created_at` order.
  */
-interface TreeNode {
+export interface TreeNode {
   id: string;
   title: string;
   layer: TaskLayer | null;
@@ -82,7 +82,7 @@ interface TreeNode {
   children: TreeNode[];
 }
 
-interface Snapshot {
+export interface Snapshot {
   active_tasks: ReturnType<ScrumStore['listTasks']>;
   task_tree: TreeNode[];
   milestones: ReturnType<ScrumStore['listMilestones']>;
@@ -90,7 +90,7 @@ interface Snapshot {
   recent_events: ReturnType<ScrumStore['listRecentEvents']>;
 }
 
-function buildSnapshot(store: ScrumStore): Snapshot {
+export function buildSnapshot(store: ScrumStore): Snapshot {
   const allTasks = store.listTasks();
   const active = allTasks.filter((t) => ACTIVE_STATUSES.includes(t.status));
   const allMilestones = store.listMilestones();

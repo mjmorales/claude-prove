@@ -5,13 +5,15 @@
  *   claude-prove report validate        --file <doc.json>
  *   claude-prove report brief           --file <brief.json> [--out <path>]
  *   claude-prove report milestone-brief --file <mb.json>    [--out <path>]
+ *   claude-prove report timeline        --file <state.json> [--out <path>]
+ *   claude-prove report status          [--workspace-root <p>] [--out <path>]
  *
  * A report document (see `blocks.ts`) is the closed block model every HTML
- * surface compiles to; `render` maps it to a self-contained HTML page via the
- * vendored static renderer (`render.ts`). `validate` checks a document against
- * the closed model without rendering. `brief`/`milestone-brief` mechanically
- * compile a Review/Milestone Brief JSON into report/v1 and render it. Authors
- * emit blocks, never markup.
+ * surface compiles to; the vendored static renderer (`render.ts`) maps it to a
+ * self-contained HTML page. `render` renders a report/v1 doc directly; `validate`
+ * checks one; `brief`/`milestone-brief`/`timeline` mechanically compile a brief /
+ * run-state JSON into report/v1; `status` reads the scrum store and renders the
+ * tree-aware rollup dashboard. Authors emit blocks, never markup.
  *
  * Stdout: the rendered HTML (when no `--out`) or nothing (validate).
  * Stderr: a one-line human summary, or validation errors one per line.
@@ -19,27 +21,43 @@
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { mainWorktreeRoot } from '@claude-prove/shared';
 import type { CAC } from 'cac';
 import type { ReviewBrief } from '../acb/brief';
 import type { MilestoneBrief } from '../acb/milestone-brief';
+import type { StateData } from '../run-state/state';
+import { buildSnapshot } from '../scrum/cli/status-cmd';
+import { openScrumStore } from '../scrum/store';
 import { type ReportDocument, validateReportDocument } from './blocks';
 import { milestoneBriefToReportDocument, reviewBriefToReportDocument } from './from-brief';
+import { runStateToReportDocument } from './from-run-state';
+import { statusSnapshotToReportDocument } from './from-status';
 import { renderReportDocument } from './render';
 
-type ReportAction = 'render' | 'validate' | 'brief' | 'milestone-brief';
+type ReportAction = 'render' | 'validate' | 'brief' | 'milestone-brief' | 'timeline' | 'status';
 
-const REPORT_ACTIONS: ReportAction[] = ['render', 'validate', 'brief', 'milestone-brief'];
+const REPORT_ACTIONS: ReportAction[] = [
+  'render',
+  'validate',
+  'brief',
+  'milestone-brief',
+  'timeline',
+  'status',
+];
 
 interface ReportFlags {
   file?: string;
   out?: string;
+  workspaceRoot?: string;
 }
 
 export function register(cli: CAC): void {
   cli
     .command('report <action>', `report/v1 HTML renderer (action: ${REPORT_ACTIONS.join(' | ')})`)
-    .option('--file <path>', 'Path to the document/brief JSON to render or validate')
+    .option('--file <path>', 'Path to the document/brief/state JSON (all actions except status)')
     .option('--out <path>', 'write HTML here instead of stdout')
+    .option('--workspace-root <path>', 'status: project root to resolve .prove/prove.db from')
     .action((action: string, flags: ReportFlags) => {
       if (!isReportAction(action)) {
         process.stderr.write(
@@ -47,7 +65,7 @@ export function register(cli: CAC): void {
         );
         process.exit(1);
       }
-      process.exit(dispatch(action, flags));
+      process.exit(action === 'status' ? dispatchStatus(flags) : dispatchFileAction(action, flags));
     });
 }
 
@@ -55,7 +73,30 @@ function isReportAction(value: string): value is ReportAction {
   return (REPORT_ACTIONS as string[]).includes(value);
 }
 
-function dispatch(action: ReportAction, flags: ReportFlags): number {
+/** `status` reads the live scrum store (no `--file`) and renders the dashboard. */
+function dispatchStatus(flags: ReportFlags): number {
+  const workspaceRoot =
+    flags.workspaceRoot && flags.workspaceRoot.length > 0
+      ? flags.workspaceRoot
+      : (mainWorktreeRoot() ?? process.cwd());
+  const store = openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
+  let doc: ReportDocument;
+  try {
+    doc = statusSnapshotToReportDocument(buildSnapshot(store));
+  } finally {
+    store.close();
+  }
+  const errors = validateReportDocument(doc);
+  if (errors.length > 0) {
+    process.stderr.write('claude-prove report status: compiled an invalid report/v1 document:\n');
+    for (const e of errors) process.stderr.write(`  - ${e}\n`);
+    return 1;
+  }
+  return emitHtml(renderReportDocument(doc), 'status', flags);
+}
+
+/** All actions except `status` resolve their report/v1 document from a `--file`. */
+function dispatchFileAction(action: Exclude<ReportAction, 'status'>, flags: ReportFlags): number {
   if (flags.file === undefined || flags.file.length === 0) {
     process.stderr.write(`claude-prove report ${action}: --file <path> is required\n`);
     return 1;
@@ -66,14 +107,7 @@ function dispatch(action: ReportAction, flags: ReportFlags): number {
     return 1;
   }
 
-  // Resolve the report/v1 document for this action: render/validate read one
-  // directly; brief/milestone-brief compile one from a brief JSON.
-  const doc: ReportDocument =
-    action === 'brief'
-      ? reviewBriefToReportDocument(parsed.value as ReviewBrief)
-      : action === 'milestone-brief'
-        ? milestoneBriefToReportDocument(parsed.value as MilestoneBrief)
-        : (parsed.value as ReportDocument);
+  const doc = compileDocument(action, parsed.value);
 
   const errors = validateReportDocument(doc);
   if (errors.length > 0) {
@@ -95,6 +129,20 @@ function dispatch(action: ReportAction, flags: ReportFlags): number {
   return emitHtml(renderReportDocument(doc), action, flags);
 }
 
+/** Resolve the report/v1 document for a file action: read directly, or compile. */
+function compileDocument(action: Exclude<ReportAction, 'status'>, value: unknown): ReportDocument {
+  switch (action) {
+    case 'brief':
+      return reviewBriefToReportDocument(value as ReviewBrief);
+    case 'milestone-brief':
+      return milestoneBriefToReportDocument(value as MilestoneBrief);
+    case 'timeline':
+      return runStateToReportDocument(value as StateData);
+    default:
+      return value as ReportDocument;
+  }
+}
+
 /** Write the rendered HTML to `--out` (file) or stdout, with a stderr summary. */
 function emitHtml(html: string, action: ReportAction, flags: ReportFlags): number {
   if (flags.out !== undefined && flags.out.length > 0) {
@@ -106,7 +154,8 @@ function emitHtml(html: string, action: ReportAction, flags: ReportFlags): numbe
       );
       return 1;
     }
-    process.stderr.write(`claude-prove report ${action}: ${flags.file} -> ${flags.out}\n`);
+    const src = flags.file ?? '(store)';
+    process.stderr.write(`claude-prove report ${action}: ${src} -> ${flags.out}\n`);
     return 0;
   }
   process.stdout.write(html);
