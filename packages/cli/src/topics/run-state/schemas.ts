@@ -23,7 +23,12 @@ import type { FieldSpec, Schema } from './validator-engine';
 // AcceptanceCriterion (text required; verifies_by/check/idempotent/status/...
 // optional). A bare `{ text }` is valid, so text-only forwarding still works;
 // the migration rewrites each legacy string into `{ text: <string> }`.
-export const CURRENT_SCHEMA_VERSION = '3';
+//
+// v3 -> v4: plan.json tasks[] gained an optional `execution` block (durable
+// run-record directives: retry/loop/fanout/on_fail/concurrency). Absent =
+// run-once/no-retry/halt-on-fail/parallel, so the migration is a pure version
+// bump (no field injected).
+export const CURRENT_SCHEMA_VERSION = '4';
 
 // Verification mechanism for a structured acceptance criterion. Mirrors
 // `AcceptanceVerifiesBy` in topics/scrum/types.ts — keep the two in sync.
@@ -51,6 +56,13 @@ export const REVIEW_VERDICTS = ['pending', 'approved', 'rejected', 'n/a'] as con
 export const VALIDATOR_PHASES = ['build', 'lint', 'test', 'custom', 'llm'] as const;
 
 export const VALIDATOR_STATUSES = ['pending', 'pass', 'fail', 'skipped'] as const;
+
+/**
+ * Concurrency mode for a durable run-record execution directive. `singleton`
+ * caps the task at one in-flight instance across the run (e.g. story_close);
+ * `parallel` imposes no such limit.
+ */
+export const EXECUTION_CONCURRENCY_MODES = ['parallel', 'singleton'] as const;
 
 // --- prd.json ---
 
@@ -338,6 +350,71 @@ const TASK_PLAN_SPEC: FieldSpec = {
       },
       description:
         'Declared per-task execution bounds, consumed by prep-permissions. All sub-fields optional; absent = unbounded. tools map to native settings.local.json permission rules; write/read/budgets are advisory prompt-only (the worktree is the write wall).',
+    },
+    execution: {
+      type: 'dict',
+      required: false,
+      fields: {
+        retry: {
+          type: 'dict',
+          required: false,
+          fields: {
+            max: {
+              type: 'int',
+              required: false,
+              description:
+                'Max re-dispatch attempts after a failure before the task is terminally failed (0 = no retry)',
+              default: 0,
+            },
+          },
+          description: 'Retry directive — re-dispatch the task up to `max` times on failure',
+        },
+        loop: {
+          type: 'dict',
+          required: false,
+          fields: {
+            max_iterations: {
+              type: 'int',
+              required: false,
+              description:
+                'Hard cap on bounded-loop iterations — the runaway-behavior floor, NOT a target; the loop body decides early exit',
+              default: 1,
+            },
+          },
+          description: 'Bounded-loop directive — repeat the task body up to `max_iterations` times',
+        },
+        fanout: {
+          type: 'dict',
+          required: false,
+          fields: {
+            batch_size: {
+              type: 'int',
+              required: false,
+              description:
+                'Max concurrent sub-agents this task fans out at once; the driver splits larger sets into sequential batches',
+              default: 1,
+            },
+          },
+          description: "Fan-out directive — width of this task's parallel sub-work",
+        },
+        on_fail: {
+          type: 'str',
+          required: false,
+          description:
+            'Task id to branch to when this task terminally fails (the on_fail edge); absent = halt-and-drain this branch',
+          default: '',
+        },
+        concurrency: {
+          type: 'str',
+          required: false,
+          enum: EXECUTION_CONCURRENCY_MODES,
+          description:
+            'singleton = at most one in-flight instance of this task across the run (e.g. story_close); parallel = no such limit',
+          default: 'parallel',
+        },
+      },
+      description:
+        'Durable execution directives the workflow/orchestrator driver honors: retry, bounded loop, fan-out width, on_fail branch, and concurrency mode. All optional; absent = run once, no retry/loop, fan-out 1, halt-on-fail, parallel. Declarative only — the engine records them; the driver executes them.',
     },
     steps: {
       type: 'list',

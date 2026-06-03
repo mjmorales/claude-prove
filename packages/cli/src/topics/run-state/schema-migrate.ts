@@ -131,12 +131,34 @@ function structureCriteria(node: Record<string, unknown>): number {
 }
 
 /**
+ * v3 -> v4: bump schema_version. The v4 plan.json schema added an OPTIONAL
+ * `tasks[].execution` block (retry/loop/fanout/on_fail/concurrency directives);
+ * absent execution means run-once/no-retry/halt-on-fail/parallel (the v3
+ * behavior), so no field is injected — the migration is a pure version bump.
+ * Every other field passes through byte-for-byte.
+ *
+ * Hardcodes target version '4'. Do NOT reference CURRENT_SCHEMA_VERSION.
+ */
+function migrateV3ToV4(data: ArtifactData): [ArtifactData, MigrationChange[]] {
+  const result: ArtifactData = { ...data, schema_version: '4' };
+  const changes: MigrationChange[] = [
+    {
+      path: 'schema_version',
+      description:
+        '"3" -> "4" (tasks[].execution added as optional — absent execution preserves run-once/no-retry/halt-on-fail/parallel behavior)',
+    },
+  ];
+  return [result, changes];
+}
+
+/**
  * Migration registry. Keys are `"<from>_to_<to>"`; `planMigration` walks them
  * sequentially. Keep the ladder dense and ordered.
  */
 export const MIGRATIONS: Record<string, MigrationFn> = {
   '1_to_2': migrateV1ToV2,
   '2_to_3': migrateV2ToV3,
+  '3_to_4': migrateV3ToV4,
 };
 
 /**

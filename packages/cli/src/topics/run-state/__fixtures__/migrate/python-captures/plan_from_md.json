@@ -2,7 +2,7 @@
   "name": "plan_from_md",
   "artifact": "plan",
   "data": {
-    "schema_version": "3",
+    "schema_version": "4",
     "kind": "plan",
     "mode": "full",
     "tasks": [

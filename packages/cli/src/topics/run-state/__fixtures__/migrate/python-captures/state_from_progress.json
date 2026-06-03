@@ -2,7 +2,7 @@
   "name": "state_from_progress",
   "artifact": "state",
   "data": {
-    "schema_version": "3",
+    "schema_version": "4",
     "kind": "state",
     "run_status": "running",
     "slug": "demo",

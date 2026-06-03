@@ -177,6 +177,69 @@ describe('v2 -> v3', () => {
   });
 });
 
+describe('v3 -> v4', () => {
+  const v3ToV4 = MIGRATIONS['3_to_4'] as MigrationFn;
+  const v3Plan = {
+    schema_version: '3',
+    kind: 'plan',
+    mode: 'full',
+    tasks: [
+      {
+        id: '1.1',
+        title: 'First',
+        wave: 1,
+        acceptance_criteria: [{ text: 'builds clean' }],
+        steps: [{ id: '1.1.1', title: 'Step', acceptance_criteria: [] }],
+      },
+    ],
+  };
+
+  test('bumps schema_version to "4"', () => {
+    const [out, changes] = v3ToV4(v3Plan);
+    expect(out.schema_version).toBe('4');
+    expect(changes).toHaveLength(1);
+    expect(changes[0].path).toBe('schema_version');
+  });
+
+  test('leaves execution absent (absent = run-once/no-retry/halt-on-fail/parallel, no injection)', () => {
+    const [out] = v3ToV4(v3Plan);
+    const tasks = out.tasks as Record<string, unknown>[];
+    expect('execution' in tasks[0]).toBe(false);
+  });
+
+  test('preserves all other fields byte-for-byte', () => {
+    const [out] = v3ToV4(v3Plan);
+    expect(out.kind).toBe('plan');
+    expect(out.mode).toBe('full');
+    expect(out.tasks).toEqual(v3Plan.tasks);
+  });
+
+  test('passes an existing execution block through untouched', () => {
+    const withExec = {
+      schema_version: '3',
+      kind: 'plan',
+      tasks: [
+        {
+          id: '1.1',
+          title: 'Looped',
+          wave: 1,
+          steps: [],
+          execution: {
+            retry: { max: 2 },
+            loop: { max_iterations: 3 },
+            fanout: { batch_size: 4 },
+            on_fail: '1.2',
+            concurrency: 'singleton',
+          },
+        },
+      ],
+    };
+    const [out] = v3ToV4(withExec);
+    const tasks = out.tasks as Record<string, unknown>[];
+    expect(tasks[0].execution).toEqual(withExec.tasks[0].execution);
+  });
+});
+
 describe('full chain to CURRENT_SCHEMA_VERSION', () => {
   test('a v1 artifact lands on the current version', () => {
     const [out] = planMigration({ schema_version: '1', kind: 'plan', tasks: [] });
@@ -199,7 +262,7 @@ describe('full chain to CURRENT_SCHEMA_VERSION', () => {
       ],
     };
     const [out] = planMigration(v1Plan);
-    expect(out.schema_version).toBe('3');
+    expect(out.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     const tasks = out.tasks as Record<string, unknown>[];
     expect(tasks[0].acceptance_criteria).toEqual([{ text: 'legacy criterion' }]);
     const steps = tasks[0].steps as Record<string, unknown>[];
