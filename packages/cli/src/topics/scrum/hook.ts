@@ -24,7 +24,13 @@ import { resolveActiveRunDir } from '../run-state/hooks/capture';
 import { pyJsonDump } from '../run-state/hooks/json-compat';
 import { EMPTY_HOOK_RESULT, type HookResult, readCwd } from '../run-state/hooks/types';
 import { type GateVerdict, evaluateSessionEndGate } from './handoff-gate';
-import { ORPHAN_TASK_ID, reconcileRunCompleted, sweepUnreconciled } from './reconcile';
+import {
+  ORPHAN_TASK_ID,
+  type StaleEscalationSweepResult,
+  bubbleStaleEscalations,
+  reconcileRunCompleted,
+  sweepUnreconciled,
+} from './reconcile';
 import { type ScrumStore, openScrumStore } from './store';
 import type { ScrumEvent, ScrumTask } from './types';
 
@@ -60,20 +66,25 @@ export interface SessionStartDigest {
   active_tasks: Array<{ id: string; title: string; status: string; last_event_at: string | null }>;
   stalled_wip: Array<{ id: string; title: string; last_event_at: string | null }>;
   recent_events: Array<{ task_id: string; kind: string; ts: string }>;
+  auto_bubbled: StaleEscalationSweepResult['bubbled'];
 }
 
 /**
- * SessionStart: emit active tasks + stalled WIP + recent events so the new
- * session inherits awareness of in-flight scrum state. Never throws —
- * errors land on stderr with exit 0 so a broken scrum store never bricks
- * a session.
+ * SessionStart: auto-bubble any escalation that aged past the staleness floor,
+ * then emit active tasks + stalled WIP + recent events so the new session
+ * inherits awareness of in-flight scrum state. The escalation sweep is the ONLY
+ * firing point for the staleness floor — there is no resident loop; it runs on
+ * each session-start transition and its results surface via `alerts` /
+ * `nextReady`. Never throws — errors land on stderr with exit 0 so a broken
+ * scrum store never bricks a session.
  */
 export function onSessionStart(payload: Record<string, unknown> | null): HookResult {
   try {
     const project = resolveProjectDir(payload);
     const store = openScrumStore({ cwd: project });
     try {
-      const digest = computeDigest(store);
+      const sweep = bubbleStaleEscalations(store, Date.now());
+      const digest = computeDigest(store, sweep);
       if (isEmptyDigest(digest)) return EMPTY_HOOK_RESULT;
       const body = pyJsonDump({
         hookSpecificOutput: {
@@ -194,7 +205,7 @@ export function onStop(payload: Record<string, unknown> | null): HookResult {
 // Session-start digest helpers
 // ---------------------------------------------------------------------------
 
-function computeDigest(store: ScrumStore): SessionStartDigest {
+function computeDigest(store: ScrumStore, sweep: StaleEscalationSweepResult): SessionStartDigest {
   const nowMs = Date.now();
   const stallCutoffMs = nowMs - STALL_THRESHOLD_HOURS * 3600 * 1000;
 
@@ -209,7 +220,12 @@ function computeDigest(store: ScrumStore): SessionStartDigest {
 
   const recent = store.listRecentEvents(DIGEST_MAX_RECENT).map(toRecentRow);
 
-  return { active_tasks: active, stalled_wip: stalled, recent_events: recent };
+  return {
+    active_tasks: active,
+    stalled_wip: stalled,
+    recent_events: recent,
+    auto_bubbled: sweep.bubbled,
+  };
 }
 
 function isStalled(task: ScrumTask, stallCutoffMs: number): boolean {
@@ -240,7 +256,8 @@ function isEmptyDigest(digest: SessionStartDigest): boolean {
   return (
     digest.active_tasks.length === 0 &&
     digest.stalled_wip.length === 0 &&
-    digest.recent_events.length === 0
+    digest.recent_events.length === 0 &&
+    digest.auto_bubbled.length === 0
   );
 }
 
@@ -262,6 +279,14 @@ function formatDigest(digest: SessionStartDigest): string {
     lines.push(`- recent events (${digest.recent_events.length}):`);
     for (const event of digest.recent_events) {
       lines.push(`  - ${event.ts} ${event.task_id} ${event.kind}`);
+    }
+  }
+  if (digest.auto_bubbled.length > 0) {
+    lines.push(`- auto-bubbled escalations (${digest.auto_bubbled.length}):`);
+    for (const bubble of digest.auto_bubbled) {
+      lines.push(
+        `  - ${bubble.task_id}: ${bubble.from_layer} → ${bubble.to_layer} (aged ${bubble.age_hours}h, id ${bubble.from_id} → ${bubble.to_id})`,
+      );
     }
   }
   return lines.join('\n');

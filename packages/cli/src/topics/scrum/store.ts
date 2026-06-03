@@ -40,6 +40,7 @@ import type {
   DecisionRow,
   DecisionWriteStatus,
   DepKind,
+  EscalationAttributes,
   EscalationLayer,
   EscalationPayload,
   EscalationResolutionMode,
@@ -346,9 +347,13 @@ const PROMOTION_DEFAULT_KIND = 'pattern';
 /** Canonical `scrum_annotations` SELECT column list (v20); maps 1:1 to `AnnotationRow`. */
 const ANNOTATION_COLUMNS = 'id, target_kind, target_ref, body, author, created_at';
 
-/** Canonical `scrum_escalations` SELECT column list (v23); maps 1:1 to `EscalationRow`. */
+/**
+ * Canonical `scrum_escalations` SELECT column list (v24/v25). Maps to
+ * `EscalationRowRaw` — the `attributes` column arrives as a JSON string|null and
+ * is decoded into `EscalationRow.attributes` by `decodeEscalation`.
+ */
 const ESCALATION_COLUMNS =
-  'id, task_id, escalation_type, layer, state, summary, raised_by, resolution_mode, resolution_note, resolved_by, walked_up_from, created_at, resolved_at';
+  'id, task_id, escalation_type, layer, state, summary, raised_by, resolution_mode, resolution_note, resolved_by, walked_up_from, attributes, created_at, resolved_at';
 
 /** Canonical `scrum_decisions` SELECT column list (v2/v4/v8/v21/v22); maps 1:1 to `DecisionRow`. */
 const DECISION_COLUMNS =
@@ -3404,8 +3409,8 @@ export class ScrumStore {
   getEscalation(id: number): EscalationRow | null {
     const row = this.prep(`SELECT ${ESCALATION_COLUMNS} FROM scrum_escalations WHERE id = ?`).get(
       id,
-    ) as EscalationRow | null;
-    return row ?? null;
+    ) as EscalationRowRaw | null;
+    return row ? decodeEscalation(row) : null;
   }
 
   /**
@@ -3414,9 +3419,11 @@ export class ScrumStore {
    * for a task. Tolerates a task with no escalations: returns an empty array.
    */
   listEscalationsForTask(taskId: string): EscalationRow[] {
-    return this.prep(
-      `SELECT ${ESCALATION_COLUMNS} FROM scrum_escalations WHERE task_id = ? ORDER BY id ASC`,
-    ).all(taskId) as EscalationRow[];
+    return (
+      this.prep(
+        `SELECT ${ESCALATION_COLUMNS} FROM scrum_escalations WHERE task_id = ? ORDER BY id ASC`,
+      ).all(taskId) as EscalationRowRaw[]
+    ).map(decodeEscalation);
   }
 
   /**
@@ -3424,9 +3431,11 @@ export class ScrumStore {
    * driver's worklist of escalations awaiting a receiver's resolution.
    */
   listOpenEscalationRows(): EscalationRow[] {
-    return this.prep(
-      `SELECT ${ESCALATION_COLUMNS} FROM scrum_escalations WHERE state = 'open' ORDER BY id ASC`,
-    ).all() as EscalationRow[];
+    return (
+      this.prep(
+        `SELECT ${ESCALATION_COLUMNS} FROM scrum_escalations WHERE state = 'open' ORDER BY id ASC`,
+      ).all() as EscalationRowRaw[]
+    ).map(decodeEscalation);
   }
 
   /**
@@ -3535,9 +3544,19 @@ export class ScrumStore {
    * engine's escalation-of-last-resort when no receiver acted. Identical
    * append-on-walk-up mechanics to a `re_escalate`, but the closing state is
    * `auto_bubbled` (the row was advanced by the clock, not by a receiver) and no
-   * `resolution_mode` is recorded. REJECTED at the top of the chain (nowhere
+   * `resolution_mode` is recorded. The closed row is stamped with
+   * `attributes = { auto_bubbled: true, linked_escalation: <new id> }` — the
+   * marker plus a forward pointer to the fresh row, the inverse of that row's
+   * `walked_up_from` back-pointer. REJECTED at the top of the chain (nowhere
    * higher) and on a non-`open` row. Returns the freshly-appended `open` row at
    * the next rung.
+   *
+   * The new row is also surfaced to the `alerts` / `nextReady` ranking via a
+   * `blocker_raised` event on the owning task — the SAME signal a hand-raised
+   * escalation emits — so a clock-driven bubble shows up everywhere a manual
+   * escalation would. The event is appended ONLY when the owning task exists in
+   * the store, preserving the escalation's soft-reference semantics (an
+   * escalation may name a task the store does not track).
    */
   autoBubbleEscalation(id: number, bubbledAt?: string): EscalationRow {
     const existing = this.getEscalation(id);
@@ -3558,7 +3577,7 @@ export class ScrumStore {
     const ts = bubbledAt ?? isoNow();
     const bubble = this.db.transaction((): EscalationRow => {
       this.closeEscalationRow(existing.id, 'auto_bubbled', null, null, null, ts);
-      return this.insertEscalation({
+      const bubbled = this.insertEscalation({
         taskId: existing.task_id,
         escalationType: existing.escalation_type,
         layer: nextLayer,
@@ -3567,8 +3586,44 @@ export class ScrumStore {
         walkedUpFrom: existing.id,
         createdAt: ts,
       });
+      // Stamp the closed row with the marker + forward pointer to the new rung.
+      this.setEscalationAttributes(existing.id, {
+        auto_bubbled: true,
+        linked_escalation: bubbled.id,
+      });
+      this.surfaceEscalationEvent(bubbled, ts);
+      return bubbled;
     });
     return bubble();
+  }
+
+  /**
+   * Write the JSON `attributes` marker onto one escalation row. NULL clears it.
+   * The single low-level attributes writer — used by the staleness auto-bubble
+   * to stamp `{ auto_bubbled, linked_escalation }` on the closed row.
+   */
+  private setEscalationAttributes(id: number, attributes: EscalationAttributes | null): void {
+    this.prep('UPDATE scrum_escalations SET attributes = ? WHERE id = ?').run(
+      attributes === null ? null : JSON.stringify(attributes),
+      id,
+    );
+  }
+
+  /**
+   * Surface an auto-bubbled escalation into the `alerts` / `nextReady` ranking by
+   * appending a `blocker_raised` event on the owning task — the same event the
+   * hand-raise path emits, so a clock-driven bubble ranks identically. Appended
+   * ONLY when the task exists (escalation `task_id` is a soft reference); a
+   * bubble naming an untracked task still advances the chain, it just carries no
+   * event surface.
+   */
+  private surfaceEscalationEvent(row: EscalationRow, ts: string): void {
+    if (!this.getTask(row.task_id)) return;
+    const payload: EscalationPayload = {
+      escalation_type: row.escalation_type,
+      summary: row.summary,
+    };
+    this.appendEvent({ taskId: row.task_id, kind: 'blocker_raised', payload, ts });
   }
 
   /**
@@ -3929,6 +3984,40 @@ function safeParseJson<T>(raw: string | null, taskId: string, field: string): T 
     return JSON.parse(raw) as T;
   } catch {
     process.stderr.write(`scrum: task '${taskId}' has corrupt ${field}; treating as null\n`);
+    return null;
+  }
+}
+
+/**
+ * Raw `scrum_escalations` row shape — identical to `EscalationRow` except the
+ * v25 `attributes` column arrives as a JSON string|null. `decodeEscalation` is
+ * the sole bridge to the public `EscalationRow`, parsing `attributes` into
+ * `EscalationAttributes | null`.
+ */
+type EscalationRowRaw = Omit<EscalationRow, 'attributes'> & { attributes: string | null };
+
+/**
+ * Decode a raw escalation row into the public `EscalationRow`, parsing the JSON
+ * `attributes` column. A corrupt `attributes` value degrades to `null` (with a
+ * stderr warning) rather than throwing, so one poisoned row cannot brick every
+ * escalation read — mirroring `decodeTask`'s tolerance for its JSON columns.
+ */
+function decodeEscalation(row: EscalationRowRaw): EscalationRow {
+  const { attributes, ...rest } = row;
+  return { ...rest, attributes: parseEscalationAttributes(attributes, row.id) };
+}
+
+function parseEscalationAttributes(
+  raw: string | null,
+  escalationId: number,
+): EscalationAttributes | null {
+  if (raw === null) return null;
+  try {
+    return JSON.parse(raw) as EscalationAttributes;
+  } catch {
+    process.stderr.write(
+      `scrum: escalation '${escalationId}' has corrupt attributes; treating as null\n`,
+    );
     return null;
   }
 }

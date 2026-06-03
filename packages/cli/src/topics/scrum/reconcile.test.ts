@@ -23,12 +23,14 @@ import { appendEntry } from '../acb/reasoning-log-store';
 import {
   type CurationProposedPayload,
   ORPHAN_TASK_ID,
+  bubbleStaleEscalations,
   buildContextBundle,
   reconcileMilestoneClosed,
   reconcileRunCompleted,
   sweepUnreconciled,
 } from './reconcile';
 import { type ScrumStore, openScrumStore } from './store';
+import { STALENESS_THRESHOLD_HOURS } from './types';
 
 // ---------------------------------------------------------------------------
 // Test harness
@@ -713,5 +715,173 @@ describe('reconcileMilestoneClosed — journal compaction', () => {
     expect(result.compactedTeams.map((c) => c.teamSlug).sort()).toEqual(['squad-a', 'squad-b']);
     expect(store.listLores('squad-a')[0]?.body).toContain('[decision]');
     expect(store.listLores('squad-b')[0]?.body).toContain('[decision]');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bubbleStaleEscalations — staleness auto-bubble (injected clock)
+// ---------------------------------------------------------------------------
+
+describe('bubbleStaleEscalations', () => {
+  // A fixed evaluation instant. All escalations are seeded with a `created_at`
+  // relative to this so the threshold is crossed deterministically — no wall
+  // clock, no setTimeout.
+  const NOW_MS = Date.parse('2026-06-02T00:00:00Z');
+  const HOUR_MS = 60 * 60 * 1000;
+
+  /** ISO timestamp `hours` before the fixed evaluation instant. */
+  function hoursAgo(hours: number): string {
+    return new Date(NOW_MS - hours * HOUR_MS).toISOString();
+  }
+
+  test('auto-bubbles an escalation older than the threshold one rung up and flips the original to auto_bubbled', () => {
+    const stale = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'aged out, no receiver',
+      createdAt: hoursAgo(STALENESS_THRESHOLD_HOURS + 1),
+    });
+
+    const result = bubbleStaleEscalations(store, NOW_MS);
+
+    expect(result.threshold_hours).toBe(STALENESS_THRESHOLD_HOURS);
+    expect(result.inspected).toBe(1);
+    expect(result.bubbled).toHaveLength(1);
+    expect(result.bubbled[0]).toMatchObject({
+      from_id: stale.id,
+      task_id: 't1',
+      from_layer: 'implementer',
+      to_layer: 'engineer',
+    });
+
+    // The original flips to auto_bubbled with the marker + forward pointer.
+    const closed = store.getEscalation(stale.id);
+    expect(closed?.state).toBe('auto_bubbled');
+    expect(closed?.attributes?.auto_bubbled).toBe(true);
+    expect(closed?.attributes?.linked_escalation).toBe(result.bubbled[0]?.to_id);
+
+    // A fresh open row exists exactly one rung up, back-pointing at the original.
+    const fresh = store.getEscalation(result.bubbled[0]?.to_id as number);
+    expect(fresh?.state).toBe('open');
+    expect(fresh?.layer).toBe('engineer');
+    expect(fresh?.walked_up_from).toBe(stale.id);
+  });
+
+  test('leaves an under-threshold escalation untouched', () => {
+    const fresh = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'ambiguous',
+      summary: 'raised recently',
+      createdAt: hoursAgo(STALENESS_THRESHOLD_HOURS - 1),
+    });
+
+    const result = bubbleStaleEscalations(store, NOW_MS);
+
+    expect(result.inspected).toBe(1);
+    expect(result.bubbled).toHaveLength(0);
+    expect(store.getEscalation(fresh.id)?.state).toBe('open');
+    expect(store.getEscalation(fresh.id)?.attributes).toBeNull();
+    // No successor row was appended.
+    expect(store.listOpenEscalationRows()).toHaveLength(1);
+  });
+
+  test('an escalation exactly at the threshold is not yet stale (strict greater-than)', () => {
+    const boundary = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'conflict',
+      summary: 'right at the line',
+      createdAt: hoursAgo(STALENESS_THRESHOLD_HOURS),
+    });
+
+    const result = bubbleStaleEscalations(store, NOW_MS);
+
+    expect(result.bubbled).toHaveLength(0);
+    expect(store.getEscalation(boundary.id)?.state).toBe('open');
+  });
+
+  test('reports a stale escalation already at the top of the chain (human) without mutating it', () => {
+    const atTop = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'human-rung, aged',
+      layer: 'human',
+      createdAt: hoursAgo(STALENESS_THRESHOLD_HOURS + 100),
+    });
+
+    const result = bubbleStaleEscalations(store, NOW_MS);
+
+    expect(result.atTopOfChain).toBe(1);
+    expect(result.bubbled).toHaveLength(0);
+    // The human-rung row stays open and unmarked — nowhere higher to walk.
+    expect(store.getEscalation(atTop.id)?.state).toBe('open');
+    expect(store.getEscalation(atTop.id)?.attributes).toBeNull();
+  });
+
+  test('advances each stale escalation only one rung in a single pass (does not re-evaluate the fresh successor)', () => {
+    const stale = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'aged out',
+      createdAt: hoursAgo(STALENESS_THRESHOLD_HOURS + 48),
+    });
+
+    const result = bubbleStaleEscalations(store, NOW_MS);
+
+    // Exactly one bubble: the successor row is created with created_at = NOW_MS,
+    // so it is not stale within the same pass and is not re-bubbled.
+    expect(result.bubbled).toHaveLength(1);
+    const fresh = store.getEscalation(result.bubbled[0]?.to_id as number);
+    expect(fresh?.layer).toBe('engineer');
+    expect(fresh?.state).toBe('open');
+    // The chain back-link is intact for a future pass to continue from.
+    expect(store.getEscalationChain(fresh?.id as number).map((e) => e.layer)).toEqual([
+      'implementer',
+      'engineer',
+    ]);
+    void stale;
+  });
+
+  test('a custom threshold overrides the default staleness window', () => {
+    const aged = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'three hours old',
+      createdAt: hoursAgo(3),
+    });
+
+    // Default (24h) leaves it alone; a 2h threshold bubbles it.
+    expect(bubbleStaleEscalations(store, NOW_MS).bubbled).toHaveLength(0);
+    const result = bubbleStaleEscalations(store, NOW_MS, 2);
+    expect(result.threshold_hours).toBe(2);
+    expect(result.bubbled).toHaveLength(1);
+    expect(store.getEscalation(aged.id)?.state).toBe('auto_bubbled');
+  });
+
+  test('surfaces a stale auto-bubble into next-ready ranking and alerts via the blocker_raised bridge', () => {
+    // The owning task must exist for the event-surface bridge to fire.
+    store.createTask({ id: 'ranked-task', title: 'Ranked', status: 'ready' });
+    store.createTask({ id: 'plain-task', title: 'Plain', status: 'ready' });
+    store.raiseEscalation({
+      taskId: 'ranked-task',
+      escalationType: 'blocked',
+      summary: 'no receiver acted',
+      createdAt: hoursAgo(STALENESS_THRESHOLD_HOURS + 5),
+    });
+
+    bubbleStaleEscalations(store, NOW_MS);
+
+    // Alerts surface: listOpenEscalations reads the blocker_raised event the
+    // bubble emitted.
+    const alertTaskIds = store.listOpenEscalations().map((e) => e.task_id);
+    expect(alertTaskIds).toContain('ranked-task');
+
+    // Next-ready ranking: the escalated task carries a positive escalation_boost
+    // and outranks the un-escalated peer.
+    const ranked = store.nextReady({ limit: 10, nowMs: NOW_MS });
+    const escalated = ranked.find((r) => r.task.id === 'ranked-task');
+    const plain = ranked.find((r) => r.task.id === 'plain-task');
+    expect(escalated?.rationale.escalation_boost).toBeGreaterThan(0);
+    expect(escalated?.rationale.escalation_type).toBe('blocked');
+    expect(escalated?.score ?? 0).toBeGreaterThan(plain?.score ?? 0);
   });
 });

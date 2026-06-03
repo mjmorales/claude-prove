@@ -171,6 +171,60 @@ describe('onSessionStart', () => {
     const result = onSessionStart(null);
     expect(result.exitCode).toBe(0);
   });
+
+  test('auto-bubbles a stale escalation and surfaces it in the digest', () => {
+    seedStore((store) => {
+      store.createTask({ id: 'blocked-task', title: 'Blocked', status: 'ready' });
+      // created_at far in the past -> reliably past the staleness threshold
+      // regardless of the wall clock the hook reads.
+      store.raiseEscalation({
+        taskId: 'blocked-task',
+        escalationType: 'blocked',
+        summary: 'no receiver acted in time',
+        createdAt: '2020-01-01T00:00:00Z',
+      });
+    });
+
+    const result = onSessionStart({ cwd: project });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('auto-bubbled escalations');
+    expect(result.stdout).toContain('implementer');
+    expect(result.stdout).toContain('engineer');
+
+    // The store reflects the bubble: original closed auto_bubbled, fresh open
+    // row one rung up.
+    seedStore((store) => {
+      const rows = store.listEscalationsForTask('blocked-task');
+      expect(rows.map((r) => r.state)).toEqual(['auto_bubbled', 'open']);
+      const [closed, fresh] = rows;
+      expect(closed?.attributes?.auto_bubbled).toBe(true);
+      expect(closed?.attributes?.linked_escalation).toBe(fresh?.id);
+      expect(fresh?.layer).toBe('engineer');
+    });
+  });
+
+  test('leaves a fresh escalation untouched on session-start', () => {
+    seedStore((store) => {
+      store.createTask({ id: 'fresh-task', title: 'Fresh', status: 'ready' });
+      // created_at = now -> well under the threshold; the sweep must skip it.
+      store.raiseEscalation({
+        taskId: 'fresh-task',
+        escalationType: 'ambiguous',
+        summary: 'just raised',
+      });
+    });
+
+    const result = onSessionStart({ cwd: project });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).not.toContain('auto-bubbled escalations');
+    seedStore((store) => {
+      const rows = store.listEscalationsForTask('fresh-task');
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.state).toBe('open');
+    });
+  });
 });
 
 // ===========================================================================

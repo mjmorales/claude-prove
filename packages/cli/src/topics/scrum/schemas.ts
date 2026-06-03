@@ -1008,6 +1008,32 @@ CREATE INDEX idx_scrum_escalations_task_state ON scrum_escalations(task_id, stat
 CREATE INDEX idx_scrum_escalations_walked_up_from ON scrum_escalations(walked_up_from);
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v25 — escalation staleness auto-bubble marker
+// ---------------------------------------------------------------------------
+
+/**
+ * v25: a nullable `attributes` JSON column on `scrum_escalations` carrying
+ * structured per-row markers. The staleness floor writes
+ * `{ "auto_bubbled": true, "linked_escalation": <new row id> }` onto a row it
+ * bubbles, so the closed (`auto_bubbled`) row carries BOTH the marker and a
+ * FORWARD pointer to the fresh row one rung up. This complements the existing
+ * `walked_up_from` BACK-pointer (new → original): together they make the
+ * staleness walk-up traversable in either direction, and the marker
+ * distinguishes a clock-driven bubble from a receiver-driven `re_escalate` at a
+ * glance without reading `resolution_mode`.
+ *
+ * A nullable column (not a new table) because the marker is a property OF an
+ * existing escalation row, not its own entity. NULL = no marker (the default
+ * for every raised / re-escalated / resolved row). The column carries no SQL
+ * CHECK — it stays forward-compatible TEXT, matching the v24 convention; the
+ * `EscalationAttributes` shape is documented on the type and parsed tolerantly
+ * at the store read boundary so one corrupt row cannot brick an escalation read.
+ */
+export const SCRUM_MIGRATION_V25_SQL = `
+ALTER TABLE scrum_escalations ADD COLUMN attributes TEXT;
+`;
+
 /**
  * Current scrum-domain store version — the highest migration version this
  * module registers. Stamped as the per-artifact `schema_version` on the
@@ -1015,7 +1041,7 @@ CREATE INDEX idx_scrum_escalations_walked_up_from ON scrum_escalations(walked_up
  * scrum row reports the schema it was read under. Bump in lockstep with the
  * top migration version on every additive hop.
  */
-export const SCRUM_SCHEMA_VERSION = 24;
+export const SCRUM_SCHEMA_VERSION = 25;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
@@ -1217,6 +1243,14 @@ export function ensureScrumSchemaRegistered(): void {
           'create scrum_escalations (typed escalation walk-up chain + four-state machine + resolution modes) + idx_scrum_escalations_task_state + idx_scrum_escalations_walked_up_from',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V24_SQL);
+        },
+      },
+      {
+        version: 25,
+        description:
+          'add scrum_escalations.attributes (nullable JSON) carrying the staleness auto-bubble marker { auto_bubbled, linked_escalation }',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V25_SQL);
         },
       },
     ],

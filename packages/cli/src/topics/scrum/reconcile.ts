@@ -28,7 +28,8 @@ import type { StoryBriefInput } from '../acb/milestone-brief';
 import type { LogEntry } from '../acb/reasoning-log';
 import { listEntries } from '../acb/reasoning-log-store';
 import type { ScrumStore } from './store';
-import type { ScrumEvent, ScrumTask } from './types';
+import { STALENESS_THRESHOLD_HOURS } from './types';
+import type { EscalationRow, ScrumEvent, ScrumTask } from './types';
 
 // ---------------------------------------------------------------------------
 // Public constants
@@ -77,6 +78,36 @@ export interface SweepResult {
   scanned: number;
   reconciled: number;
   errors: Error[];
+}
+
+/** One escalation the staleness floor auto-bubbled, as a flat audit ref. */
+export interface AutoBubbledEscalation {
+  /** The closed (`auto_bubbled`) row's id. */
+  from_id: number;
+  /** The freshly-appended `open` row's id one rung up. */
+  to_id: number;
+  task_id: string;
+  /** The rung the closed row sat at. */
+  from_layer: EscalationRow['layer'];
+  /** The rung the new open row sits at (exactly one up). */
+  to_layer: EscalationRow['layer'];
+  /** The closed row's age in hours at evaluation time. */
+  age_hours: number;
+}
+
+export interface StaleEscalationSweepResult {
+  /** Threshold (hours) the sweep evaluated against. */
+  threshold_hours: number;
+  /** Open rows inspected (every currently-open escalation). */
+  inspected: number;
+  /** Rows that crossed the threshold and were auto-bubbled. */
+  bubbled: AutoBubbledEscalation[];
+  /**
+   * Rows past the threshold that could NOT bubble because they already sit at
+   * the top of the chain (`human` — nowhere higher to walk). Reported, not
+   * mutated: a `human`-rung escalation is the terminal authority's worklist.
+   */
+  atTopOfChain: number;
 }
 
 /**
@@ -290,6 +321,100 @@ export function sweepUnreconciled(
 
   return result;
 }
+
+// ---------------------------------------------------------------------------
+// bubbleStaleEscalations — Forced Bubble-Up of aged escalations
+// ---------------------------------------------------------------------------
+
+/**
+ * Auto-bubble every `open` escalation whose age exceeds the staleness threshold
+ * one rung up the authority chain. This is the engine's escalation-of-last-
+ * resort: an escalation no receiver acted on does not sit forever at one rung —
+ * the staleness clock promotes it so it reaches a higher authority and surfaces
+ * higher in the worklist.
+ *
+ * Evaluated by the reconciler hook on session-start — there is NO resident loop
+ * or timer. The hook is the only firing point: the work is reconciled into state
+ * on the session transition, then surfaced to whoever drives next via `alerts`
+ * and the `nextReady` ranking (each bubble appends the same `blocker_raised`
+ * event a hand-raised escalation does).
+ *
+ * `nowMs` is injected so the evaluation never reads the wall clock directly —
+ * tests cross the threshold with a fixed clock, not `setTimeout`. An escalation
+ * is stale when `(nowMs − created_at) > thresholdHours` (strict `>`; a row at
+ * exactly the threshold is not yet stale). A stale row already at the top of the
+ * chain (`human`) cannot bubble — it is counted in `atTopOfChain`, never
+ * mutated. Each bubble reuses {@link ScrumStore.autoBubbleEscalation}, so the
+ * marker / forward pointer / event surface are written there.
+ */
+export function bubbleStaleEscalations(
+  store: ScrumStore,
+  nowMs: number,
+  thresholdHours: number = STALENESS_THRESHOLD_HOURS,
+): StaleEscalationSweepResult {
+  const thresholdMs = thresholdHours * 60 * 60 * 1000;
+  const result: StaleEscalationSweepResult = {
+    threshold_hours: thresholdHours,
+    inspected: 0,
+    bubbled: [],
+    atTopOfChain: 0,
+  };
+
+  // Snapshot the open rows BEFORE bubbling: an auto-bubble appends a fresh open
+  // row, and we must not re-evaluate that brand-new (un-aged) row in the same
+  // pass. Iterating the snapshot keeps the sweep single-rung-per-escalation.
+  for (const escalation of store.listOpenEscalationRows()) {
+    result.inspected++;
+    const ageMs = ageMillis(escalation.created_at, nowMs);
+    if (ageMs === null || ageMs <= thresholdMs) continue;
+
+    const nextLayer = nextLayerOf(escalation);
+    if (nextLayer === null) {
+      result.atTopOfChain++;
+      continue;
+    }
+
+    const bubbled = store.autoBubbleEscalation(escalation.id, new Date(nowMs).toISOString());
+    result.bubbled.push({
+      from_id: escalation.id,
+      to_id: bubbled.id,
+      task_id: escalation.task_id,
+      from_layer: escalation.layer,
+      to_layer: bubbled.layer,
+      age_hours: Math.floor(ageMs / (60 * 60 * 1000)),
+    });
+  }
+
+  return result;
+}
+
+/** Age in ms of an escalation against `nowMs`, or null when `created_at` is unparseable. */
+function ageMillis(createdAt: string, nowMs: number): number | null {
+  const ms = Date.parse(createdAt);
+  if (Number.isNaN(ms)) return null;
+  return Math.max(0, nowMs - ms);
+}
+
+/** The rung one above an escalation's, or null when it already sits at the top. */
+function nextLayerOf(escalation: EscalationRow): EscalationRow['layer'] | null {
+  const idx = ESCALATION_CHAIN_ORDER.indexOf(escalation.layer);
+  if (idx < 0 || idx + 1 >= ESCALATION_CHAIN_ORDER.length) return null;
+  return ESCALATION_CHAIN_ORDER[idx + 1] ?? null;
+}
+
+/**
+ * Bottom-to-top rung order, mirroring the store's `ESCALATION_CHAIN`. Inlined as
+ * a local const so this module's top-of-chain check needs no store round-trip;
+ * the store boundary remains the authority that rejects a bubble past `human`.
+ */
+const ESCALATION_CHAIN_ORDER: EscalationRow['layer'][] = [
+  'implementer',
+  'engineer',
+  'tech_lead',
+  'pm',
+  'strategy',
+  'human',
+];
 
 // ---------------------------------------------------------------------------
 // reconcileMilestoneClosed — Forced Bubble-Up of curation candidates
