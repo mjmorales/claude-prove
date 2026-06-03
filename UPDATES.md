@@ -6,6 +6,19 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.7.2 — `proposed`/`accepted` decomposition-review task states
+
+*(Additive — no migration, nothing to adopt.)* Two new `TaskStatus` values split apart what `backlog` and `ready` used to conflate:
+
+- **`proposed`** — decomposed into children, awaiting the decomposition review.
+- **`accepted`** — the decomposition review passed; this is the gate that fires the next layer's decompose, distinct from `ready` (deps cleared, implementation may start).
+
+**Lifecycle** — `backlog → proposed → accepted → ready → in_progress → review → done`, plus `proposed → backlog` (review kickback). The direct `backlog → ready|in_progress` edges remain for tasks needing no decomposition review. Both states surface as active in `scrum status` and roll up through `derivedStatus` (precedence `ready > accepted > proposed > backlog`).
+
+**No migration.** `scrum_tasks.status` is CHECK-free TEXT (same as the event-kind column), so the enum extends with no DB change and existing databases stay forward-compatible — the schema version does not move. Set the states via `scrum task status <id> proposed|accepted`.
+
+---
+
 ## v3.7.1 — Record acceptance-criterion verdicts from the CLI (`scrum task acceptance verify`)
 
 *(Bug fix — no schema change, no migration, nothing to adopt.)* Closes a close-floor deadlock: a `layer=story` task carrying `verifies_by: agent` (or any heavy-kind) acceptance criteria could not reach `done`, because the close floor reads `verification.verdict === 'verified'` and nothing wired that recording to a CLI. The verdict for an `agent` criterion is judged driver-side and was therefore unrecordable out-of-turn — the story wedged at close.
