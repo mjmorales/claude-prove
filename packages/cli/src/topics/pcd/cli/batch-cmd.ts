@@ -17,6 +17,22 @@ import type { CollapsedManifest } from '../collapse';
 import type { StructuralMap } from '../structural-map';
 import { ensurePcdDir, resolveProjectRoot } from './paths';
 
+/**
+ * Parse a JSON file and return the typed value, or null on SyntaxError.
+ * Callers must emit `Error: ...` to stderr and return 1 when null is returned;
+ * this helper only covers parse failures — existence checks remain separate.
+ */
+function readJson<T>(path: string, label: string): T | null {
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as T;
+  } catch (err) {
+    console.error(
+      `Error: failed to parse ${label}: ${path}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return null;
+  }
+}
+
 export interface BatchFlags {
   projectRoot?: string;
   maxFiles?: number;
@@ -38,8 +54,10 @@ export function runBatch(flags: BatchFlags): number {
     return 1;
   }
 
-  const collapsed = JSON.parse(readFileSync(collapsedPath, 'utf8')) as CollapsedManifest;
-  const structuralMap = JSON.parse(readFileSync(structMapPath, 'utf8')) as StructuralMap;
+  const collapsed = readJson<CollapsedManifest>(collapsedPath, 'collapsed manifest');
+  if (collapsed === null) return 1;
+  const structuralMap = readJson<StructuralMap>(structMapPath, 'structural map');
+  if (structuralMap === null) return 1;
 
   const maxFiles = flags.maxFiles ?? 15;
   const batches = formBatches(collapsed, structuralMap, maxFiles, projectRoot);

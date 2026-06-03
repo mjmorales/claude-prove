@@ -23,8 +23,11 @@
 
 import { statSync } from 'node:fs';
 import { join } from 'node:path';
+import { createLogger } from '@claude-prove/shared';
 import type { CollapsedManifest, TriageCard } from './collapse';
 import type { StructuralMap, StructuralMapCluster } from './structural-map';
+
+const logger = createLogger('pcd.batch-former');
 
 // ---------------------------------------------------------------------------
 // Path helpers (Python-parity)
@@ -76,6 +79,13 @@ export interface BatchDefinition {
 export function _estimateTokens(files: string[], projectRoot: string): number {
   let totalChars = 0;
   for (const filePath of files) {
+    // An empty path collapses to the project root via join(), which stat's
+    // successfully as a directory — bypassing the catch and producing a
+    // wrong estimate. Treat it as the documented missing-file fallback instead.
+    if (filePath === '') {
+      totalChars += 16000;
+      continue;
+    }
     const fullPath = join(projectRoot, filePath);
     try {
       totalChars += statSync(fullPath).size;
@@ -111,6 +121,15 @@ function routeQuestions(
     const qTextRaw = typeof q.text === 'string' ? q.text : q.question;
     const qText = typeof qTextRaw === 'string' ? qTextRaw : '';
     const qId = typeof q.id === 'string' ? q.id : '';
+
+    // A question with no id or with no routing anchor (no target files and no
+    // from_file) indicates a shape regression in the producer. Warn so it
+    // surfaces on stderr rather than silently degrading review prompts.
+    if (qId === '' || (targetFiles.length === 0 && fromFile === '')) {
+      logger.warn(
+        `routeQuestions: malformed question entry (id=${JSON.stringify(qId)}, target_files=${targetFiles.length}, from_file=${JSON.stringify(fromFile)}) — routing with defaults`,
+      );
+    }
 
     const routedQuestion: RoutedQuestion = {
       id: qId,

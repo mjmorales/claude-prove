@@ -465,6 +465,11 @@ export interface ApplyMigrationOptions {
  * Run migration on a config file. Returns `{ backupPath, changes }`. When
  * no migration is needed, both fields are empty. With `dryRun: true`, the
  * plan is returned without touching the filesystem.
+ *
+ * Throws on a missing or unreadable file (ENOENT-class errors from
+ * `readFileSync`). The schema CLI wraps this in try/catch and emits a
+ * `claude-prove schema:` prefixed message; other direct callers must
+ * handle the throw themselves.
  */
 export function applyMigration(
   path: string,

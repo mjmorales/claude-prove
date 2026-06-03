@@ -137,7 +137,24 @@ function fireReporter(
     cwd,
     env,
     encoding: 'utf8',
+    // A reporter that hangs (e.g. a curl with no --max-time, a blocking read)
+    // would stall the entire dispatch process. 10 s covers all reasonable
+    // transient-network reporters; SIGKILL prevents zombie children on timeout.
+    timeout: 10000,
+    killSignal: 'SIGKILL',
   });
+
+  // spawnSync sets res.error.code = 'ETIMEDOUT' (and res.signal = 'SIGTERM')
+  // when the child is killed for exceeding the timeout. Warn and skip rather
+  // than treating this as a reporter failure — the "non-fatal reporters"
+  // contract must hold even when a reporter hangs.
+  const timedOut =
+    (res.error as NodeJS.ErrnoException | undefined)?.code === 'ETIMEDOUT' ||
+    res.signal === 'SIGTERM';
+  if (timedOut) {
+    process.stderr.write(`  [${name}] timed out after 10s\n`);
+    return;
+  }
 
   // Mirror `2>&1 | sed 's/^/  [name] /' >&2` from the retired shell script:
   // merge stdout+stderr, prefix each non-empty line, drop the empty trailing

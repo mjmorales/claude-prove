@@ -117,6 +117,16 @@ function dispatchFileAction(action: Exclude<ReportAction, 'status'>, flags: Repo
     return 1;
   }
 
+  const inputErrors = validateInputShape(action, parsed.value);
+  if (inputErrors.length > 0) {
+    const kind = action === 'brief' ? 'ReviewBrief' : action;
+    process.stderr.write(
+      `claude-prove report ${action}: input is not a valid ${kind} (${inputErrors.length}):\n`,
+    );
+    for (const e of inputErrors) process.stderr.write(`  - ${e}\n`);
+    return 1;
+  }
+
   const doc = compileDocument(action, parsed.value);
 
   const errors = validateReportDocument(doc);
@@ -137,6 +147,63 @@ function dispatchFileAction(action: Exclude<ReportAction, 'status'>, flags: Repo
   }
 
   return emitHtml(renderReportDocument(doc), action, flags);
+}
+
+/**
+ * Validate the raw parsed value for each file action before casting. Returns
+ * an array of human-readable error strings; empty means the shape is
+ * acceptable. Guards against hard crashes (e.g. `undefined.length`) when a
+ * wrong-typed file is passed to a compiled action.
+ *
+ * `render` and `validate` pass through without structural checks here because
+ * validateReportDocument (called unconditionally after compileDocument) already
+ * validates a full ReportDocument.
+ */
+function validateInputShape(action: Exclude<ReportAction, 'status'>, value: unknown): string[] {
+  // render/validate: downstream validateReportDocument owns structural checks.
+  if (action === 'render' || action === 'validate') return [];
+
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return ['expected a JSON object'];
+  }
+  const v = value as Record<string, unknown>;
+  const errors: string[] = [];
+
+  if (action === 'brief') {
+    if (typeof v.summary !== 'string') errors.push('summary must be a string');
+    for (const field of ['attention', 'decisions', 'bailouts', 'verifications'] as const) {
+      if (!Array.isArray(v[field])) errors.push(`${field} must be an array`);
+    }
+    return errors;
+  }
+
+  if (action === 'milestone-brief') {
+    // milestoneBriefToReportDocument dereferences .attention, .outcomes,
+    // .decisions, and .did_not_ship as arrays; .milestone_id as a string.
+    if (typeof v.milestone_id !== 'string') errors.push('milestone_id must be a string');
+    for (const field of ['attention', 'outcomes', 'decisions', 'did_not_ship'] as const) {
+      if (!Array.isArray(v[field])) errors.push(`${field} must be an array`);
+    }
+    return errors;
+  }
+
+  if (action === 'timeline') {
+    // runStateToReportDocument dereferences .branch, .slug (string interpolation)
+    // and .tasks (iterated as an array).
+    if (typeof v.branch !== 'string') errors.push('branch must be a string');
+    if (typeof v.slug !== 'string') errors.push('slug must be a string');
+    if (!Array.isArray(v.tasks)) errors.push('tasks must be an array');
+    return errors;
+  }
+
+  if (action === 'decompose-preview') {
+    // decomposeListToReportDocument dereferences .children as an array
+    // (.layer is optional and used only for the title suffix).
+    if (!Array.isArray(v.children)) errors.push('children must be an array');
+    return errors;
+  }
+
+  return errors;
 }
 
 /** Resolve the report/v1 document for a file action: read directly, or compile. */
