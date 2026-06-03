@@ -56,6 +56,24 @@ Each validator has exactly one of `command`, `prompt`, or `skill` (conditional =
 
 The `reporters` key is optional.
 
+### Trigger Bindings (`triggers`)
+
+The optional `triggers` key declares a **status-transition → bound next-action** table the scrum reconciler consults on session transitions. A task entering a binding's `on` status surfaces its `workflow` as a pending next-action in the session-start digest (alongside `scrum next-ready` / `scrum alerts`). There is no resident evaluator — bindings fire only when a session reconciles. Unattended firing requires an explicit opt-in driver (a `/loop` while a session is open, or a scheduled remote agent that drains `scrum next-ready` on a cron); without one, a bound next-action simply waits in the digest until an interactive session picks it up.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `on` | string | yes | Task status whose entry fires the binding (closed enum: `backlog`, `proposed`, `accepted`, `ready`, `in_progress`, `review`, `blocked`, `done`, `cancelled`) |
+| `workflow` | string | yes | Bound next-action the reconciler surfaces (a workflow name or short label) |
+| `description` | string | no | Human-readable note on the binding's purpose |
+
+```json
+"triggers": [
+  { "on": "accepted", "workflow": "decompose", "description": "fire the next-layer decompose" }
+]
+```
+
+The `triggers` key is optional; absent = no bindings.
+
 ## Execution Sequence
 
 Validators run in phase order after each implementation step:
