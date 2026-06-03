@@ -1,8 +1,8 @@
 <!-- prove:managed:start -->
 # claude-prove
 
-<!-- prove:plugin-version:2.9.1 -->
-**Prove plugin v2.9.1** — if `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts --version` does not match v2.9.1, run `/prove:update` to sync.
+<!-- prove:plugin-version:3.0.0 -->
+**Prove plugin v3.0.0** — if `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts --version` does not match v3.0.0, run `/prove:update` to sync.
 
 JavaScript/TypeScript (npm)
 
@@ -19,6 +19,20 @@ JavaScript/TypeScript (npm)
 - File naming: kebab-case
 - Test files: *.test.ext (dot)
 
+## Validation
+
+Run before committing:
+
+- **llm**: `skill claude-skills:comment-audit`
+
+## Discovery Protocol
+
+Before broad Glob/Grep searches, check the file index first:
+
+- `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts cafi context` — full index with routing hints
+- `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts cafi lookup <keyword>` — search by keyword
+
+Only fall back to Glob/Grep when the index doesn't cover what you need.
 ## References
 
 ### claude-prove CLI Reference
@@ -54,6 +68,7 @@ JavaScript/TypeScript (npm)
 - `/prove:brainstorm` — Explore options and record decisions
 - `/prove:comprehend` — Socratic quiz on recent diffs to build code comprehension
 - `/prove:index` — Update the file index (run after significant changes)
+- `/prove:intake` — Render a charter/team/decompose HTML intake form, validate the pasted-back payload, and drive the one writer
 - `/prove:orchestrator` — Unified entry point for orchestrator, autopilot, and full-auto execution
 - `/prove:plan` — Plan a task or a specific step from the active plan.json
 - `/prove:review-ui` — Docker-based review UI for inspecting prove runs, ACB intent groups, and verdicts

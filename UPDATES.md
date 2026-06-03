@@ -6,7 +6,11 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## v3.10.0 — CLI robustness hardening: clean failures, honest exit codes
+## v3.0.0 — Structured-agent methodology on prove machinery
+
+*(One major release.)* Layered role-driven decomposition, AC-gated story close, risk-forward briefs, durable curation, contributor identity, trigger bindings, HTML report/intake surfaces, and a CLI robustness pass — shipped together as v3.0.0. Each subsection below documents one surface and its migration steps; run `/prove:update` once to adopt everything (config schema lands at v9, run-state schema at v4).
+
+### CLI robustness hardening: clean failures, honest exit codes
 
 *(Behavior changes, no config migration and nothing to adopt — review the consumer-contract notes below only if you script against CLI output.)* A hardening sweep across run-state, scrum, schema, pcd, acb, install, notify, report, claude-md, and cafi. Two systemic fixes plus targeted contract changes:
 
@@ -23,9 +27,8 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 - **YAML frontmatter is quote-safe.** Contributor and team artifact writers escape scalars that would corrupt YAML (colons, leading specials, boolean/null keywords).
 - **Performance.** `scrum status` computes the tree rollup in a single pass (previously one store query per node per level); `cafi status`/index reuse cached hashes for files whose mtime+size are unchanged (stat-only fast path, additive cache fields, no cache invalidation); glob `**` matching is memoized, collapsing exponential backtracking.
 
----
 
-## v3.9.0 — Interactive intake forms: `intake/v1` + the `/prove:intake` skill
+### Interactive intake forms: `intake/v1` + the `/prove:intake` skill
 
 *(Additive — new `intake` CLI topic + `intake` skill, nothing to adopt.)* A self-contained interactive HTML form surface for the charter, team, and decomposition-kickoff Q&A. The operator fills the form, copies the answers to the clipboard, and pastes them back; a skill validates the payload and drives the **same** writer the conversational interview drives. The form and the conversation are two front-ends to one writer.
 
@@ -39,9 +42,8 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 **New skill — `/prove:intake`** renders the form, walks the operator through fill → copy → paste, validates the payload, and maps the validated answers onto the existing writer: bootstrap scaffold + authoring for `charter`, `scrum team create`/`scope-set`/`rotate` for `team`, and the decompose ladder for `decompose`. It never reimplements a writer.
 
----
 
-## v3.8.0 — HTML rendering surface: report/v1 block-document renderer
+### HTML rendering surface: report/v1 block-document renderer
 
 *(Additive — new `report` CLI topic, nothing to adopt.)* A single closed **report/v1** block-document model that every HTML surface compiles to, plus a vendored static renderer that maps blocks → a self-contained HTML page. Authors emit blocks (or the renderer compiles their data shape); one vendored renderer covers every surface (Review Brief, status dashboard, run timeline, decomposition preview).
 
@@ -57,9 +59,8 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 (The interactive intake-form surface is a separate effort and is not part of this entry.)
 
----
 
-## v3.7.5 — Passive triggers & opt-in unattended-execution recipe
+### Passive triggers & opt-in unattended-execution recipe
 
 *(Docs — no schema change, nothing to adopt.)* A new reference, `references/passive-triggers.md`, documents the three-mechanism trigger model and the opt-in unattended-execution recipe:
 
@@ -69,9 +70,8 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 Explicit trade: **no autonomous progression between sessions unless the opt-in driver is configured** — prove trades unattended firing for zero operational surface (no resident daemon).
 
----
 
-## v3.7.4 — Trigger binding table honored by the reconciler (config schema v8→v9)
+### Trigger binding table honored by the reconciler (config schema v8→v9)
 
 *(Additive — one-time `/prove:update` stamp; absent `triggers` preserves current behavior.)* A declared trigger table maps a **status-transition → bound next-action**, and the scrum reconciler consults it on session transitions — realizing the common cases of passive triggers without a resident evaluator.
 
@@ -91,9 +91,8 @@ Explicit trade: **no autonomous progression between sessions unless the opt-in d
 
 **Migration — config schema v8 → v9:** `CURRENT_SCHEMA_VERSION` `'8' → '9'`. The hop is a pure version bump (`triggers` is optional; absent = no bindings, the v8 behavior). Run `/prove:update` (or `claude-prove schema migrate --file .claude/.prove.json`) at the repo root; commit the updated file and delete the generated `.bak`.
 
----
 
-## v3.7.3 — Durable workflow run records: retry/loop/fanout/on_fail/singleton (run-state schema v3→v4)
+### Durable workflow run records: retry/loop/fanout/on_fail/singleton (run-state schema v3→v4)
 
 *(Additive — run-state plan schema `v3 → v4`; a pure version bump, absent block preserves current behavior.)* A plan task gains an optional `execution` block of declarative directives the workflow/orchestrator driver honors and the durable run record persists:
 
@@ -105,9 +104,8 @@ Explicit trade: **no autonomous progression between sessions unless the opt-in d
 
 Absent block = run-once / no-retry / no-loop / fan-out 1 / halt-on-fail / parallel — exactly the pre-v4 behavior, so existing runs are unaffected. **Migration:** run-state artifacts hop `v3 → v4` via `claude-prove run-state migrate` (a pure version bump — no field is injected); new runs emit `v4`. The driver patterns for honoring each directive live in the workflow skill (`skills/workflow/SKILL.md`).
 
----
 
-## v3.7.2 — `proposed`/`accepted` decomposition-review task states
+### `proposed`/`accepted` decomposition-review task states
 
 *(Additive — no migration, nothing to adopt.)* Two new `TaskStatus` values split apart what `backlog` and `ready` used to conflate:
 
@@ -118,9 +116,8 @@ Absent block = run-once / no-retry / no-loop / fan-out 1 / halt-on-fail / parall
 
 **No migration.** `scrum_tasks.status` is CHECK-free TEXT (same as the event-kind column), so the enum extends with no DB change and existing databases stay forward-compatible — the schema version does not move. Set the states via `scrum task status <id> proposed|accepted`.
 
----
 
-## v3.7.1 — Record acceptance-criterion verdicts from the CLI (`scrum task acceptance verify`)
+### Record acceptance-criterion verdicts from the CLI (`scrum task acceptance verify`)
 
 *(Bug fix — no schema change, no migration, nothing to adopt.)* Closes a close-floor deadlock: a `layer=story` task carrying `verifies_by: agent` (or any heavy-kind) acceptance criteria could not reach `done`, because the close floor reads `verification.verdict === 'verified'` and nothing wired that recording to a CLI. The verdict for an `agent` criterion is judged driver-side and was therefore unrecordable out-of-turn — the story wedged at close.
 
@@ -132,9 +129,8 @@ Absent block = run-once / no-retry / no-loop / fan-out 1 / halt-on-fail / parall
 
 This is the symmetric counterpart to `scrum gate respond` (which records the human verdict for `gate` criteria): `verify` records the engine/driver verdict for `assert`/`bash`/`agent` criteria out-of-turn, complementing the orchestrator validation gate's inline recording.
 
----
 
-## v3.7.0 — Inter-agent communication: cross-team asks, escalations, handoff enforcement
+### Inter-agent communication: cross-team asks, escalations, handoff enforcement
 
 A cross-team request protocol, a typed escalation chain with staleness auto-promotion, and an enforced end-of-session declaration — so blocked work routes to the team that owns the interface, unresolved blockers climb the authority chain on their own, and no worker session ends without recording its outcome.
 
@@ -159,7 +155,7 @@ A cross-team request protocol, a typed escalation chain with staleness auto-prom
 
 **Auto-adoption.** The store migration is automatic on the next scrum command. The only behavior you must be aware of is the end-of-session gate: a worker session that edits files must now declare a `synthesis` outcome (or a `synthesis` + `handoff`) before it ends, or the stop hook will block and tell it what to write.
 
-## v3.6.0 — User-level config: project-root → default contributor
+### User-level config: project-root → default contributor
 
 A per-user (home-directory) config that maps a project root to a default contributor CT-UUID, so the active contributor is **implicit per project** — callers resolve "who am I driving as here?" without passing it on every invocation.
 
@@ -181,7 +177,7 @@ The mapping is **store-independent**: this verb never opens `.prove/prove.db`. T
 
 **Auto-adoption.** None required — the config is created the first time you run `scrum contributor default set`. Until then, `default show` resolves to `null` everywhere (the implicit-default mechanism is simply inactive).
 
-## v3.5.0 — Operator-of-record: point-in-time (historical) attribution
+### Operator-of-record: point-in-time (historical) attribution
 
 The single role slot that exists today — **operator-of-record** — recorded as a position history, so an action attributes to whoever held the role **at the action's timestamp**, not merely the current holder.
 
@@ -198,7 +194,7 @@ The single role slot that exists today — **operator-of-record** — recorded a
 
 **Auto-adoption.** The schema migrates automatically; the charter field and the CLI surface are opt-in (used when you set an operator-of-record). Re-running `claude-prove install bootstrap-identity` on a project whose `charter.md` predates this version leaves the existing file untouched (upgrade-preserve) — add the `operator_of_record: null` frontmatter line by hand, or it is written the first time `scrum operator set` runs.
 
-## v3.4.0 — Contributor registry: stable CT-UUIDs + github/email resolution
+### Contributor registry: stable CT-UUIDs + github/email resolution
 
 A contributor registry that resolves an executing worker or event author to a stable contributor identity — the backing for role rosters, attribution, and PR-comment author matching.
 
@@ -211,7 +207,7 @@ A contributor registry that resolves an executing worker or event author to a st
 - `scrum contributor list [--status active|inactive] [--human]` — lists the registry, ordered by slug.
 - `scrum contributor resolve [--github G] [--email E]` — maps a worker / event author to a contributor by **github match first, then email fallback** (both case-insensitive); exits 1 on a miss. This is how a task row's `created_by` / `last_modified_by` / `worker_id` provenance resolves to a contributor identity.
 
-## v3.3.0 — Methodology parity: reasoning Brief, milestone-close curation, escalation typing, initiative tier
+### Methodology parity: reasoning Brief, milestone-close curation, escalation typing, initiative tier
 
 A feature batch raising the structured-agent methodology on prove machinery to parity: a trustworthy reasoning **Review Brief** with a mechanical preservation gate, a milestone-close **curation** pass that lifts findings into durable memory, typed escalations that auto-rank into the ready queue, a milestone-grouping **initiative** tier, and a set of integrity floors on the story-close lifecycle. Two distinct schema versions advance — they migrate by **separate** paths, so do not conflate them:
 
@@ -269,9 +265,8 @@ A feature batch raising the structured-agent methodology on prove machinery to p
 
 **Auto-adoption**: the `reasoning-brief`, `curate`, and `run-migrate` skills, the `brief-judge` agent, and the layer-typed `decompose` personas are discovered on plugin load after update; the `acb brief`/`acb milestone-brief`, `run-state migrate-runs`, `scrum decision --kind`, `scrum decision review-stale`, `scrum task cancel --cascade`, `scrum milestone --initiative`, `install bootstrap-identity` (the `/prove:init` charter/team/contributor bootstrap), `scrum gate respond`, and `scrum task acceptance add --scope` surfaces, plus the escalation ranking, tree-aware status, and write-isolated acceptance verification, ship in the CLI; the v11 store columns self-migrate on next open. The **only** manual step is the config schema v7 → v8 stamp — run `/prove:update` to sync.
 
----
 
-## v3.2.0 — Skill validators in `.claude/.prove.json` (config schema v7)
+### Skill validators in `.claude/.prove.json` (config schema v7)
 
 Validators can now invoke an installed **skill** as a gate, alongside the existing `command` and `prompt` kinds.
 
@@ -287,21 +282,20 @@ Validators can now invoke an installed **skill** as a gate, alongside the existi
 
 **Auto-adoption**: the field ships in the config schema; `/prove:update` migrates the version stamp. No behavior change unless you add a `skill` validator.
 
----
 
-## v3.1.0 — Phase-0 mechanical trust floors on the scrum store
+### Phase-0 mechanical trust floors on the scrum store
 
-Six engine-owned guards that make the already-shipped v3 data model (reasoning log, acceptance criteria, `parent_id` tree, decisions) *trustworthy*. All mechanical — no new skills or subsystems. Decision record: `.prove/decisions/2026-06-01-phase0-trust-floors-store-layer.md`.
+Six engine-owned guards that make the already-shipped v3 data model (reasoning log, acceptance criteria, `parent_id` tree, decisions) *trustworthy*. All mechanical — no new skills or subsystems.
 
 **Story-layer transition floors** (`ScrumStore.updateTaskStatus`, store-enforced so the CLI and the reconciler both inherit them):
-- **≥1 acceptance criterion** (onleash §9.1): a `layer=story` task cannot transition to `ready`/`in_progress`/`done` with zero *active* criteria. Non-story layers are exempt.
-- **Synthesis floor** (onleash §10.4/§3.3): a `layer=story` task cannot reach `done` when its most-recent linked run carries no `synthesis` reasoning-log entry. Run-gated — a story with no linked run (manually driven, no worker) is exempt; the orchestrator always links a run.
+- **≥1 acceptance criterion**: a `layer=story` task cannot transition to `ready`/`in_progress`/`done` with zero *active* criteria. Non-story layers are exempt.
+- **Synthesis floor**: a `layer=story` task cannot reach `done` when its most-recent linked run carries no `synthesis` reasoning-log entry. Run-gated — a story with no linked run (manually driven, no worker) is exempt; the orchestrator always links a run.
 
-**AC mid-flight freeze** (onleash §14.13): `task acceptance add|supersede` is rejected while the task is `in_progress` — interrupt the worker (move it off `in_progress`) before amending criteria.
+**AC mid-flight freeze**: `task acceptance add|supersede` is rejected while the task is `in_progress` — interrupt the worker (move it off `in_progress`) before amending criteria.
 
 **New CLI — `scrum task cancel <id> [--cascade] [--reason R] [--detail D]`**: cancels a task (or, with `--cascade`, every non-terminal descendant in its `parent_id` subtree) and records terminal provenance. The root carries `terminal_reason` (default `cancelled`); cascade descendants carry `parent_cancelled`. Already-terminal nodes are left untouched but their children are still swept.
 
-**New CLI — `scrum decision review-stale [--days N] [--human]`**: reports decisions whose `recorded_at` is older than `N` days (default 90), oldest-first, excluding superseded rows. **Report-only** (onleash §8.8) — never prunes or mutates.
+**New CLI — `scrum decision review-stale [--days N] [--human]`**: reports decisions whose `recorded_at` is older than `N` days (default 90), oldest-first, excluding superseded rows. **Report-only** — never prunes or mutates.
 
 **Tree-aware `scrum status`**: the JSON payload gains a `task_tree` (the `parent_id` forest, each node carrying its rolled-up `derived_status`), and `--human` renders a nested Task tree section. Flat (parent-less) tasks render as single-node roots — pre-v3 stores are unaffected.
 
@@ -309,16 +303,15 @@ Six engine-owned guards that make the already-shipped v3 data model (reasoning l
 
 **Auto-adoption**: the new `task cancel`/`decision review-stale` subcommands and the status tree ship in the CLI; the v7 columns migrate on first store open. No config edit required. Run `/prove:update` to sync.
 
----
 
-## v3.0.0 — onleash methodology on prove machinery: the `decompose` skill + layered task creation
+### The `decompose` skill + layered task creation
 
-Lands onleash's two structured-agent methodologies (audit §2.2a/b) as a driver skill on top of the foundation shipped over the prior tasks (scrum hierarchy `parent_id`/`layer`, decision supersession, first-class acceptance criteria + the four verification kinds, and the `acb` reasoning log). You are the driver Claude session — prove emits the scrum tree, the criteria, and the reasoning log, and the Agent tool / native `/workflows` does the fan-out; prove never spawns Claude.
+Lands two structured-agent methodologies as a driver skill on top of the foundation shipped over the prior tasks (scrum hierarchy `parent_id`/`layer`, decision supersession, first-class acceptance criteria + the four verification kinds, and the `acb` reasoning log). You are the driver Claude session — prove emits the scrum tree, the criteria, and the reasoning log, and the Agent tool / native `/workflows` does the fan-out; prove never spawns Claude.
 
-**Breaking change.** Major release consolidating the onleash methodology. The bundled schema versions advance: run-state `schema_version` `1`→`3`, prove config `schema_version` →`6`, and scrum store migrations v3–v5 (hierarchy, decision supersession, acceptance criteria). On upgrade, run `/prove:update` to migrate `.claude/.prove.json` and apply `claude-prove store migrate` to the `.prove/prove.db` store.
+**Breaking change.** Major release consolidating the structured-agent methodology. The bundled schema versions advance: run-state `schema_version` `1`→`3`, prove config `schema_version` →`6`, and scrum store migrations v3–v5 (hierarchy, decision supersession, acceptance criteria). On upgrade, run `/prove:update` to migrate `.claude/.prove.json` and apply `claude-prove store migrate` to the `.prove/prove.db` store.
 
 **New skill — `decompose`** (`skills/decompose/SKILL.md`): two methodologies on prove primitives.
-- **Decompose ladder** (B1): top-down `charter/VISION → epic → story → task`. Per layer, a planning subagent emits a child list via a native structured-output schema (replacing onleash's `*_list.json`), each child is written as a layered scrum task (`backlog` ≈ `proposed`), an `AskUserQuestion` accept gate (or `--auto-accept-through <layer>`) promotes `backlog→ready`, and the ladder recurses. Forced bubble-up on a `discovery` finding is documented for both the in-run (branch to re-plan) and across-session (`scrum task status blocked` + reconciler + `next-ready`) paths.
+- **Decompose ladder**: top-down `charter/VISION → epic → story → task`. Per layer, a planning subagent emits a child list via a native structured-output schema, each child is written as a layered scrum task (`backlog` ≈ `proposed`), an `AskUserQuestion` accept gate (or `--auto-accept-through <layer>`) promotes `backlog→ready`, and the ladder recurses. Forced bubble-up on a `discovery` finding is documented for both the in-run (branch to re-plan) and across-session (`scrum task status blocked` + reconciler + `next-ready`) paths.
 - **AC-gated story-close** (B2): reads a story's acceptance criteria from the scrum store (`scrum task acceptance list`, not the compiled plan), dispatches each by `verifies_by` (`bash`→exit 0, `assert`→expression, `gate`→`AskUserQuestion`, `agent`→`prove:validation-agent`), writes a `verification` reasoning-log entry per criterion plus a closing `synthesis` entry (native Write → `acb log append`, one JSON file per entry), assembles the Review Brief via the existing `acb` PR path (the multipass synthesizer is flagged as a `TODO(reasoning-brief):` future task), and then **delegates** worktree/validation/`principal-architect` review/merge to orchestrator full-mode rather than reimplementing it.
 
 The skill embeds the canonical native `/workflows` (Workflow tool) script for each methodology as runnable-shaped `phase()`/`agent({schema})`/`parallel()`/`AskUserQuestion` control flow, referencing only verified `claude-prove` commands.
@@ -331,7 +324,7 @@ The skill embeds the canonical native `/workflows` (Workflow tool) script for ea
 
 ### Declared task bounds: `plan.json tasks[].bounds` + prep-permissions consumes it
 
-Lands onleash's per-task `bounds` (audit §6.2) as **declarations enforced by native permissions**, not a daemon wall. Decision record: `.prove/decisions/2026-05-31-declared-bounds-home.md`.
+Lands per-task `bounds` as **declarations enforced by native permissions**, not a daemon wall.
 
 **New plan field — `plan.json tasks[].bounds`** (run-state schema): an optional per-task block beside `worktree`:
 
@@ -375,7 +368,7 @@ Only `text` is required; everything else is optional, so a bare `{ "text": "..."
 
 ### Scrum `bounds_json` authoring column: `task create --bounds` / `task bounds` + compile-plan forwarding
 
-The deferred scrum half of declared bounds (decision `.prove/decisions/2026-05-31-declared-bounds-home.md` §2). A scrum task can now carry **declared bounds** so a milestone-authored bound survives `compile-plan` into the plan's `tasks[].bounds` instead of being re-authored every run. Mirrors how acceptance criteria flow.
+The deferred scrum half of declared bounds. A scrum task can now carry **declared bounds** so a milestone-authored bound survives `compile-plan` into the plan's `tasks[].bounds` instead of being re-authored every run. Mirrors how acceptance criteria flow.
 
 **New scrum column — `scrum_tasks.bounds_json`** (nullable JSON, matches the `acceptance_json` precedent): decoded to `ScrumTask.bounds` at the row boundary. The shape mirrors the run-state v3 plan-side `tasks[].bounds`:
 
