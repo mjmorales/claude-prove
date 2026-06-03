@@ -147,6 +147,19 @@ describe('orchestrator task-prompt', () => {
     expect(stdoutBuf).toContain('token budget and subagent timeout remain the hard backstop');
   });
 
+  test('forbids opening the shared store from the worktree (no schema pollution)', () => {
+    writePlan(BASE_PLAN);
+    writePrd(BASE_PRD);
+    const code = runTaskPrompt({ runDir, taskId: '1', projectRoot: project });
+    expect(code).toBe(0);
+    expect(stdoutBuf).toContain('## Resource Constraints');
+    // Workers share one `.prove/prove.db`; opening it auto-migrates the shared
+    // store to the worktree's in-flight schema. The prompt must forbid it.
+    expect(stdoutBuf).toContain('**DO NOT** run `claude-prove store');
+    expect(stdoutBuf).toContain('AUTO-MIGRATES that shared store');
+    expect(stdoutBuf).toContain('--workspace-root <tmpdir>');
+  });
+
   test('relative run dir → cancel-flag + handoff paths absolutized under projectRoot', () => {
     // Production passes a relative --run-dir (".prove/runs/<branch>/<slug>").
     // The worker cd's into its task worktree first, where `.prove/` is

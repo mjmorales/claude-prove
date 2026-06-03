@@ -244,6 +244,7 @@ function renderTaskPrompt(input: RenderInput): string {
     [
       '- **DO NOT** spawn agents with `isolation: "worktree"`. You are already in a worktree — nested worktrees cause exponential resource growth.',
       '- **DO NOT** use the Agent tool with `run_in_background: true` for heavy workloads. You are a leaf worker, not an orchestrator.',
+      "- **DO NOT** run `claude-prove store …` or any store-opening `claude-prove scrum …` command from this worktree. Every worktree shares ONE `.prove/prove.db` (resolved through git's common directory), and opening it AUTO-MIGRATES that shared store to your in-flight schema version — which corrupts the migration log when a sibling worktree carries a different version. Validate schema and store changes with the in-memory test suite (`bun test`); to exercise the CLI by hand, isolate it against a throwaway store with `--workspace-root <tmpdir>`.",
     ].join('\n'),
   );
   sections.push('');
