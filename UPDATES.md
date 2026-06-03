@@ -6,6 +6,22 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.9.0 — Interactive intake forms: `intake/v1` + the `/prove:intake` skill
+
+*(Additive — new `intake` CLI topic + `intake` skill, nothing to adopt.)* A self-contained interactive HTML form surface for the charter, team, and decomposition-kickoff Q&A. The operator fills the form, copies the answers to the clipboard, and pastes them back; a skill validates the payload and drives the **same** writer the conversational interview drives. The form and the conversation are two front-ends to one writer.
+
+**The model.** An `IntakeForm` is `{ schema_version: "1", form, title, description?, fields[] }`. Each field is `{ id, label, type, required?, help?, placeholder?, choices?, default? }` over a **closed** type set: `text` · `textarea` · `choice` · `multichoice` · `boolean`. `secret` and `file` are **known-but-forbidden** — spec validation rejects them with a security message, because a token or a local path would travel in plaintext through the clipboard step. This is a sibling of report/v1, not an extension: report/v1 renders data outward (snapshot-stable, no JS); a form takes input back (interactive), so it owns its own model.
+
+**New CLI — `intake <action>`:**
+- `render --form <name> | --file <spec.json> [--out <path>]` — render a form to a complete self-contained interactive HTML page (inline CSS + JS, no network; a Copy-payload control with a select-and-copy fallback for `file://`).
+- `validate --form <name> | --file <spec.json> --payload <p.json>` — PASS/FAIL a pasted-back payload against the form (envelope, required fields, value types, choice membership). The authoritative gate before any write.
+- `spec --form <name> | --file <spec.json> [--out <path>]` — emit the resolved form spec JSON (inspect/extend).
+- `list` — name the built-in forms (`charter`, `decompose`, `team`).
+
+**New skill — `/prove:intake`** renders the form, walks the operator through fill → copy → paste, validates the payload, and maps the validated answers onto the existing writer: bootstrap scaffold + authoring for `charter`, `scrum team create`/`scope-set`/`rotate` for `team`, and the decompose ladder for `decompose`. It never reimplements a writer.
+
+---
+
 ## v3.8.0 — HTML rendering surface: report/v1 block-document renderer
 
 *(Additive — new `report` CLI topic, nothing to adopt.)* A single closed **report/v1** block-document model that every HTML surface compiles to, plus a vendored static renderer that maps blocks → a self-contained HTML page. Authors emit blocks (or the renderer compiles their data shape); one vendored renderer covers every surface (Review Brief, status dashboard, run timeline, decomposition preview).

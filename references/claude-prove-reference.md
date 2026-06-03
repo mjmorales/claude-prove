@@ -27,6 +27,7 @@ Examples below omit the prefix.
 - Dispatch reporter event (Slack/Discord/MCP) -> `notify`
 - Inspect/migrate/reset `.prove/prove.db` -> `store`
 - Review UI config -> `review-ui`; commit message check -> `commit`
+- Render an HTML surface (brief, dashboard, timeline, decompose preview) -> `report`; interactive intake form (charter/team/decompose) -> `intake`
 
 ## Topics
 
@@ -86,6 +87,16 @@ Actions: `migrate` `info` `reset` (requires `--confirm`). Ex: `store info`.
 ### install — `.claude/` scaffolding + binary upgrade
 
 Actions: `init` `init-hooks` `init-config` `doctor` `upgrade`. Flags: `--project` `--cwd` `--settings <path>` `--force` `--prefix <dir>` (default `~/.local/bin`). Ex: `install doctor`.
+
+### report — report/v1 HTML renderer
+
+Actions: `render` `validate` `brief` `milestone-brief` `timeline` `status` `decompose-preview`. Flags: `--file <path>` `--out <path>` `--workspace-root <p>` (status).
+Compiles a closed block-document model to a self-contained HTML page (inline CSS, no network, byte-stable). Ex: `report status --out status.html`.
+
+### intake — intake/v1 interactive HTML forms
+
+Actions: `render` `validate` `spec` `list`. Flags: `--form <charter|team|decompose>` `--file <spec.json>` `--payload <p.json>` (validate) `--out <path>`.
+`render` emits a self-contained interactive form (copy-payload-to-clipboard); `validate` PASS/FAILs a pasted-back payload (the gate before any write); `spec`/`list` inspect built-ins. `secret`/`file` field types are rejected. Two front-ends (form + interview) drive one writer. Ex: `intake render --form charter --out charter.html`.
 
 ### review-ui — review UI config
 

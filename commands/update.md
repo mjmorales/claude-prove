@@ -129,6 +129,7 @@ Check for plugin capabilities not yet configured in `.claude/.prove.json`:
    - **`proposed` / `accepted` task states** — `scrum task status <id> proposed|accepted` drives the decomposition-review lifecycle (`backlog → proposed → accepted → ready`); the per-layer `decompose` ladder fires the next tier on `accepted`.
    - **`plan.json tasks[].execution` block** (run-state schema v4) — optional durable run-record directives (`retry` / `loop` / `fanout` / `on_fail` / `concurrency`) the workflow/orchestrator driver honors; advance on-disk run artifacts with `claude-prove run-state migrate`.
    - **Bound next-actions in the session-start digest** — when `.claude/.prove.json` carries a `triggers` table, the scrum reconciler surfaces each task sitting in a triggering status as a pending next-action (automatic; no config edit beyond populating `triggers`).
+   - **HTML rendering surfaces** — **`report <action>`** (`render`/`validate`/`brief`/`milestone-brief`/`timeline`/`status`/`decompose-preview`) compiles a closed report/v1 block-document model to a self-contained HTML page, and **`intake <action>`** (`render`/`validate`/`spec`/`list`) plus the **`intake`** skill render the charter/team/decompose Q&A as an interactive form whose pasted-back payload validates against the same form and drives the same writer the conversational interview drives (`secret`/`file` field types rejected).
 
    Note "New skills, agent, and CLI surfaces detected — live after this update; no config edit required."
 
