@@ -22,8 +22,10 @@ import { join } from 'node:path';
 import { appendEntry } from '../../acb/reasoning-log-store';
 import { runAlertsCmd } from './alerts-cmd';
 import { runAnnotationCmd } from './annotation-cmd';
+import { runAskCmd } from './ask-cmd';
 import { runContributorCmd } from './contributor-cmd';
 import { parseDecisionFile, runDecisionCmd } from './decision-cmd';
+import { runEscalationCmd } from './escalation-cmd';
 import { runGateCmd } from './gate-cmd';
 import { runHookCmd } from './hook-cmd';
 import { runInitCmd } from './init-cmd';
@@ -459,7 +461,7 @@ describe('runTaskCmd', () => {
       expect(shown.task.run_id).toBe('feat-prov');
       expect(shown.task.provenance.worker_id).toBe('worker-42');
       expect(shown.task.provenance.run_id).toBe('feat-prov');
-      expect(shown.task.provenance.schema_version).toBe(22);
+      expect(shown.task.provenance.schema_version).toBe(26);
     } finally {
       restoreEnv('PROVE_WORKER_ID', savedWorker);
       restoreEnv('PROVE_RUN_SLUG', savedSlug);
@@ -1433,6 +1435,33 @@ describe('runAlertsCmd', () => {
     const human = withCapture(() => runAlertsCmd({ workspaceRoot: workspace, human: true }));
     expect(human.stdout).toContain('Open escalations');
     expect(human.stdout).toContain('conflict');
+  });
+
+  test('an auto-bubbled escalation surfaces in alerts via the blocker_raised bridge', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'AB', id: 'ab' }));
+    withCapture(() => runTaskCmd('status', ['ab', 'ready'], {}));
+    // biome-ignore lint/suspicious/noExplicitAny: test-only store reach-in to seed + bubble an escalation.
+    const { openScrumStore } = require('../store') as any;
+    const s = openScrumStore({ override: join(workspace, '.prove', 'prove.db') });
+    try {
+      const raised = s.raiseEscalation({
+        taskId: 'ab',
+        escalationType: 'blocked',
+        summary: 'aged out, no receiver',
+        createdAt: '2026-01-01T00:00:00Z',
+      });
+      // Staleness floor promotes it one rung; this emits a blocker_raised event.
+      s.autoBubbleEscalation(raised.id, '2026-06-01T00:00:00Z');
+    } finally {
+      s.close();
+    }
+
+    const json = withCapture(() => runAlertsCmd({ workspaceRoot: workspace }));
+    const payload = JSON.parse(json.stdout.trim()) as {
+      stale_escalations: Array<{ id: string; escalation_type: string }>;
+    };
+    const e = payload.stale_escalations.find((x) => x.id === 'ab');
+    expect(e?.escalation_type).toBe('blocked');
   });
 
   test('--human table is produced when the flag is set', () => {
@@ -2602,7 +2631,7 @@ describe('runTeamCmd', () => {
     const artifact = join(workspace, 'teams', 'payments.md');
     expect(existsSync(artifact)).toBe(true);
     const content = readFileSync(artifact, 'utf8');
-    expect(content).toContain('schema_version: 22');
+    expect(content).toContain('schema_version: 26');
     expect(content).toContain('team:');
     expect(content).toContain('slug: payments');
     expect(content).toContain('team_type: stream_aligned');
@@ -3640,6 +3669,313 @@ describe('runAnnotationCmd', () => {
 });
 
 // ---------------------------------------------------------------------------
+// runEscalationCmd — escalation protocol walk-up + resolution modes (v23)
+// ---------------------------------------------------------------------------
+
+interface EscalationRowJson {
+  id: number;
+  task_id: string;
+  escalation_type: string;
+  layer: string;
+  state: string;
+  summary: string;
+  resolution_mode: string | null;
+  walked_up_from: number | null;
+}
+
+interface ResolveResultJson {
+  row: EscalationRowJson;
+  walkedUpTo: EscalationRowJson | null;
+  reDecomposeTriggered: boolean;
+}
+
+describe('runEscalationCmd', () => {
+  test('raise lands an open escalation at the implementer rung and prints the JSON row', () => {
+    const res = withCapture(() =>
+      runEscalationCmd('raise', [undefined], {
+        task: 't1',
+        type: 'blocked',
+        summary: 'cannot satisfy dep',
+        by: 'CT-impl',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as EscalationRowJson;
+    expect(row.task_id).toBe('t1');
+    expect(row.escalation_type).toBe('blocked');
+    expect(row.layer).toBe('implementer');
+    expect(row.state).toBe('open');
+    expect(row.walked_up_from).toBeNull();
+  });
+
+  test('raise honors an explicit --layer', () => {
+    const res = withCapture(() =>
+      runEscalationCmd('raise', [undefined], {
+        task: 't1',
+        type: 'conflict',
+        summary: 's',
+        layer: 'tech_lead',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    expect((JSON.parse(res.stdout.trim()) as EscalationRowJson).layer).toBe('tech_lead');
+  });
+
+  test('raise requires --task, --type, and --summary', () => {
+    const noTask = withCapture(() =>
+      runEscalationCmd('raise', [undefined], {
+        type: 'blocked',
+        summary: 's',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(noTask.exit).toBe(1);
+    expect(noTask.stderr).toContain('--task');
+
+    const noType = withCapture(() =>
+      runEscalationCmd('raise', [undefined], {
+        task: 't1',
+        summary: 's',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(noType.exit).toBe(1);
+    expect(noType.stderr).toContain('--type');
+
+    const noSummary = withCapture(() =>
+      runEscalationCmd('raise', [undefined], {
+        task: 't1',
+        type: 'blocked',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(noSummary.exit).toBe(1);
+    expect(noSummary.stderr).toContain('--summary');
+  });
+
+  test('raise rejects an off-enum --type as a usage error', () => {
+    const res = withCapture(() =>
+      runEscalationCmd('raise', [undefined], {
+        task: 't1',
+        type: 'bogus',
+        summary: 's',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--type');
+  });
+
+  test('raise rejects an off-chain --layer as a usage error', () => {
+    const res = withCapture(() =>
+      runEscalationCmd('raise', [undefined], {
+        task: 't1',
+        type: 'blocked',
+        summary: 's',
+        layer: 'ceo',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("invalid --layer 'ceo'");
+  });
+
+  test('resolve with --mode resolve transitions the row to resolved, no walk-up', () => {
+    const raised = JSON.parse(
+      withCapture(() =>
+        runEscalationCmd('raise', [undefined], {
+          task: 't1',
+          type: 'ambiguous',
+          summary: 's',
+          workspaceRoot: workspace,
+        }),
+      ).stdout.trim(),
+    ) as EscalationRowJson;
+
+    const res = withCapture(() =>
+      runEscalationCmd('resolve', [String(raised.id)], {
+        mode: 'resolve',
+        note: 'answered',
+        by: 'CT-eng',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const result = JSON.parse(res.stdout.trim()) as ResolveResultJson;
+    expect(result.row.state).toBe('resolved');
+    expect(result.row.resolution_mode).toBe('resolve');
+    expect(result.walkedUpTo).toBeNull();
+    expect(result.reDecomposeTriggered).toBe(false);
+  });
+
+  test('resolve with --mode re_decompose discharges the row and flags re-decomposition', () => {
+    const raised = JSON.parse(
+      withCapture(() =>
+        runEscalationCmd('raise', [undefined], {
+          task: 't1',
+          type: 'blocked',
+          summary: 's',
+          workspaceRoot: workspace,
+        }),
+      ).stdout.trim(),
+    ) as EscalationRowJson;
+
+    const res = withCapture(() =>
+      runEscalationCmd('resolve', [String(raised.id)], {
+        mode: 're_decompose',
+        workspaceRoot: workspace,
+      }),
+    );
+    const result = JSON.parse(res.stdout.trim()) as ResolveResultJson;
+    expect(result.row.state).toBe('resolved');
+    expect(result.reDecomposeTriggered).toBe(true);
+    expect(result.walkedUpTo).toBeNull();
+  });
+
+  test('resolve with --mode re_escalate closes the row and walks one rung up', () => {
+    const raised = JSON.parse(
+      withCapture(() =>
+        runEscalationCmd('raise', [undefined], {
+          task: 't1',
+          type: 'conflict',
+          summary: 's',
+          workspaceRoot: workspace,
+        }),
+      ).stdout.trim(),
+    ) as EscalationRowJson;
+
+    const res = withCapture(() =>
+      runEscalationCmd('resolve', [String(raised.id)], {
+        mode: 're_escalate',
+        workspaceRoot: workspace,
+      }),
+    );
+    const result = JSON.parse(res.stdout.trim()) as ResolveResultJson;
+    expect(result.row.state).toBe('re_escalated');
+    expect(result.walkedUpTo?.layer).toBe('engineer');
+    expect(result.walkedUpTo?.state).toBe('open');
+    expect(result.walkedUpTo?.walked_up_from).toBe(raised.id);
+  });
+
+  test('resolve requires --mode and rejects an off-enum mode', () => {
+    const raised = JSON.parse(
+      withCapture(() =>
+        runEscalationCmd('raise', [undefined], {
+          task: 't1',
+          type: 'blocked',
+          summary: 's',
+          workspaceRoot: workspace,
+        }),
+      ).stdout.trim(),
+    ) as EscalationRowJson;
+
+    const noMode = withCapture(() =>
+      runEscalationCmd('resolve', [String(raised.id)], { workspaceRoot: workspace }),
+    );
+    expect(noMode.exit).toBe(1);
+    expect(noMode.stderr).toContain('--mode');
+
+    const badMode = withCapture(() =>
+      runEscalationCmd('resolve', [String(raised.id)], {
+        mode: 'ignore',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(badMode.exit).toBe(1);
+    expect(badMode.stderr).toContain('--mode');
+  });
+
+  test('resolve on an unknown id exits 1', () => {
+    const res = withCapture(() =>
+      runEscalationCmd('resolve', ['999'], { mode: 'resolve', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown escalation id '999'");
+  });
+
+  test('list --task shows a task full history; list without --task shows only open rows', () => {
+    const raised = JSON.parse(
+      withCapture(() =>
+        runEscalationCmd('raise', [undefined], {
+          task: 't1',
+          type: 'blocked',
+          summary: 's',
+          workspaceRoot: workspace,
+        }),
+      ).stdout.trim(),
+    ) as EscalationRowJson;
+    // Walk it up: the root closes, a fresh open row appears at engineer.
+    withCapture(() =>
+      runEscalationCmd('resolve', [String(raised.id)], {
+        mode: 're_escalate',
+        workspaceRoot: workspace,
+      }),
+    );
+
+    const perTask = withCapture(() =>
+      runEscalationCmd('list', [undefined], { task: 't1', workspaceRoot: workspace }),
+    );
+    const histRows = JSON.parse(perTask.stdout.trim()) as EscalationRowJson[];
+    expect(histRows.map((r) => r.state)).toEqual(['re_escalated', 'open']);
+
+    const openOnly = withCapture(() =>
+      runEscalationCmd('list', [undefined], { workspaceRoot: workspace }),
+    );
+    const openRows = JSON.parse(openOnly.stdout.trim()) as EscalationRowJson[];
+    expect(openRows.every((r) => r.state === 'open')).toBe(true);
+    expect(openRows).toHaveLength(1);
+    expect(openRows[0]?.layer).toBe('engineer');
+  });
+
+  test('chain reconstructs the full walk-up root-rung-first', () => {
+    const raised = JSON.parse(
+      withCapture(() =>
+        runEscalationCmd('raise', [undefined], {
+          task: 't1',
+          type: 'ambiguous',
+          summary: 's',
+          workspaceRoot: workspace,
+        }),
+      ).stdout.trim(),
+    ) as EscalationRowJson;
+    const walked = JSON.parse(
+      withCapture(() =>
+        runEscalationCmd('resolve', [String(raised.id)], {
+          mode: 're_escalate',
+          workspaceRoot: workspace,
+        }),
+      ).stdout.trim(),
+    ) as ResolveResultJson;
+
+    const res = withCapture(() =>
+      runEscalationCmd('chain', [String(walked.walkedUpTo?.id)], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+    const chain = JSON.parse(res.stdout.trim()) as EscalationRowJson[];
+    expect(chain.map((r) => r.layer)).toEqual(['implementer', 'engineer']);
+  });
+
+  test('show and chain on an unknown id exit 1', () => {
+    const show = withCapture(() => runEscalationCmd('show', ['999'], { workspaceRoot: workspace }));
+    expect(show.exit).toBe(1);
+    const chain = withCapture(() =>
+      runEscalationCmd('chain', ['999'], { workspaceRoot: workspace }),
+    );
+    expect(chain.exit).toBe(1);
+  });
+
+  test('an unknown escalation action exits 1', () => {
+    const res = withCapture(() =>
+      runEscalationCmd('bogus', [undefined], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('unknown escalation action');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // runManifestCmd — cross-team contracts read surface
 // ---------------------------------------------------------------------------
 
@@ -3718,5 +4054,360 @@ describe('runManifestCmd', () => {
     const res = withCapture(() => runManifestCmd('bogus', { workspaceRoot: workspace }));
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('unknown manifest action');
+  });
+});
+
+describe('runAskCmd', () => {
+  interface AskJson {
+    id: number;
+    from_team: string;
+    to_team: string;
+    ask_type: string;
+    blocking_artifact: string;
+    state: string;
+    mapped_artifact: string | null;
+    rejected_reason: string | null;
+    counter_proposal: string | null;
+  }
+
+  /** File one ask and return its parsed JSON row (assumes seedAskFixture ran). */
+  function fileOneAsk(): AskJson {
+    const res = withCapture(() =>
+      runAskCmd('file', [undefined], {
+        fromTeam: 'payments',
+        toTeam: 'identity',
+        askType: 'schema-change',
+        blockingArtifact: 'blocked-1',
+        workspaceRoot: workspace,
+      }),
+    );
+    return JSON.parse(res.stdout.trim().split('\n')[0] ?? '') as AskJson;
+  }
+
+  /** Seed two sibling teams (identity accepts schema-change) + a blocked task. */
+  function seedAskFixture(): void {
+    withCapture(() =>
+      runTeamCmd('create', [undefined], {
+        slug: 'payments',
+        teamType: 'stream_aligned',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runTeamCmd('create', [undefined], {
+        slug: 'identity',
+        teamType: 'platform',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runTeamCmd('accept-add', ['identity'], {
+        askType: 'schema-change',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runTeamCmd('expose-add', ['identity'], {
+        name: 'UserRecord',
+        schemaRef: 'schemas/user.json',
+        workspaceRoot: workspace,
+      }),
+    );
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], {
+        title: 'Blocked work',
+        id: 'blocked-1',
+        workspaceRoot: workspace,
+      }),
+    );
+  }
+
+  test('file persists a filed row, prints JSON + the id, exit 0', () => {
+    seedAskFixture();
+    const res = withCapture(() =>
+      runAskCmd('file', [undefined], {
+        fromTeam: 'payments',
+        toTeam: 'identity',
+        askType: 'schema-change',
+        blockingArtifact: 'blocked-1',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const lines = res.stdout.trim().split('\n');
+    const row = JSON.parse(lines[0] ?? '') as AskJson;
+    expect(row.from_team).toBe('payments');
+    expect(row.to_team).toBe('identity');
+    expect(row.ask_type).toBe('schema-change');
+    expect(row.blocking_artifact).toBe('blocked-1');
+    expect(row.state).toBe('filed');
+    // The final stdout line is the bare new ask id.
+    expect(lines[lines.length - 1]).toBe(String(row.id));
+  });
+
+  test('file without --from-team exits 1', () => {
+    seedAskFixture();
+    const res = withCapture(() =>
+      runAskCmd('file', [undefined], {
+        toTeam: 'identity',
+        askType: 'schema-change',
+        blockingArtifact: 'blocked-1',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--from-team');
+  });
+
+  test('file on an unknown to_team exits 1', () => {
+    seedAskFixture();
+    const res = withCapture(() =>
+      runAskCmd('file', [undefined], {
+        fromTeam: 'payments',
+        toTeam: 'ghost',
+        askType: 'schema-change',
+        blockingArtifact: 'blocked-1',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown to_team 'ghost'");
+  });
+
+  test('file with a non-accepted ask_type exits 1', () => {
+    seedAskFixture();
+    const res = withCapture(() =>
+      runAskCmd('file', [undefined], {
+        fromTeam: 'payments',
+        toTeam: 'identity',
+        askType: 'api-review',
+        blockingArtifact: 'blocked-1',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("not accepted by to_team 'identity'");
+  });
+
+  test('file with a missing blocking_artifact exits 1', () => {
+    seedAskFixture();
+    const res = withCapture(() =>
+      runAskCmd('file', [undefined], {
+        fromTeam: 'payments',
+        toTeam: 'identity',
+        askType: 'schema-change',
+        blockingArtifact: 'no-such-task',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown blocking_artifact 'no-such-task'");
+  });
+
+  test('respond accept creates a mapped child, sets state, prints the row, exit 0', () => {
+    seedAskFixture();
+    const filed = fileOneAsk();
+    const res = withCapture(() =>
+      runAskCmd('respond', [String(filed.id)], {
+        verdict: 'accept',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim().split('\n')[0] ?? '') as AskJson;
+    expect(row.state).toBe('accepted');
+    expect(row.mapped_artifact).not.toBeNull();
+    expect(row.rejected_reason).toBeNull();
+    expect(row.counter_proposal).toBeNull();
+    // The mapped child is a real `story` task tagged with the to-team slug.
+    const show = withCapture(() =>
+      runTaskCmd('show', [row.mapped_artifact as string, undefined], { workspaceRoot: workspace }),
+    );
+    expect(show.exit).toBe(0);
+    const child = JSON.parse(show.stdout.trim()) as {
+      task: { id: string; layer: string | null };
+      tags: Array<{ tag: string }>;
+    };
+    expect(child.task.id).toBe(row.mapped_artifact);
+    expect(child.task.layer).toBe('story');
+    expect(child.tags.map((t) => t.tag)).toContain('identity');
+    // The from-team's blocking artifact is now blocked_by the new child.
+    const blockedShow = withCapture(() =>
+      runTaskCmd('show', ['blocked-1', undefined], { workspaceRoot: workspace }),
+    );
+    const blocked = JSON.parse(blockedShow.stdout.trim()) as {
+      blocked_by: Array<{ from_task_id: string; to_task_id: string }>;
+      events: Array<{ kind: string }>;
+    };
+    expect(blocked.blocked_by.some((d) => d.from_task_id === row.mapped_artifact)).toBe(true);
+    expect(blocked.events.some((e) => e.kind === 'ask_responded')).toBe(true);
+  });
+
+  test('respond reject records --comment as rejected_reason, no child, exit 0', () => {
+    seedAskFixture();
+    const filed = fileOneAsk();
+    const res = withCapture(() =>
+      runAskCmd('respond', [String(filed.id)], {
+        verdict: 'reject',
+        comment: 'out of scope this milestone',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim().split('\n')[0] ?? '') as AskJson;
+    expect(row.state).toBe('rejected');
+    expect(row.rejected_reason).toBe('out of scope this milestone');
+    expect(row.mapped_artifact).toBeNull();
+    expect(row.counter_proposal).toBeNull();
+  });
+
+  test('respond counter records --comment as counter_proposal, no child, exit 0', () => {
+    seedAskFixture();
+    const filed = fileOneAsk();
+    const res = withCapture(() =>
+      runAskCmd('respond', [String(filed.id)], {
+        verdict: 'counter',
+        comment: 'expose a read-only view instead',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim().split('\n')[0] ?? '') as AskJson;
+    expect(row.state).toBe('countered');
+    expect(row.counter_proposal).toBe('expose a read-only view instead');
+    expect(row.mapped_artifact).toBeNull();
+    expect(row.rejected_reason).toBeNull();
+  });
+
+  test('respond without a valid --verdict exits 1', () => {
+    seedAskFixture();
+    const filed = fileOneAsk();
+    const res = withCapture(() =>
+      runAskCmd('respond', [String(filed.id)], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--verdict');
+  });
+
+  test('respond on an unknown ask id exits 1', () => {
+    seedAskFixture();
+    const res = withCapture(() =>
+      runAskCmd('respond', ['9999'], { verdict: 'accept', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown ask id '9999'");
+  });
+
+  test('respond twice on the same ask exits 1 (already responded)', () => {
+    seedAskFixture();
+    const filed = fileOneAsk();
+    withCapture(() =>
+      runAskCmd('respond', [String(filed.id)], { verdict: 'reject', workspaceRoot: workspace }),
+    );
+    const res = withCapture(() =>
+      runAskCmd('respond', [String(filed.id)], { verdict: 'accept', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("not 'filed'");
+  });
+
+  // --- await: the team-as-workflow-kind mechanical poll ---
+
+  interface AwaitJson {
+    ask_id: number;
+    phase: string;
+    terminal: boolean;
+    state: string;
+    mapped_artifact: string | null;
+    artifact_status: string | null;
+    to_team: string;
+    outputs: Array<{ name: string; team_slug: string }>;
+    reason: string | null;
+  }
+
+  /** Run `ask await <id>` and return the parsed JSON report. */
+  function awaitAsk(id: number): { res: Captured; report: AwaitJson } {
+    const res = withCapture(() => runAskCmd('await', [String(id)], { workspaceRoot: workspace }));
+    return { res, report: JSON.parse(res.stdout.trim().split('\n')[0] ?? '') as AwaitJson };
+  }
+
+  test('await on a filed ask reports phase=pending, non-terminal, exit 0', () => {
+    seedAskFixture();
+    const filed = fileOneAsk();
+    const { res, report } = awaitAsk(filed.id);
+    expect(res.exit).toBe(0);
+    expect(report.phase).toBe('pending');
+    expect(report.terminal).toBe(false);
+    expect(report.to_team).toBe('identity');
+    expect(report.outputs).toEqual([]);
+  });
+
+  test('await on an accepted-but-not-done ask reports phase=waiting, non-terminal', () => {
+    seedAskFixture();
+    const filed = fileOneAsk();
+    withCapture(() =>
+      runAskCmd('respond', [String(filed.id)], { verdict: 'accept', workspaceRoot: workspace }),
+    );
+    const { res, report } = awaitAsk(filed.id);
+    expect(res.exit).toBe(0);
+    expect(report.phase).toBe('waiting');
+    expect(report.terminal).toBe(false);
+    expect(report.mapped_artifact).not.toBeNull();
+    expect(report.outputs).toEqual([]);
+  });
+
+  test('await on a rejected ask surfaces phase=rejected with the reason (no hang), exit 0', () => {
+    seedAskFixture();
+    const filed = fileOneAsk();
+    withCapture(() =>
+      runAskCmd('respond', [String(filed.id)], {
+        verdict: 'reject',
+        comment: 'out of scope this milestone',
+        workspaceRoot: workspace,
+      }),
+    );
+    const { res, report } = awaitAsk(filed.id);
+    expect(res.exit).toBe(0);
+    expect(report.phase).toBe('rejected');
+    expect(report.terminal).toBe(true);
+    expect(report.reason).toBe('out of scope this milestone');
+    expect(report.outputs).toEqual([]);
+  });
+
+  test('await on a countered ask surfaces phase=countered with the reason (no hang), exit 0', () => {
+    seedAskFixture();
+    const filed = fileOneAsk();
+    withCapture(() =>
+      runAskCmd('respond', [String(filed.id)], {
+        verdict: 'counter',
+        comment: 'expose a read-only view instead',
+        workspaceRoot: workspace,
+      }),
+    );
+    const { res, report } = awaitAsk(filed.id);
+    expect(res.exit).toBe(0);
+    expect(report.phase).toBe('countered');
+    expect(report.terminal).toBe(true);
+    expect(report.reason).toBe('expose a read-only view instead');
+  });
+
+  test('await without a valid <ask-id> exits 1', () => {
+    seedAskFixture();
+    const res = withCapture(() => runAskCmd('await', [undefined], { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('<ask-id>');
+  });
+
+  test('await on an unknown ask id exits 1', () => {
+    seedAskFixture();
+    const res = withCapture(() => runAskCmd('await', ['9999'], { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown ask id '9999'");
+  });
+
+  test('an unknown ask action exits 1', () => {
+    const res = withCapture(() => runAskCmd('bogus', [undefined], { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('unknown ask action');
   });
 });

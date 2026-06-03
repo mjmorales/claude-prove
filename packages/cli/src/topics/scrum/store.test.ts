@@ -15,7 +15,12 @@ import { join } from 'node:path';
 import { appendEntry } from '../acb/reasoning-log-store';
 import type { AssertContext } from './assert-grammar';
 import { type ScrumStore, criterionSatisfied, openScrumStore } from './store';
-import type { Acceptance, AcceptanceCriterion, TaskBounds } from './types';
+import type {
+  Acceptance,
+  AcceptanceCriterion,
+  EscalationRow as EscalationRowT,
+  TaskBounds,
+} from './types';
 
 let store: ScrumStore;
 
@@ -2303,7 +2308,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 22,
+      schema_version: 26,
     });
   });
 
@@ -2316,7 +2321,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(22);
+    expect(updated.provenance.schema_version).toBe(26);
   });
 });
 
@@ -3701,5 +3706,725 @@ describe('ScrumStore — teamTerminate Lore→Codex promotion (v22)', () => {
     expect(promos).toHaveLength(1);
     expect(promos[0]?.write_status).toBe('draft');
     expect(promos[0]?.content).toContain('squad wisdom');
+  });
+});
+
+// ===========================================================================
+// Cross-team ask protocol (v23)
+// ===========================================================================
+
+describe('ScrumStore — cross-team ask protocol (v23)', () => {
+  beforeEach(() => {
+    // Two sibling teams; `identity` accepts a published ask type, plus a blocked
+    // artifact the requesting team owns.
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.createTeam({ slug: 'identity', teamType: 'platform' });
+    store.addTeamAccept('identity', 'schema-change');
+    seedTask('blocked-1');
+  });
+
+  test('fileAsk persists a filed row and round-trips through getAsk', () => {
+    const ask = store.fileAsk({
+      fromTeam: 'payments',
+      toTeam: 'identity',
+      askType: 'schema-change',
+      blockingArtifact: 'blocked-1',
+      createdAt: '2026-01-01T00:00:00Z',
+    });
+    expect(ask).toEqual({
+      id: ask.id,
+      from_team: 'payments',
+      to_team: 'identity',
+      ask_type: 'schema-change',
+      blocking_artifact: 'blocked-1',
+      state: 'filed',
+      mapped_artifact: null,
+      rejected_reason: null,
+      counter_proposal: null,
+      created_at: '2026-01-01T00:00:00Z',
+    });
+    expect(store.getAsk(ask.id)).toEqual(ask);
+  });
+
+  test('fileAsk appends an ask_filed event on the blocking artifact', () => {
+    const ask = store.fileAsk({
+      fromTeam: 'payments',
+      toTeam: 'identity',
+      askType: 'schema-change',
+      blockingArtifact: 'blocked-1',
+    });
+    const events = store.listEventsForTask('blocked-1');
+    const filed = events.find((e) => e.kind === 'ask_filed');
+    expect(filed).toBeDefined();
+    expect(filed?.payload).toEqual({
+      ask_id: ask.id,
+      from_team: 'payments',
+      to_team: 'identity',
+      ask_type: 'schema-change',
+    });
+  });
+
+  test('fileAsk rejects an unknown to_team (exit-bearing domain error)', () => {
+    expect(() =>
+      store.fileAsk({
+        fromTeam: 'payments',
+        toTeam: 'ghost',
+        askType: 'schema-change',
+        blockingArtifact: 'blocked-1',
+      }),
+    ).toThrow(/unknown to_team 'ghost'/);
+  });
+
+  test('fileAsk rejects an ask_type the to_team does not accept', () => {
+    expect(() =>
+      store.fileAsk({
+        fromTeam: 'payments',
+        toTeam: 'identity',
+        askType: 'api-review',
+        blockingArtifact: 'blocked-1',
+      }),
+    ).toThrow(/ask_type 'api-review' is not accepted by to_team 'identity'/);
+  });
+
+  test('fileAsk rejects a missing blocking_artifact', () => {
+    expect(() =>
+      store.fileAsk({
+        fromTeam: 'payments',
+        toTeam: 'identity',
+        askType: 'schema-change',
+        blockingArtifact: 'no-such-task',
+      }),
+    ).toThrow(/unknown blocking_artifact 'no-such-task'/);
+  });
+
+  test('fileAsk rejects an unknown from_team', () => {
+    expect(() =>
+      store.fileAsk({
+        fromTeam: 'phantom',
+        toTeam: 'identity',
+        askType: 'schema-change',
+        blockingArtifact: 'blocked-1',
+      }),
+    ).toThrow(/unknown from_team 'phantom'/);
+  });
+
+  test('fileAsk ignores a superseded accept (only ACTIVE accepts qualify)', () => {
+    const accept = store.addTeamAccept('identity', 'api-review');
+    store.supersedeTeamAccept(accept.id, 'retired');
+    expect(() =>
+      store.fileAsk({
+        fromTeam: 'payments',
+        toTeam: 'identity',
+        askType: 'api-review',
+        blockingArtifact: 'blocked-1',
+      }),
+    ).toThrow(/not accepted by to_team 'identity'/);
+  });
+
+  test('a failed fileAsk leaves no ask row and no event (transactional)', () => {
+    expect(() =>
+      store.fileAsk({
+        fromTeam: 'payments',
+        toTeam: 'identity',
+        askType: 'schema-change',
+        blockingArtifact: 'no-such-task',
+      }),
+    ).toThrow();
+    expect(store.getAsk(1)).toBeNull();
+    const filed = store.listEventsForTask('blocked-1').filter((e) => e.kind === 'ask_filed');
+    expect(filed).toHaveLength(0);
+  });
+
+  test('getAsk returns null for an unknown id', () => {
+    expect(store.getAsk(9999)).toBeNull();
+  });
+});
+
+// ===========================================================================
+// Ask triage/respond — accept | reject | counter (v25)
+// ===========================================================================
+
+describe('ScrumStore — ask triage/respond (v25)', () => {
+  /** Seed teams + a blocked artifact, then file one ask; return the filed row. */
+  function fileFixtureAsk(): ReturnType<ScrumStore['fileAsk']> {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.createTeam({ slug: 'identity', teamType: 'platform' });
+    store.addTeamAccept('identity', 'schema-change');
+    seedTask('blocked-1');
+    return store.fileAsk({
+      fromTeam: 'payments',
+      toTeam: 'identity',
+      askType: 'schema-change',
+      blockingArtifact: 'blocked-1',
+    });
+  }
+
+  test('accept creates exactly one child under the to-team tree and sets mapped_artifact', () => {
+    const ask = fileFixtureAsk();
+    const before = store.listTasks({}).length;
+
+    const responded = store.respondAsk({ id: ask.id, verdict: 'accept' });
+
+    expect(responded.state).toBe('accepted');
+    expect(responded.mapped_artifact).not.toBeNull();
+    expect(responded.rejected_reason).toBeNull();
+    expect(responded.counter_proposal).toBeNull();
+
+    // Exactly ONE child was created.
+    expect(store.listTasks({}).length).toBe(before + 1);
+    const child = store.getTask(responded.mapped_artifact as string);
+    expect(child).not.toBeNull();
+    // It is a story tagged with the to-team slug (the team-tree linkage).
+    expect(child?.layer).toBe('story');
+    expect(store.listTagsForTask(child?.id as string).map((t) => t.tag)).toContain('identity');
+  });
+
+  test('accept wires a blocked_by dep from the blocking artifact onto the child', () => {
+    const ask = fileFixtureAsk();
+    const responded = store.respondAsk({ id: ask.id, verdict: 'accept' });
+    const child = responded.mapped_artifact as string;
+
+    // `blocked-1` is blocked_by `child`: stored canonically as `child blocks blocked-1`.
+    const blockedBy = store.getBlockedBy('blocked-1');
+    expect(blockedBy.some((d) => d.from_task_id === child)).toBe(true);
+    expect(store.getBlocking(child).some((d) => d.to_task_id === 'blocked-1')).toBe(true);
+  });
+
+  test('accept fires an ask_responded event on the blocking artifact', () => {
+    const ask = fileFixtureAsk();
+    const responded = store.respondAsk({ id: ask.id, verdict: 'accept', respondedBy: 'tl-1' });
+    const events = store.listEventsForTask('blocked-1');
+    const event = events.find((e) => e.kind === 'ask_responded');
+    expect(event).toBeDefined();
+    expect(event?.payload).toEqual({
+      ask_id: ask.id,
+      verdict: 'accept',
+      state: 'accepted',
+      mapped_artifact: responded.mapped_artifact,
+      rejected_reason: null,
+      counter_proposal: null,
+    });
+  });
+
+  test('reject records rejected_reason, fires ask_responded, and mutates no tree/deps', () => {
+    const ask = fileFixtureAsk();
+    const before = store.listTasks({}).length;
+
+    const responded = store.respondAsk({
+      id: ask.id,
+      verdict: 'reject',
+      comment: 'out of scope this milestone',
+    });
+
+    expect(responded.state).toBe('rejected');
+    expect(responded.rejected_reason).toBe('out of scope this milestone');
+    expect(responded.mapped_artifact).toBeNull();
+    expect(responded.counter_proposal).toBeNull();
+    // No child, no dep.
+    expect(store.listTasks({}).length).toBe(before);
+    expect(store.getBlockedBy('blocked-1')).toHaveLength(0);
+    // The event still fires.
+    expect(store.listEventsForTask('blocked-1').some((e) => e.kind === 'ask_responded')).toBe(true);
+  });
+
+  test('counter records counter_proposal, fires ask_responded, and mutates no tree/deps', () => {
+    const ask = fileFixtureAsk();
+    const before = store.listTasks({}).length;
+
+    const responded = store.respondAsk({
+      id: ask.id,
+      verdict: 'counter',
+      comment: 'expose a read-only view instead',
+    });
+
+    expect(responded.state).toBe('countered');
+    expect(responded.counter_proposal).toBe('expose a read-only view instead');
+    expect(responded.mapped_artifact).toBeNull();
+    expect(responded.rejected_reason).toBeNull();
+    expect(store.listTasks({}).length).toBe(before);
+    expect(store.getBlockedBy('blocked-1')).toHaveLength(0);
+    expect(store.listEventsForTask('blocked-1').some((e) => e.kind === 'ask_responded')).toBe(true);
+  });
+
+  test('respondAsk honors an explicit childId, childTitle, and epic layer on accept', () => {
+    const ask = fileFixtureAsk();
+    const responded = store.respondAsk({
+      id: ask.id,
+      verdict: 'accept',
+      childId: 'identity-schema-epic',
+      childTitle: 'Identity schema change',
+      childLayer: 'epic',
+    });
+    expect(responded.mapped_artifact).toBe('identity-schema-epic');
+    const child = store.getTask('identity-schema-epic');
+    expect(child?.title).toBe('Identity schema change');
+    expect(child?.layer).toBe('epic');
+  });
+
+  test('respondAsk rejects an unknown ask id', () => {
+    expect(() => store.respondAsk({ id: 9999, verdict: 'accept' })).toThrow(
+      /unknown ask id '9999'/,
+    );
+  });
+
+  test('respondAsk rejects an off-vocabulary verdict', () => {
+    const ask = fileFixtureAsk();
+    expect(() => store.respondAsk({ id: ask.id, verdict: 'maybe' as never })).toThrow(
+      /invalid verdict 'maybe'/,
+    );
+  });
+
+  test('respondAsk rejects a second response (an ask is responded to exactly once)', () => {
+    const ask = fileFixtureAsk();
+    store.respondAsk({ id: ask.id, verdict: 'reject', comment: 'no' });
+    expect(() => store.respondAsk({ id: ask.id, verdict: 'accept' })).toThrow(
+      /is 'rejected', not 'filed'/,
+    );
+  });
+});
+
+// ===========================================================================
+// awaitAsk — the team-as-workflow-kind mechanical poll primitive
+// ===========================================================================
+
+describe('ScrumStore — awaitAsk (team-as-workflow-kind sugar)', () => {
+  /**
+   * Seed two sibling teams (identity accepts schema-change AND exposes two
+   * outputs) + a blocked artifact, then file one ask; return the filed row. The
+   * exposes are what `ready` returns — the to-team's published outputs.
+   */
+  function fileFixtureAsk(): ReturnType<ScrumStore['fileAsk']> {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.createTeam({ slug: 'identity', teamType: 'platform' });
+    store.addTeamAccept('identity', 'schema-change');
+    store.addTeamExpose('identity', { name: 'UserRecord', schemaRef: 'schemas/user.json' });
+    store.addTeamExpose('identity', { name: 'AuthToken', schemaRef: 'schemas/token.json' });
+    seedTask('blocked-1');
+    return store.fileAsk({
+      fromTeam: 'payments',
+      toTeam: 'identity',
+      askType: 'schema-change',
+      blockingArtifact: 'blocked-1',
+    });
+  }
+
+  /** Drive a task to `done` via the allowed backlog -> in_progress -> done chain. */
+  function driveToDone(id: string): void {
+    store.updateTaskStatus(id, 'in_progress');
+    store.updateTaskStatus(id, 'done');
+  }
+
+  test('a filed (un-responded) ask reports phase=pending, non-terminal, no outputs', () => {
+    const ask = fileFixtureAsk();
+    const report = store.awaitAsk(ask.id);
+    expect(report.phase).toBe('pending');
+    expect(report.terminal).toBe(false);
+    expect(report.state).toBe('filed');
+    expect(report.mapped_artifact).toBeNull();
+    expect(report.artifact_status).toBeNull();
+    expect(report.to_team).toBe('identity');
+    expect(report.outputs).toEqual([]);
+    expect(report.reason).toBeNull();
+  });
+
+  test('an accepted ask whose child is NOT done reports phase=waiting, non-terminal', () => {
+    const ask = fileFixtureAsk();
+    // Epic layer dodges the story-layer done floors — the mapped child sits at
+    // backlog, the exact "accepted but not yet delivered" case `waiting` names.
+    const responded = store.respondAsk({ id: ask.id, verdict: 'accept', childLayer: 'epic' });
+    const report = store.awaitAsk(ask.id);
+    expect(report.phase).toBe('waiting');
+    expect(report.terminal).toBe(false);
+    expect(report.state).toBe('accepted');
+    expect(report.mapped_artifact).toBe(responded.mapped_artifact);
+    expect(report.artifact_status).toBe('backlog');
+    expect(report.outputs).toEqual([]);
+    expect(report.reason).toBeNull();
+  });
+
+  test('an accepted ask whose child IS done reports phase=ready with the to-team exposes', () => {
+    const ask = fileFixtureAsk();
+    const responded = store.respondAsk({ id: ask.id, verdict: 'accept', childLayer: 'epic' });
+    driveToDone(responded.mapped_artifact as string);
+
+    const report = store.awaitAsk(ask.id);
+    expect(report.phase).toBe('ready');
+    expect(report.terminal).toBe(true);
+    expect(report.state).toBe('accepted');
+    expect(report.artifact_status).toBe('done');
+    // The outputs are the to-team's ACTIVE exposes — the value the step returns.
+    expect(report.outputs.map((e) => e.name)).toEqual(['UserRecord', 'AuthToken']);
+    expect(report.outputs.every((e) => e.team_slug === 'identity')).toBe(true);
+    expect(report.reason).toBeNull();
+  });
+
+  test('ready outputs exclude a superseded expose (only ACTIVE outputs surface)', () => {
+    const ask = fileFixtureAsk();
+    // Retire one of identity's exposes before the child completes.
+    const stale = store.addTeamExpose('identity', { name: 'LegacyView', schemaRef: 'old.json' });
+    store.supersedeTeamExpose(stale.id, 'replaced by UserRecord');
+    const responded = store.respondAsk({ id: ask.id, verdict: 'accept', childLayer: 'epic' });
+    driveToDone(responded.mapped_artifact as string);
+
+    const report = store.awaitAsk(ask.id);
+    expect(report.phase).toBe('ready');
+    expect(report.outputs.map((e) => e.name)).toEqual(['UserRecord', 'AuthToken']);
+  });
+
+  test('a rejected ask reports phase=rejected, terminal, reason=rejected_reason, no outputs', () => {
+    const ask = fileFixtureAsk();
+    store.respondAsk({ id: ask.id, verdict: 'reject', comment: 'out of scope this milestone' });
+    const report = store.awaitAsk(ask.id);
+    expect(report.phase).toBe('rejected');
+    expect(report.terminal).toBe(true);
+    expect(report.state).toBe('rejected');
+    expect(report.reason).toBe('out of scope this milestone');
+    expect(report.mapped_artifact).toBeNull();
+    expect(report.artifact_status).toBeNull();
+    expect(report.outputs).toEqual([]);
+  });
+
+  test('a countered ask reports phase=countered, terminal, reason=counter_proposal, no outputs', () => {
+    const ask = fileFixtureAsk();
+    store.respondAsk({
+      id: ask.id,
+      verdict: 'counter',
+      comment: 'expose a read-only view instead',
+    });
+    const report = store.awaitAsk(ask.id);
+    expect(report.phase).toBe('countered');
+    expect(report.terminal).toBe(true);
+    expect(report.state).toBe('countered');
+    expect(report.reason).toBe('expose a read-only view instead');
+    expect(report.mapped_artifact).toBeNull();
+    expect(report.outputs).toEqual([]);
+  });
+
+  test('the full pending -> waiting -> ready arc tracks the ask through its lifecycle', () => {
+    const ask = fileFixtureAsk();
+    expect(store.awaitAsk(ask.id).phase).toBe('pending');
+
+    const responded = store.respondAsk({ id: ask.id, verdict: 'accept', childLayer: 'epic' });
+    expect(store.awaitAsk(ask.id).phase).toBe('waiting');
+
+    driveToDone(responded.mapped_artifact as string);
+    expect(store.awaitAsk(ask.id).phase).toBe('ready');
+  });
+
+  test('awaitAsk rejects an unknown ask id (the one error path)', () => {
+    expect(() => store.awaitAsk(9999)).toThrow(/unknown ask id '9999'/);
+  });
+});
+
+describe('ScrumStore — escalation protocol (v24)', () => {
+  test('raiseEscalation lands open at the bottom rung by default, with a null walk-up back-pointer', () => {
+    const row = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'cannot satisfy dep',
+      raisedBy: 'CT-impl',
+      createdAt: '2026-01-01T00:00:00Z',
+    });
+    expect(row.task_id).toBe('t1');
+    expect(row.escalation_type).toBe('blocked');
+    expect(row.layer).toBe('implementer');
+    expect(row.state).toBe('open');
+    expect(row.walked_up_from).toBeNull();
+    expect(row.resolution_mode).toBeNull();
+    expect(row.resolved_at).toBeNull();
+    expect(row.raised_by).toBe('CT-impl');
+    expect(row.id).toBeGreaterThan(0);
+  });
+
+  test('raiseEscalation accepts an explicit starting layer', () => {
+    const row = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'conflict',
+      summary: 'two specs contradict',
+      layer: 'tech_lead',
+    });
+    expect(row.layer).toBe('tech_lead');
+    expect(row.state).toBe('open');
+  });
+
+  test('raiseEscalation rejects an escalation_type outside the closed enum, naming the set', () => {
+    expect(() =>
+      store.raiseEscalation({
+        taskId: 't1',
+        // @ts-expect-error — exercising the runtime boundary guard with an off-enum type.
+        escalationType: 'bogus',
+        summary: 'x',
+      }),
+    ).toThrow(
+      /invalid escalation_type 'bogus'; expected one of: blocked, ambiguous, conflict, missing_context/,
+    );
+    expect(store.listEscalationsForTask('t1')).toEqual([]);
+  });
+
+  test('raiseEscalation rejects a layer outside the closed walk-up chain, naming the set', () => {
+    expect(() =>
+      store.raiseEscalation({
+        taskId: 't1',
+        escalationType: 'blocked',
+        summary: 'x',
+        // @ts-expect-error — exercising the runtime boundary guard with an off-chain layer.
+        layer: 'ceo',
+      }),
+    ).toThrow(
+      /invalid layer 'ceo'; expected one of: implementer, engineer, tech_lead, pm, strategy, human/,
+    );
+    expect(store.listEscalationsForTask('t1')).toEqual([]);
+  });
+
+  test('task_id is a soft reference — the task need not exist', () => {
+    const row = store.raiseEscalation({
+      taskId: 'ghost-task',
+      escalationType: 'missing_context',
+      summary: 'no such task',
+    });
+    expect(row.task_id).toBe('ghost-task');
+    expect(store.listEscalationsForTask('ghost-task').map((e) => e.id)).toEqual([row.id]);
+  });
+
+  // --- resolution mode: resolve -------------------------------------------
+
+  test('resolve transitions open → resolved with no walk-up and no re-decompose signal', () => {
+    const raised = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'ambiguous',
+      summary: 'spec unclear',
+    });
+    const result = store.resolveEscalation({
+      id: raised.id,
+      mode: 'resolve',
+      note: 'answered inline',
+      resolvedBy: 'CT-eng',
+      resolvedAt: '2026-01-02T00:00:00Z',
+    });
+    expect(result.row.state).toBe('resolved');
+    expect(result.row.resolution_mode).toBe('resolve');
+    expect(result.row.resolution_note).toBe('answered inline');
+    expect(result.row.resolved_by).toBe('CT-eng');
+    expect(result.row.resolved_at).toBe('2026-01-02T00:00:00Z');
+    expect(result.walkedUpTo).toBeNull();
+    expect(result.reDecomposeTriggered).toBe(false);
+    // No new row appended — the chain has exactly one rung.
+    expect(store.listEscalationsForTask('t1')).toHaveLength(1);
+  });
+
+  // --- resolution mode: re_decompose --------------------------------------
+
+  test('re_decompose discharges the escalation (→ resolved) and raises the re-decompose signal, no walk-up', () => {
+    const raised = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'needs re-splitting',
+    });
+    const result = store.resolveEscalation({ id: raised.id, mode: 're_decompose' });
+    expect(result.row.state).toBe('resolved');
+    expect(result.row.resolution_mode).toBe('re_decompose');
+    expect(result.reDecomposeTriggered).toBe(true);
+    expect(result.walkedUpTo).toBeNull();
+    expect(store.listEscalationsForTask('t1')).toHaveLength(1);
+  });
+
+  // --- resolution mode: re_escalate ---------------------------------------
+
+  test('re_escalate closes the row (→ re_escalated) and appends a fresh open row exactly one rung up', () => {
+    const raised = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'conflict',
+      summary: 'cannot decide here',
+    });
+    const result = store.resolveEscalation({
+      id: raised.id,
+      mode: 're_escalate',
+      resolvedBy: 'CT-impl',
+    });
+    // The receiving row is closed re_escalated.
+    expect(result.row.state).toBe('re_escalated');
+    expect(result.row.resolution_mode).toBe('re_escalate');
+    expect(result.reDecomposeTriggered).toBe(false);
+    // A NEW open row appears exactly one rung up, linked back to the closed row.
+    expect(result.walkedUpTo).not.toBeNull();
+    expect(result.walkedUpTo?.layer).toBe('engineer');
+    expect(result.walkedUpTo?.state).toBe('open');
+    expect(result.walkedUpTo?.escalation_type).toBe('conflict');
+    expect(result.walkedUpTo?.summary).toBe('cannot decide here');
+    expect(result.walkedUpTo?.walked_up_from).toBe(raised.id);
+    expect(store.listEscalationsForTask('t1')).toHaveLength(2);
+  });
+
+  test('re_escalate walks exactly one layer per step along the full chain, never skipping', () => {
+    let current = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'climb the ladder',
+    });
+    // The full chain bottom-to-top. Each re_escalate must advance to the NEXT rung.
+    const expectedAfterEach = ['engineer', 'tech_lead', 'pm', 'strategy', 'human'];
+    const walked: string[] = [];
+    for (let i = 0; i < expectedAfterEach.length; i++) {
+      const result = store.resolveEscalation({ id: current.id, mode: 're_escalate' });
+      expect(result.row.state).toBe('re_escalated');
+      expect(result.walkedUpTo).not.toBeNull();
+      const next = result.walkedUpTo as NonNullable<typeof result.walkedUpTo>;
+      walked.push(next.layer);
+      current = next;
+    }
+    expect(walked).toEqual(expectedAfterEach);
+    // The escalation now sits open at 'human' (the top).
+    expect(current.layer).toBe('human');
+    expect(current.state).toBe('open');
+  });
+
+  test('re_escalate at the top of the chain (human) is rejected; the row stays open', () => {
+    const raised = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'top rung',
+      layer: 'human',
+    });
+    expect(() => store.resolveEscalation({ id: raised.id, mode: 're_escalate' })).toThrow(
+      /already at the top of the chain \('human'\); cannot re_escalate past 'human'/,
+    );
+    // Untouched: still open at human.
+    expect(store.getEscalation(raised.id)?.state).toBe('open');
+    expect(store.listEscalationsForTask('t1')).toHaveLength(1);
+  });
+
+  // --- state-machine guards -----------------------------------------------
+
+  test('resolveEscalation rejects a mode outside the closed enum, naming the set', () => {
+    const raised = store.raiseEscalation({ taskId: 't1', escalationType: 'blocked', summary: 'x' });
+    expect(() =>
+      // @ts-expect-error — exercising the runtime boundary guard with an off-enum mode.
+      store.resolveEscalation({ id: raised.id, mode: 'ignore' }),
+    ).toThrow(/invalid mode 'ignore'; expected one of: resolve, re_decompose, re_escalate/);
+    expect(store.getEscalation(raised.id)?.state).toBe('open');
+  });
+
+  test('resolveEscalation rejects an unknown id', () => {
+    expect(() => store.resolveEscalation({ id: 999, mode: 'resolve' })).toThrow(
+      /unknown escalation id '999'/,
+    );
+  });
+
+  test('an already-terminal escalation cannot be resolved again (one-shot transitions)', () => {
+    const raised = store.raiseEscalation({ taskId: 't1', escalationType: 'blocked', summary: 'x' });
+    store.resolveEscalation({ id: raised.id, mode: 'resolve' });
+    expect(() => store.resolveEscalation({ id: raised.id, mode: 'resolve' })).toThrow(
+      /is 'resolved', not 'open'/,
+    );
+  });
+
+  // --- auto-bubble (the staleness floor's fourth state) --------------------
+
+  test('autoBubbleEscalation closes the row auto_bubbled and appends an open row one rung up', () => {
+    const raised = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'aged out',
+    });
+    const bubbled = store.autoBubbleEscalation(raised.id, '2026-03-01T00:00:00Z');
+    expect(store.getEscalation(raised.id)?.state).toBe('auto_bubbled');
+    expect(store.getEscalation(raised.id)?.resolution_mode).toBeNull();
+    expect(bubbled.layer).toBe('engineer');
+    expect(bubbled.state).toBe('open');
+    expect(bubbled.walked_up_from).toBe(raised.id);
+  });
+
+  test('autoBubbleEscalation at the top of the chain is rejected', () => {
+    const raised = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'x',
+      layer: 'human',
+    });
+    expect(() => store.autoBubbleEscalation(raised.id)).toThrow(
+      /already at the top of the chain \('human'\); cannot bubble past 'human'/,
+    );
+  });
+
+  test('autoBubbleEscalation stamps the closed row with attributes.auto_bubbled + linked_escalation pointing at the new rung', () => {
+    const raised = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'aged out',
+    });
+    const bubbled = store.autoBubbleEscalation(raised.id, '2026-03-01T00:00:00Z');
+    const closed = store.getEscalation(raised.id);
+    // The auto_bubbled marker + forward pointer ride on the CLOSED row.
+    expect(closed?.state).toBe('auto_bubbled');
+    expect(closed?.attributes).toEqual({ auto_bubbled: true, linked_escalation: bubbled.id });
+    // The forward pointer (closed → new) is the inverse of the new row's back-pointer.
+    expect(closed?.attributes?.linked_escalation).toBe(bubbled.id);
+    expect(bubbled.walked_up_from).toBe(raised.id);
+    // The fresh open row carries no marker — it is a normal open escalation.
+    expect(bubbled.attributes).toBeNull();
+  });
+
+  test('autoBubbleEscalation surfaces a blocker_raised event on an existing task (alerts/next-ready bridge)', () => {
+    seedTask('real-task');
+    const raised = store.raiseEscalation({
+      taskId: 'real-task',
+      escalationType: 'ambiguous',
+      summary: 'no receiver acted',
+    });
+    store.autoBubbleEscalation(raised.id, '2026-03-01T00:00:00Z');
+    const blockerEvents = store
+      .listEventsForTask('real-task')
+      .filter((e) => e.kind === 'blocker_raised');
+    expect(blockerEvents).toHaveLength(1);
+    expect(blockerEvents[0]?.payload).toMatchObject({
+      escalation_type: 'ambiguous',
+      summary: 'no receiver acted',
+    });
+  });
+
+  test('autoBubbleEscalation skips the event surface when the task does not exist (soft reference preserved)', () => {
+    const raised = store.raiseEscalation({
+      taskId: 'ghost-task',
+      escalationType: 'blocked',
+      summary: 'orphaned escalation',
+    });
+    // No throw, and the bubble still advances the chain.
+    const bubbled = store.autoBubbleEscalation(raised.id, '2026-03-01T00:00:00Z');
+    expect(bubbled.layer).toBe('engineer');
+    // appendEvent would have thrown on an unknown task; the guard prevents that.
+    expect(store.getEscalation(raised.id)?.state).toBe('auto_bubbled');
+  });
+
+  // --- chain reconstruction -----------------------------------------------
+
+  test('getEscalationChain reconstructs the full walk-up path root-rung-first', () => {
+    const root = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'ambiguous',
+      summary: 'walk it up',
+    });
+    const r1 = store.resolveEscalation({ id: root.id, mode: 're_escalate' }).walkedUpTo;
+    const r2 = store.resolveEscalation({
+      id: (r1 as EscalationRowT).id,
+      mode: 're_escalate',
+    }).walkedUpTo;
+    // From the topmost rung, the chain reads bottom-to-top across the three rungs.
+    const chain = store.getEscalationChain((r2 as EscalationRowT).id);
+    expect(chain.map((e) => e.layer)).toEqual(['implementer', 'engineer', 'tech_lead']);
+    expect(chain.map((e) => e.state)).toEqual(['re_escalated', 're_escalated', 'open']);
+    // Querying from a middle rung yields the same root-first prefix up to that rung.
+    const partial = store.getEscalationChain((r1 as EscalationRowT).id);
+    expect(partial.map((e) => e.layer)).toEqual(['implementer', 'engineer']);
+  });
+
+  test('listOpenEscalationRows surfaces only open rows across the walk-up', () => {
+    const a = store.raiseEscalation({ taskId: 't1', escalationType: 'blocked', summary: 'a' });
+    store.raiseEscalation({ taskId: 't2', escalationType: 'conflict', summary: 'b' });
+    // Walk `a` up once: its root row closes, a fresh open row appears at engineer.
+    store.resolveEscalation({ id: a.id, mode: 're_escalate' });
+    const open = store.listOpenEscalationRows();
+    // The closed root of `a` is excluded; its walked-up successor + `b` remain.
+    expect(open.map((e) => e.summary).sort()).toEqual(['a', 'b']);
+    expect(open.find((e) => e.summary === 'a')?.layer).toBe('engineer');
   });
 });

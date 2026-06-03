@@ -66,7 +66,15 @@
  *   claude-prove scrum lore show <id>            (one Lore entry by id)
  *   claude-prove scrum annotation add            --target-kind task|team|decision --target REF --body TEXT --author ID   (append a per-artifact note; target is a soft reference, no authorship gate)
  *   claude-prove scrum annotation list           --target-kind K --target REF [--human]   (a target's notes, oldest-first)
+ *   claude-prove scrum escalation raise          --task ID --type blocked|ambiguous|conflict|missing_context --summary TEXT [--layer RUNG] [--by ID]   (raise a typed escalation at a rung of the walk-up chain; default layer implementer)
+ *   claude-prove scrum escalation show <id>      (one escalation by id)
+ *   claude-prove scrum escalation list           [--task ID] [--human]   (a task's escalations oldest-first, or every open escalation across all tasks)
+ *   claude-prove scrum escalation resolve <id>   --mode resolve|re_decompose|re_escalate [--note TEXT] [--by ID]   (receiver resolution: resolve→resolved, re_decompose→resolved+signal, re_escalate→walks one rung up)
+ *   claude-prove scrum escalation chain <id>     [--human]   (reconstruct the full walk-up chain one escalation climbed, root rung first)
  *   claude-prove scrum manifest show             [--human]   (cross-team contracts: every team's active accepts[] + exposes[], both-teams-visible)
+ *   claude-prove scrum ask file                  --from-team A --to-team B --ask-type T --blocking-artifact ART   (file a cross-team ask; to-team must accept T; ART must exist)
+ *   claude-prove scrum ask respond <ask-id>      --verdict accept|reject|counter [--comment TEXT] [--by ID]   (mechanically apply a triage verdict: accept wires a child + blocked_by dep; reject/counter record --comment; no model spawn)
+ *   claude-prove scrum ask await <ask-id>        (mechanical poll for the team-as-workflow-kind sugar: reports phase pending|waiting|ready|rejected|countered + to-team outputs on ready; no model spawn)
  *   claude-prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
  *   claude-prove scrum hook <event>              (event: session-start | subagent-stop | stop)
  *
@@ -85,9 +93,11 @@
 import type { CAC } from 'cac';
 import { runAlertsCmd } from './scrum/cli/alerts-cmd';
 import { runAnnotationCmd } from './scrum/cli/annotation-cmd';
+import { runAskCmd } from './scrum/cli/ask-cmd';
 import { runCompilePlanCmd } from './scrum/cli/compile-plan-cmd';
 import { runContributorCmd } from './scrum/cli/contributor-cmd';
 import { runDecisionCmd } from './scrum/cli/decision-cmd';
+import { runEscalationCmd } from './scrum/cli/escalation-cmd';
 import { runGateCmd } from './scrum/cli/gate-cmd';
 import { runHookCmd } from './scrum/cli/hook-cmd';
 import { runInitCmd } from './scrum/cli/init-cmd';
@@ -118,7 +128,9 @@ type ScrumAction =
   | 'team'
   | 'lore'
   | 'annotation'
+  | 'escalation'
   | 'manifest'
+  | 'ask'
   | 'link-run'
   | 'hook';
 
@@ -138,7 +150,9 @@ const SCRUM_ACTIONS: ScrumAction[] = [
   'team',
   'lore',
   'annotation',
+  'escalation',
   'manifest',
+  'ask',
   'link-run',
   'hook',
 ];
@@ -230,6 +244,29 @@ interface ScrumFlags {
   // specific target within that class.
   targetKind?: string;
   target?: string;
+  // `ask file` (v23). `fromTeam` raises the ask, `toTeam` is the sibling asked
+  // (must accept `askType`, shared with the team interface flags above), and
+  // `blockingArtifact` is the task id blocked on the ask.
+  fromTeam?: string;
+  toTeam?: string;
+  blockingArtifact?: string;
+  // `ask respond` (v25). `verdict` is the closed triage verdict (accept | reject
+  // | counter); `comment` (shared with `gate respond` above) is the
+  // verdict-specific rationale (rejected_reason / counter_proposal); `by` (shared
+  // with decision/escalation above) is who produced the verdict.
+  verdict?: string;
+  // `escalation raise`/`resolve` (v24). `type` is the closed escalation kind
+  // (blocked | ambiguous | conflict | missing_context); `summary` the
+  // receiver-facing prose; `mode` the resolution mode (resolve | re_decompose |
+  // re_escalate); `note` the receiver's rationale. `task` (above) is the owning
+  // task; `layer` (shared with `task create`'s containment tier above — distinct
+  // actions, so the value is correct per call) is the rung to raise at (default
+  // implementer); `by` (shared with decision/team supersede above) is who raised
+  // / resolved.
+  type?: string;
+  summary?: string;
+  mode?: string;
+  note?: string;
 }
 
 export function register(cli: CAC): void {
@@ -349,6 +386,29 @@ export function register(cli: CAC): void {
       '--target <ref>',
       'annotation add/list: the target identifier within its class (a soft reference — existence is not checked)',
     )
+    .option('--from-team <slug>', 'ask file: the team raising the ask')
+    .option(
+      '--to-team <slug>',
+      'ask file: the sibling team asked (must accept the --ask-type in its active interface)',
+    )
+    .option(
+      '--blocking-artifact <task-id>',
+      'ask file: the task id blocked on the ask (must be an existing task)',
+    )
+    .option(
+      '--verdict <v>',
+      'ask respond: the triage verdict (accept | reject | counter); accept wires a child + dep, reject/counter record --comment only',
+    )
+    .option(
+      '--type <t>',
+      'escalation raise: the escalation kind (blocked | ambiguous | conflict | missing_context)',
+    )
+    .option('--summary <text>', 'escalation raise: the receiver-facing prose')
+    .option(
+      '--mode <m>',
+      'escalation resolve: the resolution mode (resolve | re_decompose | re_escalate)',
+    )
+    .option('--note <text>', 'escalation resolve: the receiver rationale recorded on resolution')
     .option(
       '--workspace-root <w>',
       'Main worktree root; pins store to <root>/.prove/prove.db (default: git common-dir)',
@@ -596,12 +656,48 @@ function dispatch(
         workspaceRoot: flags.workspaceRoot,
       });
 
+    case 'escalation':
+      if (arg1 === undefined) {
+        console.error(
+          'error: scrum escalation: sub-action required (one of: raise | show | list | resolve | chain)',
+        );
+        return 1;
+      }
+      return runEscalationCmd(arg1, [arg2], {
+        task: flags.task,
+        type: flags.type,
+        summary: flags.summary,
+        layer: flags.layer,
+        mode: flags.mode,
+        note: flags.note,
+        by: flags.by,
+        human: flags.human,
+        workspaceRoot: flags.workspaceRoot,
+      });
+
     case 'manifest':
       if (arg1 === undefined) {
         console.error('error: scrum manifest: sub-action required (one of: show)');
         return 1;
       }
       return runManifestCmd(arg1, {
+        human: flags.human,
+        workspaceRoot: flags.workspaceRoot,
+      });
+
+    case 'ask':
+      if (arg1 === undefined) {
+        console.error('error: scrum ask: sub-action required (one of: file | respond | await)');
+        return 1;
+      }
+      return runAskCmd(arg1, [arg2], {
+        fromTeam: flags.fromTeam,
+        toTeam: flags.toTeam,
+        askType: flags.askType,
+        blockingArtifact: flags.blockingArtifact,
+        verdict: flags.verdict,
+        comment: flags.comment,
+        by: flags.by,
         human: flags.human,
         workspaceRoot: flags.workspaceRoot,
       });

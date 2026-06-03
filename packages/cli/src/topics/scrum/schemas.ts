@@ -892,6 +892,188 @@ export const SCRUM_MIGRATION_V22_SQL = `
 ALTER TABLE scrum_decisions ADD COLUMN source_lore_id INTEGER REFERENCES scrum_lores(id);
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v23 — cross-team ask protocol (scrum_asks)
+// ---------------------------------------------------------------------------
+
+/**
+ * v23: the cross-team ask protocol — one row per ask a team files against a
+ * sibling team. An ask is the request a worker raises when its work is blocked
+ * on another team's published interface: "team A needs team B to handle ask type
+ * T, and A's artifact ART is blocked until B does". A new table (not a column on
+ * an existing one) because an ask is its own entity, relating two teams and a
+ * blocking artifact rather than being owned by any single one:
+ *
+ *   scrum_asks — one row per filed ask. `from_team` and `to_team` are both
+ *                `scrum_teams.slug` FKs — the team raising the ask and the
+ *                sibling it is asking. `ask_type` is the kebab-case interface
+ *                type the ask targets; at filing time it MUST be one of
+ *                `to_team`'s ACTIVE `scrum_team_accepts` rows — a team can only
+ *                be asked for what it has published it accepts. `blocking_artifact`
+ *                is the `scrum_tasks.id` of the artifact blocked on the ask — the
+ *                FK guarantees the cited artifact exists. `state` is the ask
+ *                lifecycle; a freshly-filed ask is always `'filed'`.
+ *
+ * Validation that spans tables (the `ask_type ∈ to_team.accepts` membership
+ * rule) is enforced at the store boundary in `fileAsk`, NOT by a SQL constraint
+ * — it reads the sibling team's active accept interface, which is not expressible
+ * as a column CHECK. The two team FKs and the artifact FK ARE expressed in the
+ * schema, so an unknown team or artifact is rejected by the engine even before
+ * the boundary check runs.
+ *
+ * `id` is an AUTOINCREMENT surrogate. `state` carries no CHECK — the column stays
+ * forward-compatible TEXT, matching the v2–v22 convention; the closed `AskState`
+ * vocabulary is documented on the `AskRow` type in `types.ts`. Indexes back the
+ * per-recipient fetch (`to_team`) and the per-artifact fetch (`blocking_artifact`).
+ * Table and index names carry the `scrum_` / `idx_scrum_` prefix per the
+ * domain-namespacing contract established in v1.
+ */
+export const SCRUM_MIGRATION_V23_SQL = `
+CREATE TABLE scrum_asks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_team TEXT NOT NULL REFERENCES scrum_teams(slug),
+    to_team TEXT NOT NULL REFERENCES scrum_teams(slug),
+    ask_type TEXT NOT NULL,
+    blocking_artifact TEXT NOT NULL REFERENCES scrum_tasks(id),
+    state TEXT NOT NULL DEFAULT 'filed',
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX idx_scrum_asks_to_team ON scrum_asks(to_team);
+CREATE INDEX idx_scrum_asks_blocking_artifact ON scrum_asks(blocking_artifact);
+`;
+
+// ---------------------------------------------------------------------------
+// Migration v24 — escalation protocol (scrum_escalations)
+// ---------------------------------------------------------------------------
+
+/**
+ * v24: the escalation protocol — a typed escalation that walks UP a fixed
+ * authority chain one rung at a time, with per-receiver resolution modes. A new
+ * table (not columns on an existing one) because an escalation is its own
+ * entity referenced from many rows, and because the walk-up is append-only: a
+ * single escalation that climbs the chain materializes as a SERIES of rows, one
+ * per rung it touched, linked by `walked_up_from`.
+ *
+ *   scrum_escalations — one row per typed escalation AT one rung of the chain.
+ *                 `task_id` is the owning task — a SOFT reference (no FK), held
+ *                 exactly as the roster's `contributor_id` and the annotation's
+ *                 `target_ref` hold their referents. `escalation_type` is the
+ *                 closed kind (`blocked` | `ambiguous` | `conflict` |
+ *                 `missing_context`); `layer` is the rung of the walk-up chain
+ *                 (`implementer` → `engineer` → `tech_lead` → `pm` → `strategy`
+ *                 → `human`); `state` is the four-state lifecycle (`open` |
+ *                 `resolved` | `re_escalated` | `auto_bubbled`). None carry a SQL
+ *                 CHECK — the columns stay forward-compatible TEXT, matching the
+ *                 v2–v22 convention; the closed vocabularies are documented on
+ *                 the `EscalationType` / `EscalationLayer` / `EscalationState`
+ *                 types and enforced at the store boundary. `summary` is the
+ *                 receiver-facing prose. `raised_by` / `resolved_by` record
+ *                 provenance. `resolution_mode` is the `EscalationResolutionMode`
+ *                 applied to close the row (NULL while `open`); `resolution_note`
+ *                 is the receiver's rationale. `walked_up_from` is the
+ *                 `scrum_escalations.id` this row was kicked up FROM (NULL for a
+ *                 root) — the back-pointer that reconstructs the chain.
+ *
+ * Walk-up is APPEND-ONLY with explicit linkage, not an in-place layer bump: a
+ * `re_escalate` / `auto_bubble` closes the current row (`state` →
+ * `re_escalated` / `auto_bubbled`) and APPENDS a fresh `open` row at the next
+ * rung carrying `walked_up_from = <closed row id>`. The single-rung advance is
+ * enforced at the store boundary against the canonical `ESCALATION_CHAIN`, NOT
+ * by SQL — "one layer up, no skips" spans two rows and is not expressible as a
+ * column constraint.
+ *
+ * Indexes back the two hot reads: open escalations per task (`task_id, state`)
+ * and the chain back-link (`walked_up_from`). Table and index names carry the
+ * `scrum_` / `idx_scrum_` prefix per the domain-namespacing contract.
+ */
+export const SCRUM_MIGRATION_V24_SQL = `
+CREATE TABLE scrum_escalations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id TEXT NOT NULL,
+    escalation_type TEXT NOT NULL,
+    layer TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'open',
+    summary TEXT NOT NULL,
+    raised_by TEXT,
+    resolution_mode TEXT,
+    resolution_note TEXT,
+    resolved_by TEXT,
+    walked_up_from INTEGER REFERENCES scrum_escalations(id),
+    created_at TEXT NOT NULL,
+    resolved_at TEXT
+);
+
+CREATE INDEX idx_scrum_escalations_task_state ON scrum_escalations(task_id, state);
+CREATE INDEX idx_scrum_escalations_walked_up_from ON scrum_escalations(walked_up_from);
+`;
+
+// ---------------------------------------------------------------------------
+// Migration v25 — ask triage/respond: response provenance on scrum_asks
+// ---------------------------------------------------------------------------
+
+/**
+ * v25: three additive columns on `scrum_asks` completing the ask triage/respond
+ * step. A filed ask is triaged to one of three verdicts — accept, reject, or
+ * counter — and the verdict's provenance lands on the ask row itself rather than
+ * a new table, because a response is a one-to-one property of the ask it answers
+ * (an ask is filed once and responded to once). All three are
+ * `ALTER TABLE ... ADD COLUMN` so the migration is forward-only and preserves
+ * every existing row — a pre-v25 (still-`filed`) ask reads all three NULL.
+ *
+ *   mapped_artifact  — set ONLY on an `accept`: the `scrum_tasks.id` of the
+ *                      single child task the accepting team created under its
+ *                      tree to satisfy the ask. A SOFT reference (no FK) so it
+ *                      matches how the escalation roster and operator history
+ *                      hold their referents; the accept path creates the child
+ *                      in the same transaction, so the id always resolves at
+ *                      write time. NULL on `reject` / `counter`.
+ *   rejected_reason  — set ONLY on a `reject`: the responder's free-text
+ *                      rationale for declining the ask. NULL otherwise.
+ *   counter_proposal — set ONLY on a `counter`: the responder's free-text
+ *                      counter-proposal (a different artifact, scope, or
+ *                      interface than the ask requested). NULL otherwise.
+ *
+ * The `state` column (v23) carries the verdict itself — `accepted` | `rejected`
+ * | `countered` — extending the closed `AskState` set documented on the `AskRow`
+ * type; the column keeps no CHECK, matching the v2–v24 forward-compatible-TEXT
+ * convention. The "exactly one of the three columns is non-NULL, and it matches
+ * the verdict" invariant is enforced at the store boundary in `respondAsk`, not
+ * by SQL — it spans the verdict and three columns and is not expressible as a
+ * column CHECK.
+ */
+export const SCRUM_MIGRATION_V25_SQL = `
+ALTER TABLE scrum_asks ADD COLUMN mapped_artifact TEXT;
+ALTER TABLE scrum_asks ADD COLUMN rejected_reason TEXT;
+ALTER TABLE scrum_asks ADD COLUMN counter_proposal TEXT;
+`;
+
+// ---------------------------------------------------------------------------
+// Migration v26 — escalation staleness auto-bubble marker
+// ---------------------------------------------------------------------------
+
+/**
+ * v26: a nullable `attributes` JSON column on `scrum_escalations` carrying
+ * structured per-row markers. The staleness floor writes
+ * `{ "auto_bubbled": true, "linked_escalation": <new row id> }` onto a row it
+ * bubbles, so the closed (`auto_bubbled`) row carries BOTH the marker and a
+ * FORWARD pointer to the fresh row one rung up. This complements the existing
+ * `walked_up_from` BACK-pointer (new → original): together they make the
+ * staleness walk-up traversable in either direction, and the marker
+ * distinguishes a clock-driven bubble from a receiver-driven `re_escalate` at a
+ * glance without reading `resolution_mode`.
+ *
+ * A nullable column (not a new table) because the marker is a property OF an
+ * existing escalation row, not its own entity. NULL = no marker (the default
+ * for every raised / re-escalated / resolved row). The column carries no SQL
+ * CHECK — it stays forward-compatible TEXT, matching the v24 convention; the
+ * `EscalationAttributes` shape is documented on the type and parsed tolerantly
+ * at the store read boundary so one corrupt row cannot brick an escalation read.
+ */
+export const SCRUM_MIGRATION_V26_SQL = `
+ALTER TABLE scrum_escalations ADD COLUMN attributes TEXT;
+`;
+
 /**
  * Current scrum-domain store version — the highest migration version this
  * module registers. Stamped as the per-artifact `schema_version` on the
@@ -899,12 +1081,12 @@ ALTER TABLE scrum_decisions ADD COLUMN source_lore_id INTEGER REFERENCES scrum_l
  * scrum row reports the schema it was read under. Bump in lockstep with the
  * top migration version on every additive hop.
  */
-export const SCRUM_SCHEMA_VERSION = 22;
+export const SCRUM_SCHEMA_VERSION = 26;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that have hit `clearRegistry()` — both
- * paths land a single scrum/{v1..v21} entry set. Matches
+ * paths land a single scrum/{v1..vN} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -1085,6 +1267,38 @@ export function ensureScrumSchemaRegistered(): void {
           'add scrum_decisions.source_lore_id (nullable self-FK to scrum_lores) for Lore→Codex promotion provenance',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V22_SQL);
+        },
+      },
+      {
+        version: 23,
+        description:
+          'create scrum_asks (cross-team ask protocol) + idx_scrum_asks_to_team + idx_scrum_asks_blocking_artifact',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V23_SQL);
+        },
+      },
+      {
+        version: 24,
+        description:
+          'create scrum_escalations (typed escalation walk-up chain + four-state machine + resolution modes) + idx_scrum_escalations_task_state + idx_scrum_escalations_walked_up_from',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V24_SQL);
+        },
+      },
+      {
+        version: 25,
+        description:
+          'add scrum_asks.mapped_artifact + scrum_asks.rejected_reason + scrum_asks.counter_proposal for the ask triage/respond verdict provenance',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V25_SQL);
+        },
+      },
+      {
+        version: 26,
+        description:
+          'add scrum_escalations.attributes (nullable JSON) carrying the staleness auto-bubble marker { auto_bubbled, linked_escalation }',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V26_SQL);
         },
       },
     ],

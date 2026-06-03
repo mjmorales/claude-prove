@@ -50,7 +50,9 @@ export type EventKind =
   | 'note'
   | 'unlinked_run_detected'
   | 'curation_proposed'
-  | 'gate_responded';
+  | 'gate_responded'
+  | 'ask_filed'
+  | 'ask_responded';
 
 /**
  * Dependency direction. Pinned by a CHECK constraint on `scrum_deps.kind`;
@@ -94,6 +96,239 @@ export interface EscalationPayload {
   escalation_type: EscalationType;
   summary: string;
   blocking_task_id?: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// Escalation protocol — walk-up chain + state machine + resolution modes
+// ---------------------------------------------------------------------------
+
+/**
+ * The fixed escalation ladder a typed escalation walks UP, one layer per step.
+ * A first-class chain distinct from the per-team `TeamRole` roster: the roster
+ * names who fills a team's three slots, whereas this ladder is the org-wide
+ * authority chain an escalation climbs until someone resolves it. The order is
+ * canonical and total — `implementer` is the lowest rung (where work happens),
+ * `human` is the top (the terminal authority that cannot be walked past).
+ *
+ *   implementer — the worker that raised the escalation; the bottom rung.
+ *   engineer    — the next rung up; owns the immediate technical decision.
+ *   tech_lead   — owns the team's technical direction.
+ *   pm          — owns scope and priority for the body of work.
+ *   strategy    — owns cross-cutting direction above any single team.
+ *   human       — the terminal authority; an escalation at `human` has nowhere
+ *                 higher to walk, so a re-escalate at this rung is rejected.
+ */
+export type EscalationLayer =
+  | 'implementer'
+  | 'engineer'
+  | 'tech_lead'
+  | 'pm'
+  | 'strategy'
+  | 'human';
+
+/**
+ * The walk-up chain in canonical bottom-to-top order. The single source of
+ * truth for "one layer up": `nextEscalationLayer` indexes this array, so an
+ * escalation advances EXACTLY one rung and never skips. The array order IS the
+ * chain — reordering it reorders the ladder.
+ */
+export const ESCALATION_CHAIN: EscalationLayer[] = [
+  'implementer',
+  'engineer',
+  'tech_lead',
+  'pm',
+  'strategy',
+  'human',
+];
+
+/**
+ * The layer exactly one rung above `layer`, or null when `layer` is the top
+ * (`human`) and there is nowhere higher to walk. The store's walk-up uses this
+ * to advance an escalation by exactly one rung — there is no skip-ahead path.
+ */
+export function nextEscalationLayer(layer: EscalationLayer): EscalationLayer | null {
+  const idx = ESCALATION_CHAIN.indexOf(layer);
+  if (idx < 0 || idx + 1 >= ESCALATION_CHAIN.length) return null;
+  return ESCALATION_CHAIN[idx + 1] ?? null;
+}
+
+/**
+ * Lifecycle of one escalation. A closed four-state machine matching the
+ * `scrum_escalations.state` column; the column carries no CHECK, so this union
+ * documents the closed set and the store boundary enforces every transition.
+ *
+ *   open         — the escalation is awaiting its current layer's resolution;
+ *                  the state a fresh escalation is raised in.
+ *   resolved     — the current layer resolved it (`resolve`). TERMINAL.
+ *   re_escalated — the current layer kicked it one rung higher (`re_escalate`):
+ *                  this escalation row is closed `re_escalated` and a NEW `open`
+ *                  row is appended at the next layer up. TERMINAL for THIS row.
+ *   auto_bubbled — the escalation aged past its threshold without a resolution
+ *                  and was bubbled one rung higher by the staleness floor rather
+ *                  than by an explicit receiver action. TERMINAL for THIS row;
+ *                  like `re_escalated`, it closes this row and opens the next.
+ */
+export type EscalationState = 'open' | 'resolved' | 're_escalated' | 'auto_bubbled';
+
+/** Runtime-checkable list of the closed `EscalationState` set. */
+export const ESCALATION_STATES: EscalationState[] = [
+  'open',
+  'resolved',
+  're_escalated',
+  'auto_bubbled',
+];
+
+/**
+ * How a receiver resolves an `open` escalation — the `escalation_resolution`
+ * mode. A closed set: the receiver at the escalation's current layer applies
+ * exactly one of these, and the store transitions the row's state accordingly.
+ *
+ *   resolve       — the receiver answered the escalation. The row → `resolved`.
+ *   re_decompose  — the escalation cannot be answered as-posed; it needs the
+ *                   work re-decomposed. The row → `resolved` (this escalation is
+ *                   discharged) AND `re_decompose_triggered` is set on the
+ *                   result, the signal the driver uses to force re-decomposition
+ *                   of the owning task. No walk-up — re-decomposition happens at
+ *                   the SAME layer that received it.
+ *   re_escalate   — the receiver cannot resolve at this layer and kicks it one
+ *                   rung up. The row → `re_escalated` and a NEW `open` row is
+ *                   appended at `nextEscalationLayer`. Rejected when the current
+ *                   layer is already `human` (the top — nowhere higher to walk).
+ */
+export type EscalationResolutionMode = 'resolve' | 're_decompose' | 're_escalate';
+
+/** Runtime-checkable list of the closed `EscalationResolutionMode` set. */
+export const ESCALATION_RESOLUTION_MODES: EscalationResolutionMode[] = [
+  'resolve',
+  're_decompose',
+  're_escalate',
+];
+
+/**
+ * The fixed staleness threshold (hours) an `open` escalation may sit before the
+ * reconciler hook auto-bubbles it one rung up. A constant — not persisted — so
+ * the floor is uniform across every project and needs no schema or config
+ * surface. An escalation whose age (`now − created_at`) EXCEEDS this is stale;
+ * an escalation at exactly the threshold is not yet (strict `>`).
+ */
+export const STALENESS_THRESHOLD_HOURS = 24;
+
+/**
+ * Structured markers carried on `scrum_escalations.attributes` (the v25 JSON
+ * column). NULL on every raised / re-escalated / resolved row; set ONLY on a
+ * row the staleness floor auto-bubbles.
+ *
+ *   auto_bubbled       — true on a row advanced by the staleness clock (the
+ *                        engine), distinguishing it from a receiver-driven
+ *                        `re_escalate` without reading `resolution_mode`.
+ *   linked_escalation  — the `scrum_escalations.id` of the fresh `open` row this
+ *                        row was bubbled UP to. The FORWARD pointer (original →
+ *                        new), the inverse of the new row's `walked_up_from`
+ *                        BACK-pointer, so the staleness walk-up is traversable
+ *                        in either direction.
+ */
+export interface EscalationAttributes {
+  auto_bubbled?: boolean;
+  linked_escalation?: number;
+}
+
+/**
+ * A row of `scrum_escalations` — one typed escalation at one layer of the
+ * walk-up chain. Walk-up is APPEND-ONLY: a `re_escalate` / `auto_bubble` does
+ * not move a row up, it CLOSES this row (state `re_escalated` / `auto_bubbled`)
+ * and APPENDS a fresh `open` row at the next layer that points back here via
+ * `walked_up_from`. The whole chain a single escalation climbed is therefore
+ * reconstructable by following `walked_up_from` back to the root (`null`).
+ *
+ *   id              — AUTOINCREMENT surrogate.
+ *   task_id         — the owning task; a SOFT reference (no FK) so an escalation
+ *                     may name a task the store does not verify, matching how the
+ *                     roster and annotations hold their referents.
+ *   escalation_type — the closed `EscalationType` (blocked | ambiguous |
+ *                     conflict | missing_context); guarded at the store boundary.
+ *   layer           — the rung of the walk-up chain this row sits at (see
+ *                     `EscalationLayer`); guarded at the store boundary.
+ *   state           — the closed `EscalationState` (open | resolved |
+ *                     re_escalated | auto_bubbled).
+ *   summary         — the attention-bearing prose the receiver reads.
+ *   raised_by       — who raised this escalation (an identifier — typically a
+ *                     CT-UUID). Recorded for provenance.
+ *   resolution_mode — the `EscalationResolutionMode` applied to close it, or
+ *                     NULL while still `open`.
+ *   resolution_note — the receiver's free-text rationale on resolution, or NULL.
+ *   resolved_by     — who resolved it, or NULL while still `open`.
+ *   walked_up_from  — the `scrum_escalations.id` this row was walked up FROM, or
+ *                     NULL for a root escalation (the first rung). The back-pointer
+ *                     that reconstructs the chain.
+ *   attributes      — structured `EscalationAttributes` markers, or NULL. Set
+ *                     ONLY on a row the staleness floor auto-bubbled, carrying
+ *                     `auto_bubbled: true` and `linked_escalation` (the forward
+ *                     pointer to the fresh row one rung up).
+ *   created_at      — when this row was raised/appended (ISO-8601).
+ *   resolved_at     — when this row left `open` (ISO-8601), or NULL while open.
+ */
+export interface EscalationRow {
+  id: number;
+  task_id: string;
+  escalation_type: EscalationType;
+  layer: EscalationLayer;
+  state: EscalationState;
+  summary: string;
+  raised_by: string | null;
+  resolution_mode: EscalationResolutionMode | null;
+  resolution_note: string | null;
+  resolved_by: string | null;
+  walked_up_from: number | null;
+  attributes: EscalationAttributes | null;
+  created_at: string;
+  resolved_at: string | null;
+}
+
+/**
+ * Input to `raiseEscalation`. `escalationType` must be a member of the closed
+ * `EscalationType` set; `layer` defaults to `implementer` (the bottom rung —
+ * where a worker raises). Both are guarded at the store boundary. `taskId` is a
+ * soft reference (existence not checked). `createdAt` defaults to now().
+ */
+export interface RaiseEscalationInput {
+  taskId: string;
+  escalationType: EscalationType;
+  summary: string;
+  /** The rung this escalation is raised at; defaults to `implementer`. */
+  layer?: EscalationLayer;
+  raisedBy?: string | null;
+  /** ISO-8601 timestamp; defaults to now(). */
+  createdAt?: string;
+}
+
+/**
+ * Input to `resolveEscalation`. `id` names the `open` escalation row to act on;
+ * `mode` is the `EscalationResolutionMode` the receiver applies (guarded at the
+ * store boundary). `note`/`resolvedBy` are recorded for provenance.
+ * `resolvedAt` defaults to now().
+ */
+export interface ResolveEscalationInput {
+  id: number;
+  mode: EscalationResolutionMode;
+  note?: string | null;
+  resolvedBy?: string | null;
+  /** ISO-8601 timestamp; defaults to now(). */
+  resolvedAt?: string;
+}
+
+/**
+ * The result of `resolveEscalation`. `row` is the (now-closed) escalation row
+ * the resolution acted on. `walkedUpTo` is the freshly-appended `open` row at
+ * the next layer when `mode` was `re_escalate` (otherwise null).
+ * `reDecomposeTriggered` is true ONLY for `re_decompose` — the signal the driver
+ * reads to force re-decomposition of the owning task. Exactly one of
+ * (`walkedUpTo` set) / (`reDecomposeTriggered` true) / (neither, for `resolve`)
+ * holds.
+ */
+export interface ResolveEscalationResult {
+  row: EscalationRow;
+  walkedUpTo: EscalationRow | null;
+  reDecomposeTriggered: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -1167,6 +1402,223 @@ export interface ManifestAsk {
   from_team: string;
   to_team: string;
   ask_type: string;
+}
+
+/**
+ * The lifecycle state of a cross-team ask. A freshly-filed ask is always
+ * `'filed'` (v23); the triage/respond step (v25) discharges it to exactly one of
+ * three terminal verdicts. Later protocol steps extend this closed set via a
+ * schema-version bump, never a silent value. Matches `scrum_asks.state`; the
+ * column has no CHECK constraint, so this union documents the canonical closed
+ * set without pinning the schema. Enforced at the store boundary in `fileAsk`
+ * (the `filed` seed) and `respondAsk` (the verdict transition).
+ *
+ *   filed     — the ask has been recorded against the target team; no response
+ *               yet. The only state from which `respondAsk` may transition.
+ *   accepted  — the accepting team agreed: it created one child task under its
+ *               tree (`mapped_artifact`) and the from-team's blocking artifact
+ *               now `blocked_by` that child.
+ *   rejected  — the team declined the ask; `rejected_reason` records why. No
+ *               tree or dependency mutation.
+ *   countered — the team proposed a different artifact/scope/interface;
+ *               `counter_proposal` records it. No tree or dependency mutation.
+ */
+export type AskState = 'filed' | 'accepted' | 'rejected' | 'countered';
+
+/** Runtime-checkable list of the closed `AskState` set, in canonical order. */
+export const ASK_STATES: AskState[] = ['filed', 'accepted', 'rejected', 'countered'];
+
+/**
+ * A triage verdict the driver produces for a filed ask, passed to `respondAsk`.
+ * The driver (a skill, a native Agent-tool subagent, or an `AskUserQuestion`
+ * gate) makes the judgment; the CLI applies the verdict MECHANICALLY with no
+ * model invocation. A closed set, one per terminal `AskState`:
+ *
+ *   accept  — create one child task under the to-team's tree, set the ask's
+ *             `mapped_artifact` to it, and add a `blocked_by` dep from the
+ *             from-team's blocking artifact onto the child. State → `accepted`.
+ *   reject  — record `rejected_reason`; mutate nothing in the tree or deps.
+ *             State → `rejected`.
+ *   counter — record `counter_proposal`; mutate nothing in the tree or deps.
+ *             State → `countered`.
+ */
+export type AskVerdict = 'accept' | 'reject' | 'counter';
+
+/** Runtime-checkable list of the closed `AskVerdict` set, in canonical order. */
+export const ASK_VERDICTS: AskVerdict[] = ['accept', 'reject', 'counter'];
+
+/** The terminal `AskState` each verdict transitions a filed ask into. */
+export const ASK_VERDICT_STATE: Record<AskVerdict, AskState> = {
+  accept: 'accepted',
+  reject: 'rejected',
+  counter: 'countered',
+};
+
+/**
+ * One row of the `scrum_asks` table (v23) — a single cross-team ask a worker
+ * files against a sibling team. An ask is the request raised when work is blocked
+ * on another team's published interface: `from_team` needs `to_team` to handle
+ * `ask_type`, and `blocking_artifact` stays blocked until it does.
+ *
+ *   id                — AUTOINCREMENT surrogate.
+ *   from_team         — the requesting team's slug, a `scrum_teams.slug`.
+ *   to_team           — the target team's slug, a `scrum_teams.slug`. At filing
+ *                       time `ask_type` MUST be one of this team's ACTIVE
+ *                       `scrum_team_accepts` rows — a team can only be asked for
+ *                       what it has published it accepts. Enforced at the store
+ *                       boundary in `fileAsk`.
+ *   ask_type          — the kebab-case interface type requested.
+ *   blocking_artifact — the `scrum_tasks.id` of the artifact blocked on the ask;
+ *                       the FK guarantees the cited artifact exists.
+ *   state             — the ask lifecycle state (see `AskState`); a freshly-filed
+ *                       ask is `'filed'`, and `respondAsk` discharges it to
+ *                       `accepted` | `rejected` | `countered`.
+ *   mapped_artifact   — the `scrum_tasks.id` of the child task created to satisfy
+ *                       an ACCEPTED ask (v25); NULL while `filed` and on
+ *                       reject/counter. A soft reference.
+ *   rejected_reason   — the responder's rationale on a REJECTED ask (v25); NULL
+ *                       otherwise.
+ *   counter_proposal  — the responder's counter on a COUNTERED ask (v25); NULL
+ *                       otherwise.
+ *   created_at        — when the ask was filed (ISO-8601).
+ */
+export interface AskRow {
+  id: number;
+  from_team: string;
+  to_team: string;
+  ask_type: string;
+  blocking_artifact: string;
+  state: AskState;
+  mapped_artifact: string | null;
+  rejected_reason: string | null;
+  counter_proposal: string | null;
+  created_at: string;
+}
+
+/**
+ * Input to `fileAsk` (v23). `fromTeam` and `toTeam` must both be registered
+ * teams (guarded at the store boundary). `askType` MUST be one of `toTeam`'s
+ * ACTIVE accepted ask types, and `blockingArtifact` MUST be an existing task id
+ * — both are validated at the boundary, with each failure throwing a domain
+ * error. `createdAt` defaults to now().
+ */
+export interface FileAskInput {
+  fromTeam: string;
+  toTeam: string;
+  askType: string;
+  blockingArtifact: string;
+  /** ISO-8601 timestamp; defaults to now(). */
+  createdAt?: string;
+}
+
+/**
+ * Input to `respondAsk` (v25) — the MECHANICAL application of a triage verdict
+ * the driver already produced. The store performs no judgment: it applies
+ * `verdict` deterministically and spawns no model. `id` names a `filed` ask
+ * (a non-`filed` ask is rejected — an ask is responded to exactly once).
+ *
+ *   id      — the `scrum_asks.id` to respond to; must be in state `filed`.
+ *   verdict — the closed `AskVerdict` (accept | reject | counter), guarded at
+ *             the boundary against the closed set.
+ *   comment — verdict-specific free text: the `rejected_reason` on `reject`, the
+ *             `counter_proposal` on `counter`. Ignored on `accept`. Optional.
+ *   childTitle  — title for the child task created on `accept`; defaults to a
+ *                 derived title naming the ask type. Ignored on reject/counter.
+ *   childLayer  — containment tier of the `accept` child: `story` (the default)
+ *                 or `epic`. Ignored on reject/counter.
+ *   childId     — explicit id for the `accept` child; defaults to a generated id.
+ *                 Ignored on reject/counter.
+ *   respondedBy — who produced the verdict (recorded on the `ask_responded`
+ *                 event for provenance). Optional.
+ */
+export interface RespondAskInput {
+  id: number;
+  verdict: AskVerdict;
+  comment?: string | null;
+  childTitle?: string;
+  childLayer?: Extract<TaskLayer, 'epic' | 'story'>;
+  childId?: string;
+  respondedBy?: string | null;
+  /** ISO-8601 timestamp; defaults to now(). */
+  respondedAt?: string;
+}
+
+/**
+ * The mechanical phase a filed ask is in when polled by `awaitAsk` — the closed
+ * vocabulary the team-as-workflow-kind sugar branches on. A NON-terminal phase
+ * (`pending`, `waiting`) means the calling script should poll again later; a
+ * TERMINAL phase (`ready`, `rejected`, `countered`) means the step resolves now.
+ * Derived purely from the ask's `state` plus, on `accepted`, its
+ * `mapped_artifact` task's `status`; computing it spawns no model. New phases
+ * extend this closed set via a schema-version bump, never a silent value.
+ *
+ *   pending   — the ask is still `filed`; the responder has not triaged it yet.
+ *               NON-terminal: poll again.
+ *   waiting   — the ask is `accepted` but its `mapped_artifact` child task has
+ *               not reached `done`. NON-terminal: poll again.
+ *   ready     — the ask is `accepted` AND its `mapped_artifact` child is `done`;
+ *               the to-team's exposed outputs are available. TERMINAL (success).
+ *   rejected  — the ask is `rejected`; `reason` carries the responder's
+ *               `rejected_reason`. TERMINAL (the step surfaces the rejection,
+ *               never hangs).
+ *   countered — the ask is `countered`; `reason` carries the responder's
+ *               `counter_proposal`. TERMINAL (the step surfaces the counter,
+ *               never hangs).
+ */
+export type AskAwaitPhase = 'pending' | 'waiting' | 'ready' | 'rejected' | 'countered';
+
+/** Runtime-checkable list of the closed `AskAwaitPhase` set, in canonical order. */
+export const ASK_AWAIT_PHASES: AskAwaitPhase[] = [
+  'pending',
+  'waiting',
+  'ready',
+  'rejected',
+  'countered',
+];
+
+/** The `AskAwaitPhase` values from which the team-as-workflow-kind step resolves. */
+export const ASK_AWAIT_TERMINAL_PHASES: AskAwaitPhase[] = ['ready', 'rejected', 'countered'];
+
+/**
+ * The structured status report `awaitAsk` returns for one ask — the MECHANICAL
+ * primitive the `kind:<team-slug>` workflow sugar composes. It reports whether a
+ * filed ask has been responded to and, on accept, whether its mapped child has
+ * reached `done`; on `ready` it carries the to-team's exposed outputs. A pure
+ * read: computing the report spawns no model and never mutates. The driver
+ * branches on `phase` — re-poll on a NON-terminal phase, resolve the step on a
+ * TERMINAL one (return `outputs` on `ready`, surface `reason` on
+ * `rejected`/`countered` so the calling script never hangs).
+ *
+ *   ask_id          — the polled `scrum_asks.id`.
+ *   phase           — the closed `AskAwaitPhase` (see its doc).
+ *   terminal        — true on `ready` | `rejected` | `countered`; false on
+ *                     `pending` | `waiting`. The single boolean the calling loop
+ *                     checks to stop polling.
+ *   state           — the ask's current `AskState`, echoed for context.
+ *   mapped_artifact — the accepted ask's child task id, or NULL when the ask is
+ *                     not accepted.
+ *   artifact_status — the `mapped_artifact` task's `TaskStatus` on `waiting` /
+ *                     `ready`, else NULL. Distinguishes "child not done yet"
+ *                     (`waiting`) from "child done" (`ready`).
+ *   to_team         — the responding team's slug (the `exposes` owner).
+ *   outputs         — the to-team's ACTIVE exposed outputs, present and populated
+ *                     ONLY on `ready` (empty array on every other phase). This is
+ *                     the value the `kind:<team-slug>` step returns.
+ *   reason          — the responder's rationale on a TERMINAL non-success phase:
+ *                     `rejected_reason` on `rejected`, `counter_proposal` on
+ *                     `countered`. NULL otherwise. The surfaced terminal result
+ *                     that prevents a silent hang.
+ */
+export interface AskAwaitReport {
+  ask_id: number;
+  phase: AskAwaitPhase;
+  terminal: boolean;
+  state: AskState;
+  mapped_artifact: string | null;
+  artifact_status: TaskStatus | null;
+  to_team: string;
+  outputs: TeamExposeRow[];
+  reason: string | null;
 }
 
 /**

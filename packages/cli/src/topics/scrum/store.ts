@@ -33,14 +33,25 @@ import type {
   AddAnnotationInput,
   AnnotationRow,
   AnnotationTargetKind,
+  AskAwaitPhase,
+  AskAwaitReport,
+  AskRow,
+  AskState,
+  AskVerdict,
   Contributor,
   ContributorStatus,
   DecisionRow,
   DecisionWriteStatus,
   DepKind,
+  EscalationAttributes,
+  EscalationLayer,
   EscalationPayload,
+  EscalationResolutionMode,
+  EscalationRow,
+  EscalationState,
   EscalationType,
   EventKind,
+  FileAskInput,
   GateVerdict,
   LoreRow,
   Manifest,
@@ -50,8 +61,12 @@ import type {
   OperatorHistoryRow,
   PromoteLoreToCodexInput,
   Provenance,
+  RaiseEscalationInput,
   RecordLoreInput,
   RecordLoreResult,
+  ResolveEscalationInput,
+  ResolveEscalationResult,
+  RespondAskInput,
   RotateTeamMemberInput,
   RotateTeamMemberResult,
   ScrumContextBundle,
@@ -86,6 +101,11 @@ import type { AddTeamExposeInput, CreateTeamInput } from './types';
 import {
   ACCEPTANCE_SCOPES,
   ANNOTATION_TARGET_KINDS,
+  ASK_AWAIT_TERMINAL_PHASES,
+  ASK_VERDICTS,
+  ASK_VERDICT_STATE,
+  ESCALATION_CHAIN,
+  ESCALATION_RESOLUTION_MODES,
   ESCALATION_TYPES,
   GATED_DECISION_KINDS,
   GATE_VERDICTS,
@@ -94,6 +114,7 @@ import {
   TEAM_TYPES,
   TECH_LEAD_REVIEW_KIND,
   VERIFICATION_VERDICTS,
+  nextEscalationLayer,
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -315,6 +336,10 @@ const TEAM_ACCEPT_COLUMNS = 'id, team_slug, ask_type, status, superseded_by, rea
 const TEAM_EXPOSE_COLUMNS =
   'id, team_slug, name, schema_ref, status, superseded_by, reason, created_at';
 
+/** Canonical `scrum_asks` SELECT column list (v23 + v25); maps 1:1 to `AskRow`. */
+const ASK_COLUMNS =
+  'id, from_team, to_team, ask_type, blocking_artifact, state, mapped_artifact, rejected_reason, counter_proposal, created_at';
+
 /** Canonical `scrum_lores` SELECT column list (v19); maps 1:1 to `LoreRow`. */
 const LORE_COLUMNS = 'id, team_slug, body, author_contributor_id, created_at';
 
@@ -329,6 +354,14 @@ const PROMOTION_DEFAULT_KIND = 'pattern';
 
 /** Canonical `scrum_annotations` SELECT column list (v20); maps 1:1 to `AnnotationRow`. */
 const ANNOTATION_COLUMNS = 'id, target_kind, target_ref, body, author, created_at';
+
+/**
+ * Canonical `scrum_escalations` SELECT column list (v24/v25). Maps to
+ * `EscalationRowRaw` — the `attributes` column arrives as a JSON string|null and
+ * is decoded into `EscalationRow.attributes` by `decodeEscalation`.
+ */
+const ESCALATION_COLUMNS =
+  'id, task_id, escalation_type, layer, state, summary, raised_by, resolution_mode, resolution_note, resolved_by, walked_up_from, attributes, created_at, resolved_at';
 
 /** Canonical `scrum_decisions` SELECT column list (v2/v4/v8/v21/v22); maps 1:1 to `DecisionRow`. */
 const DECISION_COLUMNS =
@@ -2957,6 +2990,281 @@ export class ScrumStore {
   }
 
   // ==========================================================================
+  // Cross-team ask protocol (v23)
+  // ==========================================================================
+
+  /**
+   * File a cross-team ask — record one `'filed'` row in `scrum_asks`. The ask is
+   * the request a worker raises when its work is blocked on a sibling team's
+   * published interface: `fromTeam` needs `toTeam` to handle `askType`, and
+   * `blockingArtifact` stays blocked until it does.
+   *
+   * Three validations run at this boundary, each throwing a domain error rather
+   * than landing a malformed row:
+   *   1. `toTeam` must resolve — an unknown target team is rejected.
+   *   2. `askType` must be one of `toTeam`'s ACTIVE accepted ask types — a team
+   *      can only be asked for what it has published it accepts.
+   *   3. `blockingArtifact` must be an existing task id.
+   * `fromTeam` is validated too (it is an FK target), but the spec-bearing checks
+   * are the three above. The insert and the `ask_filed` audit event ride one
+   * transaction, so a failure leaves the store untouched. Returns the new row.
+   */
+  fileAsk(input: FileAskInput): AskRow {
+    if (this.getTeam(input.fromTeam) === null) {
+      throw new Error(`fileAsk: unknown from_team '${input.fromTeam}'`);
+    }
+    if (this.getTeam(input.toTeam) === null) {
+      throw new Error(`fileAsk: unknown to_team '${input.toTeam}'`);
+    }
+    const accepted = this.listTeamAccepts(input.toTeam).map((a) => a.ask_type);
+    if (!accepted.includes(input.askType)) {
+      throw new Error(
+        `fileAsk: ask_type '${input.askType}' is not accepted by to_team '${input.toTeam}'; accepted: ${accepted.length > 0 ? accepted.join(', ') : '(none)'}`,
+      );
+    }
+    if (this.getTask(input.blockingArtifact) === null) {
+      throw new Error(`fileAsk: unknown blocking_artifact '${input.blockingArtifact}'`);
+    }
+
+    const createdAt = input.createdAt ?? isoNow();
+    const tx = this.db.transaction(() => {
+      const result = this.prep(
+        'INSERT INTO scrum_asks (from_team, to_team, ask_type, blocking_artifact, state, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ).run(
+        input.fromTeam,
+        input.toTeam,
+        input.askType,
+        input.blockingArtifact,
+        'filed' satisfies AskState,
+        createdAt,
+      );
+      const id = Number(result.lastInsertRowid);
+      // Audit the filing against the blocking artifact's event timeline so the
+      // task that triggered the ask carries the cross-team request in its history.
+      this.appendEvent({
+        taskId: input.blockingArtifact,
+        kind: 'ask_filed',
+        ts: createdAt,
+        payload: {
+          ask_id: id,
+          from_team: input.fromTeam,
+          to_team: input.toTeam,
+          ask_type: input.askType,
+        },
+      });
+      return id;
+    });
+    const askId = tx();
+    return this.prep(`SELECT ${ASK_COLUMNS} FROM scrum_asks WHERE id = ?`).get(askId) as AskRow;
+  }
+
+  /** Fetch one ask by id, or null if missing. */
+  getAsk(id: number): AskRow | null {
+    const row = this.prep(`SELECT ${ASK_COLUMNS} FROM scrum_asks WHERE id = ?`).get(
+      id,
+    ) as AskRow | null;
+    return row ?? null;
+  }
+
+  /**
+   * Apply a triage verdict to a `filed` ask — the MECHANICAL response step. The
+   * driver (a skill, a native Agent-tool subagent, or an interactive gate) makes
+   * the accept/reject/counter judgment elsewhere; THIS method spawns no model
+   * and invokes no Agent — it applies `input.verdict` deterministically. Each
+   * verdict and its effect:
+   *
+   *   accept  — create exactly ONE child task under the to-team's tree (a
+   *             `story` by default, or `epic`), tagged with the to-team slug so
+   *             a reader can find which team owns it (teams carry no root-task
+   *             anchor, so the tag IS the team linkage). Set the ask's
+   *             `mapped_artifact` to the child id, and add a `blocked_by` dep
+   *             from the from-team's `blocking_artifact` onto the child — the
+   *             blocking artifact stays blocked until the new child completes.
+   *             State → `accepted`.
+   *   reject  — record `rejected_reason` (the `comment`); mutate NOTHING in the
+   *             tree or deps. State → `rejected`.
+   *   counter — record `counter_proposal` (the `comment`); mutate NOTHING in the
+   *             tree or deps. State → `countered`.
+   *
+   * Every effect rides ONE transaction (child create + dep + ask update + the
+   * `ask_responded` event), so a failure leaves the store untouched. The
+   * `ask_responded` event lands on the blocking artifact's timeline, mirroring
+   * how `fileAsk` audits `ask_filed` there. Rejects: an unknown id, an
+   * off-vocabulary verdict, and a non-`filed` ask (an ask is responded to
+   * exactly once). Returns the updated row.
+   */
+  respondAsk(input: RespondAskInput): AskRow {
+    if (!(ASK_VERDICTS as string[]).includes(input.verdict)) {
+      throw new Error(
+        `respondAsk: invalid verdict '${input.verdict}'; expected one of: ${ASK_VERDICTS.join(', ')}`,
+      );
+    }
+    const existing = this.getAsk(input.id);
+    if (existing === null) {
+      throw new Error(`respondAsk: unknown ask id '${input.id}'`);
+    }
+    if (existing.state !== 'filed') {
+      throw new Error(
+        `respondAsk: ask ${input.id} is '${existing.state}', not 'filed'; only a filed ask can be responded to`,
+      );
+    }
+
+    const verdict: AskVerdict = input.verdict;
+    const nextState: AskState = ASK_VERDICT_STATE[verdict];
+    const respondedAt = input.respondedAt ?? isoNow();
+    const comment = input.comment ?? null;
+    const childLayer = input.childLayer ?? 'story';
+
+    const apply = this.db.transaction((): AskRow => {
+      let mappedArtifact: string | null = null;
+      let rejectedReason: string | null = null;
+      let counterProposal: string | null = null;
+
+      if (verdict === 'accept') {
+        // Create exactly one child under the to-team's tree. Teams carry no
+        // root-task anchor, so the child is a standalone layered task tagged
+        // with the to-team slug (the team linkage the existing model allows).
+        const childId =
+          input.childId !== undefined && input.childId.length > 0
+            ? input.childId
+            : `ask-${existing.id}-${childLayer}-${randomUUID().slice(0, 8)}`;
+        const childTitle =
+          input.childTitle !== undefined && input.childTitle.length > 0
+            ? input.childTitle
+            : `${existing.to_team}: ${existing.ask_type} (ask ${existing.id})`;
+        this.createTask({
+          id: childId,
+          title: childTitle,
+          layer: childLayer,
+          tags: [existing.to_team],
+          createdByAgent: input.respondedBy ?? null,
+          createdAt: respondedAt,
+        });
+        // The from-team's blocking artifact is blocked_by the new child: it
+        // stays blocked until the child completes.
+        this.addDep(existing.blocking_artifact, childId, 'blocked_by');
+        mappedArtifact = childId;
+      } else if (verdict === 'reject') {
+        rejectedReason = comment;
+      } else {
+        counterProposal = comment;
+      }
+
+      this.prep(
+        'UPDATE scrum_asks SET state = ?, mapped_artifact = ?, rejected_reason = ?, counter_proposal = ? WHERE id = ?',
+      ).run(nextState, mappedArtifact, rejectedReason, counterProposal, existing.id);
+
+      // Audit the response against the blocking artifact's event timeline, the
+      // same timeline `fileAsk` recorded `ask_filed` on.
+      this.appendEvent({
+        taskId: existing.blocking_artifact,
+        kind: 'ask_responded',
+        ts: respondedAt,
+        agent: input.respondedBy ?? null,
+        payload: {
+          ask_id: existing.id,
+          verdict,
+          state: nextState,
+          mapped_artifact: mappedArtifact,
+          rejected_reason: rejectedReason,
+          counter_proposal: counterProposal,
+        },
+      });
+
+      return this.prep(`SELECT ${ASK_COLUMNS} FROM scrum_asks WHERE id = ?`).get(
+        existing.id,
+      ) as AskRow;
+    });
+    return apply();
+  }
+
+  /**
+   * Poll a filed ask and report its mechanical phase — the read primitive the
+   * team-as-workflow-kind sugar composes. A `kind:<team-slug>` workflow step
+   * files an ask, the driver triages and responds, and the step then polls THIS
+   * method until it reports a TERMINAL phase. The dividing line is the engine
+   * boundary: filing and responding are mutations the driver drives; computing
+   * "is it answered yet, and if accepted is the child done, and what does the
+   * to-team expose" is pure derivation — so it spawns no model and never mutates.
+   *
+   * The phase derives from the ask's `state` plus, when accepted, the
+   * `mapped_artifact` child task's `status`:
+   *   - `filed`     → `pending`   (NON-terminal — poll again)
+   *   - `accepted`  → `waiting`   when the child is not yet `done` (NON-terminal)
+   *   - `accepted`  → `ready`     when the child IS `done`; `outputs` carries the
+   *                               to-team's ACTIVE exposes (TERMINAL success)
+   *   - `rejected`  → `rejected`  with `reason = rejected_reason` (TERMINAL)
+   *   - `countered` → `countered` with `reason = counter_proposal` (TERMINAL)
+   *
+   * `outputs` is populated ONLY on `ready` — the to-team's exposed outputs are
+   * the value the step returns. Reject/counter set a non-null `reason` so the
+   * calling script surfaces a terminal result instead of waiting forever.
+   * Rejects an unknown ask id (the one error path); every existing ask yields a
+   * report.
+   */
+  awaitAsk(id: number): AskAwaitReport {
+    const ask = this.getAsk(id);
+    if (ask === null) {
+      throw new Error(`awaitAsk: unknown ask id '${id}'`);
+    }
+
+    const base = {
+      ask_id: ask.id,
+      state: ask.state,
+      mapped_artifact: ask.mapped_artifact,
+      to_team: ask.to_team,
+    };
+
+    if (ask.state === 'filed') {
+      return this.buildAwaitReport(base, 'pending', { artifactStatus: null });
+    }
+    if (ask.state === 'rejected') {
+      return this.buildAwaitReport(base, 'rejected', { reason: ask.rejected_reason });
+    }
+    if (ask.state === 'countered') {
+      return this.buildAwaitReport(base, 'countered', { reason: ask.counter_proposal });
+    }
+
+    // state === 'accepted': the phase hinges on the mapped child's status. A
+    // missing child (soft-deleted out from under the ask) reads as not-done.
+    const child = ask.mapped_artifact !== null ? this.getTask(ask.mapped_artifact) : null;
+    const artifactStatus: TaskStatus | null = child?.status ?? null;
+    if (artifactStatus !== 'done') {
+      return this.buildAwaitReport(base, 'waiting', { artifactStatus });
+    }
+    // The child is done — expose the to-team's ACTIVE published outputs.
+    return this.buildAwaitReport(base, 'ready', {
+      artifactStatus,
+      outputs: this.listTeamExposes(ask.to_team),
+    });
+  }
+
+  /**
+   * Assemble an `AskAwaitReport` from a phase plus the variable parts. Centralizes
+   * the `terminal` derivation (a phase in `ASK_AWAIT_TERMINAL_PHASES`) and the
+   * defaulting of `artifact_status` / `outputs` / `reason`, so `awaitAsk`'s branch
+   * arms stay one line each.
+   */
+  private buildAwaitReport(
+    base: Pick<AskAwaitReport, 'ask_id' | 'state' | 'mapped_artifact' | 'to_team'>,
+    phase: AskAwaitPhase,
+    parts: {
+      artifactStatus?: TaskStatus | null;
+      outputs?: TeamExposeRow[];
+      reason?: string | null;
+    },
+  ): AskAwaitReport {
+    return {
+      ...base,
+      phase,
+      terminal: ASK_AWAIT_TERMINAL_PHASES.includes(phase),
+      artifact_status: parts.artifactStatus ?? null,
+      outputs: parts.outputs ?? [],
+      reason: parts.reason ?? null,
+    };
+  }
+
+  // ==========================================================================
   // Manifest — cross-team contracts read surface
   // ==========================================================================
 
@@ -3262,6 +3570,329 @@ export class ScrumStore {
   }
 
   // ==========================================================================
+  // Escalation protocol (v23) — typed walk-up chain + resolution modes
+  // ==========================================================================
+
+  /**
+   * Raise one typed escalation at a rung of the walk-up chain. The bottom-rung
+   * entry point: a worker raises a `blocked` / `ambiguous` / `conflict` /
+   * `missing_context` escalation, which lands `open` at `layer` (default
+   * `implementer`) awaiting that layer's receiver.
+   *
+   * `escalationType` MUST be a member of the closed `EscalationType` set and
+   * `layer` a member of the closed `EscalationChain` — both throw WITHOUT
+   * writing on an off-vocabulary value (the boundary guard matching
+   * `addAnnotation`/`createTeam`). `taskId` is a SOFT reference: the store does
+   * NOT verify the task exists (it carries no FK, matching the annotation's
+   * `target_ref`). A root escalation carries `walked_up_from = NULL`; the
+   * append-on-walk-up path (`resolveEscalation` / `autoBubbleEscalation`) is the
+   * only writer that sets it.
+   */
+  raiseEscalation(input: RaiseEscalationInput): EscalationRow {
+    if (!(ESCALATION_TYPES as string[]).includes(input.escalationType)) {
+      throw new Error(
+        `raiseEscalation: invalid escalation_type '${input.escalationType}'; expected one of: ${ESCALATION_TYPES.join(', ')}`,
+      );
+    }
+    const layer = input.layer ?? 'implementer';
+    if (!(ESCALATION_CHAIN as string[]).includes(layer)) {
+      throw new Error(
+        `raiseEscalation: invalid layer '${layer}'; expected one of: ${ESCALATION_CHAIN.join(', ')}`,
+      );
+    }
+    return this.insertEscalation({
+      taskId: input.taskId,
+      escalationType: input.escalationType,
+      layer,
+      summary: input.summary,
+      raisedBy: input.raisedBy ?? null,
+      walkedUpFrom: null,
+      createdAt: input.createdAt ?? isoNow(),
+    });
+  }
+
+  /** Fetch one escalation by id, or null when no such row exists. */
+  getEscalation(id: number): EscalationRow | null {
+    const row = this.prep(`SELECT ${ESCALATION_COLUMNS} FROM scrum_escalations WHERE id = ?`).get(
+      id,
+    ) as EscalationRowRaw | null;
+    return row ? decodeEscalation(row) : null;
+  }
+
+  /**
+   * A task's escalations, oldest-first (raise order). The read surface a driver
+   * consults to see the full escalation history — every rung, open and closed —
+   * for a task. Tolerates a task with no escalations: returns an empty array.
+   */
+  listEscalationsForTask(taskId: string): EscalationRow[] {
+    return (
+      this.prep(
+        `SELECT ${ESCALATION_COLUMNS} FROM scrum_escalations WHERE task_id = ? ORDER BY id ASC`,
+      ).all(taskId) as EscalationRowRaw[]
+    ).map(decodeEscalation);
+  }
+
+  /**
+   * Every currently-`open` escalation across all tasks, oldest-first — the
+   * driver's worklist of escalations awaiting a receiver's resolution.
+   */
+  listOpenEscalationRows(): EscalationRow[] {
+    return (
+      this.prep(
+        `SELECT ${ESCALATION_COLUMNS} FROM scrum_escalations WHERE state = 'open' ORDER BY id ASC`,
+      ).all() as EscalationRowRaw[]
+    ).map(decodeEscalation);
+  }
+
+  /**
+   * Reconstruct the full walk-up chain a single escalation climbed, bottom rung
+   * first. Follows `walked_up_from` from any row in the chain back to the root
+   * (`null`), then returns the rows root-first. The list reads as the escalation's
+   * journey up the ladder: each entry is one rung, with its closing state and
+   * resolution. A visited-set guards against an accidental self-link cycle.
+   */
+  getEscalationChain(id: number): EscalationRow[] {
+    // Walk DOWN to the root via walked_up_from, collecting the rung at each hop.
+    const chainDown: EscalationRow[] = [];
+    const visited = new Set<number>();
+    let cursor: number | null = id;
+    while (cursor !== null && !visited.has(cursor)) {
+      visited.add(cursor);
+      const row = this.getEscalation(cursor);
+      if (row === null) break;
+      chainDown.push(row);
+      cursor = row.walked_up_from;
+    }
+    // chainDown is top-rung-first (we started at `id` and walked toward the root);
+    // reverse so the caller reads it root-first (bottom rung → top).
+    return chainDown.reverse();
+  }
+
+  /**
+   * Apply a receiver's resolution to an `open` escalation. The receiver at the
+   * escalation's current layer chooses exactly one `EscalationResolutionMode`,
+   * and this method transitions the row accordingly — the per-receiver half of
+   * the protocol. Runs in ONE transaction so a `re_escalate` never leaves the
+   * closed row without its walked-up successor (or vice versa).
+   *
+   *   resolve      — the receiver answered it. The row → `resolved`. No walk-up.
+   *   re_decompose — the escalation needs the work re-decomposed. The row →
+   *                  `resolved` (it is discharged at THIS layer) and the result's
+   *                  `reDecomposeTriggered` is set — the signal the driver reads
+   *                  to force re-decomposition. No walk-up.
+   *   re_escalate  — the receiver cannot resolve at this layer. The row →
+   *                  `re_escalated` AND a fresh `open` row is appended at the next
+   *                  rung (`nextEscalationLayer`) carrying `walked_up_from = <this
+   *                  row id>`. Advances EXACTLY one rung. REJECTED when the current
+   *                  layer is already `human` (the top — nowhere higher to walk).
+   *
+   * Throws WITHOUT writing on: an unknown id, a row that is not `open` (already
+   * terminal — every transition is one-shot), an off-vocabulary `mode`, or a
+   * `re_escalate` at the top of the chain.
+   */
+  resolveEscalation(input: ResolveEscalationInput): ResolveEscalationResult {
+    if (!(ESCALATION_RESOLUTION_MODES as string[]).includes(input.mode)) {
+      throw new Error(
+        `resolveEscalation: invalid mode '${input.mode}'; expected one of: ${ESCALATION_RESOLUTION_MODES.join(', ')}`,
+      );
+    }
+    const existing = this.getEscalation(input.id);
+    if (existing === null) {
+      throw new Error(`resolveEscalation: unknown escalation id '${input.id}'`);
+    }
+    if (existing.state !== 'open') {
+      throw new Error(
+        `resolveEscalation: escalation ${input.id} is '${existing.state}', not 'open'; only an open escalation can be resolved`,
+      );
+    }
+
+    const mode = input.mode as EscalationResolutionMode;
+    const resolvedAt = input.resolvedAt ?? isoNow();
+    const resolvedBy = input.resolvedBy ?? null;
+    const note = input.note ?? null;
+
+    // A re_escalate at the top rung has nowhere higher to walk — reject BEFORE
+    // mutating, so the row stays open.
+    const nextLayer = nextEscalationLayer(existing.layer);
+    if (mode === 're_escalate' && nextLayer === null) {
+      throw new Error(
+        `resolveEscalation: escalation ${input.id} is already at the top of the chain ('${existing.layer}'); cannot re_escalate past 'human'`,
+      );
+    }
+
+    const apply = this.db.transaction((): ResolveEscalationResult => {
+      // `resolve` and `re_decompose` both DISCHARGE the row → `resolved`; only the
+      // result flag differs. `re_escalate` closes it → `re_escalated`.
+      const closedState: EscalationState = mode === 're_escalate' ? 're_escalated' : 'resolved';
+      this.closeEscalationRow(existing.id, closedState, mode, note, resolvedBy, resolvedAt);
+
+      let walkedUpTo: EscalationRow | null = null;
+      if (mode === 're_escalate' && nextLayer !== null) {
+        walkedUpTo = this.insertEscalation({
+          taskId: existing.task_id,
+          escalationType: existing.escalation_type,
+          layer: nextLayer,
+          summary: existing.summary,
+          raisedBy: resolvedBy,
+          walkedUpFrom: existing.id,
+          createdAt: resolvedAt,
+        });
+      }
+
+      const row = this.requireEscalation(existing.id, 'resolveEscalation');
+      return { row, walkedUpTo, reDecomposeTriggered: mode === 're_decompose' };
+    });
+    return apply();
+  }
+
+  /**
+   * Bubble an aged `open` escalation one rung up by the staleness floor — the
+   * engine's escalation-of-last-resort when no receiver acted. Identical
+   * append-on-walk-up mechanics to a `re_escalate`, but the closing state is
+   * `auto_bubbled` (the row was advanced by the clock, not by a receiver) and no
+   * `resolution_mode` is recorded. The closed row is stamped with
+   * `attributes = { auto_bubbled: true, linked_escalation: <new id> }` — the
+   * marker plus a forward pointer to the fresh row, the inverse of that row's
+   * `walked_up_from` back-pointer. REJECTED at the top of the chain (nowhere
+   * higher) and on a non-`open` row. Returns the freshly-appended `open` row at
+   * the next rung.
+   *
+   * The new row is also surfaced to the `alerts` / `nextReady` ranking via a
+   * `blocker_raised` event on the owning task — the SAME signal a hand-raised
+   * escalation emits — so a clock-driven bubble shows up everywhere a manual
+   * escalation would. The event is appended ONLY when the owning task exists in
+   * the store, preserving the escalation's soft-reference semantics (an
+   * escalation may name a task the store does not track).
+   */
+  autoBubbleEscalation(id: number, bubbledAt?: string): EscalationRow {
+    const existing = this.getEscalation(id);
+    if (existing === null) {
+      throw new Error(`autoBubbleEscalation: unknown escalation id '${id}'`);
+    }
+    if (existing.state !== 'open') {
+      throw new Error(
+        `autoBubbleEscalation: escalation ${id} is '${existing.state}', not 'open'; only an open escalation can be auto-bubbled`,
+      );
+    }
+    const nextLayer = nextEscalationLayer(existing.layer);
+    if (nextLayer === null) {
+      throw new Error(
+        `autoBubbleEscalation: escalation ${id} is already at the top of the chain ('${existing.layer}'); cannot bubble past 'human'`,
+      );
+    }
+    const ts = bubbledAt ?? isoNow();
+    const bubble = this.db.transaction((): EscalationRow => {
+      this.closeEscalationRow(existing.id, 'auto_bubbled', null, null, null, ts);
+      const bubbled = this.insertEscalation({
+        taskId: existing.task_id,
+        escalationType: existing.escalation_type,
+        layer: nextLayer,
+        summary: existing.summary,
+        raisedBy: null,
+        walkedUpFrom: existing.id,
+        createdAt: ts,
+      });
+      // Stamp the closed row with the marker + forward pointer to the new rung.
+      this.setEscalationAttributes(existing.id, {
+        auto_bubbled: true,
+        linked_escalation: bubbled.id,
+      });
+      this.surfaceEscalationEvent(bubbled, ts);
+      return bubbled;
+    });
+    return bubble();
+  }
+
+  /**
+   * Write the JSON `attributes` marker onto one escalation row. NULL clears it.
+   * The single low-level attributes writer — used by the staleness auto-bubble
+   * to stamp `{ auto_bubbled, linked_escalation }` on the closed row.
+   */
+  private setEscalationAttributes(id: number, attributes: EscalationAttributes | null): void {
+    this.prep('UPDATE scrum_escalations SET attributes = ? WHERE id = ?').run(
+      attributes === null ? null : JSON.stringify(attributes),
+      id,
+    );
+  }
+
+  /**
+   * Surface an auto-bubbled escalation into the `alerts` / `nextReady` ranking by
+   * appending a `blocker_raised` event on the owning task — the same event the
+   * hand-raise path emits, so a clock-driven bubble ranks identically. Appended
+   * ONLY when the task exists (escalation `task_id` is a soft reference); a
+   * bubble naming an untracked task still advances the chain, it just carries no
+   * event surface.
+   */
+  private surfaceEscalationEvent(row: EscalationRow, ts: string): void {
+    if (!this.getTask(row.task_id)) return;
+    const payload: EscalationPayload = {
+      escalation_type: row.escalation_type,
+      summary: row.summary,
+    };
+    this.appendEvent({ taskId: row.task_id, kind: 'blocker_raised', payload, ts });
+  }
+
+  /**
+   * Insert one `open` escalation row and return it. The single low-level writer
+   * shared by `raiseEscalation` (root row) and the walk-up paths
+   * (`resolveEscalation` / `autoBubbleEscalation`, which pass `walkedUpFrom`).
+   * Closed-enum guarding is the caller's job — this writes what it is given.
+   */
+  private insertEscalation(args: {
+    taskId: string;
+    escalationType: EscalationType;
+    layer: EscalationLayer;
+    summary: string;
+    raisedBy: string | null;
+    walkedUpFrom: number | null;
+    createdAt: string;
+  }): EscalationRow {
+    const result = this.prep(
+      `INSERT INTO scrum_escalations
+         (task_id, escalation_type, layer, state, summary, raised_by, walked_up_from, created_at)
+       VALUES (?, ?, ?, 'open', ?, ?, ?, ?)`,
+    ).run(
+      args.taskId,
+      args.escalationType,
+      args.layer,
+      args.summary,
+      args.raisedBy,
+      args.walkedUpFrom,
+      args.createdAt,
+    );
+    return this.requireEscalation(Number(result.lastInsertRowid), 'insertEscalation');
+  }
+
+  /**
+   * Flip an escalation row out of `open` into a terminal state, stamping the
+   * resolution provenance. The single low-level closer shared by every walk-up
+   * and resolution path.
+   */
+  private closeEscalationRow(
+    id: number,
+    state: EscalationState,
+    mode: EscalationResolutionMode | null,
+    note: string | null,
+    resolvedBy: string | null,
+    resolvedAt: string,
+  ): void {
+    this.prep(
+      `UPDATE scrum_escalations
+         SET state = ?, resolution_mode = ?, resolution_note = ?, resolved_by = ?, resolved_at = ?
+       WHERE id = ?`,
+    ).run(state, mode, note, resolvedBy, resolvedAt, id);
+  }
+
+  /** Fetch an escalation by id or throw — the post-write read-back guard. */
+  private requireEscalation(id: number, ctx: string): EscalationRow {
+    const row = this.getEscalation(id);
+    if (row === null) {
+      throw new Error(`${ctx}: escalation ${id} vanished after write`);
+    }
+    return row;
+  }
+
+  // ==========================================================================
   // Internals
   // ==========================================================================
 
@@ -3559,6 +4190,40 @@ function safeParseJson<T>(raw: string | null, taskId: string, field: string): T 
     return JSON.parse(raw) as T;
   } catch {
     process.stderr.write(`scrum: task '${taskId}' has corrupt ${field}; treating as null\n`);
+    return null;
+  }
+}
+
+/**
+ * Raw `scrum_escalations` row shape — identical to `EscalationRow` except the
+ * v25 `attributes` column arrives as a JSON string|null. `decodeEscalation` is
+ * the sole bridge to the public `EscalationRow`, parsing `attributes` into
+ * `EscalationAttributes | null`.
+ */
+type EscalationRowRaw = Omit<EscalationRow, 'attributes'> & { attributes: string | null };
+
+/**
+ * Decode a raw escalation row into the public `EscalationRow`, parsing the JSON
+ * `attributes` column. A corrupt `attributes` value degrades to `null` (with a
+ * stderr warning) rather than throwing, so one poisoned row cannot brick every
+ * escalation read — mirroring `decodeTask`'s tolerance for its JSON columns.
+ */
+function decodeEscalation(row: EscalationRowRaw): EscalationRow {
+  const { attributes, ...rest } = row;
+  return { ...rest, attributes: parseEscalationAttributes(attributes, row.id) };
+}
+
+function parseEscalationAttributes(
+  raw: string | null,
+  escalationId: number,
+): EscalationAttributes | null {
+  if (raw === null) return null;
+  try {
+    return JSON.parse(raw) as EscalationAttributes;
+  } catch {
+    process.stderr.write(
+      `scrum: escalation '${escalationId}' has corrupt attributes; treating as null\n`,
+    );
     return null;
   }
 }
