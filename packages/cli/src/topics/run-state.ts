@@ -4,9 +4,8 @@
  * cac matches commands by a single token (the first positional arg), so
  * every run-state sub-action lives under one `run-state <action>`
  * command. Internal dispatch re-routes to per-action handler modules
- * under `./run-state/cli/`. The user-facing shape mirrors
- * `tools/run_state/__main__.py` 1:1 so hooks, skills, and orchestrator
- * wrappers flip over without interface drift:
+ * under `./run-state/cli/`. The user-facing command shape is stable so
+ * hooks, skills, and orchestrator wrappers bind to it without drift:
  *
  *   claude-prove run-state validate <file> [--kind K] [--strict]
  *   claude-prove run-state init --branch B --slug S --plan FILE [--prd FILE] [--overwrite]
@@ -22,9 +21,10 @@
  *   claude-prove run-state dispatch <record|has> <key> [<event>]
  *   claude-prove run-state report write <step_id> --status S [--commit SHA] [--json FILE] [--notes TEXT]
  *   claude-prove run-state migrate [--dry-run] [--overwrite]
- *   claude-prove run-state hook <guard|validate|session-start|stop|subagent-stop>
+ *   claude-prove run-state migrate-runs [--branch B] [--slug S]
+ *   claude-prove run-state hook <guard|bounds|capture|validate|session-start|stop|subagent-stop>
  *
- * Exit codes mirror Python:
+ * Exit codes:
  *   0  success
  *   1  usage / validation error (missing args, unknown action, I/O)
  *   2  schema / state invariant violation (suitable for hook blocking)
@@ -44,6 +44,7 @@ import { runDispatch } from './run-state/cli/dispatch-cmd';
 import { runInit } from './run-state/cli/init-cmd';
 import { runLs } from './run-state/cli/ls-cmd';
 import { runMigrate } from './run-state/cli/migrate-cmd';
+import { runMigrateRuns } from './run-state/cli/migrate-runs-cmd';
 import { runReportWrite } from './run-state/cli/report-cmd';
 import { runCurrent, runShow, runShowReport, runSummary } from './run-state/cli/show-cmd';
 import { type StepAction, runStep } from './run-state/cli/step-cmd';
@@ -94,6 +95,7 @@ type RunStateAction =
   | 'dispatch'
   | 'report'
   | 'migrate'
+  | 'migrate-runs'
   | 'hook';
 
 const ACTIONS: RunStateAction[] = [
@@ -111,6 +113,7 @@ const ACTIONS: RunStateAction[] = [
   'dispatch',
   'report',
   'migrate',
+  'migrate-runs',
   'hook',
 ];
 
@@ -234,6 +237,12 @@ function dispatch(
         runsRoot: flags.runsRoot,
         dryRun: flags.dryRun,
         overwrite: flags.overwrite,
+      });
+    case 'migrate-runs':
+      return runMigrateRuns({
+        runsRoot: flags.runsRoot,
+        branch: flags.branch,
+        slug: flags.slug,
       });
     case 'hook':
       return dispatchHook(pos);
@@ -441,6 +450,14 @@ function narrowJsonText(value: string): 'json' | 'text' {
 }
 
 function narrowShowKind(value: string | undefined): 'state' | 'plan' | 'prd' | 'report' {
-  if (value === 'prd' || value === 'plan' || value === 'report') return value;
+  if (value === 'prd' || value === 'plan' || value === 'report' || value === 'state') return value;
+  // Warn on a typo (`stat`, `report.json`) rather than silently coercing to
+  // 'state' and masking the mistake — matching the narrowMdJson/narrowJsonText
+  // siblings above. Stay quiet when --kind is simply omitted.
+  if (value !== undefined) {
+    console.warn(
+      `warning: unknown --kind '${value}' (expected: state | plan | prd | report); defaulting to 'state'`,
+    );
+  }
   return 'state';
 }

@@ -32,7 +32,12 @@ export interface Conventions {
 
 export interface ValidatorSummary {
   name: string;
+  /** Shell command, or '' for a prompt/skill validator. */
   command: string;
+  /** Prompt-file path for an llm prompt validator; '' otherwise. */
+  prompt: string;
+  /** Skill name for a skill-invoked gate (e.g. 'claude-skills:comment-audit'); '' otherwise. */
+  skill: string;
   phase: string;
 }
 
@@ -551,6 +556,8 @@ export function scanProveConfig(root: string, pluginDir: string | undefined): Pr
       return {
         name: typeof vv.name === 'string' ? vv.name : '',
         command: typeof vv.command === 'string' ? vv.command : '',
+        prompt: typeof vv.prompt === 'string' ? vv.prompt : '',
+        skill: typeof vv.skill === 'string' ? vv.skill : '',
         phase: typeof vv.phase === 'string' ? vv.phase : '',
       };
     }),

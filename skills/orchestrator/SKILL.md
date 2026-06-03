@@ -366,6 +366,47 @@ Triggered by `--full` without an existing plan. Gathers PRD + plan via a require
 | state.json write rejected by hook | Use `scripts/prove-run`; never `Write`/`Edit` state.json directly |
 | No slug resolved | Ensure you are inside a worktree with `.prove-wt-slug.txt` (created by `claude-prove worktree create`) |
 
+## Interrupting a run — the Layer-1 floor
+
+To stop in-flight work, **cancel → discard → re-dispatch fresh**:
+
+1. **Cancel the task subtree** — `claude-prove scrum task cancel <id> --cascade --reason <r> [--detail <d>]`. Cascades down `parent_id`, stamping `cancelled` on the root and `parent_cancelled` on descendants so the abandonment is auditable.
+2. **Discard the run** — `claude-prove run-state init --overwrite --branch <b> --slug <g> ...`. Resets `state.json` so a re-dispatch starts clean instead of resuming the abandoned run.
+3. **Re-dispatch** — start a fresh run from the corrected plan.
+
+This is the deterministic guarantee. Native subagents are not externally signalable
+mid-run, so the only hard stop is the `/workflows` **token budget** + the **subagent
+timeout** — they bound and terminate the run without cooperation.
+
+**Tradeoff:** cancel-and-redispatch discards in-flight work unless a `synthesis`
+reasoning-log entry was already written. The graceful **Layer 2** path below recovers
+that work cooperatively, but is best-effort and layers ON TOP of this floor — it never
+replaces it, because a non-polling or stuck agent only stops at the budget/timeout.
+Layer 1 is always the backstop.
+
+### Layer 2 — cooperative checkpoint-interrupt (best-effort)
+
+A best-effort graceful interrupt that lets a re-dispatch RESUME rather than restart. It
+sits on top of the Layer-1 floor and never replaces it.
+
+1. **Raise the cancel-flag (driver writes).** Write a `CANCEL` file under the run dir —
+   `.prove/runs/<branch>/<slug>/CANCEL` (resolve `.prove/...` from the **main worktree**,
+   `$MAIN_ROOT`, not a task worktree). An optional one-line body records the reason.
+   ```bash
+   echo "<reason>" > "$MAIN_ROOT/.prove/runs/<branch>/<slug>/CANCEL"
+   ```
+2. **Worker polls + hands off (subagent reads).** The implementation-agent prompt emitted
+   by `claude-prove orchestrator task-prompt` already instructs workers to poll this flag
+   at natural checkpoints. When the flag is present, the worker performs a **graceful
+   handoff**: write a `synthesis` reasoning-log entry capturing progress + next steps
+   (`claude-prove acb log append --run-dir <dir> --file <entry.json>`), commit
+   work-in-progress, and self-exit — so the re-dispatch resumes from the handoff.
+3. **Clear the flag before re-dispatch.** Remove the `CANCEL` file so the resumed run is
+   not immediately re-interrupted: `rm -f "$MAIN_ROOT/.prove/runs/<branch>/<slug>/CANCEL"`.
+
+A non-polling or stuck worker will not stop here; the `/workflows` token budget and the
+subagent timeout (Layer 1) remain the hard stop.
+
 ## Rules
 
 - All state mutations through `scripts/prove-run` — never direct-edit `state.json`, never inline `python3 -c`, `jq`, or `sed` for run state

@@ -8,6 +8,8 @@
  */
 
 import { readFileSync } from 'node:fs';
+import { runBoundsHook } from './bounds';
+import { runCaptureHook } from './capture';
 import { runGuard } from './guard';
 import { runSessionStart } from './session-start';
 import { runStop } from './stop';
@@ -15,10 +17,19 @@ import { runSubagentStop } from './subagent-stop';
 import { type HookResult, parseHookPayload } from './types';
 import { runValidateHook } from './validate';
 
-export type HookEvent = 'guard' | 'validate' | 'session-start' | 'stop' | 'subagent-stop';
+export type HookEvent =
+  | 'guard'
+  | 'bounds'
+  | 'capture'
+  | 'validate'
+  | 'session-start'
+  | 'stop'
+  | 'subagent-stop';
 
 export const HOOK_EVENTS: readonly HookEvent[] = [
   'guard',
+  'bounds',
+  'capture',
   'validate',
   'session-start',
   'stop',
@@ -38,6 +49,10 @@ export function dispatchHook(
   switch (event) {
     case 'guard':
       return runGuard(payload);
+    case 'bounds':
+      return runBoundsHook(payload);
+    case 'capture':
+      return runCaptureHook(payload);
     case 'validate':
       return runValidateHook(payload);
     case 'session-start':

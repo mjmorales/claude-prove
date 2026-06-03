@@ -1,18 +1,16 @@
 /**
  * Human-readable diff between current config and schema-compliant target.
  *
- * Ported 1:1 from `tools/schema/diff.py`. Two exports:
+ * Two exports:
  *   - `configDiff(path)` — renders a validation + migration report for a
- *     single config file. Output is a newline-joined string matching the
- *     Python source line-for-line.
+ *     single config file as a newline-joined string.
  *   - `summary(provePath, settingsPath)` — concatenates `configDiff` for
  *     the prove and settings configs, inserting a placeholder for any
  *     missing file.
  *
- * Auto-detection of schema (prove vs settings) mirrors the Python
- * filename/path rules. Migration section only renders for `.prove.json`
- * files; settings files skip the plan and print a plain "valid" line when
- * there are no errors.
+ * Auto-detection of schema (prove vs settings) keys off filename/path rules.
+ * Migration section only renders for `.prove.json` files; settings files
+ * skip the plan and print a plain "valid" line when there are no errors.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -32,7 +30,17 @@ export function configDiff(path: string): string {
   }
 
   const raw = readFileSync(path, 'utf8');
-  const config = JSON.parse(raw) as Record<string, unknown>;
+  let config: Record<string, unknown>;
+  try {
+    config = JSON.parse(raw) as Record<string, unknown>;
+  } catch (err) {
+    // Return the failure as a displayable string (the function's contract)
+    // so callers that print configDiff verbatim exit cleanly instead of
+    // crashing on a raw SyntaxError. summary() can then still report the
+    // sibling config below.
+    const msg = err instanceof Error ? err.message : String(err);
+    return `Invalid JSON in ${path}: ${msg}`;
+  }
 
   const detection = detectSchema(path);
   if (detection === null) {
@@ -106,7 +114,10 @@ function detectSchema(path: string): SchemaDetection | null {
   if (name === '.prove.json' || path.endsWith('.claude/.prove.json')) {
     return { schema: PROVE_SCHEMA, label: '.claude/.prove.json', isProve: true };
   }
-  if (name === 'settings.json' && path.includes('.claude')) {
+  // Detect by basename alone — symmetric with the .prove.json branch above.
+  // Requiring '.claude' in the path made an absolute settings.json under a
+  // non-canonical parent dir silently undetectable.
+  if (name === 'settings.json') {
     return { schema: SETTINGS_SCHEMA, label: '.claude/settings.json', isProve: false };
   }
   return null;

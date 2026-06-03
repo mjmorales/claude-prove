@@ -50,6 +50,10 @@
       "summary": "Update the file index (run after significant changes)"
     },
     {
+      "name": "intake",
+      "summary": "Render a charter/team/decompose HTML intake form, validate the pasted-back payload, and drive the one writer"
+    },
+    {
       "name": "orchestrator",
       "summary": "Unified entry point for orchestrator, autopilot, and full-auto execution"
     },

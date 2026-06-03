@@ -48,27 +48,46 @@ function resolvePluginDir(opts: ClaudeMdOpts): string {
 /**
  * Refuse to run against `~/.claude` (the plugin install directory). Mirrors
  * the guard in `skills/claude-md/__main__.py::main`.
+ *
+ * Returns 2 (the guarded exit code) when the check trips, null otherwise.
+ * Returning instead of calling process.exit keeps the guard testable and
+ * consistent with the rest of the module's numeric exit-code convention.
  */
-function assertNotPluginInstall(projectRoot: string): void {
+function assertNotPluginInstall(projectRoot: string): number | null {
   const claudeDir = resolve(homedir(), '.claude');
   const isUnder = projectRoot === claudeDir || projectRoot.startsWith(`${claudeDir}/`);
   if (isUnder) {
     process.stderr.write(
       `ERROR: --project-root is inside ~/.claude/ (the plugin install location).\nRun this command targeting your project root, not the plugin directory.\n  project-root: ${projectRoot}\n`,
     );
-    process.exit(2);
+    return 2;
   }
+  return null;
 }
 
 /** `generate` — scan project and write CLAUDE.md; prints JSON status to stdout. */
 export function runGenerate(opts: ClaudeMdOpts): number {
   const projectRoot = resolveProjectRoot(opts);
   const pluginDir = resolvePluginDir(opts);
-  assertNotPluginInstall(projectRoot);
+  const guard = assertNotPluginInstall(projectRoot);
+  if (guard !== null) return guard;
 
   const scan = scanProject(projectRoot, pluginDir);
-  const content = compose(scan, pluginDir);
-  const path = writeClaudeMd(projectRoot, content);
+
+  // compose and writeClaudeMd each call readFileSync/writeFileSync with no
+  // internal error handling; guard them so a permission error or missing parent
+  // directory exits cleanly rather than throwing an unhandled exception.
+  let content: string;
+  let path: string;
+  try {
+    content = compose(scan, pluginDir);
+    path = writeClaudeMd(projectRoot, content);
+  } catch (err) {
+    process.stderr.write(
+      `ERROR: could not write CLAUDE.md: ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+    return 1;
+  }
 
   const status = {
     status: 'generated',
@@ -83,7 +102,8 @@ export function runGenerate(opts: ClaudeMdOpts): number {
 export function runScan(opts: ClaudeMdOpts): number {
   const projectRoot = resolveProjectRoot(opts);
   const pluginDir = resolvePluginDir(opts);
-  assertNotPluginInstall(projectRoot);
+  const guard = assertNotPluginInstall(projectRoot);
+  if (guard !== null) return guard;
 
   const scan = scanProject(projectRoot, pluginDir);
   process.stdout.write(`${JSON.stringify(scan, null, 2)}\n`);
@@ -94,7 +114,8 @@ export function runScan(opts: ClaudeMdOpts): number {
 export function runSubagentContext(opts: ClaudeMdOpts): number {
   const projectRoot = resolveProjectRoot(opts);
   const pluginDir = resolvePluginDir(opts);
-  assertNotPluginInstall(projectRoot);
+  const guard = assertNotPluginInstall(projectRoot);
+  if (guard !== null) return guard;
 
   const scan = scanProject(projectRoot, pluginDir);
   process.stdout.write(composeSubagentContext(scan, pluginDir));

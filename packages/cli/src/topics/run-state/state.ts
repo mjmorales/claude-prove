@@ -5,16 +5,16 @@
  * mutations funnel through this module so invariants (status transitions,
  * monotonic timestamps, dispatch dedup) hold uniformly.
  *
- * Ported 1:1 from `tools/run_state/state.py`. On-disk JSON must stay
- * byte-equivalent with the Python source: object key order follows Python's
- * dict construction order, `JSON.stringify(..., null, 2)` matches Python's
- * `indent=2`, and files end with a trailing newline.
+ * On-disk JSON shape is stable: object key order follows construction order,
+ * `JSON.stringify(..., null, 2)` (two-space indent), and files end with a
+ * trailing newline.
  *
- * Atomic write: temp-file (`<path>.tmp`) + rename to target. The lock file
- * (`state.json.lock`) is a presence-flag sidecar (Python uses fcntl.flock
- * for advisory locking; TS keeps the sidecar for on-disk parity). Single-
- * process orchestrator runs are typical — callers should funnel through
- * this module rather than writing state.json directly.
+ * Atomic write: temp-file (`<path>.tmp`) + rename to target. `state.json` is
+ * single-writer-by-convention: there is no locking. The `state.json.lock`
+ * sidecar is a presence-flag only — it is never acquired, tested, or held, so
+ * it provides no write-serialization. Concurrent mutators would interleave
+ * load -> mutate -> write with last-write-wins; callers must funnel every
+ * mutation through this module to keep the single-writer invariant.
  */
 
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -24,6 +24,8 @@ import {
   CURRENT_SCHEMA_VERSION,
   PLAN_SCHEMA,
   PRD_SCHEMA,
+  STEP_STATUSES,
+  TASK_STATUSES,
   VALIDATOR_PHASES,
   VALIDATOR_STATUSES,
 } from './schemas';
@@ -104,19 +106,35 @@ export interface StateData {
   dispatch: DispatchLedger;
 }
 
+/**
+ * Structured acceptance criterion on a plan task/step (run-state v3). `text`
+ * is the only required field; `compile-plan` forwards the scrum shape, while a
+ * migrated v2 plan carries a bare `{ text }`. Mirrors `ACCEPTANCE_CRITERION_SPEC`
+ * in schemas.ts.
+ */
+export interface PlanCriterionInput {
+  id?: string;
+  text: string;
+  verifies_by?: string;
+  check?: string;
+  status?: string;
+  idempotent?: boolean;
+  [extra: string]: unknown;
+}
+
 export interface PlanTaskInput {
   id: string;
   title: string;
   wave?: number;
   deps?: string[];
   description?: string;
-  acceptance_criteria?: string[];
+  acceptance_criteria?: PlanCriterionInput[];
   worktree?: { path: string; branch: string };
   steps: Array<{
     id: string;
     title: string;
     description?: string;
-    acceptance_criteria?: string[];
+    acceptance_criteria?: PlanCriterionInput[];
   }>;
   [extra: string]: unknown;
 }
@@ -183,11 +201,11 @@ export const _clock: { now: () => string } = {
 };
 
 function defaultUtcnowIso(): string {
-  // Parity seam for capture.sh harnesses: PROVE_STATE_FROZEN_NOW lets Python
-  // and TS sides emit identical timestamps. Not used in production.
+  // PROVE_STATE_FROZEN_NOW pins the timestamp for deterministic test capture.
+  // Not used in production.
   const frozen = process.env.PROVE_STATE_FROZEN_NOW;
   if (frozen) return frozen;
-  // Match Python: datetime.now(UTC).strftime('%Y-%m-%dT%H:%M:%SZ')
+  // ISO-8601 UTC, seconds precision with `Z` suffix (no milliseconds).
   return new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
@@ -201,8 +219,10 @@ export function utcnowIso(): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Ensure the lock sidecar exists so its presence mirrors the Python source.
- * Python uses fcntl.flock on this fd; TS keeps the sidecar for on-disk parity.
+ * Ensure the `state.json.lock` sidecar exists. This is a presence-flag only:
+ * it is never acquired or held, so it grants no write-serialization. It is
+ * retained because the on-disk run layout and the `.gitignore` shipped with a
+ * run both expect the file to be present.
  */
 function touchLock(lockPath: string): void {
   mkdirSync(dirname(lockPath), { recursive: true });
@@ -263,7 +283,7 @@ export function defaultsFromSchema(schema: Schema): Record<string, unknown> {
   return out;
 }
 
-/** Factory for a fresh prd.json shell — matches Python `new_prd`. */
+/** Factory for a fresh prd.json shell. */
 export function newPrd(title: string, extras: Record<string, unknown> = {}): PrdData {
   const prd = defaultsFromSchema(PRD_SCHEMA);
   prd.schema_version = CURRENT_SCHEMA_VERSION;
@@ -275,7 +295,7 @@ export function newPrd(title: string, extras: Record<string, unknown> = {}): Prd
   return prd as unknown as PrdData;
 }
 
-/** Factory for a fresh plan.json shell — matches Python `new_plan`. */
+/** Factory for a fresh plan.json shell. */
 export function newPlan(tasks: PlanTaskInput[], mode = 'simple'): PlanData {
   const plan = defaultsFromSchema(PLAN_SCHEMA);
   plan.schema_version = CURRENT_SCHEMA_VERSION;
@@ -390,13 +410,13 @@ function stateExists(paths: RunPaths): boolean {
   }
 }
 
-/** Read the current state.json under the file lock. */
+/** Read the current state.json. Touches the presence-flag sidecar (no lock). */
 export function loadState(paths: RunPaths): StateData {
   touchLock(paths.state_lock);
   return readJson(paths.state) as unknown as StateData;
 }
 
-/** Write state back. Bumps `updated_at` and goes through atomic write + lock. */
+/** Write state back. Bumps `updated_at` and goes through atomic write. */
 export function saveState(paths: RunPaths, state: StateData): void {
   state.updated_at = utcnowIso();
   touchLock(paths.state_lock);
@@ -404,8 +424,8 @@ export function saveState(paths: RunPaths, state: StateData): void {
 }
 
 /**
- * Read-modify-write helper. Mirrors Python's `mutate_state` context manager:
- * load, apply mutator, bump `updated_at`, persist atomically.
+ * Read-modify-write helper: load, apply mutator, bump `updated_at`, persist
+ * atomically.
  */
 function mutateState<T>(paths: RunPaths, mutator: (state: StateData) => T): T {
   touchLock(paths.state_lock);
@@ -593,9 +613,8 @@ function terminateStep(
 }
 
 /**
- * Record a validator outcome in the per-phase summary. Mirrors Python's
- * `set_validator` — the phase slot is overwritten in place (no list append),
- * matching the `validator_summary` dict semantics.
+ * Record a validator outcome in the per-phase summary. The phase slot is
+ * overwritten in place (no list append) in the `validator_summary` map.
  */
 export function validatorSet(
   paths: RunPaths,
@@ -688,11 +707,24 @@ export function dispatchHas(paths: RunPaths, key: string): boolean {
 // Auto-advance / finalize helpers
 // ---------------------------------------------------------------------------
 
+// Terminal-status sets keyed to each finalize predicate's own vocabulary. They
+// are split by domain — step statuses vs task statuses — because the two enums
+// differ: a step may be 'skipped' but a task never can. Sharing one literal
+// across both predicates makes 'skipped' read as legal for tasks, which it is
+// not. Membership is asserted against the closed enums so the predicate cannot
+// drift from the schema.
+const TERMINAL_STEP_STATUSES: ReadonlySet<StepStatus> = new Set(
+  STEP_STATUSES.filter((s): s is StepStatus => s === 'completed' || s === 'skipped'),
+);
+
+const TERMINAL_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set(
+  TASK_STATUSES.filter((s): s is TaskStatus => s === 'completed'),
+);
+
 function maybeFinalizeTask(task: TaskData): void {
   const statuses = new Set(task.steps.map((s) => s.status));
   if (statuses.size === 0) return;
-  const terminal = new Set(['completed', 'skipped']);
-  const allTerminal = [...statuses].every((s) => terminal.has(s));
+  const allTerminal = [...statuses].every((s) => TERMINAL_STEP_STATUSES.has(s));
   if (allTerminal && task.status !== 'completed') {
     assertTransition(task.status, 'completed', TASK_TRANSITIONS);
     task.status = 'completed';
@@ -731,8 +763,7 @@ function maybeAdvanceCurrent(state: StateData, task: TaskData, step: StepData): 
 function maybeFinalizeRun(state: StateData): void {
   const statuses = new Set(state.tasks.map((t) => t.status));
   if (statuses.size === 0) return;
-  const terminal = new Set(['completed', 'skipped']);
-  const allTerminal = [...statuses].every((s) => terminal.has(s));
+  const allTerminal = [...statuses].every((s) => TERMINAL_TASK_STATUSES.has(s));
   if (allTerminal) {
     state.run_status = 'completed';
     if (!state.ended_at) state.ended_at = utcnowIso();
@@ -747,8 +778,9 @@ function maybeFinalizeRun(state: StateData): void {
 
 /**
  * Persist a per-step report under `reports/<step_id>.json`. Dots in step
- * ids are normalized to underscores for clarity. Write-once semantics:
- * existing reports are NOT overwritten — callers must delete before rewrite.
+ * ids are normalized to underscores for clarity. Overwrites atomically
+ * (last-write-wins): an existing report for the same step is replaced via
+ * `writeJsonAtomic`'s truncate+rename, so a rerun supersedes the prior report.
  *
  * Returns the target path.
  */
@@ -756,15 +788,13 @@ export function reportWrite(paths: RunPaths, report: ReportData): string {
   const stepId = report.step_id;
   if (!stepId) throw new StateError("report is missing 'step_id'");
   mkdirSync(paths.reports_dir, { recursive: true });
-  const filename = `${stepId.replace(/\./g, '_')}.json`;
-  const target = `${paths.reports_dir}/${filename}`;
+  const target = paths.reportFile(stepId);
   writeJsonAtomic(target, report);
   return target;
 }
 
 export function reportRead(paths: RunPaths, stepId: string): ReportData | null {
-  const filename = `${stepId.replace(/\./g, '_')}.json`;
-  const target = `${paths.reports_dir}/${filename}`;
+  const target = paths.reportFile(stepId);
   try {
     return readJson(target) as unknown as ReportData;
   } catch {

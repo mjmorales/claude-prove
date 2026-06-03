@@ -6,6 +6,418 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.10.0 — CLI robustness hardening: clean failures, honest exit codes
+
+*(Behavior changes, no config migration and nothing to adopt — review the consumer-contract notes below only if you script against CLI output.)* A hardening sweep across run-state, scrum, schema, pcd, acb, install, notify, report, claude-md, and cafi. Two systemic fixes plus targeted contract changes:
+
+- **Corrupt artifacts fail clean.** Every on-disk artifact read (`plan.json`, `state.json`, triage/collapsed manifests, report inputs, schema configs) reports a one-line error and exits 1 instead of escaping as a raw `SyntaxError` stack trace.
+- **Durable writes win.** Commands that commit a store row and then run a secondary write (contributor/team artifact mirrors, milestone-close curation, charter sync) emit the result JSON immediately after the commit; a secondary failure degrades to a stderr warning with exit 0 instead of masking the successful write as a command failure. `scrum decision recover` is now transactional — a mid-walk git failure rolls back every recovered row.
+- **`schema validate` / `diff` error channel.** FAIL summaries, per-error lines, and warnings move from stdout to stderr; stdout carries only the PASS line. Consumers parsing validation failures from stdout must read stderr.
+- **`run-state migrate` sweep isolation.** A corrupt run no longer aborts the remaining sweep. Summary format is `N processed, M failed` (was `N runs processed`); exit 1 only when failures exist.
+- **`install upgrade` content-type check.** An HTML-denylist replaces the binary allowlist: any content-type is accepted except HTML/XHTML (or a body opening with an HTML doctype), so an upstream CDN content-type change cannot break upgrades.
+- **Bootstrap never migrates `schema_version`.** Re-emitting `.claude/.prove.json` preserves an older on-disk version so `schema migrate` owns the upgrade; a newer on-disk version now errors (downgrade guard) instead of being silently relabeled.
+- **Reporters time out.** `notify dispatch` kills a reporter process after 10s and continues with a warning; a hung reporter previously wedged the dispatcher indefinitely.
+- **`report` inputs are shape-checked.** `brief`, `milestone-brief`, `timeline`, and `decompose-preview` validate the input file's shape and exit 1 with a readable message instead of crashing on a wrong-typed file.
+- **`store info` survives a fresh database.** It reports v0 per domain instead of throwing `no such table: _migrations_log`.
+- **Hooks cannot brick a session.** The scrum Stop/SubagentStop hooks survive a removed-worktree cwd, and the bounds PreToolUse hook passes permissively on malformed bounds rows; the SubagentStop message now surfaces the reason when a story-close floor blocks a task transition.
+- **YAML frontmatter is quote-safe.** Contributor and team artifact writers escape scalars that would corrupt YAML (colons, leading specials, boolean/null keywords).
+- **Performance.** `scrum status` computes the tree rollup in a single pass (previously one store query per node per level); `cafi status`/index reuse cached hashes for files whose mtime+size are unchanged (stat-only fast path, additive cache fields, no cache invalidation); glob `**` matching is memoized, collapsing exponential backtracking.
+
+---
+
+## v3.9.0 — Interactive intake forms: `intake/v1` + the `/prove:intake` skill
+
+*(Additive — new `intake` CLI topic + `intake` skill, nothing to adopt.)* A self-contained interactive HTML form surface for the charter, team, and decomposition-kickoff Q&A. The operator fills the form, copies the answers to the clipboard, and pastes them back; a skill validates the payload and drives the **same** writer the conversational interview drives. The form and the conversation are two front-ends to one writer.
+
+**The model.** An `IntakeForm` is `{ schema_version: "1", form, title, description?, fields[] }`. Each field is `{ id, label, type, required?, help?, placeholder?, choices?, default? }` over a **closed** type set: `text` · `textarea` · `choice` · `multichoice` · `boolean`. `secret` and `file` are **known-but-forbidden** — spec validation rejects them with a security message, because a token or a local path would travel in plaintext through the clipboard step. This is a sibling of report/v1, not an extension: report/v1 renders data outward (snapshot-stable, no JS); a form takes input back (interactive), so it owns its own model.
+
+**New CLI — `intake <action>`:**
+- `render --form <name> | --file <spec.json> [--out <path>]` — render a form to a complete self-contained interactive HTML page (inline CSS + JS, no network; a Copy-payload control with a select-and-copy fallback for `file://`).
+- `validate --form <name> | --file <spec.json> --payload <p.json>` — PASS/FAIL a pasted-back payload against the form (envelope, required fields, value types, choice membership). The authoritative gate before any write.
+- `spec --form <name> | --file <spec.json> [--out <path>]` — emit the resolved form spec JSON (inspect/extend).
+- `list` — name the built-in forms (`charter`, `decompose`, `team`).
+
+**New skill — `/prove:intake`** renders the form, walks the operator through fill → copy → paste, validates the payload, and maps the validated answers onto the existing writer: bootstrap scaffold + authoring for `charter`, `scrum team create`/`scope-set`/`rotate` for `team`, and the decompose ladder for `decompose`. It never reimplements a writer.
+
+---
+
+## v3.8.0 — HTML rendering surface: report/v1 block-document renderer
+
+*(Additive — new `report` CLI topic, nothing to adopt.)* A single closed **report/v1** block-document model that every HTML surface compiles to, plus a vendored static renderer that maps blocks → a self-contained HTML page. Authors emit blocks (or the renderer compiles their data shape); one vendored renderer covers every surface (Review Brief, status dashboard, run timeline, decomposition preview).
+
+**The model.** A `ReportDocument` is `{ schema_version: "1", title, blocks[] }` over a **closed** block set: `heading` · `paragraph` · `list` · `table` · `badge` · `keyValue` · `callout` · `section` (nests) · `divider`. Badges and callouts carry a closed `tone` (`neutral` · `info` · `success` · `warn` · `danger`). Adding a block kind is a deliberate model change.
+
+**New CLI — `report <action>`** (every action writes to `--out` or stdout):
+- `render --file <doc.json>` — render a report/v1 document to a complete self-contained HTML page (inline CSS, no network, every text node HTML-escaped, byte-stable).
+- `validate --file <doc.json>` — validate a document against the closed model, reporting every problem with a JSON-path.
+- `brief --file <brief.json>` / `milestone-brief --file <mb.json>` — mechanically compile a Review/Milestone Brief into report/v1 and render it (HTML beside the markdown).
+- `timeline --file <state.json>` — compile a run-state state.json into a run-timeline view (run header + per-task step tables).
+- `status [--workspace-root <p>]` — read the scrum store and render the tree-aware rollup dashboard (milestones + depth-indented task forest + active tasks).
+- `decompose-preview --file <children.json>` — compile a decompose ladder's proposed child list into a preview the operator reviews before the accept gate (the decompose skill renders it inline before the `proposed → accepted` gate).
+
+(The interactive intake-form surface is a separate effort and is not part of this entry.)
+
+---
+
+## v3.7.5 — Passive triggers & opt-in unattended-execution recipe
+
+*(Docs — no schema change, nothing to adopt.)* A new reference, `references/passive-triggers.md`, documents the three-mechanism trigger model and the opt-in unattended-execution recipe:
+
+- **Intra-run** — the trigger is the next `/workflows` statement (deterministic control flow).
+- **Cross-session** — the scrum reconciler *surfaces* (does not auto-execute) bound next-actions from the `triggers[]` table via the session-start digest and `scrum next-ready` / `scrum alerts`.
+- **Opt-in unattended** — a `/loop` (same machine, session open) or scheduled-remote-agent (`/schedule`, recurring) driver that drains `claude-prove scrum next-ready` hands-off. prove ships no scheduler of its own — both recipes use Claude Code's own scheduling primitives.
+
+Explicit trade: **no autonomous progression between sessions unless the opt-in driver is configured** — prove trades unattended firing for zero operational surface (no resident daemon).
+
+---
+
+## v3.7.4 — Trigger binding table honored by the reconciler (config schema v8→v9)
+
+*(Additive — one-time `/prove:update` stamp; absent `triggers` preserves current behavior.)* A declared trigger table maps a **status-transition → bound next-action**, and the scrum reconciler consults it on session transitions — realizing the common cases of passive triggers without a resident evaluator.
+
+**New config field — `triggers`** in `.claude/.prove.json` (`PROVE_SCHEMA`): a list of bindings, each `{ on, workflow, description? }`:
+
+```jsonc
+"triggers": [
+  { "on": "accepted", "workflow": "decompose", "description": "fire the next-layer decompose" },
+  { "on": "ready",    "workflow": "orchestrate" }
+]
+```
+
+- **`on`** — the task status whose entry fires the binding (closed enum: `backlog` `proposed` `accepted` `ready` `in_progress` `review` `blocked` `done` `cancelled`).
+- **`workflow`** — the bound next-action the reconciler surfaces (a workflow name or short label).
+
+**How it's honored.** The session-start scrum hook consults the table and surfaces a **bound next-actions** section in its digest: every non-terminal task currently sitting in a triggering status yields one pending next-action the next driver should take. There is **no resident evaluator** — bindings fire only when a session reconciles; intra-run, a workflow script branches directly. A malformed or absent config yields no bindings (the hook never breaks).
+
+**Migration — config schema v8 → v9:** `CURRENT_SCHEMA_VERSION` `'8' → '9'`. The hop is a pure version bump (`triggers` is optional; absent = no bindings, the v8 behavior). Run `/prove:update` (or `claude-prove schema migrate --file .claude/.prove.json`) at the repo root; commit the updated file and delete the generated `.bak`.
+
+---
+
+## v3.7.3 — Durable workflow run records: retry/loop/fanout/on_fail/singleton (run-state schema v3→v4)
+
+*(Additive — run-state plan schema `v3 → v4`; a pure version bump, absent block preserves current behavior.)* A plan task gains an optional `execution` block of declarative directives the workflow/orchestrator driver honors and the durable run record persists:
+
+- **`retry: { max: N }`** — re-dispatch on terminal failure up to `N` times before halt-and-drain.
+- **`loop: { max_iterations: N }`** — repeat the task body until its exit condition or `N` iterations (`N` is the runaway floor, not a target).
+- **`fanout: { batch_size: N }`** — fan the task's sub-work out `N`-wide; larger sets split into sequential batches at the cap.
+- **`on_fail: <task-id>`** — branch to the named task on terminal failure instead of halting the branch.
+- **`concurrency: parallel | singleton`** — `singleton` caps the task at one in-flight instance across the run (a story-close task runs `singleton`); `parallel` imposes no limit.
+
+Absent block = run-once / no-retry / no-loop / fan-out 1 / halt-on-fail / parallel — exactly the pre-v4 behavior, so existing runs are unaffected. **Migration:** run-state artifacts hop `v3 → v4` via `claude-prove run-state migrate` (a pure version bump — no field is injected); new runs emit `v4`. The driver patterns for honoring each directive live in the workflow skill (`skills/workflow/SKILL.md`).
+
+---
+
+## v3.7.2 — `proposed`/`accepted` decomposition-review task states
+
+*(Additive — no migration, nothing to adopt.)* Two new `TaskStatus` values split apart what `backlog` and `ready` used to conflate:
+
+- **`proposed`** — decomposed into children, awaiting the decomposition review.
+- **`accepted`** — the decomposition review passed; this is the gate that fires the next layer's decompose, distinct from `ready` (deps cleared, implementation may start).
+
+**Lifecycle** — `backlog → proposed → accepted → ready → in_progress → review → done`, plus `proposed → backlog` (review kickback). The direct `backlog → ready|in_progress` edges remain for tasks needing no decomposition review. Both states surface as active in `scrum status` and roll up through `derivedStatus` (precedence `ready > accepted > proposed > backlog`).
+
+**No migration.** `scrum_tasks.status` is CHECK-free TEXT (same as the event-kind column), so the enum extends with no DB change and existing databases stay forward-compatible — the schema version does not move. Set the states via `scrum task status <id> proposed|accepted`.
+
+---
+
+## v3.7.1 — Record acceptance-criterion verdicts from the CLI (`scrum task acceptance verify`)
+
+*(Bug fix — no schema change, no migration, nothing to adopt.)* Closes a close-floor deadlock: a `layer=story` task carrying `verifies_by: agent` (or any heavy-kind) acceptance criteria could not reach `done`, because the close floor reads `verification.verdict === 'verified'` and nothing wired that recording to a CLI. The verdict for an `agent` criterion is judged driver-side and was therefore unrecordable out-of-turn — the story wedged at close.
+
+**New verb — `scrum task acceptance verify <task-id> --verdict verified|failed [--criterion ID] [--reason R] [--by WHO]`.** Stamps the recorded verification verdict the story-close floor reads:
+- With `--criterion <id>`: records one criterion's verdict.
+- Without `--criterion`: records the verdict on every *active, applies-to-self, non-`gate`* criterion on the task (the whole-task form). Skips `gate` criteria (their verdict lives in `gate.verdict`, resolved via `scrum gate respond`), superseded criteria, and `descendants`-scoped goalposts.
+- `--by` is the verification contributor of record (else the run env `PROVE_WORKER_ID`, else NULL); `--reason` carries the failing detail on a `failed` verdict.
+- Targeting a `gate` criterion, or a verify with no applicable non-gate criterion, exits non-zero with guidance.
+
+This is the symmetric counterpart to `scrum gate respond` (which records the human verdict for `gate` criteria): `verify` records the engine/driver verdict for `assert`/`bash`/`agent` criteria out-of-turn, complementing the orchestrator validation gate's inline recording.
+
+---
+
+## v3.7.0 — Inter-agent communication: cross-team asks, escalations, handoff enforcement
+
+A cross-team request protocol, a typed escalation chain with staleness auto-promotion, and an enforced end-of-session declaration — so blocked work routes to the team that owns the interface, unresolved blockers climb the authority chain on their own, and no worker session ends without recording its outcome.
+
+- **Scrum store** (`.prove/prove.db`): advances **v22 → v26** across four additive migrations — **auto-migrates** on the next `claude-prove scrum …` command (or `claude-prove store migrate`); no manual step, no data loss (every migration is `CREATE TABLE` / `ALTER TABLE ADD COLUMN`, nullable).
+  - **v23** — `scrum_asks` (the cross-team ask table).
+  - **v24** — `scrum_escalations` (the escalation table + four-state machine).
+  - **v25** — `scrum_asks.mapped_artifact` / `rejected_reason` / `counter_proposal` (ask-response provenance).
+  - **v26** — `scrum_escalations.attributes` (the staleness auto-bubble marker).
+
+**Cross-team ask protocol — `scrum ask file|respond|await`.** A worker whose artifact is blocked on another team's interface files an ask against that team:
+- `scrum ask file --from-team A --to-team B --ask-type T --blocking-artifact ART` — persists a `filed` ask. Validates that team `B` resolves, that `T` is in `B`'s active accepted interface, and that `ART` exists; each failure exits non-zero.
+- `scrum ask respond <ask-id> --verdict accept|reject|counter [--comment TEXT] [--by ID]` — mechanically applies a triage verdict. `accept` creates one child task under the responding team (tagged with its slug), sets `mapped_artifact`, and adds a `blocked_by` dep from the filing artifact onto that child; `reject` records the reason; `counter` records the counter-proposal. Every verdict emits an `ask_responded` event. The triage *judgment* is the driver's; the CLI only records it (no model is spawned).
+- `scrum ask await <ask-id>` — a read-only status probe returning a closed-enum phase (`pending` | `waiting` | `ready` | `rejected` | `countered`) plus, on `ready`, the responding team's exposed outputs. The single `terminal` flag tells a polling loop when to stop.
+
+**Escalation protocol — `scrum escalation raise|show|list|resolve|chain`.** A typed escalation (`blocked` | `ambiguous` | `conflict` | `missing_context`) walks up a fixed authority chain (`implementer → engineer → tech_lead → pm → strategy → human`) exactly one rung at a time. The receiver resolves it (`resolve` | `re_decompose` | `re_escalate`); `re_escalate` appends a fresh open escalation one rung up, linked to the closed one, so a single escalation that climbs the chain is a traversable series of rows rather than an in-place mutation.
+
+**Escalation staleness auto-bubble.** An open escalation older than the staleness threshold (24h) auto-promotes one rung — a fresh escalation is filed up-chain and the original flips to `auto_bubbled` with a forward pointer. There is **no resident loop**: the sweep runs inside the session-start reconciler hook and surfaces bubbled escalations through `scrum alerts` and `scrum next-ready` ranking.
+
+**Enforced end-of-session handoff/synthesis declaration.** *(Behavior change.)* `scrum hook stop` and `scrum hook subagent-stop` now **block** a session that touched an artifact unless it logged either a `synthesis` entry with `outcome: completed` or a `synthesis` entry plus a `handoff` entry carrying a reason from the closed set (`context_budget` | `blocked` | `checkpoint` | `scope_boundary` | `needs_decision`). The block emits actionable remediation telling the worker exactly what to log; sessions that touched nothing, or that already declared an outcome, pass unchanged.
+
+**Workflow sugar — `kind:<team-slug>` step.** The workflow skill documents a step form that composes the above: file an ask → the responding team triages → poll `scrum ask await` until terminal → collect the exposed outputs on accept; reject/counter surface a terminal result rather than hanging.
+
+**Auto-adoption.** The store migration is automatic on the next scrum command. The only behavior you must be aware of is the end-of-session gate: a worker session that edits files must now declare a `synthesis` outcome (or a `synthesis` + `handoff`) before it ends, or the stop hook will block and tell it what to write.
+
+## v3.6.0 — User-level config: project-root → default contributor
+
+A per-user (home-directory) config that maps a project root to a default contributor CT-UUID, so the active contributor is **implicit per project** — callers resolve "who am I driving as here?" without passing it on every invocation.
+
+- **No schema change, no store table.** This is a home-dir dotfile, not project DB state. It carries no migration and `/prove:update` does not touch it.
+
+**Config file.** `${XDG_CONFIG_HOME:-~/.config}/claude-prove/config.json` (XDG-honored, else `~/.config`). Shape:
+
+```json
+{ "default_contributors": { "<absolute-project-root>": "<CT-UUID>" } }
+```
+
+Reads tolerate an absent file (treated as an empty mapping) and raise a clear, path-anchored error on a malformed file. Writes create the directory if missing, preserve unrelated top-level keys, and write atomically.
+
+**CLI — `scrum contributor default set|show`.**
+- `scrum contributor default set [--project-root P] --id <CT-UUID>` — record the mapping for project root `P` (default: cwd). `--id` is required.
+- `scrum contributor default show [--project-root P]` — print the resolved CT-UUID for `P`, or `null` when the root is unmapped (a sane fallback, never an error).
+
+The mapping is **store-independent**: this verb never opens `.prove/prove.db`. The CT-UUID is stored verbatim and is **not** validated against any single project's registry — the config spans every project on the machine, so a CT-UUID minted in one project is meaningless to another's store. The caller resolves the returned CT-UUID against the relevant project's registry.
+
+**Auto-adoption.** None required — the config is created the first time you run `scrum contributor default set`. Until then, `default show` resolves to `null` everywhere (the implicit-default mechanism is simply inactive).
+
+## v3.5.0 — Operator-of-record: point-in-time (historical) attribution
+
+The single role slot that exists today — **operator-of-record** — recorded as a position history, so an action attributes to whoever held the role **at the action's timestamp**, not merely the current holder.
+
+- **Scrum store** (`.prove/prove.db`): advances to **v13** (new `scrum_operator_history` table) — **auto-migrates** on the next `claude-prove scrum …` command (or `claude-prove store migrate`); no manual step.
+
+**Position-history table + point-in-time resolution.** A new `scrum_operator_history` table holds one row per held interval: `contributor_id` (a `scrum_contributors` CT-UUID — the holder), `from_ts` (when they took the role), and `to_ts` (when they handed it off, or `NULL` for the current holder). At most one open (`to_ts IS NULL`) row exists at a time — setting a new holder closes the prior row's `to_ts` to the new `from_ts`, then appends a fresh open row, all in one transaction. Resolving at an instant `t` returns the holder whose half-open interval `[from_ts, to_ts)` contains `t` — so an action stamped before a handoff attributes to the historical holder, not the current one.
+
+**Charter records the current holder.** The `charter.md` identity artifact scaffolded by `claude-prove install bootstrap-identity` gains an `operator_of_record` frontmatter field (a contributor CT-UUID, `null` until a holder is set). `scrum operator set` keeps it in sync with the open interval. The canonical history lives in the table; the field is the file-side mirror of the current holder.
+
+**CLI — `scrum operator set|resolve|history`.**
+- `scrum operator set --contributor <CT-UUID> [--from-ts <ISO>]` — set / transfer the operator-of-record, appending a new open interval (closing the prior one) and syncing `charter.md`. `--from-ts` backdates the handoff (default: now). The contributor must be registered.
+- `scrum operator resolve --at <ISO>` — resolve the contributor who held the role at that instant (the interval containing it), **not** the current holder; exits 1 when no holder was in effect.
+- `scrum operator history [--human]` — print the full position history, oldest interval first.
+
+**Auto-adoption.** The schema migrates automatically; the charter field and the CLI surface are opt-in (used when you set an operator-of-record). Re-running `claude-prove install bootstrap-identity` on a project whose `charter.md` predates this version leaves the existing file untouched (upgrade-preserve) — add the `operator_of_record: null` frontmatter line by hand, or it is written the first time `scrum operator set` runs.
+
+## v3.4.0 — Contributor registry: stable CT-UUIDs + github/email resolution
+
+A contributor registry that resolves an executing worker or event author to a stable contributor identity — the backing for role rosters, attribution, and PR-comment author matching.
+
+- **Scrum store** (`.prove/prove.db`): advances to **v12** (new `scrum_contributors` table) — **auto-migrates** on the next `claude-prove scrum …` command (or `claude-prove store migrate`); no manual step.
+
+**Registry table + stable CT-UUIDs.** A new `scrum_contributors` table holds one row per contributor: `id` (a CT-prefixed stable id, e.g. `ct-jane-doe-<uuid>`, minted once and never changed so attribution survives a renamed handle or email), `slug` (unique handle), `status` (`active | inactive`), `display_name`, `github`, `email`, plus the same `created_by`/`created_at`/`last_modified_by`/`last_modified_at` provenance columns the other scrum tables carry.
+
+**CLI — `scrum contributor register|list|resolve`.**
+- `scrum contributor register --slug <s> [--display-name N] [--github G] [--email E] [--id CT-UUID] [--status active|inactive]` — mints a CT-UUID (or accepts an explicit `--id`), inserts the row, and scaffolds an on-disk `contributors/<slug>.md` identity artifact whose frontmatter mirrors the row (`schema_version` + `provenance` block + the `{id, slug, status, display_name, github, email}` registry fields). This extends — does not compete with — the `contributor` artifact `claude-prove install bootstrap-identity` scaffolds.
+- `scrum contributor list [--status active|inactive] [--human]` — lists the registry, ordered by slug.
+- `scrum contributor resolve [--github G] [--email E]` — maps a worker / event author to a contributor by **github match first, then email fallback** (both case-insensitive); exits 1 on a miss. This is how a task row's `created_by` / `last_modified_by` / `worker_id` provenance resolves to a contributor identity.
+
+## v3.3.0 — Methodology parity: reasoning Brief, milestone-close curation, escalation typing, initiative tier
+
+A feature batch raising the structured-agent methodology on prove machinery to parity: a trustworthy reasoning **Review Brief** with a mechanical preservation gate, a milestone-close **curation** pass that lifts findings into durable memory, typed escalations that auto-rank into the ready queue, a milestone-grouping **initiative** tier, and a set of integrity floors on the story-close lifecycle. Two distinct schema versions advance — they migrate by **separate** paths, so do not conflate them:
+
+- **Config schema** (`.claude/.prove.json`, `PROVE_SCHEMA`): **v7 → v8** — needs a one-time migration via `/prove:update` (or `claude-prove schema migrate --file .claude/.prove.json`).
+- **Scrum store** (`.prove/prove.db`): advances to **v11** (v8 decision kind, v9 task provenance, v10 milestone initiative, v11 executing-worker/run attribution) — **auto-migrates** on the next `claude-prove scrum …` command (or `claude-prove store migrate`); no manual step.
+
+**Reasoning Review Brief — `acb brief render|validate`.** A new synthesizer turns a run's reasoning log into the 7-section risk-forward Review Brief (Section 2 "Needs your attention" ordered hack > risk > open-assumption, reverse-chronological). The judgment half is a driver skill — **`reasoning-brief`** (`skills/reasoning-brief/SKILL.md`) — consuming `deriveEpisodes()` output plus the git diff; over a token threshold the episodes are chunked and synthesized across multiple passes (`acb brief chunk`). The mechanical half is a **Stage-1 preservation validator** (`acb brief validate`): it verifies every `hack`/`risk`/`bailout`/open-assumption finding and every decision's alternatives is present in the brief — without that gate the brief is advisory, not trustworthy. An optional non-blocking **Stage-2 prose judge** (the `brief-judge` agent) scores synthesized prose and records a failure as a risk entry rather than blocking the pipeline.
+
+**Milestone-level Brief — `acb milestone-brief render|validate --milestone <id>`.** A stakeholder rollup that recursively aggregates the per-story briefs of a milestone, with the same mechanical preservation guarantee applied recursively (every child finding must survive into the rollup).
+
+**Journal → Codex curation + decision kind taxonomy.** Milestone close now triggers a **curation** pass — the **`curate`** skill (`skills/curate/SKILL.md`) lifts durable reasoning-log findings into `scrum_decisions` so they survive the session that found them. Decisions gain an optional **kind** subtype — the closed set `adr | glossary | pattern`:
+- `scrum decision record <path> --kind <adr|glossary|pattern>` — tag a decision's subtype on record (an unknown value exits 1; the column itself stays free TEXT, forward-compatible).
+- `scrum decision list --kind <k>` — filter the decision list to one subtype.
+
+**Structured escalation typing + staleness auto-bubble.** Escalations now carry a typed reason from the closed set `blocked | ambiguous | conflict | missing_context`. Open escalations are ranked by staleness and auto-bubble into the ready queue: `scrum next-ready` annotates each candidate's rationale with an `escalation=<boost>(<type>)` term, and `scrum alerts` reports open escalations alongside stalled WIP and orphan runs.
+
+**Stale-memory review — `scrum decision review-stale [--days N]`.** Reports decisions older than the threshold (default 90, configurable via `memory.stale_threshold_days`), oldest-first, excluding superseded rows. **Report-only** — staleness never prunes or supersedes a decision.
+
+**Tree-aware `scrum status`.** The status view renders the epic → story → task containment tree with each node's rolled-up derived status, rather than a flat task list. Parent-less tasks render as single-node roots, so pre-tree stores are unaffected.
+
+**Cancel cascade + terminal provenance.** `scrum task cancel <id> [--cascade] [--reason R] [--detail D]` cancels a task — or, with `--cascade`, every non-terminal descendant in its `parent_id` subtree — and records terminal provenance (`terminal_reason` on the root, `parent_cancelled` on cascade descendants; an optional `terminal_detail`). This is the supersede / re-decompose lifecycle: cancel a subtree, then re-decompose under a fresh parent.
+
+**Story-close integrity floors** (store-enforced, so the CLI and the reconciler both inherit them):
+- **AC mid-flight freeze** — acceptance criteria are frozen while a `layer=story` task is `in_progress`; `task acceptance add|supersede` is rejected until the worker is moved off `in_progress`.
+- **Mandatory synthesis floor** — a `layer=story` task cannot reach `done` unless its most-recent linked run carries a `synthesis` reasoning-log entry. Run-gated: a story with no linked run is exempt.
+
+**Initiative tier above milestone.** A new `scrum_milestones.initiative` grouping column ties several milestones to one outcome bet — the tier above milestone. `scrum milestone create --initiative <label>` tags a milestone; `scrum milestone list --initiative <label>` filters to one initiative. NULL = the milestone belongs to no initiative (the flat default).
+
+**Typed decompose-layer personas.** The `decompose` skill now applies a layer-typed planning persona at each rung of the ladder (the epic planner, the story planner, the task planner each reason in a role calibrated to that layer's altitude), rather than one generic decomposition prompt for all layers.
+
+**Interrupt model — cancel-and-redispatch floor + cooperative checkpoint-interrupt.** Two layered interrupt mechanisms for in-flight workers: a Layer-1 **cancel-and-redispatch** floor (a hard stop that cancels a dispatched worker and re-dispatches fresh work) and a Layer-2 **cooperative checkpoint-interrupt** (a committed worker observes a CANCEL flag at safe checkpoints and yields cleanly without losing committed progress).
+
+**Per-artifact provenance + executing attribution.** Scrum tasks carry a reusable provenance block — `created_by`, `created_at`, `last_modified_by`, `last_modified_at`, plus `worker_id`/`run_id` recording which worker and run last wrote the row (sourced from `PROVE_WORKER_ID`/`PROVE_RUN_SLUG`, NULL when absent). `scrum task show` surfaces it. This block is the shared shape that file artifacts (charter/team/contributor) mirror in their frontmatter.
+
+**Project-identity bootstrap — `/prove:init` charter/team/contributor.** `/prove:init` extends beyond tech-stack detection: `claude-prove install bootstrap-identity` (with `--with-charter | --with-team | --full | --form`) runs pre-flight checks (git work tree, clean tree, integration branch, CLI on PATH), then scaffolds `charter.md`, `team.md`, and a `contributors/<id>.md` record — each carrying the `schema_version` + `provenance` frontmatter block. Re-running is upgrade-preserving: it adds only missing artifacts and never overwrites an existing one.
+
+**Acceptance-criteria completion.** The acceptance/verification system gains four pieces: (1) an `assert`-kind **expression grammar** — a closed boolean grammar (comparisons + `and`/`or`/`not`) over run/plan context (`run.status`, `task.status`, `validator.*`, …), parsed to an AST and evaluated in-process, no shell, no `eval`; an unknown accessor/operator is a typed error, never a silent pass. (2) **`shared_acceptance` scope** — a criterion carries an optional closed-enum `scope` (`descendants | self | both`) gating copy-down to child tasks; `scrum task acceptance add --scope <s>` sets it, and absent scope preserves the prior copy-down default. (3) **Write-isolated verification** — a `bash`/`agent` criterion verifies inside an ephemeral detached worktree cut from story HEAD (native wall-clock timeout, failure transcript persisted, worktree always torn down), so a check cannot mutate the real tree and parallel evaluation is safe. (4) **`gate`-kind respond flow** — a human-decided criterion holds a persisted verdict (`gate_pending → approved | rejected`) resolved pull-based via `scrum gate respond <criterion-id> approve|reject --task <id> [--comment]` (or an interactive turn / session-start surfacing), recording the responder; never a blocking daemon.
+
+**Acceptance verification is enforced, not just declared.** A `verifyTaskAcceptance` entry point evaluates each applicable criterion by kind (honoring `scope`) and is wired into the story-close floor: a `layer=story` task can no longer reach `done` while an applicable `gate` is unapproved or an applicable `assert`/`bash`/`agent` verdict is non-`verified`. Cheap kinds (gate, assert) resolve at the floor; heavy kinds (bash/agent worktree runs) are evaluated at the orchestrator gate, which records a verdict the floor reads — the floor never runs a worktree itself. `scrum alerts` also surfaces open `gate_pending` criteria (task + criterion id + the exact `scrum gate respond` resolver) so out-of-turn gates bubble up. The `decompose` skill is hardened from real exercise: stories are born with acceptance criteria (the ladder authors them at creation, satisfying the story-acceptance floor); the story-close Review Brief draws from the flat `acb log list` stream (a pure-verification close has no decision-anchored episodes); and a named story-close step promotes durable reasoning-log `decision` entries into the decision store via `scrum decision record`, human-gated — the per-story analogue of the milestone-close `curate` pass.
+
+**Declared bounds become a native enforcement wall + mechanical capture.** A task's `bounds` (`read`/`write` path globs, `budgets`) were advisory; three native Claude Code hooks now make them load-bearing. A **PreToolUse scope wall** (`run-state hook bounds`, matcher `Read|Write|Edit|MultiEdit|Bash`) denies an Edit/Write/Read or a Bash write-target outside the active task's declared globs — emitting the canonical `permissionDecision: deny` (so the reason reaches the agent), and **permissive by construction** (absent bounds, ambiguous active task, or any resolution failure pass silently — no false blocks). A **tool_calls budget** folds into that same hook: a per-task counter soft-warns near the limit and hard-stops at it (`wall_clock_s` and `tokens` stay enforced by the subagent timeout and the workflow token budget — documented, not hook-metered). A **PostToolUse mechanical-capture** hook (matcher `*`) appends a `capture` reasoning-log entry recording the *what* (the tool + target) so agents author only the *why*; it is append-only and never blocks (always exit 0). All three resolve the active task/run from the main-worktree `.prove/prove.db` and are registered idempotently in the settings composer.
+
+**New config knobs** (`PROVE_SCHEMA` v8, all optional with defaults — absent = the documented default, so no config edit is required):
+- `brief.single_pass_token_threshold` (default `8000`) — episodes at or below this combined token count synthesize in one pass; above it, they chunk into multipass.
+- `brief.max_synthesis_retries` (default `2`) — retry budget for the brief synthesis step before giving up.
+- `brief.prose_judge_on` (default `true`) — whether the non-blocking Stage-2 prose judge runs.
+- `memory.stale_threshold_days` (default `90`) — age past which `decision review-stale` flags a decision.
+- `decomposition.auto_accept_through` (default `none`; enum `none|epic|story|task`) — the decompose layer through which children auto-promote `backlog → ready` without a human accept gate; every layer at or above the named one auto-accepts, and the gate still fires below it.
+
+**Migration — config schema v7 → v8**: `CURRENT_SCHEMA_VERSION` bumped `'7'` → `'8'`. The hop adds the optional `brief`/`memory`/`decomposition` blocks with their defaults; no existing field is rewritten, so a v7 config migrates cleanly and configs that never set a knob inherit the defaults. **Manual step**: run `/prove:update` (or `claude-prove schema migrate --file .claude/.prove.json`) at the repo root to stamp v8; commit the updated file and delete the generated `.bak`.
+
+**Migration — scrum store → v11**: the v8 (`scrum_decisions.kind`), v9 (`scrum_tasks.last_modified_by` + `last_modified_at`), v10 (`scrum_milestones.initiative`), and v11 (`scrum_tasks.worker_id` + `run_id`) migrations all `ADD COLUMN` with a NULL default — append-only, no existing row rewritten. **No manual step**: the unified store self-migrates on the next `claude-prove scrum …` command (or `claude-prove store migrate`). Separate from the config schema — `CURRENT_SCHEMA_VERSION` does not track it.
+
+**On-demand run-content migration — `run-state migrate-runs` + the `run-migrate` skill.** Some methodology schema bumps need CONTENT reshaping of stored run artifacts (prose, structured findings) that no column move can do. The new `run-state migrate-runs` command is the mechanical half: it scans every run under the runs root (narrowable with `--branch`/`--slug`), detects which artifacts sit behind `CURRENT_SCHEMA_VERSION`, and emits a JSON plan naming each behind-version artifact plus the per-hop instruction file for any content reshaping it needs. It is read-only — it never calls a model and never mutates. The judgment half is the operator-invoked **`run-migrate`** skill (`skills/run-migrate/SKILL.md`): on explicit invocation it consumes the plan, reshapes the content behind an operator approval gate, and stops. This composes with the deterministic `run-state migrate`/`schema migrate` chain (which handles structural column moves) — structure first, content second — and runs only when the operator asks, never as a background or resident loop. No manual step on update: a run whose artifacts need no content reshaping is reported with empty `hops` and deferred entirely to the structural chain.
+
+**Auto-adoption**: the `reasoning-brief`, `curate`, and `run-migrate` skills, the `brief-judge` agent, and the layer-typed `decompose` personas are discovered on plugin load after update; the `acb brief`/`acb milestone-brief`, `run-state migrate-runs`, `scrum decision --kind`, `scrum decision review-stale`, `scrum task cancel --cascade`, `scrum milestone --initiative`, `install bootstrap-identity` (the `/prove:init` charter/team/contributor bootstrap), `scrum gate respond`, and `scrum task acceptance add --scope` surfaces, plus the escalation ranking, tree-aware status, and write-isolated acceptance verification, ship in the CLI; the v11 store columns self-migrate on next open. The **only** manual step is the config schema v7 → v8 stamp — run `/prove:update` to sync.
+
+---
+
+## v3.2.0 — Skill validators in `.claude/.prove.json` (config schema v7)
+
+Validators can now invoke an installed **skill** as a gate, alongside the existing `command` and `prompt` kinds.
+
+**New validator field — `skill`**: a validator entry may carry `skill` (e.g. `"claude-skills:comment-audit"`) instead of `command`/`prompt`. The driver session (orchestrator / workflow) invokes the named skill via the Skill tool, scoped to the step diff, and treats its findings as the PASS/FAIL signal — one retry then halt, same as every other validator. A skill that normally edits behind a human gate runs in audit-only mode inside the validation gate (findings only, no auto-apply). The skill must be resolvable by the Skill tool (built-in, `plugin:skill`, or user skill). See `references/validation-config.md` → "Skill Validators".
+
+```jsonc
+"validators": [
+  { "name": "comment-audit", "skill": "claude-skills:comment-audit", "phase": "llm" }
+]
+```
+
+**Migration — config schema v6 → v7**: the `skill` field is additive and optional, so the v6→v7 hop is a pure version stamp — no existing validator is rewritten. Run `/prove:update` (or `claude-prove schema migrate --file .claude/.prove.json`) to bump the stamp; configs without a skill validator are unaffected.
+
+**Auto-adoption**: the field ships in the config schema; `/prove:update` migrates the version stamp. No behavior change unless you add a `skill` validator.
+
+---
+
+## v3.1.0 — Phase-0 mechanical trust floors on the scrum store
+
+Six engine-owned guards that make the already-shipped v3 data model (reasoning log, acceptance criteria, `parent_id` tree, decisions) *trustworthy*. All mechanical — no new skills or subsystems. Decision record: `.prove/decisions/2026-06-01-phase0-trust-floors-store-layer.md`.
+
+**Story-layer transition floors** (`ScrumStore.updateTaskStatus`, store-enforced so the CLI and the reconciler both inherit them):
+- **≥1 acceptance criterion** (onleash §9.1): a `layer=story` task cannot transition to `ready`/`in_progress`/`done` with zero *active* criteria. Non-story layers are exempt.
+- **Synthesis floor** (onleash §10.4/§3.3): a `layer=story` task cannot reach `done` when its most-recent linked run carries no `synthesis` reasoning-log entry. Run-gated — a story with no linked run (manually driven, no worker) is exempt; the orchestrator always links a run.
+
+**AC mid-flight freeze** (onleash §14.13): `task acceptance add|supersede` is rejected while the task is `in_progress` — interrupt the worker (move it off `in_progress`) before amending criteria.
+
+**New CLI — `scrum task cancel <id> [--cascade] [--reason R] [--detail D]`**: cancels a task (or, with `--cascade`, every non-terminal descendant in its `parent_id` subtree) and records terminal provenance. The root carries `terminal_reason` (default `cancelled`); cascade descendants carry `parent_cancelled`. Already-terminal nodes are left untouched but their children are still swept.
+
+**New CLI — `scrum decision review-stale [--days N] [--human]`**: reports decisions whose `recorded_at` is older than `N` days (default 90), oldest-first, excluding superseded rows. **Report-only** (onleash §8.8) — never prunes or mutates.
+
+**Tree-aware `scrum status`**: the JSON payload gains a `task_tree` (the `parent_id` forest, each node carrying its rolled-up `derived_status`), and `--human` renders a nested Task tree section. Flat (parent-less) tasks render as single-node roots — pre-v3 stores are unaffected.
+
+**Migration — scrum store v6→v7** (`scrum_tasks.terminal_reason` + `scrum_tasks.terminal_detail`, both nullable): applied automatically on the next store open (`runMigrations`); no manual step. This is a scrum-store migration, separate from the `.claude/.prove.json` config schema — `CURRENT_SCHEMA_VERSION` is unchanged.
+
+**Auto-adoption**: the new `task cancel`/`decision review-stale` subcommands and the status tree ship in the CLI; the v7 columns migrate on first store open. No config edit required. Run `/prove:update` to sync.
+
+---
+
+## v3.0.0 — onleash methodology on prove machinery: the `decompose` skill + layered task creation
+
+Lands onleash's two structured-agent methodologies (audit §2.2a/b) as a driver skill on top of the foundation shipped over the prior tasks (scrum hierarchy `parent_id`/`layer`, decision supersession, first-class acceptance criteria + the four verification kinds, and the `acb` reasoning log). You are the driver Claude session — prove emits the scrum tree, the criteria, and the reasoning log, and the Agent tool / native `/workflows` does the fan-out; prove never spawns Claude.
+
+**Breaking change.** Major release consolidating the onleash methodology. The bundled schema versions advance: run-state `schema_version` `1`→`3`, prove config `schema_version` →`6`, and scrum store migrations v3–v5 (hierarchy, decision supersession, acceptance criteria). On upgrade, run `/prove:update` to migrate `.claude/.prove.json` and apply `claude-prove store migrate` to the `.prove/prove.db` store.
+
+**New skill — `decompose`** (`skills/decompose/SKILL.md`): two methodologies on prove primitives.
+- **Decompose ladder** (B1): top-down `charter/VISION → epic → story → task`. Per layer, a planning subagent emits a child list via a native structured-output schema (replacing onleash's `*_list.json`), each child is written as a layered scrum task (`backlog` ≈ `proposed`), an `AskUserQuestion` accept gate (or `--auto-accept-through <layer>`) promotes `backlog→ready`, and the ladder recurses. Forced bubble-up on a `discovery` finding is documented for both the in-run (branch to re-plan) and across-session (`scrum task status blocked` + reconciler + `next-ready`) paths.
+- **AC-gated story-close** (B2): reads a story's acceptance criteria from the scrum store (`scrum task acceptance list`, not the compiled plan), dispatches each by `verifies_by` (`bash`→exit 0, `assert`→expression, `gate`→`AskUserQuestion`, `agent`→`prove:validation-agent`), writes a `verification` reasoning-log entry per criterion plus a closing `synthesis` entry (native Write → `acb log append`, one JSON file per entry), assembles the Review Brief via the existing `acb` PR path (the multipass synthesizer is flagged as a `TODO(reasoning-brief):` future task), and then **delegates** worktree/validation/`principal-architect` review/merge to orchestrator full-mode rather than reimplementing it.
+
+The skill embeds the canonical native `/workflows` (Workflow tool) script for each methodology as runnable-shaped `phase()`/`agent({schema})`/`parallel()`/`AskUserQuestion` control flow, referencing only verified `claude-prove` commands.
+
+**New CLI flags — `scrum task create --parent <id> --layer <epic|story|task>`**: the `task create` action now writes layered children into the `parent_id` containment tree and tags the `layer` tier. `--layer` is validated against the closed `epic|story|task` set (exit 1 on a typo); an unknown `--parent` surfaces the store's `unknown parent_id` error as exit 1. These flags are what the decompose ladder uses to write children — the store layer already accepted `parentId`/`layer`; this wires the CLI surface.
+
+**Migration**: none for the schema — the scrum hierarchy/AC/supersession migrations (v3–v5) shipped in the prior tasks; this release is the additive skill + CLI flags on top of them. Ensure your `.prove/prove.db` is migrated (`claude-prove store migrate`) if you are coming from before v3.
+
+**Auto-adoption**: the `decompose` skill is discovered on plugin load after update; the `scrum task create --parent/--layer` flags ship in the CLI. No config edit required. Run `/prove:update` to sync.
+
+### Declared task bounds: `plan.json tasks[].bounds` + prep-permissions consumes it
+
+Lands onleash's per-task `bounds` (audit §6.2) as **declarations enforced by native permissions**, not a daemon wall. Decision record: `.prove/decisions/2026-05-31-declared-bounds-home.md`.
+
+**New plan field — `plan.json tasks[].bounds`** (run-state schema): an optional per-task block beside `worktree`:
+
+```jsonc
+"bounds": {
+  "read":  ["src/auth/**"],
+  "write": ["src/auth/**"],
+  "tools": { "allow": ["Bash(go test *)"], "deny": ["Bash(git push *)"] },
+  "budgets": { "tokens": 200000, "tool_calls": 100, "wall_clock_s": 1800 }  // ADVISORY ONLY
+}
+```
+
+All sub-fields are optional; **absent `bounds` = current behavior** (unbounded). `budgets.*` are **advisory only** — claude-prove has no enforcement daemon; nothing blocks on them.
+
+**Behavior — `prep-permissions` now consumes `tasks[].bounds`** (`skills/prep-permissions/SKILL.md`): `tools.allow`/`tools.deny` merge into native `permissions.allow`/`permissions.deny`; `write[]` is advisory — the git worktree is the write wall (native permission deny rules match a set, not its complement, so no "deny outside X" rule exists); `read[]` and `budgets` render into the task prompt as advisory guidance (no native surface). It emits ONE workspace `settings.local.json` — the **union** of all tasks' rules (known limitation: task A can use task B's tools; per-worktree isolation is deferred). `prep-permissions` is still **operator-invoked** — it is NOT auto-wired into orchestrator/workflow dispatch.
+
+**Migration — run-state schema v1 → v2**: `CURRENT_SCHEMA_VERSION` bumped `'1'` → `'2'`. The hop (`packages/cli/src/topics/run-state/schema-migrate.ts`, `_migrate_v1_to_v2`) is a pure version bump — `bounds` is added as optional, and absent bounds preserves v1 behavior, so no data is rewritten. Existing `plan.json` files keep working unchanged; newly created plans carry `schema_version: "2"`.
+
+**Auto-adoption**: the edited `prep-permissions` skill is picked up on plugin load after update; the new plan field is available to anyone authoring `plan.json` by hand or via `/prove:plan`. No config edit required. Run `/prove:update` to sync.
+
+### Structured plan acceptance criteria: `plan.json tasks[]/steps[].acceptance_criteria` + compile-plan forwards the full criterion
+
+`compile-plan` could previously forward only a criterion's **text** into the plan, dropping the structured shape (`verifies_by`/`check`/`idempotent`/`status`) the scrum store carries — so the orchestrator saw acceptance as opaque strings and could not dispatch a criterion by its verification kind. This lands the structured criterion end-to-end.
+
+**Changed plan field — `plan.json tasks[].acceptance_criteria` and `tasks[].steps[].acceptance_criteria`** (run-state schema): list items changed from bare strings to a structured criterion dict mirroring scrum's `AcceptanceCriterion`:
+
+```jsonc
+"acceptance_criteria": [
+  { "id": "c1", "text": "builds clean", "verifies_by": "bash", "check": "bun run build", "status": "active", "idempotent": true },
+  { "text": "criteria authored by hand only need text" }
+]
+```
+
+Only `text` is required; everything else is optional, so a bare `{ "text": "..." }` is valid and hand-authored/text-only plans keep working. `verifies_by` is the closed set `bash|assert|gate|agent`; `status` is `active|superseded`. **PRD `acceptance_criteria` are unchanged** — they remain a flat `string[]`; this only restructures the plan-task/step lists.
+
+**Behavior — `scrum compile-plan` now forwards the full criterion**: it emits `id/text/verifies_by/check/status/idempotent` per active criterion (scrum bookkeeping fields `superseded_by`/`reason`/`inherited_from` and the task-level `policy` are not forwarded). Superseded criteria are skipped. The orchestrator task/review prompt renderers now render `text` annotated as `text (verifies_by: check)` when a verification kind is present, and tolerate a legacy v2 string (an unmigrated `plan.json`) by rendering it as its own text.
+
+**Migration — run-state schema v2 → v3**: `CURRENT_SCHEMA_VERSION` bumped `'2'` → `'3'`. The hop (`packages/cli/src/topics/run-state/schema-migrate.ts`, `_migrate_v2_to_v3`) rewrites each plan-task/step `acceptance_criteria` **string** into `{ "text": <string> }` — no data loss, no injected fields; already-structured items pass through (idempotent on v3 data). For `prd`/`state`/`report` artifacts (no plan-task acceptance) it is a pure version bump. A v2 plan with string criteria migrates cleanly to v3, and the run-state validator does not enforce `schema_version` equality, so unmigrated v2 plans keep validating. Run `claude-prove run-state migrate` to advance on-disk artifacts.
+
+**Auto-adoption**: the schema, migrator, and `compile-plan` change ship in the CLI; the edited orchestrator prompt renderers are picked up on plugin load. No config edit required. Run `/prove:update` to sync.
+
+### Scrum `bounds_json` authoring column: `task create --bounds` / `task bounds` + compile-plan forwarding
+
+The deferred scrum half of declared bounds (decision `.prove/decisions/2026-05-31-declared-bounds-home.md` §2). A scrum task can now carry **declared bounds** so a milestone-authored bound survives `compile-plan` into the plan's `tasks[].bounds` instead of being re-authored every run. Mirrors how acceptance criteria flow.
+
+**New scrum column — `scrum_tasks.bounds_json`** (nullable JSON, matches the `acceptance_json` precedent): decoded to `ScrumTask.bounds` at the row boundary. The shape mirrors the run-state v3 plan-side `tasks[].bounds`:
+
+```jsonc
+"bounds": {
+  "read":  ["src/auth/**"],
+  "write": ["src/auth/**"],
+  "tools": { "allow": ["Bash(go test *)"], "deny": ["Bash(git push *)"] },
+  "budgets": { "tokens": 200000, "tool_calls": 100, "wall_clock_s": 1800 }
+}
+```
+
+All top-level keys (`read | write | tools | budgets`) are optional; **NULL column = no authored bounds (absent = unbounded)**, the pre-migration behavior. Write-time validation rejects unknown top-level keys (a typo like `reads` fails loud); sub-field contents are not deeply type-checked (forward-compatible JSON; the run-state plan schema re-validates the forwarded shape). Enforcement is unchanged from the §2 decision: **`tools` is the only native surface** (allow/deny merge into `settings.local.json` permissions via `prep-permissions`); `read`/`write`/`budgets` are **advisory** — the git worktree is the write wall, and there is **no native deny-outside (`Edit(!glob)`) rule**. Bounds are never inherited from a parent task.
+
+**New CLI surface** (`claude-prove scrum task`):
+
+- `task create --title X --bounds '<json>'` — author bounds at create time.
+- `task bounds set <id> --bounds '<json>'` — set/replace bounds; pass `--bounds ''` to clear (→ unbounded).
+- `task bounds show <id>` — print the task's bounds object (or `null`).
+
+`--bounds` takes a single JSON blob (bounds is a nested dict — no per-field flag explosion). Malformed JSON or an unknown top-level key exits 1.
+
+**Behavior — `scrum compile-plan` now forwards `bounds`**: each scrum task's `bounds` is emitted verbatim into the corresponding `plan.tasks[].bounds` (the run-state v3 plan supports it). A task with no bounds emits **no `bounds` key** (absent = unbounded) — null-bounds tasks never crash compilation.
+
+**Migration — scrum store schema v5 → v6**: a new scrum domain migration appends `ALTER TABLE scrum_tasks ADD COLUMN bounds_json TEXT;`. Append-only — v1–v5 migrations are untouched; the column defaults NULL on every existing row, so no data is rewritten. The unified store migrates on next open (any `claude-prove scrum …` command, or `claude-prove store migrate`). No manual step.
+
+**Auto-adoption**: the column, CLI flags, and `compile-plan` forwarding ship in the CLI; the store self-migrates on next open. No config edit required. Run `/prove:update` to sync.
+
+### Tool toggles now gate hooks: `tools.<name>.enabled:false` omits the install block + the acb hook self-gates
+
+`tools.<name>.enabled` in `.claude/.prove.json` was **inert** for hooks — `writeSettingsHooks` emitted every canonical block regardless of the flag, and the `acb` post-commit hook fired regardless. The only way to disable a tool's hook was hand-editing `.claude/settings.json` out from under the emitter (which then drifts from the canonical shape). This wires the flag to the hook surface so a disabled tool means no hook. Surfaced by a steward audit (the flag looked like a switch but mapped to no mechanism).
+
+**Behavior — `install init` / `install init-hooks` honor `tools.<name>.enabled`**: `writeSettingsHooks` gained a `disabledTools` option (`packages/installer/src/write-settings-hooks.ts`). A tool with `enabled:false` has its prove-owned hook block omitted on a fresh write and **removed** if already present (the event key is dropped only when no user-authored block remains). `init`/`init-hooks` read the disabled set from `.claude/.prove.json` via `disabledToolsFromConfig` (`packages/cli/src/topics/install/disabled-tools.ts`); a missing or malformed config yields an empty set — every tool stays enabled, so a broken config never silently strips hooks. **Absent flag / `enabled:true` = unchanged** (block installed), so existing installs and the byte-shape parity fixture are unaffected.
+
+**Behavior — the `acb` post-commit hook self-gates**: `runHookPostCommit` returns silent when `tools.acb.enabled:false` (read after the commit-detection filters, so the config is touched only on real commits). Defense in depth — a `settings.json` staged while acb was enabled stops firing without a re-install. Default-on preserved: an absent or unreadable flag = enabled.
+
+**Migration**: none — no schema change. To drop a now-disabled tool's hook block from an existing `.claude/settings.json`, re-run `claude-prove install init-hooks` (or `/prove:update`); the acb runtime gate takes effect immediately, no re-install needed.
+
+**Auto-adoption**: the installer + hook changes ship in the CLI. After setting a tool `enabled:false`, re-run `claude-prove install init-hooks` to remove its block; the acb self-gate is automatic. Run `/prove:update` to sync.
+
+---
+
 ## v2.8.0 — New `/prove:workflow` command: run a whole milestone (or plan.json) as a parallel fan-out
 
 Adds the `/prove:workflow` command + skill. Point it at a **scrum milestone id** or a **`plan.json`** and it runs the dependency graph as one fan-out execution: it compiles the milestone's tasks + `blocked_by` edges into a `plan.json`, runs the tasks in parallel waves through the orchestrator's existing full-mode machinery (worktrees, validators, `principal-architect` review, sequential merge), and mirrors each task's status back to the scrum store (`task status done|blocked` + `link-run`).

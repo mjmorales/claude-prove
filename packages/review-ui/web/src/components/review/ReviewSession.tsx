@@ -17,6 +17,10 @@ import { PanelLoading } from "../PanelLoading";
 
 type VerdictKey = Exclude<GroupVerdict, "pending">;
 
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 export function ReviewSession() {
   const slug = useSelection((s) => s.slug);
   const setReviewMode = useSelection((s) => s.setReviewMode);
@@ -32,6 +36,7 @@ export function ReviewSession() {
   const [fixOpen, setFixOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [submitting, setSubmitting] = useState<GroupVerdict | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [celebrate, setCelebrate] = useState(false);
   const [lastFixPrompt, setLastFixPrompt] = useState<string | null>(null);
   const [showReviewed, setShowReviewed] = useState(false);
@@ -156,11 +161,16 @@ export function ReviewSession() {
     async (v: VerdictKey, note?: string) => {
       if (!current || !slug) return;
       setSubmitting(v);
+      setSubmitError(null);
       try {
         await api.submitVerdict(slug, current.id, v, note);
         invalidateReview();
         setStampKey((k) => k + 1);
+        // Only advance on success — a failed submit must keep the reviewer on
+        // the same item so they can retry, not silently skip it.
         advanceAfterVerdict();
+      } catch (err) {
+        setSubmitError(errMsg(err));
       } finally {
         setSubmitting(null);
       }
@@ -172,12 +182,15 @@ export function ReviewSession() {
     async (note: string) => {
       if (!current || !slug) return;
       setSubmitting("needs_discussion");
+      setSubmitError(null);
       try {
         await api.submitDiscuss(slug, current.id, note);
         invalidateReview();
         setStampKey((k) => k + 1);
         setDiscussOpen(false);
         advanceAfterVerdict();
+      } catch (err) {
+        setSubmitError(errMsg(err));
       } finally {
         setSubmitting(null);
       }
@@ -189,6 +202,7 @@ export function ReviewSession() {
     async (note: string) => {
       if (!current || !slug) return;
       setSubmitting("rework");
+      setSubmitError(null);
       try {
         const res = await api.submitFix(slug, current.id, {
           note,
@@ -200,6 +214,8 @@ export function ReviewSession() {
         setLastFixPrompt(res.prompt);
         invalidateReview();
         setStampKey((k) => k + 1);
+      } catch (err) {
+        setSubmitError(errMsg(err));
       } finally {
         setSubmitting(null);
       }
@@ -210,10 +226,19 @@ export function ReviewSession() {
   const undoCurrent = useCallback(async () => {
     if (!current || !slug) return;
     if (currentVerdict === "pending") return;
-    await api.submitVerdict(slug, current.id, "pending");
-    invalidateReview();
-    setStampKey((k) => k + 1);
-  }, [current, slug, currentVerdict, invalidateReview]);
+    if (submitting) return; // guard against a second undo racing in-flight
+    setSubmitting("pending");
+    setSubmitError(null);
+    try {
+      await api.submitVerdict(slug, current.id, "pending");
+      invalidateReview();
+      setStampKey((k) => k + 1);
+    } catch (err) {
+      setSubmitError(errMsg(err));
+    } finally {
+      setSubmitting(null);
+    }
+  }, [current, slug, currentVerdict, submitting, invalidateReview]);
 
   // On first load: pick head of queue if nothing active.
   const bootRef = useRef(false);
@@ -525,9 +550,19 @@ export function ReviewSession() {
             <span className="kbd">u</span>
           </button>
         </div>
-        <div className="text-[12px] text-fg-dim">
-          Verdict CTAs live on the intent card. {autoAdvance ? "Auto-advance on — pick a verdict, next intent queues up automatically." : "Auto-advance paused."}
-        </div>
+        {submitError ? (
+          <div
+            role="alert"
+            className="text-[12px] text-anom truncate max-w-[60%]"
+            title={submitError}
+          >
+            Submit failed: {submitError}
+          </div>
+        ) : (
+          <div className="text-[12px] text-fg-dim">
+            Verdict CTAs live on the intent card. {autoAdvance ? "Auto-advance on — pick a verdict, next intent queues up automatically." : "Auto-advance paused."}
+          </div>
+        )}
       </div>
 
       {/* Drawers + overlays */}

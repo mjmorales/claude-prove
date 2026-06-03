@@ -1,5 +1,5 @@
 {
-  "schema_version": "6",
+  "schema_version": "9",
   "scopes": {
     "agents": "agents/",
     "cache": "cache/",
@@ -10,6 +10,13 @@
     "skills": "skills/",
     "scripts": "scripts/"
   },
+  "validators": [
+    {
+      "name": "comment-audit",
+      "skill": "claude-skills:comment-audit",
+      "phase": "llm"
+    }
+  ],
   "claude_md": {
     "references": [
       {
@@ -39,7 +46,7 @@
       "enabled": true
     },
     "acb": {
-      "enabled": true,
+      "enabled": false,
       "scope": "user",
       "config": {
         "base_branch": "main",
@@ -67,5 +74,16 @@
       "config": {}
     }
   },
-  "dev_mode": true
+  "dev_mode": true,
+  "brief": {
+    "single_pass_token_threshold": 8000,
+    "max_synthesis_retries": 2,
+    "prose_judge_on": true
+  },
+  "memory": {
+    "stale_threshold_days": 90
+  },
+  "decomposition": {
+    "auto_accept_through": "none"
+  }
 }

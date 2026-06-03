@@ -19,13 +19,21 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { appendEntry } from '../acb/reasoning-log-store';
 import {
+  type CurationProposedPayload,
   ORPHAN_TASK_ID,
+  type TriggerBinding,
+  bubbleStaleEscalations,
   buildContextBundle,
+  computeBoundActions,
+  reconcileMilestoneClosed,
   reconcileRunCompleted,
   sweepUnreconciled,
+  triggerBindingsForStatus,
 } from './reconcile';
 import { type ScrumStore, openScrumStore } from './store';
+import { STALENESS_THRESHOLD_HOURS } from './types';
 
 // ---------------------------------------------------------------------------
 // Test harness
@@ -235,6 +243,24 @@ describe('reconcileRunCompleted — orphan run', () => {
     const orphanEvents = events.filter((e) => e.kind === 'unlinked_run_detected');
     expect(orphanEvents).toHaveLength(2);
   });
+
+  test('revives a soft-deleted orphan sentinel instead of hitting a PK conflict', () => {
+    // First orphan run creates the sentinel; an operator then soft-deletes it.
+    reconcileRunCompleted(writeRun({ branch: 'feat-a', slug: 'one', taskId: null }), store);
+    store.softDeleteTask(ORPHAN_TASK_ID);
+    expect(store.getTask(ORPHAN_TASK_ID)).toBeNull();
+
+    // A later orphan run must revive the sentinel, not throw a UNIQUE conflict.
+    const result = reconcileRunCompleted(
+      writeRun({ branch: 'feat-b', slug: 'two', taskId: null }),
+      store,
+    );
+    expect(result.kind).toBe('orphan');
+    expect(store.getTask(ORPHAN_TASK_ID)).not.toBeNull();
+    expect(
+      store.listEventsForTask(ORPHAN_TASK_ID).some((e) => e.kind === 'unlinked_run_detected'),
+    ).toBe(true);
+  });
 });
 
 // ===========================================================================
@@ -398,5 +424,534 @@ describe('sweepUnreconciled', () => {
   test('returns empty result when .prove/runs is absent', () => {
     const result = sweepUnreconciled(store, 0);
     expect(result).toEqual({ scanned: 0, reconciled: 0, errors: [] });
+  });
+});
+
+// ===========================================================================
+// reconcileMilestoneClosed — curation candidate bubble-up
+// ===========================================================================
+
+// Per-type required fields beyond the envelope (mirrors reasoning-log.ts).
+const TYPE_EXTRA: Record<string, Record<string, unknown>> = {
+  decision: { alternatives: ['a', 'b'], selected_rationale: 'a won' },
+  hack: { file_refs: ['x.ts'], cleanup_condition: 'when stable' },
+  risk: { severity: 'high', mitigation: 'monitor it' },
+  assumption: { resolved: false, resolution_ref: null },
+  bailout: { attempted: 'x', reason_abandoned: 'y' },
+  synthesis: { outcome: 'shipped' },
+  discovery: {},
+  context: {},
+  review_feedback: {},
+  verification: {},
+};
+
+/** Write a valid reasoning-log entry of `type` under `runDir`. */
+function writeLogEntry(runDir: string, id: string, type: string, agent = 'engineer'): void {
+  appendEntry(runDir, {
+    id,
+    ts: `2026-06-01T10:00:00Z#${id}`,
+    type,
+    agent,
+    run_path: runDir,
+    body: `${type} body for ${id}`,
+    ...TYPE_EXTRA[type],
+  });
+}
+
+/** Link `taskId` to a run dir under `project` and return the absolute run dir. */
+function linkRunDir(taskId: string, slug: string, branch = 'feat'): string {
+  const runRel = join('.prove', 'runs', branch, slug);
+  store.linkRun({ taskId, runPath: runRel, branch, slug });
+  return join(project, runRel);
+}
+
+/** The decoded payload of the single curation_proposed event on `taskId`. */
+function curationPayload(taskId: string): CurationProposedPayload | null {
+  const event = store.listEventsForTask(taskId).find((e) => e.kind === 'curation_proposed');
+  return event ? (event.payload as CurationProposedPayload) : null;
+}
+
+describe('reconcileMilestoneClosed', () => {
+  test('emits one curation_proposed per task with findings, keeping only the four curation types', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    store.createTask({ id: 'task-a', title: 'A', milestoneId: 'm1' });
+
+    const runDir = linkRunDir('task-a', 'a');
+    writeLogEntry(runDir, 'd1', 'decision');
+    writeLogEntry(runDir, 'h1', 'hack');
+    writeLogEntry(runDir, 'r1', 'risk');
+    writeLogEntry(runDir, 'as1', 'assumption');
+    // Non-curation entries must be excluded from candidates.
+    writeLogEntry(runDir, 'disc1', 'discovery');
+    writeLogEntry(runDir, 'syn1', 'synthesis');
+    writeLogEntry(runDir, 'bail1', 'bailout');
+
+    const result = reconcileMilestoneClosed('m1', store);
+
+    expect(result.emitted).toEqual([{ taskId: 'task-a', candidateCount: 4 }]);
+    const payload = curationPayload('task-a');
+    expect(payload?.milestone_id).toBe('m1');
+    expect(payload?.candidates.map((c) => c.type).sort()).toEqual([
+      'assumption',
+      'decision',
+      'hack',
+      'risk',
+    ]);
+    expect(
+      payload?.candidates.every((c) => c.run_path === join('.prove', 'runs', 'feat', 'a')),
+    ).toBe(true);
+  });
+
+  test('no-op for a task whose runs carry no curation-relevant findings', () => {
+    store.createMilestone({ id: 'm2', title: 'M2' });
+    store.createTask({ id: 'task-clean', title: 'Clean', milestoneId: 'm2' });
+    const runDir = linkRunDir('task-clean', 'clean');
+    writeLogEntry(runDir, 'disc', 'discovery');
+    writeLogEntry(runDir, 'syn', 'synthesis');
+
+    const result = reconcileMilestoneClosed('m2', store);
+
+    expect(result.emitted).toHaveLength(0);
+    expect(result.skippedNoFindings).toBe(1);
+    expect(curationPayload('task-clean')).toBeNull();
+  });
+
+  test('no-op for a task with no linked runs at all', () => {
+    store.createMilestone({ id: 'm3', title: 'M3' });
+    store.createTask({ id: 'task-norun', title: 'NoRun', milestoneId: 'm3' });
+
+    const result = reconcileMilestoneClosed('m3', store);
+    expect(result.emitted).toHaveLength(0);
+    expect(result.skippedNoFindings).toBe(1);
+  });
+
+  test('idempotent: a second close does not re-emit and reports already-emitted', () => {
+    store.createMilestone({ id: 'm4', title: 'M4' });
+    store.createTask({ id: 'task-i', title: 'I', milestoneId: 'm4' });
+    const runDir = linkRunDir('task-i', 'i');
+    writeLogEntry(runDir, 'h', 'hack');
+
+    const first = reconcileMilestoneClosed('m4', store);
+    expect(first.emitted).toHaveLength(1);
+
+    const second = reconcileMilestoneClosed('m4', store);
+    expect(second.emitted).toHaveLength(0);
+    expect(second.skippedAlreadyEmitted).toBe(1);
+
+    const count = store
+      .listEventsForTask('task-i')
+      .filter((e) => e.kind === 'curation_proposed').length;
+    expect(count).toBe(1);
+  });
+
+  test('aggregates and dedupes candidates across multiple linked runs', () => {
+    store.createMilestone({ id: 'm5', title: 'M5' });
+    store.createTask({ id: 'task-multi', title: 'Multi', milestoneId: 'm5' });
+    const run1 = linkRunDir('task-multi', 'one');
+    const run2 = linkRunDir('task-multi', 'two');
+    writeLogEntry(run1, 'h-one', 'hack');
+    writeLogEntry(run2, 'r-two', 'risk');
+    // Same entry id surfacing through both runs is collapsed to one candidate.
+    writeLogEntry(run1, 'dup', 'decision');
+    writeLogEntry(run2, 'dup', 'decision');
+
+    const result = reconcileMilestoneClosed('m5', store);
+    expect(result.emitted[0]?.candidateCount).toBe(3);
+    const ids = curationPayload('task-multi')
+      ?.candidates.map((c) => c.entry_id)
+      .sort();
+    expect(ids).toEqual(['dup', 'h-one', 'r-two']);
+  });
+
+  test('emits per-task: only milestone members with findings get an event', () => {
+    store.createMilestone({ id: 'm6', title: 'M6' });
+    store.createTask({ id: 'm6-a', title: 'A', milestoneId: 'm6' });
+    store.createTask({ id: 'm6-b', title: 'B', milestoneId: 'm6' });
+    // A task in a different milestone must be untouched.
+    store.createMilestone({ id: 'other', title: 'Other' });
+    store.createTask({ id: 'other-a', title: 'Other A', milestoneId: 'other' });
+
+    writeLogEntry(linkRunDir('m6-a', 'a6'), 'h', 'hack');
+    writeLogEntry(linkRunDir('other-a', 'oa'), 'h', 'hack');
+
+    const result = reconcileMilestoneClosed('m6', store);
+    expect(result.emitted.map((e) => e.taskId)).toEqual(['m6-a']);
+    expect(result.skippedNoFindings).toBe(1); // m6-b
+    expect(curationPayload('other-a')).toBeNull();
+  });
+
+  test('skips a malformed log dir without aborting the milestone curation', () => {
+    store.createMilestone({ id: 'm7', title: 'M7' });
+    store.createTask({ id: 'm7-bad', title: 'Bad', milestoneId: 'm7' });
+    store.createTask({ id: 'm7-ok', title: 'Ok', milestoneId: 'm7' });
+
+    const badDir = linkRunDir('m7-bad', 'bad');
+    mkdirSync(join(badDir, 'log', 'engineer'), { recursive: true });
+    writeFileSync(join(badDir, 'log', 'engineer', 'broken.json'), '{ not json');
+
+    writeLogEntry(linkRunDir('m7-ok', 'ok'), 'h', 'hack');
+
+    const result = reconcileMilestoneClosed('m7', store);
+    // The corrupt run contributes nothing; the good task still curates.
+    expect(result.emitted.map((e) => e.taskId)).toEqual(['m7-ok']);
+    expect(result.skippedNoFindings).toBe(1); // m7-bad yielded zero candidates
+  });
+});
+
+// ===========================================================================
+// reconcileMilestoneClosed — milestone-close journal compaction (v22)
+//
+// On a milestone close, the milestone journal is rolled up into one Lore summary
+// per team TERMINATING on that milestone. These tests create the terminating team
+// WITHOUT a seated tech_lead, mirroring the real flow where closeMilestone vacates
+// the roster before reconcile runs — so the engine-authored compaction Lore lands
+// via recordLore's warn-allow (no-tech_lead) branch.
+// ===========================================================================
+
+describe('reconcileMilestoneClosed — journal compaction', () => {
+  test('rolls the journal into one Lore per terminating team', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    store.createTeam({
+      slug: 'squad',
+      teamType: 'enabling',
+      lifetime: 'terminates_on_milestone',
+      terminatesOnMilestone: 'm1',
+    });
+    store.createTask({ id: 'task-a', title: 'A', milestoneId: 'm1' });
+    const runDir = linkRunDir('task-a', 'a');
+    writeLogEntry(runDir, 'h1', 'hack');
+    writeLogEntry(runDir, 'r1', 'risk');
+
+    const result = reconcileMilestoneClosed('m1', store);
+
+    expect(result.compactedTeams).toHaveLength(1);
+    expect(result.compactedTeams[0]?.teamSlug).toBe('squad');
+    expect(result.compactedTeams[0]?.candidateCount).toBe(2);
+
+    const lores = store.listLores('squad');
+    expect(lores).toHaveLength(1);
+    // The summary opens with the idempotency marker and folds in each finding.
+    expect(lores[0]?.body).toContain('[milestone-close-summary:m1]');
+    expect(lores[0]?.body).toContain('[hack]');
+    expect(lores[0]?.body).toContain('[risk]');
+  });
+
+  test('no terminating team is a no-op (per-task curation unchanged)', () => {
+    store.createMilestone({ id: 'm2', title: 'M2' });
+    // A persistent team and a team pinned to a DIFFERENT milestone — neither terminates here.
+    store.createTeam({ slug: 'core', teamType: 'platform' });
+    store.createTeam({
+      slug: 'elsewhere',
+      teamType: 'enabling',
+      lifetime: 'terminates_on_milestone',
+      terminatesOnMilestone: 'other',
+    });
+    store.createTask({ id: 'task-b', title: 'B', milestoneId: 'm2' });
+    writeLogEntry(linkRunDir('task-b', 'b'), 'h1', 'hack');
+
+    const result = reconcileMilestoneClosed('m2', store);
+
+    // No compaction; the per-task curation still fired.
+    expect(result.compactedTeams).toHaveLength(0);
+    expect(result.emitted.map((e) => e.taskId)).toEqual(['task-b']);
+    expect(store.listLores('core')).toHaveLength(0);
+    expect(store.listLores('elsewhere')).toHaveLength(0);
+  });
+
+  test('idempotent: a re-close does not double-write the compaction Lore', () => {
+    store.createMilestone({ id: 'm3', title: 'M3' });
+    store.createTeam({
+      slug: 'squad',
+      teamType: 'enabling',
+      lifetime: 'terminates_on_milestone',
+      terminatesOnMilestone: 'm3',
+    });
+    store.createTask({ id: 'task-c', title: 'C', milestoneId: 'm3' });
+    writeLogEntry(linkRunDir('task-c', 'c'), 'h1', 'hack');
+
+    const first = reconcileMilestoneClosed('m3', store);
+    expect(first.compactedTeams).toHaveLength(1);
+
+    const second = reconcileMilestoneClosed('m3', store);
+    expect(second.compactedTeams).toHaveLength(0);
+    expect(second.skippedAlreadyCompacted).toBe(1);
+    // Exactly one compaction Lore exists.
+    expect(store.listLores('squad')).toHaveLength(1);
+  });
+
+  test('an empty journal still records a compaction Lore for the terminating team', () => {
+    store.createMilestone({ id: 'm4', title: 'M4' });
+    store.createTeam({
+      slug: 'squad',
+      teamType: 'enabling',
+      lifetime: 'terminates_on_milestone',
+      terminatesOnMilestone: 'm4',
+    });
+    // A task with only non-curation findings — the journal is empty.
+    store.createTask({ id: 'task-d', title: 'D', milestoneId: 'm4' });
+    writeLogEntry(linkRunDir('task-d', 'd'), 'disc', 'discovery');
+
+    const result = reconcileMilestoneClosed('m4', store);
+
+    expect(result.compactedTeams).toHaveLength(1);
+    const lores = store.listLores('squad');
+    expect(lores).toHaveLength(1);
+    expect(lores[0]?.body).toContain('[milestone-close-summary:m4]');
+    expect(lores[0]?.body).toContain('no curation-relevant findings');
+  });
+
+  test('two terminating teams each get the same milestone journal rolled up', () => {
+    store.createMilestone({ id: 'm5', title: 'M5' });
+    for (const slug of ['squad-a', 'squad-b']) {
+      store.createTeam({
+        slug,
+        teamType: 'enabling',
+        lifetime: 'terminates_on_milestone',
+        terminatesOnMilestone: 'm5',
+      });
+    }
+    store.createTask({ id: 'task-e', title: 'E', milestoneId: 'm5' });
+    writeLogEntry(linkRunDir('task-e', 'e'), 'd1', 'decision');
+
+    const result = reconcileMilestoneClosed('m5', store);
+
+    expect(result.compactedTeams.map((c) => c.teamSlug).sort()).toEqual(['squad-a', 'squad-b']);
+    expect(store.listLores('squad-a')[0]?.body).toContain('[decision]');
+    expect(store.listLores('squad-b')[0]?.body).toContain('[decision]');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// bubbleStaleEscalations — staleness auto-bubble (injected clock)
+// ---------------------------------------------------------------------------
+
+describe('bubbleStaleEscalations', () => {
+  // A fixed evaluation instant. All escalations are seeded with a `created_at`
+  // relative to this so the threshold is crossed deterministically — no wall
+  // clock, no setTimeout.
+  const NOW_MS = Date.parse('2026-06-02T00:00:00Z');
+  const HOUR_MS = 60 * 60 * 1000;
+
+  /** ISO timestamp `hours` before the fixed evaluation instant. */
+  function hoursAgo(hours: number): string {
+    return new Date(NOW_MS - hours * HOUR_MS).toISOString();
+  }
+
+  test('auto-bubbles an escalation older than the threshold one rung up and flips the original to auto_bubbled', () => {
+    const stale = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'aged out, no receiver',
+      createdAt: hoursAgo(STALENESS_THRESHOLD_HOURS + 1),
+    });
+
+    const result = bubbleStaleEscalations(store, NOW_MS);
+
+    expect(result.threshold_hours).toBe(STALENESS_THRESHOLD_HOURS);
+    expect(result.inspected).toBe(1);
+    expect(result.bubbled).toHaveLength(1);
+    expect(result.bubbled[0]).toMatchObject({
+      from_id: stale.id,
+      task_id: 't1',
+      from_layer: 'implementer',
+      to_layer: 'engineer',
+    });
+
+    // The original flips to auto_bubbled with the marker + forward pointer.
+    const closed = store.getEscalation(stale.id);
+    expect(closed?.state).toBe('auto_bubbled');
+    expect(closed?.attributes?.auto_bubbled).toBe(true);
+    expect(closed?.attributes?.linked_escalation).toBe(result.bubbled[0]?.to_id);
+
+    // A fresh open row exists exactly one rung up, back-pointing at the original.
+    const fresh = store.getEscalation(result.bubbled[0]?.to_id as number);
+    expect(fresh?.state).toBe('open');
+    expect(fresh?.layer).toBe('engineer');
+    expect(fresh?.walked_up_from).toBe(stale.id);
+  });
+
+  test('leaves an under-threshold escalation untouched', () => {
+    const fresh = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'ambiguous',
+      summary: 'raised recently',
+      createdAt: hoursAgo(STALENESS_THRESHOLD_HOURS - 1),
+    });
+
+    const result = bubbleStaleEscalations(store, NOW_MS);
+
+    expect(result.inspected).toBe(1);
+    expect(result.bubbled).toHaveLength(0);
+    expect(store.getEscalation(fresh.id)?.state).toBe('open');
+    expect(store.getEscalation(fresh.id)?.attributes).toBeNull();
+    // No successor row was appended.
+    expect(store.listOpenEscalationRows()).toHaveLength(1);
+  });
+
+  test('an escalation exactly at the threshold is not yet stale (strict greater-than)', () => {
+    const boundary = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'conflict',
+      summary: 'right at the line',
+      createdAt: hoursAgo(STALENESS_THRESHOLD_HOURS),
+    });
+
+    const result = bubbleStaleEscalations(store, NOW_MS);
+
+    expect(result.bubbled).toHaveLength(0);
+    expect(store.getEscalation(boundary.id)?.state).toBe('open');
+  });
+
+  test('reports a stale escalation already at the top of the chain (human) without mutating it', () => {
+    const atTop = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'human-rung, aged',
+      layer: 'human',
+      createdAt: hoursAgo(STALENESS_THRESHOLD_HOURS + 100),
+    });
+
+    const result = bubbleStaleEscalations(store, NOW_MS);
+
+    expect(result.atTopOfChain).toBe(1);
+    expect(result.bubbled).toHaveLength(0);
+    // The human-rung row stays open and unmarked — nowhere higher to walk.
+    expect(store.getEscalation(atTop.id)?.state).toBe('open');
+    expect(store.getEscalation(atTop.id)?.attributes).toBeNull();
+  });
+
+  test('advances each stale escalation only one rung in a single pass (does not re-evaluate the fresh successor)', () => {
+    const stale = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'aged out',
+      createdAt: hoursAgo(STALENESS_THRESHOLD_HOURS + 48),
+    });
+
+    const result = bubbleStaleEscalations(store, NOW_MS);
+
+    // Exactly one bubble: the successor row is created with created_at = NOW_MS,
+    // so it is not stale within the same pass and is not re-bubbled.
+    expect(result.bubbled).toHaveLength(1);
+    const fresh = store.getEscalation(result.bubbled[0]?.to_id as number);
+    expect(fresh?.layer).toBe('engineer');
+    expect(fresh?.state).toBe('open');
+    // The chain back-link is intact for a future pass to continue from.
+    expect(store.getEscalationChain(fresh?.id as number).map((e) => e.layer)).toEqual([
+      'implementer',
+      'engineer',
+    ]);
+    void stale;
+  });
+
+  test('a custom threshold overrides the default staleness window', () => {
+    const aged = store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'three hours old',
+      createdAt: hoursAgo(3),
+    });
+
+    // Default (24h) leaves it alone; a 2h threshold bubbles it.
+    expect(bubbleStaleEscalations(store, NOW_MS).bubbled).toHaveLength(0);
+    const result = bubbleStaleEscalations(store, NOW_MS, 2);
+    expect(result.threshold_hours).toBe(2);
+    expect(result.bubbled).toHaveLength(1);
+    expect(store.getEscalation(aged.id)?.state).toBe('auto_bubbled');
+  });
+
+  test('surfaces a stale auto-bubble into next-ready ranking and alerts via the blocker_raised bridge', () => {
+    // The owning task must exist for the event-surface bridge to fire.
+    store.createTask({ id: 'ranked-task', title: 'Ranked', status: 'ready' });
+    store.createTask({ id: 'plain-task', title: 'Plain', status: 'ready' });
+    store.raiseEscalation({
+      taskId: 'ranked-task',
+      escalationType: 'blocked',
+      summary: 'no receiver acted',
+      createdAt: hoursAgo(STALENESS_THRESHOLD_HOURS + 5),
+    });
+
+    bubbleStaleEscalations(store, NOW_MS);
+
+    // Alerts surface: listOpenEscalations reads the blocker_raised event the
+    // bubble emitted.
+    const alertTaskIds = store.listOpenEscalations().map((e) => e.task_id);
+    expect(alertTaskIds).toContain('ranked-task');
+
+    // Next-ready ranking: the escalated task carries a positive escalation_boost
+    // and outranks the un-escalated peer.
+    const ranked = store.nextReady({ limit: 10, nowMs: NOW_MS });
+    const escalated = ranked.find((r) => r.task.id === 'ranked-task');
+    const plain = ranked.find((r) => r.task.id === 'plain-task');
+    expect(escalated?.rationale.escalation_boost).toBeGreaterThan(0);
+    expect(escalated?.rationale.escalation_type).toBe('blocked');
+    expect(escalated?.score ?? 0).toBeGreaterThan(plain?.score ?? 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Trigger bindings — declared status-transition -> bound next-action (1.4)
+// ---------------------------------------------------------------------------
+
+describe('triggerBindingsForStatus', () => {
+  const triggers: TriggerBinding[] = [
+    { on: 'accepted', workflow: 'decompose', description: 'fire next layer' },
+    { on: 'accepted', workflow: 'notify' },
+    { on: 'ready', workflow: 'orchestrate' },
+  ];
+
+  test('returns every binding whose `on` matches the status', () => {
+    expect(triggerBindingsForStatus(triggers, 'accepted').map((t) => t.workflow)).toEqual([
+      'decompose',
+      'notify',
+    ]);
+  });
+
+  test('returns [] when no binding fires for the status', () => {
+    expect(triggerBindingsForStatus(triggers, 'done')).toEqual([]);
+    expect(triggerBindingsForStatus([], 'accepted')).toEqual([]);
+  });
+});
+
+describe('computeBoundActions', () => {
+  const triggers: TriggerBinding[] = [
+    { on: 'accepted', workflow: 'decompose', description: 'fire next layer' },
+    { on: 'ready', workflow: 'orchestrate' },
+  ];
+
+  test('surfaces one bound action per task sitting in a triggering status', () => {
+    store.createTask({ id: 'a1', title: 'Accepted one', status: 'accepted' });
+    store.createTask({ id: 'r1', title: 'Ready one', status: 'ready' });
+    store.createTask({ id: 'b1', title: 'Backlog one', status: 'backlog' });
+
+    const actions = computeBoundActions(store, triggers, 10);
+    expect(actions).toEqual([
+      {
+        task_id: 'a1',
+        title: 'Accepted one',
+        status: 'accepted',
+        workflow: 'decompose',
+        description: 'fire next layer',
+      },
+      {
+        task_id: 'r1',
+        title: 'Ready one',
+        status: 'ready',
+        workflow: 'orchestrate',
+        description: '',
+      },
+    ]);
+  });
+
+  test('an empty trigger table yields no actions', () => {
+    store.createTask({ id: 'a1', title: 'Accepted', status: 'accepted' });
+    expect(computeBoundActions(store, [], 10)).toEqual([]);
+  });
+
+  test('honors the cap', () => {
+    store.createTask({ id: 'a1', title: 'A1', status: 'accepted' });
+    store.createTask({ id: 'a2', title: 'A2', status: 'accepted' });
+    store.createTask({ id: 'a3', title: 'A3', status: 'accepted' });
+    expect(computeBoundActions(store, triggers, 2)).toHaveLength(2);
   });
 });

@@ -1,3 +1,16 @@
+// Runtime contract: this package is Bun-only. The `Store` wrapper leans on
+// bun:sqlite-specific API — generic `prepare<T, Bindings[]>`, variadic
+// `stmt.run(...params)`/`stmt.all(...params)`, and `db.transaction(fn)` (used
+// in migrate.ts and the scrum/acb stores). node:sqlite's `DatabaseSync` has no
+// `transaction()` method, so a runtime-agnostic `isBun ? bun:sqlite :
+// node:sqlite` import would resolve cleanly under Node yet break every
+// transaction call site — a worse failure than the import throw it replaces.
+// Every shipped consumer runs under Bun: the CLI is a Bun binary and the
+// review-ui server's production entry is `bun run .../server/src/index.ts`
+// (packages/review-ui/Dockerfile CMD; runtime base oven/bun:1-alpine). The
+// `node dist/index.js` / `tsx watch` scripts in server/package.json are stale
+// scaffolding for a tsc `dist/` the Docker image never builds — launch the
+// server under Bun, never bare Node.
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -71,7 +84,10 @@ export function openStore(opts: StoreOptions = {}): Store {
     ? new Database(path, { readonly: true })
     : new Database(path, { create: true });
   if (path !== MEMORY_PATH) {
-    db.run('PRAGMA journal_mode = WAL');
+    // WAL is a journal-mode write — illegal on a readonly handle (errors or
+    // no-ops depending on the SQLite build). foreign_keys is a harmless
+    // connection-scoped pragma either way.
+    if (!opts.readonly) db.run('PRAGMA journal_mode = WAL');
     db.run('PRAGMA foreign_keys = ON');
   }
   return new Store(path, db);

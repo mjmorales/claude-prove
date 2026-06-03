@@ -2,7 +2,7 @@
   "name": "new_state_empty_plan",
   "artifact": "state",
   "data": {
-    "schema_version": "1",
+    "schema_version": "4",
     "kind": "state",
     "run_status": "pending",
     "slug": "s",

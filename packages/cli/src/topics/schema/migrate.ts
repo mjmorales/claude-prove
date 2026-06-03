@@ -281,6 +281,115 @@ function migrateV5ToV6(config: ProveConfig): [ProveConfig, MigrationChange[]] {
   return [result, changes];
 }
 
+/**
+ * v6 -> v7: bump schema_version only. v7 adds the optional `skill` field to
+ * validator entries (a validator may now reference a skill to invoke as the
+ * gate, alongside the existing `command`/`prompt` kinds). The field is
+ * additive and optional, so no existing validator needs rewriting — this hop
+ * is a pure version stamp.
+ *
+ * Hardcodes target version '7'. Do NOT reference CURRENT_SCHEMA_VERSION —
+ * migrations are frozen-in-time; later version bumps must not retroactively
+ * change what this migration does.
+ */
+function migrateV6ToV7(config: ProveConfig): [ProveConfig, MigrationChange[]] {
+  const result: ProveConfig = { ...config };
+  result.schema_version = '7';
+  return [result, [new MigrationChange('change', 'schema_version', '"6" -> "7"')]];
+}
+
+/**
+ * v7 -> v8: bump schema_version and seed the methodology-knob groups
+ * `brief`, `memory`, and `decomposition` with their defaults when absent.
+ * Each group is seeded independently and idempotently — an existing group is
+ * preserved byte-for-byte and emits no add-change. All other top-level keys
+ * pass through untouched.
+ *
+ * Seeded defaults:
+ *   - brief: { single_pass_token_threshold: 8000, max_synthesis_retries: 2,
+ *              prose_judge_on: true }
+ *   - memory: { stale_threshold_days: 90 }
+ *   - decomposition: { auto_accept_through: 'none' }
+ *
+ * Hardcodes target version '8'. Do NOT reference CURRENT_SCHEMA_VERSION —
+ * migrations are frozen-in-time; later version bumps must not retroactively
+ * change what this migration does.
+ */
+function migrateV7ToV8(config: ProveConfig): [ProveConfig, MigrationChange[]] {
+  const changes: MigrationChange[] = [];
+  const result: ProveConfig = { ...config };
+
+  result.schema_version = '8';
+  changes.push(new MigrationChange('change', 'schema_version', '"7" -> "8"'));
+
+  if (!('brief' in result)) {
+    const briefDefaults = {
+      single_pass_token_threshold: 8000,
+      max_synthesis_retries: 2,
+      prose_judge_on: true,
+    };
+    result.brief = briefDefaults;
+    changes.push(
+      new MigrationChange(
+        'add',
+        'brief',
+        'added brief synthesis defaults (single_pass_token_threshold 8000, max_synthesis_retries 2, prose_judge_on true)',
+        briefDefaults,
+      ),
+    );
+  }
+
+  if (!('memory' in result)) {
+    const memoryDefaults = { stale_threshold_days: 90 };
+    result.memory = memoryDefaults;
+    changes.push(
+      new MigrationChange(
+        'add',
+        'memory',
+        'added durable-memory defaults (stale_threshold_days 90)',
+        memoryDefaults,
+      ),
+    );
+  }
+
+  if (!('decomposition' in result)) {
+    const decompositionDefaults = { auto_accept_through: 'none' };
+    result.decomposition = decompositionDefaults;
+    changes.push(
+      new MigrationChange(
+        'add',
+        'decomposition',
+        "added decompose-ladder defaults (auto_accept_through 'none' — accept gate fires at every layer)",
+        decompositionDefaults,
+      ),
+    );
+  }
+
+  return [result, changes];
+}
+
+/**
+ * v8 -> v9: add the OPTIONAL top-level `triggers` field (declared trigger
+ * bindings the scrum reconciler consults). Absent triggers = no bindings (the
+ * v8 behavior), so no key is seeded — this is a pure version bump. All other
+ * top-level keys pass through untouched.
+ *
+ * Hardcodes target version '9'. Do NOT reference CURRENT_SCHEMA_VERSION —
+ * migrations are frozen-in-time; later version bumps must not retroactively
+ * change what this migration does.
+ */
+function migrateV8ToV9(config: ProveConfig): [ProveConfig, MigrationChange[]] {
+  const result: ProveConfig = { ...config, schema_version: '9' };
+  const changes: MigrationChange[] = [
+    new MigrationChange(
+      'change',
+      'schema_version',
+      '"8" -> "9" (triggers added as optional — absent triggers preserves current behavior)',
+    ),
+  ];
+  return [result, changes];
+}
+
 export const MIGRATIONS: Record<string, MigrationFn> = {
   '0_to_1': migrateV0ToV1,
   '1_to_2': migrateV1ToV2,
@@ -288,6 +397,9 @@ export const MIGRATIONS: Record<string, MigrationFn> = {
   '3_to_4': migrateV3ToV4,
   '4_to_5': migrateV4ToV5,
   '5_to_6': migrateV5ToV6,
+  '6_to_7': migrateV6ToV7,
+  '7_to_8': migrateV7ToV8,
+  '8_to_9': migrateV8ToV9,
 };
 
 /**
@@ -353,6 +465,11 @@ export interface ApplyMigrationOptions {
  * Run migration on a config file. Returns `{ backupPath, changes }`. When
  * no migration is needed, both fields are empty. With `dryRun: true`, the
  * plan is returned without touching the filesystem.
+ *
+ * Throws on a missing or unreadable file (ENOENT-class errors from
+ * `readFileSync`). The schema CLI wraps this in try/catch and emits a
+ * `claude-prove schema:` prefixed message; other direct callers must
+ * handle the throw themselves.
  */
 export function applyMigration(
   path: string,

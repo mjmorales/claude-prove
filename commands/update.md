@@ -76,7 +76,7 @@ Creates `.claude/.prove.<timestamp>.bak` backup.
 
 Check for plugin capabilities not yet configured in `.claude/.prove.json`:
 
-1. **External references**: If `claude_md.references` is absent or empty, scan `$PLUGIN_DIR/references/` for bundled `.md` files. Extract labels from first `# Heading` line (fall back to filename sans extension). **Exclude `claude-prove-reference.md`** — the composer injects it as a built-in default; offering it here would create a duplicate the dedup logic silently drops.
+1. **External references**: If `claude_md.references` is absent or empty, scan `$PLUGIN_DIR/references/` for bundled `.md` files. Extract labels from first `# Heading` line (fall back to filename sans extension). **Exclude `claude-prove-reference.md` and `design-principles.md`** — the composer injects both as built-in defaults; offering them here would create duplicates the dedup logic silently drops.
 
    ```
    New plugin feature: External References
@@ -97,6 +97,41 @@ Check for plugin capabilities not yet configured in `.claude/.prove.json`:
 2. **Core commands**: New `core: true` commands are picked up automatically in Step 8 (CLAUDE.md regeneration). Note "New commands detected, will appear in CLAUDE.md after regeneration."
 
    **Scrum hooks** (schema v5+): when `tools.scrum.enabled` is true and `.claude/settings.json` is missing scrum-tagged hook entries, add three entries (SessionStart matcher `startup|resume|compact`, SubagentStop no matcher, Stop no matcher — all invoking `claude-prove scrum hook <event>` with `_tool: "scrum"`). Dev-mode installs substitute the resolved `bun run <plugin>/packages/cli/bin/run.ts` prefix via `resolveBinaryPath`. Idempotent: skip if `_tool: "scrum"` entries already present.
+
+3. **Methodology config knobs** (config schema v9): the `.claude/.prove.json` schema gains optional config blocks. The version stamp is migrated in by Step 4's `schema migrate` — there is nothing to add by hand — but surface the tunables so the operator knows they exist:
+
+   - `brief.single_pass_token_threshold` (default `8000`), `brief.max_synthesis_retries` (default `2`), `brief.prose_judge_on` (default `true`) — reasoning Review Brief synthesis tunables (multipass split, retry budget, whether the non-blocking prose judge runs).
+   - `memory.stale_threshold_days` (default `90`) — age past which `scrum decision review-stale` flags a decision.
+   - `decomposition.auto_accept_through` (default `none`; one of `none|epic|story|task`) — the decompose layer through which children auto-promote `proposed → accepted` without a human accept gate.
+   - `triggers` (v9; absent = no bindings) — an **opt-in** trigger table: a list of `{ on, workflow, description? }` mapping a task status to a bound next-action the scrum reconciler surfaces in its session-start digest. Unlike the tunables above it has no default — populate it only to use trigger bindings.
+
+   ```
+   New plugin feature: Methodology config knobs (schema v9)
+
+   Optional tunables now available in .claude/.prove.json (defaults applied by migration):
+     brief.single_pass_token_threshold, brief.max_synthesis_retries, brief.prose_judge_on
+     memory.stale_threshold_days
+     decomposition.auto_accept_through
+   Opt-in (no default — populate to use): triggers
+   ```
+
+   Note "These knobs are optional — defaults are migrated in; edit `.claude/.prove.json` only to override (or to populate the opt-in `triggers` table)." Do not prompt to write them.
+
+4. **New methodology skills + CLI surfaces**: these are discovered automatically on plugin load (skills/agents) or ship in the CLI — there is no `.claude/.prove.json` change. Note them so the operator knows the capabilities are live:
+
+   - **`reasoning-brief`** skill + **`brief-judge`** agent — synthesize the 7-section risk-forward Review Brief from a run's reasoning log, gated by `acb brief render|validate` (mechanical preservation check) and a non-blocking prose judge.
+   - **`curate`** skill — milestone-close pass that lifts durable reasoning-log findings into `scrum_decisions`.
+   - **`run-migrate`** skill + **`run-state migrate-runs`** — on-demand, operator-invoked migration for CONTENT reshaping of stored run artifacts beyond column moves: the CLI mechanically detects which artifacts are behind the current schema and emits a plan (target artifacts + per-hop instruction file), and the skill applies the model-driven reshaping behind an operator gate. Composes with the deterministic `run-state migrate`/`schema migrate` (structure first, content second); never a background loop.
+   - **`acb milestone-brief render|validate --milestone <id>`** — stakeholder rollup aggregating a milestone's per-story briefs.
+   - **`scrum decision record --kind <adr|glossary|pattern>`** and **`scrum decision list --kind <k>`** — the decision subtype taxonomy.
+   - **`scrum decision review-stale [--days N]`**, **`scrum task cancel [--cascade]`**, **`scrum milestone create|list --initiative <label>`**, tree-aware `scrum status`, and typed-escalation ranking in `scrum next-ready` / `scrum alerts`.
+   - **`scrum task acceptance verify <task> --verdict verified|failed [--criterion ID] [--by WHO]`** — records the verification verdict the story-close floor reads for `assert`/`bash`/`agent` criteria (the out-of-turn counterpart to `scrum gate respond`).
+   - **`proposed` / `accepted` task states** — `scrum task status <id> proposed|accepted` drives the decomposition-review lifecycle (`backlog → proposed → accepted → ready`); the per-layer `decompose` ladder fires the next tier on `accepted`.
+   - **`plan.json tasks[].execution` block** (run-state schema v4) — optional durable run-record directives (`retry` / `loop` / `fanout` / `on_fail` / `concurrency`) the workflow/orchestrator driver honors; advance on-disk run artifacts with `claude-prove run-state migrate`.
+   - **Bound next-actions in the session-start digest** — when `.claude/.prove.json` carries a `triggers` table, the scrum reconciler surfaces each task sitting in a triggering status as a pending next-action (automatic; no config edit beyond populating `triggers`).
+   - **HTML rendering surfaces** — **`report <action>`** (`render`/`validate`/`brief`/`milestone-brief`/`timeline`/`status`/`decompose-preview`) compiles a closed report/v1 block-document model to a self-contained HTML page, and **`intake <action>`** (`render`/`validate`/`spec`/`list`) plus the **`intake`** skill render the charter/team/decompose Q&A as an interactive form whose pasted-back payload validates against the same form and drives the same writer the conversational interview drives (`secret`/`file` field types rejected).
+
+   Note "New skills, agent, and CLI surfaces detected — live after this update; no config edit required."
 
 Skip this step entirely if all features are already configured.
 

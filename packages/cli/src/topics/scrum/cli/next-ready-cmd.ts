@@ -65,7 +65,11 @@ function renderHumanTable(rows: NextReadyRow[]): string {
     const score = row.score.toFixed(2).padStart(6);
     const taskCell = `${row.task.id}  ${row.task.title}`.padEnd(40).slice(0, 40);
     const r = row.rationale;
-    const rationale = `unblock=${r.unblock_depth} milestone=${r.milestone_boost} hot=${r.context_hotness.toFixed(2)} tags=${r.tag_boost}`;
+    const escalation =
+      r.escalation_boost > 0
+        ? ` escalation=${r.escalation_boost.toFixed(1)}(${r.escalation_type})`
+        : '';
+    const rationale = `unblock=${r.unblock_depth} milestone=${r.milestone_boost} hot=${r.context_hotness.toFixed(2)} tags=${r.tag_boost}${escalation}`;
     lines.push(`${rank}  ${score}  ${taskCell}  ${rationale}`);
   }
   return `${lines.join('\n')}\n`;

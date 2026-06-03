@@ -12,9 +12,9 @@
  *   - `description`: documentation; not validator input
  *   - `default`:     default value used by migrations
  *
- * `CURRENT_SCHEMA_VERSION` ships as `"5"` here even though the Python source
- * still reports `"3"` — the v3 -> v4 migration landed in an earlier task and
- * the v4 -> v5 migration (adds `tools.scrum`) lands in Phase 12 Task 2.
+ * `CURRENT_SCHEMA_VERSION` is the single source of truth for the latest
+ * config shape. Bumping it requires a matching migration hop in `migrate.ts`
+ * and a corresponding `_migrate_vN_to_vM` registry entry.
  */
 
 export type FieldType = 'str' | 'int' | 'bool' | 'list' | 'dict' | 'any';
@@ -40,7 +40,7 @@ export interface Schema {
   fields: Record<string, FieldSpec>;
 }
 
-export const CURRENT_SCHEMA_VERSION = '6';
+export const CURRENT_SCHEMA_VERSION = '9';
 
 /**
  * Shape of `tools.scrum` introduced in schema v5. The v4 -> v5 migration
@@ -124,6 +124,12 @@ export const PROVE_SCHEMA: Schema = {
             type: 'str',
             required: false,
             description: 'Path to LLM validation prompt file',
+          },
+          skill: {
+            type: 'str',
+            required: false,
+            description:
+              'Skill to invoke as the gate (e.g. "claude-skills:comment-audit"); the driver runs it via the Skill tool. Mutually exclusive with command/prompt',
           },
           phase: {
             type: 'str',
@@ -217,6 +223,116 @@ export const PROVE_SCHEMA: Schema = {
         'Tool activation state and configuration overrides. Known entries: ' +
         'acb, cafi, pcd, run_state, scrum (see TOOL_SCRUM_SCHEMA). Each entry ' +
         "has { enabled: bool, scope?: 'user' | 'project', config?: object }.",
+    },
+    brief: {
+      type: 'dict',
+      required: false,
+      fields: {
+        single_pass_token_threshold: {
+          type: 'int',
+          required: false,
+          description:
+            'Token budget that splits single-pass from multipass brief ' +
+            'synthesis. Episodes whose combined token count is at or below ' +
+            'this threshold synthesize in one pass; above it, the episodes ' +
+            'are chunked and synthesized across multiple passes.',
+          default: 8000,
+        },
+        max_synthesis_retries: {
+          type: 'int',
+          required: false,
+          description:
+            'Retry budget for the Stage-2 brief synthesis step. On a failed ' +
+            'synthesis attempt the step retries up to this many times before ' +
+            'giving up.',
+          default: 2,
+        },
+        prose_judge_on: {
+          type: 'bool',
+          required: false,
+          description:
+            'Whether the non-blocking Stage-2 prose judge runs. When true, ' +
+            'the judge scores synthesized prose for quality without gating ' +
+            'the pipeline; when false, the judge is skipped entirely.',
+          default: true,
+        },
+      },
+      description: 'Agent Change Brief synthesis settings',
+    },
+    memory: {
+      type: 'dict',
+      required: false,
+      fields: {
+        stale_threshold_days: {
+          type: 'int',
+          required: false,
+          description:
+            'Age in days past which a decision record is reported stale by ' +
+            'the decision review-stale report. Report-only — staleness never ' +
+            'prunes or supersedes a decision.',
+          default: 90,
+        },
+      },
+      description: 'Durable-memory and decision-record settings',
+    },
+    decomposition: {
+      type: 'dict',
+      required: false,
+      fields: {
+        auto_accept_through: {
+          type: 'str',
+          required: false,
+          enum: ['none', 'epic', 'story', 'task'],
+          description:
+            'Decompose layer through which children are auto-promoted ' +
+            'backlog->ready without a human accept gate. Layers order ' +
+            'epic -> story -> task; every layer at or above the named one ' +
+            "auto-accepts and the gate still fires below it. 'none' is the " +
+            'off setting: the accept gate fires at every layer.',
+          default: 'none',
+        },
+      },
+      description: 'Decompose-ladder settings',
+    },
+    triggers: {
+      type: 'list',
+      required: false,
+      items: {
+        type: 'dict',
+        fields: {
+          on: {
+            type: 'str',
+            required: true,
+            enum: [
+              'backlog',
+              'proposed',
+              'accepted',
+              'ready',
+              'in_progress',
+              'review',
+              'blocked',
+              'done',
+              'cancelled',
+            ],
+            description:
+              'Task status whose entry fires this binding (the status-transition target — e.g. "accepted" fires the next-layer decompose)',
+          },
+          workflow: {
+            type: 'str',
+            required: true,
+            description:
+              'Bound next-action the reconciler surfaces when a task enters `on` (a workflow name or a short next-action label)',
+          },
+          description: {
+            type: 'str',
+            required: false,
+            description: 'Human-readable note on what this binding is for',
+            default: '',
+          },
+        },
+      },
+      description:
+        'Declared trigger bindings: status-transition -> bound next-action. The scrum reconciler consults this table on session transitions (session-start / subagent-stop / stop) and surfaces the bound action via the session-start digest and next-ready. No resident evaluator — bindings fire only when a session reconciles; intra-run, a workflow script branches directly.',
     },
   },
 };

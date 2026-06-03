@@ -182,15 +182,17 @@ function gitLsFiles(root: string): string[] | null {
 function gitCheckIgnore(root: string, paths: string[]): Set<string> {
   if (paths.length === 0) return new Set();
 
-  const proc = runGit(['check-ignore', '--stdin'], root, paths.join('\n'));
+  // NUL framing on both stdin and stdout (-z) so paths containing a literal
+  // newline (legal on POSIX) survive intact — '\n'-splitting would corrupt
+  // them and silently fail to mark such a file as ignored.
+  const proc = runGit(['check-ignore', '--stdin', '-z'], root, paths.join('\0'));
   if (proc === null) return new Set();
   // git check-ignore: exit 0 = some ignored, exit 1 = none, other = error.
   if (proc.exitCode !== 0 && proc.exitCode !== 1) return new Set();
 
   const ignored = new Set<string>();
-  for (const line of proc.stdout.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed.length > 0) ignored.add(trimmed);
+  for (const entry of proc.stdout.split('\0')) {
+    if (entry.length > 0) ignored.add(entry);
   }
   return ignored;
 }
@@ -304,7 +306,14 @@ function splitPatternSegments(pattern: string): string[] {
  *     path segment.
  */
 function fullMatch(pathSegs: string[], patternSegs: string[]): boolean {
-  return matchFrom(pathSegs, 0, patternSegs, 0);
+  // A path with n segments matched against a pattern carrying m independent
+  // `**` tokens backtracks through O(n^m) `(pi, qi)` states without memoization.
+  // `failed` records states already proven to lead to a non-match within this
+  // call, collapsing the redundant re-evaluation to O(n*m) while preserving
+  // exact match semantics. Keys are collision-free because `pi` spans
+  // `0..pathSegs.length` and `qi` spans `0..patternSegs.length`.
+  const failed = new Set<number>();
+  return matchFrom(pathSegs, 0, patternSegs, 0, failed);
 }
 
 function matchFrom(
@@ -312,18 +321,22 @@ function matchFrom(
   startPi: number,
   patternSegs: string[],
   startQi: number,
+  failed: Set<number>,
 ): boolean {
   let pi = startPi;
   let qi = startQi;
   while (qi < patternSegs.length) {
     const token = patternSegs[qi];
     if (token === '**') {
+      const stateKey = pi * (patternSegs.length + 1) + qi;
+      if (failed.has(stateKey)) return false;
       const isTrailing = qi === patternSegs.length - 1;
       const minSkip = isTrailing ? 1 : 0;
       // Try every possible skip length from minSkip to remaining path segments.
       for (let skip = minSkip; pi + skip <= pathSegs.length; skip++) {
-        if (matchFrom(pathSegs, pi + skip, patternSegs, qi + 1)) return true;
+        if (matchFrom(pathSegs, pi + skip, patternSegs, qi + 1, failed)) return true;
       }
+      failed.add(stateKey);
       return false;
     }
     if (pi >= pathSegs.length) return false;

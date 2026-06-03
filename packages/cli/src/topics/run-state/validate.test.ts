@@ -22,7 +22,7 @@ describe('validateData', () => {
     const r = validateData({}, 'plan');
     expect(r.ok).toBe(false);
     expect(r.kind).toBe('plan');
-    expect(r.version).toBe('1');
+    expect(r.version).toBe('4');
     expect(r.errors).toEqual([
       '  ERROR: schema_version: required field is missing',
       '  ERROR: kind: required field is missing',
@@ -61,6 +61,47 @@ describe('validateData', () => {
     expect(r.errors).toContain('  ERROR: tasks[0].wave: expected int, got str');
   });
 
+  test('a valid execution directive block passes', () => {
+    const r = validateData(
+      {
+        schema_version: '4',
+        kind: 'plan',
+        tasks: [
+          {
+            id: '1.1',
+            title: 't',
+            wave: 1,
+            steps: [],
+            execution: {
+              retry: { max: 2 },
+              loop: { max_iterations: 3 },
+              fanout: { batch_size: 4 },
+              on_fail: '1.2',
+              concurrency: 'singleton',
+            },
+          },
+        ],
+      },
+      'plan',
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  test('rejects an off-enum execution.concurrency', () => {
+    const r = validateData(
+      {
+        schema_version: '4',
+        kind: 'plan',
+        tasks: [{ id: '1.1', title: 't', wave: 1, steps: [], execution: { concurrency: 'bogus' } }],
+      },
+      'plan',
+    );
+    expect(r.ok).toBe(false);
+    expect(r.errors).toContain(
+      "  ERROR: tasks[0].execution.concurrency: must be one of ['parallel', 'singleton'], got 'bogus'",
+    );
+  });
+
   test('valid state passes clean', () => {
     const r = validateData(
       {
@@ -73,7 +114,7 @@ describe('validateData', () => {
       },
       'state',
     );
-    expect(r).toEqual({ ok: true, kind: 'state', version: '1', errors: [] });
+    expect(r).toEqual({ ok: true, kind: 'state', version: '4', errors: [] });
   });
 
   test('unknown kind returns structured error', () => {

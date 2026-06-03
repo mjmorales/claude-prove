@@ -49,6 +49,16 @@ export class RunPaths implements RunPathsData {
   }
 
   /**
+   * Canonical per-step report filename under `reports_dir`. Dots in step ids
+   * are replaced with underscores so the filename is filesystem-safe; callers
+   * must never derive this path independently — any change to the convention
+   * here propagates automatically to every reader and writer.
+   */
+  reportFile(stepId: string): string {
+    return join(this.reports_dir, `${stepId.replace(/\./g, '_')}.json`);
+  }
+
+  /**
    * Resolve layout for `<runs_root>/<branch>/<slug>/`. Does not touch the
    * filesystem — pure path computation. `initRun` creates the directory
    * structure.

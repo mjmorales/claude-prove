@@ -16,13 +16,23 @@ import {
 } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-/** Cache schema version. Bump when the on-disk layout changes incompatibly. */
+/**
+ * Cache schema version. Bump when the on-disk layout changes incompatibly.
+ * The optional `mtime_ms`/`size` fields on FileCacheEntry are additive and
+ * backward-compatible (absent fields fall back to hashing, then backfill),
+ * so they did not warrant a bump — version-mismatched caches are discarded
+ * by loadCache, and a bump would force a full re-index on every upgrade.
+ */
 export const CACHE_VERSION = 1;
 
 export interface FileCacheEntry {
   hash: string;
   description: string;
   last_indexed: string;
+  /** Millisecond mtime from statSync at last index time. Used as fast-path skip for hashing. */
+  mtime_ms?: number;
+  /** File size in bytes at last index time. Used alongside mtime_ms as a fast-path guard. */
+  size?: number;
 }
 
 export interface FileCache {

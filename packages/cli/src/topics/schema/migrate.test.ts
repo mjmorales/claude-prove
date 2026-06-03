@@ -50,7 +50,10 @@
  *   'v4 to v5 preserves acb/pcd/cafi/run_state entries'
  *   'v4 to v5 bumps version only when no other changes apply'
  *   'v4 to v5 seeds tools when tools key absent'
- *   'full v0 to v5 chain applies all hops in order'
+ *   'v7 to v8 seeds brief/memory/decomposition defaults'
+ *   'v7 to v8 preserves existing brief/memory/decomposition (idempotent)'
+ *   'v7 to v8 preserves all other top-level keys byte-for-byte'
+ *   'full v0 to current chain applies all hops in order'
  *   'backup filename follows Python with_suffix semantics'
  */
 
@@ -444,8 +447,23 @@ describe('TestV3ToV4', () => {
     });
     // v5 -> v6 seeds dev_mode: false at the top level.
     expect(target.dev_mode).toBe(false);
+    // v7 -> v8 seeds the methodology-knob groups.
+    expect(target.brief).toEqual({
+      single_pass_token_threshold: 8000,
+      max_synthesis_retries: 2,
+      prose_judge_on: true,
+    });
+    expect(target.memory).toEqual({ stale_threshold_days: 90 });
+    expect(target.decomposition).toEqual({ auto_accept_through: 'none' });
     // Only chain-bump + seeded-entry changes should appear — no other v3 mutations.
-    const allowedPaths = new Set(['schema_version', 'tools.scrum', 'dev_mode']);
+    const allowedPaths = new Set([
+      'schema_version',
+      'tools.scrum',
+      'dev_mode',
+      'brief',
+      'memory',
+      'decomposition',
+    ]);
     const nonChainChanges = changes.filter((c) => !allowedPaths.has(c.path));
     expect(nonChainChanges).toEqual([]);
   });
@@ -480,9 +498,15 @@ describe('TestV4ToV5', () => {
     expect(tools.scrum).toEqual(existing);
     // No add-change for tools.scrum when it already existed.
     expect(changes.some((c) => c.path === 'tools.scrum')).toBe(false);
-    // The only non-version-bump change from the chain is v5 -> v6's dev_mode add.
+    // Non-version-bump changes from the chain: v5 -> v6 dev_mode add and the
+    // v7 -> v8 methodology-knob group seeds.
     const nonVersionChanges = changes.filter((c) => c.path !== 'schema_version');
-    expect(nonVersionChanges.map((c) => c.path)).toEqual(['dev_mode']);
+    expect(nonVersionChanges.map((c) => c.path)).toEqual([
+      'dev_mode',
+      'brief',
+      'memory',
+      'decomposition',
+    ]);
   });
 
   test('v4 to v5 preserves acb/pcd/cafi/run_state entries', () => {
@@ -534,14 +558,32 @@ describe('TestV4ToV5', () => {
     const [target, changes] = planMigration(config);
 
     expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
-    // Changes reflect both v4->v5 (version bump only, scrum already correct) and
-    // v5->v6 (version bump + dev_mode add). No tools.scrum mutation.
+    // Changes reflect v4->v5 (version bump only, scrum already correct),
+    // v5->v6 (version bump + dev_mode add), v6->v7 (version bump only),
+    // v7->v8 (version bump + brief/memory/decomposition seeds), and v8->v9
+    // (version bump only — triggers absent). No tools.scrum mutation.
     const paths = changes.map((c) => c.path);
-    expect(paths).toEqual(['schema_version', 'schema_version', 'dev_mode']);
-    // Keys outside schema_version/tools/dev_mode untouched.
-    const keys = Object.keys(target).filter(
-      (k) => k !== 'schema_version' && k !== 'tools' && k !== 'dev_mode',
-    );
+    expect(paths).toEqual([
+      'schema_version',
+      'schema_version',
+      'dev_mode',
+      'schema_version',
+      'schema_version',
+      'brief',
+      'memory',
+      'decomposition',
+      'schema_version',
+    ]);
+    // Keys outside the chain-seeded ones untouched.
+    const chainSeeded = new Set([
+      'schema_version',
+      'tools',
+      'dev_mode',
+      'brief',
+      'memory',
+      'decomposition',
+    ]);
+    const keys = Object.keys(target).filter((k) => !chainSeeded.has(k));
     const origKeys = Object.keys(config).filter((k) => k !== 'schema_version' && k !== 'tools');
     expect(keys).toEqual(origKeys);
   });
@@ -575,9 +617,9 @@ describe('TestV5ToV6', () => {
     expect(target.dev_mode).toBe(true);
     // No add-change for dev_mode when it already existed.
     expect(changes.some((c) => c.path === 'dev_mode')).toBe(false);
-    // Only the schema_version bump change is emitted.
+    // Non-version-bump changes are the v7 -> v8 methodology-knob group seeds.
     const nonVersionChanges = changes.filter((c) => c.path !== 'schema_version');
-    expect(nonVersionChanges).toEqual([]);
+    expect(nonVersionChanges.map((c) => c.path)).toEqual(['brief', 'memory', 'decomposition']);
   });
 
   test('v5 to v6 preserves explicit dev_mode: false (idempotent)', () => {
@@ -607,6 +649,138 @@ describe('TestV5ToV6', () => {
   });
 });
 
+describe('TestV7ToV8', () => {
+  test('v7 to v8 seeds brief/memory/decomposition defaults', () => {
+    const config = { schema_version: '7' };
+    const [target, changes] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect(target.brief).toEqual({
+      single_pass_token_threshold: 8000,
+      max_synthesis_retries: 2,
+      prose_judge_on: true,
+    });
+    expect(target.memory).toEqual({ stale_threshold_days: 90 });
+    expect(target.decomposition).toEqual({ auto_accept_through: 'none' });
+    expect(changes.some((c) => c.path === 'brief' && c.action === 'add')).toBe(true);
+    expect(changes.some((c) => c.path === 'memory' && c.action === 'add')).toBe(true);
+    expect(changes.some((c) => c.path === 'decomposition' && c.action === 'add')).toBe(true);
+  });
+
+  test('v7 to v8 preserves existing brief/memory/decomposition (idempotent)', () => {
+    const config = {
+      schema_version: '7',
+      brief: { single_pass_token_threshold: 4096, max_synthesis_retries: 5, prose_judge_on: false },
+      memory: { stale_threshold_days: 30 },
+      decomposition: { auto_accept_through: 'story' },
+    };
+    const [target, changes] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    // Existing groups are preserved byte-for-byte — no seeding.
+    expect(target.brief).toEqual({
+      single_pass_token_threshold: 4096,
+      max_synthesis_retries: 5,
+      prose_judge_on: false,
+    });
+    expect(target.memory).toEqual({ stale_threshold_days: 30 });
+    expect(target.decomposition).toEqual({ auto_accept_through: 'story' });
+    // No add-change for any group when all already existed.
+    expect(changes.some((c) => c.path === 'brief')).toBe(false);
+    expect(changes.some((c) => c.path === 'memory')).toBe(false);
+    expect(changes.some((c) => c.path === 'decomposition')).toBe(false);
+    // Only the schema_version bump change is emitted by this hop.
+    const nonVersionChanges = changes.filter((c) => c.path !== 'schema_version');
+    expect(nonVersionChanges).toEqual([]);
+  });
+
+  test('v7 to v8 seeds only the absent groups', () => {
+    const config = {
+      schema_version: '7',
+      brief: { single_pass_token_threshold: 12000, max_synthesis_retries: 1, prose_judge_on: true },
+    };
+    const [target, changes] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    // brief preserved, memory + decomposition seeded.
+    expect(target.brief).toEqual({
+      single_pass_token_threshold: 12000,
+      max_synthesis_retries: 1,
+      prose_judge_on: true,
+    });
+    expect(target.memory).toEqual({ stale_threshold_days: 90 });
+    expect(target.decomposition).toEqual({ auto_accept_through: 'none' });
+    expect(changes.some((c) => c.path === 'brief')).toBe(false);
+    expect(changes.some((c) => c.path === 'memory' && c.action === 'add')).toBe(true);
+    expect(changes.some((c) => c.path === 'decomposition' && c.action === 'add')).toBe(true);
+  });
+
+  test('v7 to v8 preserves all other top-level keys byte-for-byte', () => {
+    const config = {
+      schema_version: '7',
+      scopes: { plugin: '.' },
+      validators: [{ name: 'lint', command: 'go vet ./...', phase: 'lint' }],
+      claude_md: { references: [{ path: 'refs/a.md', label: 'A' }] },
+      tools: { scrum: { enabled: true, scope: 'user', config: {} } },
+      dev_mode: true,
+    };
+    const [target] = planMigration(config);
+
+    expect(target.scopes).toEqual({ plugin: '.' });
+    expect(target.validators).toEqual([{ name: 'lint', command: 'go vet ./...', phase: 'lint' }]);
+    expect(target.claude_md).toEqual({ references: [{ path: 'refs/a.md', label: 'A' }] });
+    expect(target.tools).toEqual({ scrum: { enabled: true, scope: 'user', config: {} } });
+    expect(target.dev_mode).toBe(true);
+    // New groups seeded alongside.
+    expect(target.brief).toEqual({
+      single_pass_token_threshold: 8000,
+      max_synthesis_retries: 2,
+      prose_judge_on: true,
+    });
+    expect(target.memory).toEqual({ stale_threshold_days: 90 });
+    expect(target.decomposition).toEqual({ auto_accept_through: 'none' });
+  });
+
+  test('v7 to v8 validates clean against PROVE_SCHEMA', () => {
+    const config = { schema_version: '7' };
+    const [target] = planMigration(config);
+
+    const errors = validateConfig(target as Record<string, unknown>, PROVE_SCHEMA);
+    const errorCount = errors.filter((e) => e.severity === 'error').length;
+    expect(errorCount).toBe(0);
+  });
+});
+
+describe('TestV8ToV9', () => {
+  test('v8 to v9 is a pure version bump — triggers absent, none seeded', () => {
+    const config = { schema_version: '8' };
+    const [target, changes] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect('triggers' in target).toBe(false);
+    // The only change this hop emits is the version bump.
+    expect(changes.map((c) => c.path)).toEqual(['schema_version']);
+  });
+
+  test('v8 to v9 preserves an existing triggers table byte-for-byte', () => {
+    const triggers = [{ on: 'accepted', workflow: 'decompose', description: 'fire next layer' }];
+    const config = { schema_version: '8', triggers };
+    const [target] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect(target.triggers).toEqual(triggers);
+  });
+
+  test('v9 config with a triggers table validates clean', () => {
+    const config = {
+      schema_version: '9',
+      triggers: [{ on: 'ready', workflow: 'orchestrate' }],
+    };
+    const errors = validateConfig(config, PROVE_SCHEMA);
+    expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
+  });
+});
+
 describe('TestFullChain', () => {
   test('full v0 to current chain applies all hops in order', () => {
     const config = {
@@ -629,6 +803,7 @@ describe('TestFullChain', () => {
     const idxScopesTools = changeText.findIndex((s) => s.includes('scopes.tools'));
     const idxScrum = changeText.findIndex((s) => s.includes('tools.scrum'));
     const idxDevMode = changeText.findIndex((s) => s.includes('dev_mode'));
+    const idxBrief = changeText.findIndex((s) => s.includes('+ brief:'));
 
     expect(idxAdd).toBeGreaterThanOrEqual(0);
     expect(idxClaude).toBeGreaterThan(idxAdd);
@@ -636,6 +811,7 @@ describe('TestFullChain', () => {
     expect(idxScopesTools).toBeGreaterThan(idxIndex);
     expect(idxScrum).toBeGreaterThan(idxScopesTools);
     expect(idxDevMode).toBeGreaterThan(idxScrum);
+    expect(idxBrief).toBeGreaterThan(idxDevMode);
 
     // v1->v2 renames stage -> phase
     const validators = target.validators as Record<string, unknown>[];
@@ -666,6 +842,15 @@ describe('TestFullChain', () => {
 
     // v5->v6 seeds dev_mode: false
     expect(target.dev_mode).toBe(false);
+
+    // v7->v8 seeds brief/memory/decomposition with defaults
+    expect(target.brief).toEqual({
+      single_pass_token_threshold: 8000,
+      max_synthesis_retries: 2,
+      prose_judge_on: true,
+    });
+    expect(target.memory).toEqual({ stale_threshold_days: 90 });
+    expect(target.decomposition).toEqual({ auto_accept_through: 'none' });
   });
 });
 

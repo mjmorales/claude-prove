@@ -14,7 +14,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 
 export interface TaskPromptOpts {
   runDir: string;
@@ -28,11 +28,25 @@ interface PlanStep {
   title?: string;
 }
 
+/**
+ * Acceptance criterion on a plan task. The v3 shape is structured (`text` +
+ * optional `verifies_by`/`check`, forwarded from scrum via `compile-plan`); a
+ * legacy v2 string (an unmigrated plan.json) is tolerated and renders as its
+ * own text. PRD acceptance_criteria stay bare strings.
+ */
+type PlanCriterion =
+  | string
+  | {
+      text?: string;
+      verifies_by?: string;
+      check?: string;
+    };
+
 interface PlanTask {
   id: string;
   title?: string;
   description?: string;
-  acceptance_criteria?: string[];
+  acceptance_criteria?: PlanCriterion[];
   steps?: PlanStep[];
 }
 
@@ -159,7 +173,7 @@ function renderTaskPrompt(input: RenderInput): string {
   if (ac.length > 0) {
     sections.push('## Task Acceptance Criteria');
     sections.push('');
-    sections.push(formatBulletList(ac));
+    sections.push(formatCriteriaList(ac));
     sections.push('');
   }
 
@@ -230,8 +244,11 @@ function renderTaskPrompt(input: RenderInput): string {
     [
       '- **DO NOT** spawn agents with `isolation: "worktree"`. You are already in a worktree — nested worktrees cause exponential resource growth.',
       '- **DO NOT** use the Agent tool with `run_in_background: true` for heavy workloads. You are a leaf worker, not an orchestrator.',
+      "- **DO NOT** run `claude-prove store …` or any store-opening `claude-prove scrum …` command from this worktree. Every worktree shares ONE `.prove/prove.db` (resolved through git's common directory), and opening it AUTO-MIGRATES that shared store to your in-flight schema version — which corrupts the migration log when a sibling worktree carries a different version. Validate schema and store changes with the in-memory test suite (`bun test`); to exercise the CLI by hand, isolate it against a throwaway store with `--workspace-root <tmpdir>`.",
     ].join('\n'),
   );
+  sections.push('');
+  sections.push(renderCheckpointInterrupt(opts.runDir, opts.projectRoot));
   sections.push('');
   sections.push('## When Done');
   sections.push('');
@@ -257,8 +274,64 @@ function renderTaskPrompt(input: RenderInput): string {
   return `${sections.join('\n')}\n`;
 }
 
+/**
+ * Cooperative checkpoint-interrupt protocol (Layer 2) for the worker prompt.
+ *
+ * Best-effort graceful interrupt that layers ON TOP of the Layer-1
+ * cancel-and-redispatch floor — it never replaces it. The driver raises a
+ * cancel flag (a `CANCEL` file under the run dir); the worker polls it at
+ * natural checkpoints and, when set, writes a `synthesis` reasoning-log entry
+ * capturing progress + next steps, commits work-in-progress, and self-exits so
+ * a re-dispatch RESUMES from the handoff rather than restarting. A non-polling
+ * or stuck worker will not stop here — the token budget / subagent timeout
+ * (Layer 1) remains the hard backstop.
+ *
+ * A relative run dir is absolutized against `projectRoot` (the main worktree
+ * root), so the embedded flag path and handoff-append command target the main
+ * worktree's `.prove/runs/...` tree — never the worker's own task worktree,
+ * where `.prove/` is gitignored and absent.
+ */
+function renderCheckpointInterrupt(runDir: string, projectRoot: string): string {
+  const resolvedRunDir = isAbsolute(runDir) ? runDir : join(projectRoot, runDir);
+  const cancelFlag = join(resolvedRunDir, 'CANCEL');
+  return [
+    '## Cooperative checkpoint-interrupt (Layer 2)',
+    '',
+    'The driver can ask for an early, graceful stop by writing a cancel-flag file. Poll it at natural checkpoints (after a logical unit of work, before starting the next file or step):',
+    '',
+    '```bash',
+    `test -f "${cancelFlag}" && echo "cancel requested"`,
+    '```',
+    '',
+    'When the cancel-flag is present, perform a graceful handoff so a re-dispatch RESUMES instead of restarting:',
+    '',
+    `1. Write a \`synthesis\` reasoning-log entry capturing progress so far and the concrete next steps. Compose the entry JSON with the Write tool, then append it: \`claude-prove acb log append --run-dir "${resolvedRunDir}" --file <entry.json>\`.`,
+    '2. Commit your work-in-progress (`feat({scope}): WIP — graceful handoff at checkpoint`).',
+    '3. Self-exit; do not continue past the checkpoint.',
+    '',
+    'This path is best-effort and layers ON TOP of the Layer-1 cancel-and-redispatch floor — it never replaces it. When you are mid-step or cannot stop cleanly, keep working: the token budget and subagent timeout remain the hard backstop.',
+  ].join('\n');
+}
+
 function formatBulletList(items: string[]): string {
   return items.map((c) => `- ${c}`).join('\n');
+}
+
+/**
+ * Render structured plan-task criteria as a bullet list. Each line is the
+ * criterion `text`, annotated with `(verifies_by: check)` when a verification
+ * kind is present so the implementer sees how the criterion will be checked.
+ */
+function formatCriteriaList(criteria: PlanCriterion[]): string {
+  return criteria
+    .map((c) => {
+      if (typeof c === 'string') return `- ${c}`;
+      const text = c.text ?? '';
+      if (!c.verifies_by) return `- ${text}`;
+      const check = c.check ? `: ${c.check}` : '';
+      return `- ${text} (${c.verifies_by}${check})`;
+    })
+    .join('\n');
 }
 
 function readJson<T>(path: string): T | null {

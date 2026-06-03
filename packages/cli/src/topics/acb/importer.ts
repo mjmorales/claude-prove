@@ -199,13 +199,18 @@ function runImport(workspaceRoot: string, legacyPath: string): ImportResult {
       insertReviews(proveDb, reviews);
       proveDb.run('COMMIT');
     } catch (err) {
+      const insertMsg = err instanceof Error ? err.message : String(err);
+      let errorMsg = insertMsg;
       try {
         proveDb.run('ROLLBACK');
-      } catch {
-        /* ignore rollback errors; the original is already fatal */
+      } catch (rbErr) {
+        // Capture the rollback failure so both errors are observable. The
+        // finally block below closes the connection (implicitly rolling back
+        // any open transaction), so nothing is left dangling.
+        const rbMsg = rbErr instanceof Error ? rbErr.message : String(rbErr);
+        errorMsg = `${insertMsg}; rollback also failed: ${rbMsg}`;
       }
-      const message = err instanceof Error ? err.message : String(err);
-      return { imported: false, reason: 'error', error: message };
+      return { imported: false, reason: 'error', error: errorMsg };
     }
 
     deleteLegacyFiles(legacyPath);

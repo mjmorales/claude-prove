@@ -18,6 +18,22 @@ export interface MigrationResult {
   alreadyUpToDate: DomainSnapshot[];
 }
 
+/**
+ * Thrown when a domain's migration batch fails. Migrations are all-or-nothing
+ * within a domain (the failing batch rolls back) but committed across domains:
+ * if domain A lands and domain B then throws, A's migrations stay durably
+ * applied. `partial` carries the migrations that committed before the failure
+ * so a caller can report exactly which domains landed.
+ */
+export class MigrationError extends Error {
+  readonly partial: MigrationResult;
+  constructor(message: string, partial: MigrationResult, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'MigrationError';
+    this.partial = partial;
+  }
+}
+
 const MIGRATIONS_LOG_SQL = `
   CREATE TABLE IF NOT EXISTS _migrations_log (
     domain TEXT NOT NULL,
@@ -37,6 +53,11 @@ const MIGRATIONS_LOG_SQL = `
  * Returns a structured result partitioning domains into `applied` (new
  * versions landed this run) and `alreadyUpToDate` (domain + max version
  * that was already recorded).
+ *
+ * Domains migrate independently and commit as they finish, so a later domain
+ * throwing does NOT roll back earlier domains. On such a partial failure this
+ * throws a `MigrationError` whose `partial` field reports the migrations that
+ * already committed (the local `result` is otherwise lost with the throw).
  */
 export function runMigrations(store: Store): MigrationResult {
   const db = store.getDb();
@@ -58,6 +79,9 @@ export function runMigrations(store: Store): MigrationResult {
       continue;
     }
 
+    // Snapshot the applied count before this domain's batch so a rolled-back
+    // batch leaves no phantom entries in the reported partial result.
+    const appliedBeforeDomain = result.applied.length;
     const tx = db.transaction(() => {
       for (const m of pending) {
         m.up(db);
@@ -68,7 +92,18 @@ export function runMigrations(store: Store): MigrationResult {
         result.applied.push({ domain, version: m.version, description: m.description });
       }
     });
-    tx();
+    try {
+      tx();
+    } catch (err) {
+      // The failing batch rolled back; drop its phantom entries, then surface
+      // the migrations that earlier domains durably committed.
+      result.applied.length = appliedBeforeDomain;
+      throw new MigrationError(
+        `migration failed for domain '${domain}': ${err instanceof Error ? err.message : String(err)}`,
+        result,
+        { cause: err },
+      );
+    }
   }
 
   return result;

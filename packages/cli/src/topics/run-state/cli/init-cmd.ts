@@ -1,14 +1,14 @@
 /**
  * `run-state init --branch B --slug S --plan FILE [--prd FILE] [--overwrite]`
  *
- * Mirrors Python `cmd_init`: validate plan (+ optional prd), write
- * prd.json/plan.json/state.json under the resolved run directory.
+ * Validate plan (+ optional prd), write prd.json/plan.json/state.json under
+ * the resolved run directory.
  */
 
 import { readFileSync } from 'node:fs';
 import { type PlanData, type PrdData, StateError, initRun } from '../state';
 import { validateData } from '../validate';
-import { ResolveError, defaultRunsRoot } from './resolve';
+import { defaultRunsRoot } from './resolve';
 
 export interface InitFlags {
   branch?: string;
@@ -79,10 +79,16 @@ export function runInit(flags: InitFlags): number {
     console.log(`initialized: ${paths.root}`);
     return 0;
   } catch (err) {
-    if (err instanceof StateError || err instanceof ResolveError) {
+    if (err instanceof StateError) {
       console.error(`error: ${err.message}`);
       return 2;
     }
-    throw err;
+    // initRun does raw fs ops (mkdirSync, lock touch, atomic writes) that
+    // raise plain Node Errors (EACCES, ENOSPC, read-only mount), not
+    // StateError. Catch them as I/O failures and exit 1 (the documented I/O
+    // code) instead of crashing the CLI with a raw stack trace.
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`error: failed to initialize run: ${msg}`);
+    return 1;
   }
 }

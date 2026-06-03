@@ -2,7 +2,9 @@
  * `claude-prove scrum status [--human] [--workspace-root W]`
  *
  * Snapshot of active scrum state:
- *   - active_tasks      — every non-terminal, non-deleted task
+ *   - active_tasks      — every non-terminal, non-deleted task (flat list)
+ *   - task_tree         — the parent_id containment forest (epic→story→task),
+ *                         each node carrying its rolled-up `derived_status`
  *   - milestones        — planned + active milestones (excludes closed)
  *   - total_milestones  — count of every milestone row including closed
  *   - recent_events     — last 20 cross-task events
@@ -12,6 +14,11 @@
  * The stderr line always carries a one-line summary so tailing hooks
  * see context regardless of format.
  *
+ * The tree surfaces the v3 `derivedStatus` rollup that was computed
+ * and thrown away at the operator boundary. Flat tasks
+ * (parent_id NULL, no children) appear as single-node roots, so legacy stores
+ * render exactly as before plus a now-trivial tree.
+ *
  * Exit codes:
  *   0  success
  *   1  workspace unresolvable or store open error
@@ -19,8 +26,8 @@
 
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
-import { type ScrumStore, openScrumStore } from '../store';
-import type { TaskStatus } from '../types';
+import { type ScrumStore, foldChildStatuses, openScrumStore } from '../store';
+import type { ScrumTask, TaskLayer, TaskStatus } from '../types';
 
 export interface StatusCmdFlags {
   human?: boolean;
@@ -29,7 +36,15 @@ export interface StatusCmdFlags {
 
 const RECENT_EVENT_LIMIT = 20;
 
-const ACTIVE_STATUSES: TaskStatus[] = ['backlog', 'ready', 'in_progress', 'review', 'blocked'];
+const ACTIVE_STATUSES: TaskStatus[] = [
+  'backlog',
+  'proposed',
+  'accepted',
+  'ready',
+  'in_progress',
+  'review',
+  'blocked',
+];
 
 export function runStatusCmd(flags: StatusCmdFlags): number {
   const workspaceRoot =
@@ -53,14 +68,29 @@ export function runStatusCmd(flags: StatusCmdFlags): number {
   }
 }
 
-interface Snapshot {
+/**
+ * One node of the containment forest. `status` is the task's own authored
+ * status; `derived_status` is the rolled-up status over its subtree (equal to
+ * `status` for a leaf). Children are nested depth-first in `created_at` order.
+ */
+export interface TreeNode {
+  id: string;
+  title: string;
+  layer: TaskLayer | null;
+  status: TaskStatus;
+  derived_status: TaskStatus;
+  children: TreeNode[];
+}
+
+export interface Snapshot {
   active_tasks: ReturnType<ScrumStore['listTasks']>;
+  task_tree: TreeNode[];
   milestones: ReturnType<ScrumStore['listMilestones']>;
   total_milestones: number;
   recent_events: ReturnType<ScrumStore['listRecentEvents']>;
 }
 
-function buildSnapshot(store: ScrumStore): Snapshot {
+export function buildSnapshot(store: ScrumStore): Snapshot {
   const allTasks = store.listTasks();
   const active = allTasks.filter((t) => ACTIVE_STATUSES.includes(t.status));
   const allMilestones = store.listMilestones();
@@ -68,10 +98,74 @@ function buildSnapshot(store: ScrumStore): Snapshot {
   const recent = store.listRecentEvents(RECENT_EVENT_LIMIT);
   return {
     active_tasks: active,
+    task_tree: buildTaskTree(allTasks),
     milestones,
     total_milestones: allMilestones.length,
     recent_events: recent,
   };
+}
+
+/**
+ * Assemble the `parent_id` forest from the full non-deleted task list in a
+ * single pass. `allTasks` already excludes soft-deleted rows and is
+ * `created_at`-ordered, so a one-shot in-memory children index reproduces
+ * exactly what per-node `getChildren` would return (same rows, same order)
+ * without re-querying per node, and `derivedStatus` is folded from that index
+ * instead of re-descending the subtree per node — turning the prior
+ * O(N x depth) query fan-out into a single O(N) walk.
+ *
+ * Roots are the parent-less tasks; each node's children stay `created_at`-
+ * ordered and its `derived_status` is the rollup over its subtree (equal to
+ * `status` for a leaf). A `seen` set prevents a malformed `parent_id` cycle
+ * from looping the tree build; `derivedStatus` carries its own independent
+ * cycle guard, matching the store's per-node rollup, so a cycle still yields a
+ * defined status rather than recursing forever.
+ */
+function buildTaskTree(allTasks: ScrumTask[]): TreeNode[] {
+  const childrenByParent = new Map<string, ScrumTask[]>();
+  for (const task of allTasks) {
+    if (task.parent_id === null) continue;
+    const siblings = childrenByParent.get(task.parent_id);
+    if (siblings) siblings.push(task);
+    else childrenByParent.set(task.parent_id, [task]);
+  }
+
+  // Rollup over the subtree of `id`, replicating the store's `rollupStatus`:
+  // a leaf returns its authored status; a parent folds its children's DERIVED
+  // statuses by precedence. `visited` is the ancestor chain on the current
+  // path — re-entering a node (a `parent_id` cycle) short-circuits to its
+  // authored status, identical to the store's per-node guard.
+  const byId = new Map(allTasks.map((t) => [t.id, t] as const));
+  const derivedStatus = (id: string, visited: Set<string>): TaskStatus => {
+    const task = byId.get(id);
+    // Every child id resolves from `allTasks`, so this is unreachable in
+    // practice; the fallback keeps the lookup total for a defensive call.
+    if (!task) return 'backlog';
+    if (visited.has(id)) return task.status;
+    const children = childrenByParent.get(id);
+    if (children === undefined || children.length === 0) return task.status;
+    visited.add(id);
+    const childStatuses = children.map((c) => derivedStatus(c.id, visited));
+    visited.delete(id);
+    return foldChildStatuses(childStatuses);
+  };
+
+  const build = (task: ScrumTask, seen: Set<string>): TreeNode => {
+    seen.add(task.id);
+    const children = (childrenByParent.get(task.id) ?? [])
+      .filter((c) => !seen.has(c.id))
+      .map((c) => build(c, seen));
+    return {
+      id: task.id,
+      title: task.title,
+      layer: task.layer,
+      status: task.status,
+      derived_status: derivedStatus(task.id, new Set<string>()),
+      children,
+    };
+  };
+  const seen = new Set<string>();
+  return allTasks.filter((t) => t.parent_id === null).map((root) => build(root, seen));
 }
 
 function renderHumanTable(snapshot: Snapshot): string {
@@ -88,9 +182,32 @@ function renderHumanTable(snapshot: Snapshot): string {
     lines.push(`  [${m.status}] ${m.id}  ${m.title}`);
   }
   lines.push('');
+  lines.push(`Task tree (${snapshot.task_tree.length} root${plural(snapshot.task_tree.length)}):`);
+  for (const root of snapshot.task_tree) renderTreeNode(root, 1, lines);
+  lines.push('');
   lines.push(`Recent events (${snapshot.recent_events.length}):`);
   for (const e of snapshot.recent_events) {
     lines.push(`  ${e.ts}  ${e.task_id}  ${e.kind}`);
   }
   return `${lines.join('\n')}\n`;
+}
+
+/**
+ * Render one tree node and its subtree, two spaces per depth level. A node
+ * shows its `derived_status`; a parent whose own authored status differs from
+ * the rollup appends `(self: <status>)` so the distinction stays visible.
+ */
+function renderTreeNode(node: TreeNode, depth: number, lines: string[]): void {
+  const indent = '  '.repeat(depth);
+  const layer = node.layer ? `${node.layer}: ` : '';
+  const selfNote =
+    node.children.length > 0 && node.status !== node.derived_status
+      ? `  (self: ${node.status})`
+      : '';
+  lines.push(`${indent}[${node.derived_status}] ${layer}${node.id}  ${node.title}${selfNote}`);
+  for (const child of node.children) renderTreeNode(child, depth + 1, lines);
+}
+
+function plural(n: number): string {
+  return n === 1 ? '' : 's';
 }

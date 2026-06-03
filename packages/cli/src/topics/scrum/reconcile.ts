@@ -24,8 +24,12 @@
 
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative } from 'node:path';
+import type { StoryBriefInput } from '../acb/milestone-brief';
+import type { LogEntry } from '../acb/reasoning-log';
+import { listEntries } from '../acb/reasoning-log-store';
 import type { ScrumStore } from './store';
-import type { ScrumEvent, ScrumTask } from './types';
+import { STALENESS_THRESHOLD_HOURS } from './types';
+import type { EscalationRow, ScrumEvent, ScrumTask, TaskStatus } from './types';
 
 // ---------------------------------------------------------------------------
 // Public constants
@@ -76,6 +80,158 @@ export interface SweepResult {
   errors: Error[];
 }
 
+/** One escalation the staleness floor auto-bubbled, as a flat audit ref. */
+export interface AutoBubbledEscalation {
+  /** The closed (`auto_bubbled`) row's id. */
+  from_id: number;
+  /** The freshly-appended `open` row's id one rung up. */
+  to_id: number;
+  task_id: string;
+  /** The rung the closed row sat at. */
+  from_layer: EscalationRow['layer'];
+  /** The rung the new open row sits at (exactly one up). */
+  to_layer: EscalationRow['layer'];
+  /** The closed row's age in hours at evaluation time. */
+  age_hours: number;
+}
+
+export interface StaleEscalationSweepResult {
+  /** Threshold (hours) the sweep evaluated against. */
+  threshold_hours: number;
+  /** Open rows inspected (every currently-open escalation). */
+  inspected: number;
+  /** Rows that crossed the threshold and were auto-bubbled. */
+  bubbled: AutoBubbledEscalation[];
+  /**
+   * Rows past the threshold that could NOT bubble because they already sit at
+   * the top of the chain (`human` — nowhere higher to walk). Reported, not
+   * mutated: a `human`-rung escalation is the terminal authority's worklist.
+   */
+  atTopOfChain: number;
+}
+
+// ---------------------------------------------------------------------------
+// Trigger bindings — declared status-transition -> bound next-action
+// ---------------------------------------------------------------------------
+
+/**
+ * A declared trigger binding (mirrors `PROVE_SCHEMA.triggers[]`). A task
+ * entering the `on` status surfaces `workflow` as a bound next-action. The
+ * reconciler consults the table on session transitions — there is no resident
+ * evaluator, so a binding fires only when a session reconciles.
+ */
+export interface TriggerBinding {
+  on: string;
+  workflow: string;
+  description?: string;
+}
+
+/** A pending bound next-action the reconciler surfaces for a task in `on`. */
+export interface BoundAction {
+  task_id: string;
+  title: string;
+  status: string;
+  workflow: string;
+  description: string;
+}
+
+/**
+ * The bindings whose `on` matches `status`. Pure consult over the declared
+ * table — no store, no model, no daemon. Empty when nothing fires.
+ */
+export function triggerBindingsForStatus(
+  triggers: TriggerBinding[],
+  status: string,
+): TriggerBinding[] {
+  return triggers.filter((t) => t.on === status);
+}
+
+/**
+ * Resolve the pending bound next-actions across the store: for every binding,
+ * every non-deleted task currently sitting in its `on` status yields one
+ * BoundAction. This is the session-transition surface — a task parked in a
+ * triggering status (e.g. `accepted`) has a pending bound action the next
+ * driver should take. Capped at `limit`; ordered by binding order then the
+ * store's task order. An empty `triggers` table yields no actions.
+ */
+export function computeBoundActions(
+  store: ScrumStore,
+  triggers: TriggerBinding[],
+  limit: number,
+): BoundAction[] {
+  const out: BoundAction[] = [];
+  for (const binding of triggers) {
+    for (const task of store.listTasks({ status: binding.on as TaskStatus })) {
+      if (out.length >= limit) return out;
+      out.push({
+        task_id: task.id,
+        title: task.title,
+        status: task.status,
+        workflow: binding.workflow,
+        description: binding.description ?? '',
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * The reasoning-log entry types curation surfaces as promotion candidates.
+ * These four carry durable, attention-bearing signal a
+ * milestone-close should lift toward `scrum_decisions`: `decision` (→ adr),
+ * `hack`/`risk` (→ pattern/tracked debt), `assumption` (→ glossary/decision).
+ * `bailout`/`discovery`/`context`/`synthesis`/`review_feedback`/`verification`
+ * stay in the run log — they are run-local narration, not durable memory.
+ */
+export const CURATION_ENTRY_TYPES = ['hack', 'risk', 'decision', 'assumption'] as const;
+export type CurationEntryType = (typeof CURATION_ENTRY_TYPES)[number];
+
+/**
+ * One promotion candidate inside a `curation_proposed` event. A flat ref — the
+ * curation skill reads the full entry file (alternatives, cleanup_condition,
+ * severity, …) from `run_path` when it needs more than the body to classify.
+ */
+export interface CurationCandidate {
+  /** Reasoning-log entry id (the entry filename stem). */
+  entry_id: string;
+  type: CurationEntryType;
+  /** Authoring agent (the `log/<agent>/` dir segment). */
+  agent: string;
+  /** Repo-relative run dir the entry was read from. */
+  run_path: string;
+  /** The entry's attention-bearing prose body. */
+  body: string;
+}
+
+/** Payload carried by a task-scoped `curation_proposed` event. */
+export interface CurationProposedPayload {
+  /** The milestone whose close triggered the proposal. */
+  milestone_id: string;
+  candidates: CurationCandidate[];
+}
+
+/** Outcome of {@link reconcileMilestoneClosed}, one summary per milestone. */
+export interface MilestoneCurationResult {
+  milestoneId: string;
+  /** Tasks that had findings and were not already curated for this milestone. */
+  emitted: Array<{ taskId: string; candidateCount: number }>;
+  /** Tasks skipped because they carried zero curation-relevant findings. */
+  skippedNoFindings: number;
+  /** Tasks skipped because a `curation_proposed` event already existed. */
+  skippedAlreadyEmitted: number;
+  /**
+   * Milestone-close journal compaction (v22). One Lore summary is rolled up per
+   * team TERMINATING on this milestone (`terminates_on_milestone === <id>`) from
+   * the milestone journal — the curation candidates gathered across the
+   * milestone's tasks. Empty when no team terminates on this milestone (a no-op
+   * that leaves the per-task curation flow unchanged). Idempotent: a re-close
+   * skips a team that already carries the compaction summary.
+   */
+  compactedTeams: Array<{ teamSlug: string; loreId: number; candidateCount: number }>;
+  /** Terminating teams skipped because their compaction Lore already exists. */
+  skippedAlreadyCompacted: number;
+}
+
 // ---------------------------------------------------------------------------
 // Internal narrow types — stripped-down shapes of the fields we actually read
 // ---------------------------------------------------------------------------
@@ -110,8 +266,17 @@ interface PlanJsonLite {
  * the linked task's context bundle. Does not throw on orphan runs — returns
  * a `kind: 'orphan'` result instead. Malformed JSON returns `kind: 'skipped'`
  * with `reason` populated so callers can surface the failure.
+ *
+ * `projectRoot` anchors repo-relative run paths during the bundle rebuild; it
+ * defaults to `process.cwd()`. The Stop-hook sweep passes the project dir it
+ * resolved from the Claude Code payload so the rebuild stays correct when the
+ * reconcile runs from a subdirectory or a linked worktree.
  */
-export function reconcileRunCompleted(runStatePath: string, store: ScrumStore): ReconcileRunResult {
+export function reconcileRunCompleted(
+  runStatePath: string,
+  store: ScrumStore,
+  projectRoot: string = process.cwd(),
+): ReconcileRunResult {
   const runDir = dirname(runStatePath);
   const planPath = join(runDir, 'plan.json');
 
@@ -148,10 +313,10 @@ export function reconcileRunCompleted(runStatePath: string, store: ScrumStore): 
   linkRunForTask(store, taskId, runDir, state);
   appendRunCompletedEvent(store, taskId, runDir, state);
   appendStewardVerdictIfPresent(store, taskId, state);
-  transitionTaskIfTerminal(store, task, state);
-  rebuildContextBundle(store, taskId);
+  const blockedReason = transitionTaskIfTerminal(store, task, state);
+  rebuildContextBundle(store, taskId, projectRoot);
 
-  return { kind: 'reconciled', taskId, runPath: runDir };
+  return { kind: 'reconciled', taskId, runPath: runDir, reason: blockedReason ?? undefined };
 }
 
 // ---------------------------------------------------------------------------
@@ -165,14 +330,24 @@ export function reconcileRunCompleted(runStatePath: string, store: ScrumStore): 
  * what state.json already records), decisions cited (events kind
  * `decision_linked`), last 5 run summaries, and a concatenated summary of
  * recent event titles.
+ *
+ * `projectRoot` anchors repo-relative run paths read from linked runs'
+ * state.json; it defaults to `process.cwd()`. Callers that know the project
+ * root (the Stop-hook sweep resolves it from the Claude Code payload, which
+ * may differ from cwd) pass it so bundle aggregation stays correct when the
+ * reconcile runs from a subdirectory or a linked worktree.
  */
-export function buildContextBundle(taskId: string, store: ScrumStore): ContextBundle {
+export function buildContextBundle(
+  taskId: string,
+  store: ScrumStore,
+  projectRoot: string = process.cwd(),
+): ContextBundle {
   const runs = store.listRunsForTask(taskId);
   const events = store.listEventsForTask(taskId, 200);
 
-  const files = collectFilesTouched(runs);
+  const files = collectFilesTouched(runs, projectRoot);
   const decisions = collectDecisions(events, store);
-  const runSummaries = summarizeRuns(runs).slice(-5);
+  const runSummaries = summarizeRuns(runs, projectRoot).slice(-5);
   const summary_text = buildSummaryText(events);
 
   return {
@@ -219,7 +394,7 @@ export function sweepUnreconciled(
     if (mtimeMs <= sinceTs) continue;
 
     try {
-      const outcome = reconcileRunCompleted(statePath, store);
+      const outcome = reconcileRunCompleted(statePath, store, root);
       if (outcome.kind === 'reconciled' || outcome.kind === 'orphan') {
         result.reconciled++;
       }
@@ -229,6 +404,407 @@ export function sweepUnreconciled(
   }
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// bubbleStaleEscalations — Forced Bubble-Up of aged escalations
+// ---------------------------------------------------------------------------
+
+/**
+ * Auto-bubble every `open` escalation whose age exceeds the staleness threshold
+ * one rung up the authority chain. This is the engine's escalation-of-last-
+ * resort: an escalation no receiver acted on does not sit forever at one rung —
+ * the staleness clock promotes it so it reaches a higher authority and surfaces
+ * higher in the worklist.
+ *
+ * Evaluated by the reconciler hook on session-start — there is NO resident loop
+ * or timer. The hook is the only firing point: the work is reconciled into state
+ * on the session transition, then surfaced to whoever drives next via `alerts`
+ * and the `nextReady` ranking (each bubble appends the same `blocker_raised`
+ * event a hand-raised escalation does).
+ *
+ * `nowMs` is injected so the evaluation never reads the wall clock directly —
+ * tests cross the threshold with a fixed clock, not `setTimeout`. An escalation
+ * is stale when `(nowMs − created_at) > thresholdHours` (strict `>`; a row at
+ * exactly the threshold is not yet stale). A stale row already at the top of the
+ * chain (`human`) cannot bubble — it is counted in `atTopOfChain`, never
+ * mutated. Each bubble reuses {@link ScrumStore.autoBubbleEscalation}, so the
+ * marker / forward pointer / event surface are written there.
+ */
+export function bubbleStaleEscalations(
+  store: ScrumStore,
+  nowMs: number,
+  thresholdHours: number = STALENESS_THRESHOLD_HOURS,
+): StaleEscalationSweepResult {
+  const thresholdMs = thresholdHours * 60 * 60 * 1000;
+  const result: StaleEscalationSweepResult = {
+    threshold_hours: thresholdHours,
+    inspected: 0,
+    bubbled: [],
+    atTopOfChain: 0,
+  };
+
+  // Snapshot the open rows BEFORE bubbling: an auto-bubble appends a fresh open
+  // row, and we must not re-evaluate that brand-new (un-aged) row in the same
+  // pass. Iterating the snapshot keeps the sweep single-rung-per-escalation.
+  for (const escalation of store.listOpenEscalationRows()) {
+    result.inspected++;
+    const ageMs = ageMillis(escalation.created_at, nowMs);
+    if (ageMs === null || ageMs <= thresholdMs) continue;
+
+    const nextLayer = nextLayerOf(escalation);
+    if (nextLayer === null) {
+      result.atTopOfChain++;
+      continue;
+    }
+
+    const bubbled = store.autoBubbleEscalation(escalation.id, new Date(nowMs).toISOString());
+    result.bubbled.push({
+      from_id: escalation.id,
+      to_id: bubbled.id,
+      task_id: escalation.task_id,
+      from_layer: escalation.layer,
+      to_layer: bubbled.layer,
+      age_hours: Math.floor(ageMs / (60 * 60 * 1000)),
+    });
+  }
+
+  return result;
+}
+
+/** Age in ms of an escalation against `nowMs`, or null when `created_at` is unparseable. */
+function ageMillis(createdAt: string, nowMs: number): number | null {
+  const ms = Date.parse(createdAt);
+  if (Number.isNaN(ms)) return null;
+  return Math.max(0, nowMs - ms);
+}
+
+/** The rung one above an escalation's, or null when it already sits at the top. */
+function nextLayerOf(escalation: EscalationRow): EscalationRow['layer'] | null {
+  const idx = ESCALATION_CHAIN_ORDER.indexOf(escalation.layer);
+  if (idx < 0 || idx + 1 >= ESCALATION_CHAIN_ORDER.length) return null;
+  return ESCALATION_CHAIN_ORDER[idx + 1] ?? null;
+}
+
+/**
+ * Bottom-to-top rung order, mirroring the store's `ESCALATION_CHAIN`. Inlined as
+ * a local const so this module's top-of-chain check needs no store round-trip;
+ * the store boundary remains the authority that rejects a bubble past `human`.
+ */
+const ESCALATION_CHAIN_ORDER: EscalationRow['layer'][] = [
+  'implementer',
+  'engineer',
+  'tech_lead',
+  'pm',
+  'strategy',
+  'human',
+];
+
+// ---------------------------------------------------------------------------
+// reconcileMilestoneClosed — Forced Bubble-Up of curation candidates
+// ---------------------------------------------------------------------------
+
+/**
+ * On milestone close, walk every task in the milestone, gather the
+ * curation-relevant reasoning-log findings across its linked runs, and emit
+ * one task-scoped `curation_proposed` event per task that has any. The work
+ * surfaces structurally on the close transition rather than as opt-in
+ * hygiene. The reasoning log is write-only until this runs; the event is what
+ * the curation *skill* reads to propose Journal→Codex promotions.
+ *
+ * Engine side only: this surfaces candidates mechanically. The judgment —
+ * which findings become durable `scrum_decisions`, and as what `kind` — is the
+ * model-owned curation skill.
+ *
+ * Idempotent two ways: (1) a task already carrying a `curation_proposed`
+ * event for this milestone is skipped, so a re-close never double-emits;
+ * (2) a task with zero findings is a no-op. `projectDir` resolves repo-relative
+ * run paths (defaults to `process.cwd()`); the CLI passes the workspace root.
+ *
+ * Milestone-close journal compaction (v22): in the SAME close transition, the
+ * milestone journal — every curation candidate gathered across the milestone's
+ * tasks — is rolled up into ONE Lore summary per team TERMINATING on this
+ * milestone (`terminates_on_milestone === milestoneId`). When no team terminates
+ * on the milestone, this is a no-op and the per-task curation flow above is
+ * unchanged. The rollup is a deterministic concatenation the engine surfaces; the
+ * model refines it later.
+ */
+export function reconcileMilestoneClosed(
+  milestoneId: string,
+  store: ScrumStore,
+  projectDir?: string,
+): MilestoneCurationResult {
+  const root = projectDir ?? process.cwd();
+  const result: MilestoneCurationResult = {
+    milestoneId,
+    emitted: [],
+    skippedNoFindings: 0,
+    skippedAlreadyEmitted: 0,
+    compactedTeams: [],
+    skippedAlreadyCompacted: 0,
+  };
+
+  // The full milestone journal — every curation candidate across every task —
+  // is gathered once, both to drive the per-task curation events and to feed the
+  // per-terminating-team Lore compaction below.
+  const journal: CurationCandidate[] = [];
+
+  for (const task of store.listTasks({ milestoneId })) {
+    const candidates = collectCurationCandidates(store, task.id, root);
+    journal.push(...candidates);
+    if (hasCurationEventForMilestone(store, task.id, milestoneId)) {
+      result.skippedAlreadyEmitted++;
+      continue;
+    }
+    if (candidates.length === 0) {
+      result.skippedNoFindings++;
+      continue;
+    }
+    const payload: CurationProposedPayload = { milestone_id: milestoneId, candidates };
+    store.appendEvent({ taskId: task.id, kind: 'curation_proposed', payload });
+    result.emitted.push({ taskId: task.id, candidateCount: candidates.length });
+  }
+
+  compactJournalForTerminatingTeams(milestoneId, journal, store, result);
+
+  return result;
+}
+
+/**
+ * Deterministic marker embedded in a milestone-close compaction Lore body, used
+ * as the per-(team, milestone) idempotency key. A re-close skips a terminating
+ * team that already carries a Lore entry whose body opens with this marker, so
+ * compaction never double-writes — mirroring the per-task `curation_proposed`
+ * dedup that guards the curation flow.
+ */
+function compactionMarker(milestoneId: string): string {
+  return `[milestone-close-summary:${milestoneId}]`;
+}
+
+/**
+ * Author id stamped on an engine-written compaction Lore. After a milestone
+ * close, a terminating team's roster is vacated, so no tech_lead is seated to
+ * author against — `recordLore` warn-allows the write (the team-of-one /
+ * bootstrapping tolerance). A fixed, recognizable id marks the rollup as
+ * engine-surfaced rather than a human-authored convention.
+ */
+const COMPACTION_AUTHOR_ID = 'ct-engine-compaction';
+
+/**
+ * Roll the milestone journal into one Lore summary per team terminating on this
+ * milestone. The terminating set is determinable from the team registry alone:
+ * every team whose `terminates_on_milestone` names this milestone, regardless of
+ * its current status (after a close the matching teams are already `inactive`,
+ * but they are still the right rollup targets). No terminating team → no-op.
+ *
+ * Idempotent: a team already carrying a compaction Lore for this milestone (its
+ * body opens with {@link compactionMarker}) is skipped, so a re-close never
+ * double-writes. The rollup body is a deterministic concatenation of the
+ * journal's candidate bodies — the engine surfaces a faithful starting point;
+ * the model refines it later.
+ */
+function compactJournalForTerminatingTeams(
+  milestoneId: string,
+  journal: CurationCandidate[],
+  store: ScrumStore,
+  result: MilestoneCurationResult,
+): void {
+  const marker = compactionMarker(milestoneId);
+  const terminating = store
+    .listTeams()
+    .filter((team) => team.terminates_on_milestone === milestoneId);
+
+  for (const team of terminating) {
+    if (store.listLores(team.slug).some((lore) => lore.body.startsWith(marker))) {
+      result.skippedAlreadyCompacted++;
+      continue;
+    }
+    const body = renderCompactionLore(marker, team.slug, journal);
+    const { row } = store.recordLore({
+      teamSlug: team.slug,
+      body,
+      authorContributorId: COMPACTION_AUTHOR_ID,
+    });
+    result.compactedTeams.push({
+      teamSlug: team.slug,
+      loreId: row.id,
+      candidateCount: journal.length,
+    });
+  }
+}
+
+/**
+ * Render the deterministic milestone-close compaction Lore body for one team. The
+ * body opens with the idempotency marker, then concatenates each journal
+ * candidate as a typed bullet. An empty journal still produces a valid summary
+ * (the marker plus a "no findings" line) so the rollup is recorded for every
+ * terminating team — the model can prune it later.
+ */
+function renderCompactionLore(
+  marker: string,
+  teamSlug: string,
+  journal: CurationCandidate[],
+): string {
+  const header = `${marker} Journal compaction for team '${teamSlug}' at milestone close.`;
+  if (journal.length === 0) {
+    return `${header}\n\n(no curation-relevant findings in the milestone journal)`;
+  }
+  const bullets = journal
+    .map((candidate) => `- [${candidate.type}] ${candidate.body} (from ${candidate.run_path})`)
+    .join('\n');
+  return `${header}\n\n${bullets}`;
+}
+
+// ---------------------------------------------------------------------------
+// gatherMilestoneStories — assemble the milestone-brief rollup input
+// ---------------------------------------------------------------------------
+
+/**
+ * Reduce every task in a milestone to one `StoryBriefInput`, merging the
+ * reasoning-log entries across the task's linked runs. This is the mechanical
+ * input the milestone brief synthesizes from: each story carries its
+ * attention-bearing entries (so the recursive preservation rule can prove none
+ * was dropped), its decisions, its shipped outcome, and — for a story that did
+ * not ship — its recorded terminal reason. The judgment of what the rollup
+ * *says* is the synthesizer skill's; this only gathers.
+ *
+ * A story `shipped` when its status is `done`. `outcome` is the body of its
+ * latest `synthesis` entry (the worker's hand-off-of-record). A run whose log
+ * dir is malformed is skipped rather than aborting the whole gather — a corrupt
+ * log must not block a milestone brief from rendering. `projectDir` resolves
+ * repo-relative run paths (defaults to `process.cwd()`); the CLI passes the
+ * workspace root.
+ */
+export function gatherMilestoneStories(
+  milestoneId: string,
+  store: ScrumStore,
+  projectDir?: string,
+): StoryBriefInput[] {
+  const root = projectDir ?? process.cwd();
+  const stories: StoryBriefInput[] = [];
+
+  for (const task of store.listTasks({ milestoneId })) {
+    const entries = collectStoryEntries(store, task.id, root);
+    stories.push({
+      story_id: task.id,
+      title: task.title,
+      shipped: task.status === 'done',
+      entries,
+      outcome: latestSynthesisOutcome(entries),
+      terminal_reason: task.terminal_reason,
+      terminal_detail: task.terminal_detail,
+    });
+  }
+
+  return stories;
+}
+
+/**
+ * Merge every linked run's reasoning log for a task, deduped by entry id (the
+ * same entry can surface through more than one linked run-path form). Sorted by
+ * `ts` so attention/decision derivation reads in chronological order.
+ */
+function collectStoryEntries(store: ScrumStore, taskId: string, projectDir: string): LogEntry[] {
+  const merged: LogEntry[] = [];
+  const seen = new Set<string>();
+
+  for (const run of store.listRunsForTask(taskId)) {
+    const runDir = isAbsolute(run.run_path) ? run.run_path : join(projectDir, run.run_path);
+    let entries: LogEntry[];
+    try {
+      entries = listEntries(runDir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (seen.has(entry.id)) continue;
+      seen.add(entry.id);
+      merged.push(entry);
+    }
+  }
+
+  merged.sort((a, b) => (a.ts === b.ts ? cmpAsc(a.id, b.id) : cmpAsc(a.ts, b.ts)));
+  return merged;
+}
+
+/** The body of the latest `synthesis` entry, or empty when the story has none. */
+function latestSynthesisOutcome(entries: LogEntry[]): string {
+  let outcome = '';
+  for (const entry of entries) {
+    if (entry.type === 'synthesis') outcome = entry.outcome;
+  }
+  return outcome;
+}
+
+function cmpAsc(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * True when `taskId` already carries a `curation_proposed` event naming
+ * `milestoneId`. The dedup key is the milestone so the same task can be
+ * curated under more than one milestone over its life, but never twice for
+ * the same close.
+ */
+function hasCurationEventForMilestone(
+  store: ScrumStore,
+  taskId: string,
+  milestoneId: string,
+): boolean {
+  for (const event of store.listEventsForTask(taskId, 1000)) {
+    if (event.kind !== 'curation_proposed') continue;
+    const payload = event.payload;
+    if (isRecord(payload) && payload.milestone_id === milestoneId) return true;
+  }
+  return false;
+}
+
+/**
+ * Read every linked run's reasoning log, keep the curation-relevant entry
+ * types, and dedup by entry id (the same entry can surface through more than
+ * one linked run-path form). A run whose log dir is malformed is skipped
+ * rather than aborting the whole milestone curation — a corrupt log file must
+ * not block a milestone from closing.
+ */
+function collectCurationCandidates(
+  store: ScrumStore,
+  taskId: string,
+  projectDir: string,
+): CurationCandidate[] {
+  const candidates: CurationCandidate[] = [];
+  const seen = new Set<string>();
+
+  for (const run of store.listRunsForTask(taskId)) {
+    const runDir = isAbsolute(run.run_path) ? run.run_path : join(projectDir, run.run_path);
+    let entries: LogEntry[];
+    try {
+      entries = listEntries(runDir);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!isCurationEntryType(entry.type)) continue;
+      if (seen.has(entry.id)) continue;
+      seen.add(entry.id);
+      candidates.push({
+        entry_id: entry.id,
+        type: entry.type,
+        agent: entry.agent,
+        run_path: run.run_path,
+        body: entry.body,
+      });
+    }
+  }
+
+  return candidates;
+}
+
+function isCurationEntryType(type: LogEntry['type']): type is CurationEntryType {
+  return (CURATION_ENTRY_TYPES as readonly string[]).includes(type);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 // ---------------------------------------------------------------------------
@@ -286,23 +862,41 @@ function appendStewardVerdictIfPresent(
 /**
  * Only `completed` runs drive the task to `done`. Halted/failed runs leave
  * status alone — the orchestrator may retry, and a human review may still
- * push the task forward. Transition errors (e.g., illegal edge from a
- * terminal status) are swallowed because the event log already records
- * the run outcome.
+ * push the task forward.
+ *
+ * Returns `null` when the task transitioned (or no transition was due), and a
+ * surfaceable message when the transition was attempted but the store rejected
+ * it. Two rejection classes are distinguished:
+ *   - An illegal-edge rejection (`invalid transition ...`) is an expected
+ *     no-op — the run_completed event already records the outcome, so it is
+ *     swallowed silently and returns `null`.
+ *   - A story close-floor rejection (unmet acceptance criteria, missing
+ *     synthesis) or store corruption means the engine TRIED to close the story
+ *     and could not — exactly the condition the close-floors exist to catch.
+ *     Its message is returned so the caller can carry it on the reconcile
+ *     result instead of losing it, rather than reporting a clean reconcile that
+ *     masks a story stuck short of `done`.
  */
-function transitionTaskIfTerminal(store: ScrumStore, task: ScrumTask, state: StateJsonLite): void {
-  if (state.run_status !== 'completed') return;
-  if (task.status === 'done' || task.status === 'cancelled') return;
+function transitionTaskIfTerminal(
+  store: ScrumStore,
+  task: ScrumTask,
+  state: StateJsonLite,
+): string | null {
+  if (state.run_status !== 'completed') return null;
+  if (task.status === 'done' || task.status === 'cancelled') return null;
 
   try {
     store.updateTaskStatus(task.id, 'done');
-  } catch {
-    // Invalid transition — event log already captured the run_completed signal.
+    return null;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('invalid transition')) return null;
+    return message;
   }
 }
 
-function rebuildContextBundle(store: ScrumStore, taskId: string): void {
-  const bundle = buildContextBundle(taskId, store);
+function rebuildContextBundle(store: ScrumStore, taskId: string, projectRoot: string): void {
+  const bundle = buildContextBundle(taskId, store, projectRoot);
   store.saveContextBundle(taskId, bundle);
 }
 
@@ -330,8 +924,22 @@ function emitOrphanEvent(
   });
 }
 
+/**
+ * Guarantee the orphan sentinel exists and is live. Three cases:
+ *   - live row     → nothing to do.
+ *   - soft-deleted → revive it (clear `deleted_at`). A plain `createTask`
+ *     here would hit `UNIQUE constraint failed: scrum_tasks.id` because the
+ *     row physically exists, escaping the reconciler and failing every orphan
+ *     run thereafter — so we restore the sentinel's always-present invariant
+ *     instead of re-inserting.
+ *   - absent       → create it.
+ */
 function ensureOrphanTask(store: ScrumStore): void {
   if (store.getTask(ORPHAN_TASK_ID)) return;
+  if (store.getTaskIncludingDeleted(ORPHAN_TASK_ID)) {
+    store.undeleteTask(ORPHAN_TASK_ID);
+    return;
+  }
   store.createTask({
     id: ORPHAN_TASK_ID,
     title: ORPHAN_TASK_TITLE,
@@ -344,15 +952,17 @@ function ensureOrphanTask(store: ScrumStore): void {
 // Internals — context bundle aggregation
 // ---------------------------------------------------------------------------
 
-function collectFilesTouched(runs: ReturnType<ScrumStore['listRunsForTask']>): string[] {
+function collectFilesTouched(
+  runs: ReturnType<ScrumStore['listRunsForTask']>,
+  projectRoot: string,
+): string[] {
   const seen = new Set<string>();
   for (const run of runs) {
-    const statePath = resolveRunStatePath(run.run_path);
+    const statePath = resolveRunStatePath(run.run_path, projectRoot);
     const state = readJsonOrNull<StateJsonLite>(statePath);
     if (!state || !Array.isArray(state.tasks)) continue;
-    // state.json doesn't carry per-file diffs in v1 — collect any `files`
-    // array if a future version adds it. For now, fall back to commit shas
-    // so the bundle still records *something* provenance-worthy.
+    // state.json v1 carries no per-file diffs; fall back to commit shas so
+    // the bundle still records provenance.
     for (const task of state.tasks) {
       if (!Array.isArray(task.steps)) continue;
       for (const step of task.steps) {
@@ -404,9 +1014,12 @@ function collectDecisions(
   return out;
 }
 
-function summarizeRuns(runs: ReturnType<ScrumStore['listRunsForTask']>): ContextBundle['runs'] {
+function summarizeRuns(
+  runs: ReturnType<ScrumStore['listRunsForTask']>,
+  projectRoot: string,
+): ContextBundle['runs'] {
   return runs.map((run) => {
-    const statePath = resolveRunStatePath(run.run_path);
+    const statePath = resolveRunStatePath(run.run_path, projectRoot);
     const state = readJsonOrNull<StateJsonLite>(statePath);
     return {
       slug: run.slug ?? '',
@@ -488,12 +1101,16 @@ function toRunPath(runDir: string): string {
 }
 
 /**
- * Resolve `join(cwdOrProject, runPath)` with an absolute-path shortcut so
+ * Resolve `join(projectRoot, runPath)` with an absolute-path shortcut so
  * bundle aggregation handles both stored forms (repo-relative + absolute).
+ * `projectRoot` anchors repo-relative run paths; the sweep passes the
+ * project dir it already resolved so the lookup stays correct when the
+ * reconcile is invoked from a subdirectory or a linked worktree (matching
+ * the `isAbsolute` anchoring `collectStoryEntries` uses).
  */
-function resolveRunStatePath(runPath: string): string {
+function resolveRunStatePath(runPath: string, projectRoot: string): string {
   if (isAbsolute(runPath)) return join(runPath, 'state.json');
-  return join(process.cwd(), runPath, 'state.json');
+  return join(projectRoot, runPath, 'state.json');
 }
 
 function safeRealpath(p: string): string {

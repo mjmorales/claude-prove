@@ -67,16 +67,29 @@ export function resolvePaths(patterns: string[], cwd: string = process.cwd()): s
  * block is removed before counting — matches Python defaults.
  */
 export function measureFiles(paths: string[], stripFrontmatterFlag = true): MeasureEntry[] {
-  return paths.map((path) => {
-    const raw = readFileSync(path, 'utf8');
+  return paths.flatMap((path) => {
+    let raw: string;
+    try {
+      raw = readFileSync(path, 'utf8');
+    } catch (err) {
+      // A file present at resolution time but gone before read (concurrent build
+      // cleanup, watch-triggered removal) is silently dropped so the caller gets
+      // a partial-but-valid result set rather than an unhandled exception.
+      process.stderr.write(
+        `prompting token-count: skipping '${path}': ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+      return [];
+    }
     const body = stripFrontmatterFlag ? stripFrontmatter(raw) : raw;
-    return {
-      path,
-      tokens: countTokens(body),
-      // Python: `stripped.count("\n") + 1`. Produces 1 for the empty string.
-      lines: countNewlines(body) + 1,
-      chars: body.length,
-    };
+    return [
+      {
+        path,
+        tokens: countTokens(body),
+        // Python: `stripped.count("\n") + 1`. Produces 1 for the empty string.
+        lines: countNewlines(body) + 1,
+        chars: body.length,
+      },
+    ];
   });
 }
 

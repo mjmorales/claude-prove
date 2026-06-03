@@ -86,7 +86,7 @@ function cmdValidate(flags: SchemaFlags): number {
 
   if (config === null) {
     for (const e of errors) {
-      console.log(e.toString());
+      console.error(e.toString());
     }
     return 1;
   }
@@ -96,13 +96,13 @@ function cmdValidate(flags: SchemaFlags): number {
 
   if (errors.length > 0) {
     for (const e of errors) {
-      console.log(e.toString());
+      console.error(e.toString());
     }
-    console.log('');
+    console.error('');
   }
 
   if (errCount > 0) {
-    console.log(`FAIL: ${errCount} error(s), ${warnCount} warning(s)`);
+    console.error(`FAIL: ${errCount} error(s), ${warnCount} warning(s)`);
     return 1;
   }
 
@@ -161,11 +161,29 @@ function cmdMigrate(flags: SchemaFlags): number {
 
 function cmdDiff(flags: SchemaFlags): number {
   const path = flags.file ?? DEFAULT_PROVE_PATH;
-  console.log(configDiff(path));
+  let out: string;
+  try {
+    out = configDiff(path);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`claude-prove schema: ${msg}`);
+    return 1;
+  }
+  console.log(out);
   return 0;
 }
 
 function cmdSummary(): number {
-  console.log(summary(DEFAULT_PROVE_PATH, DEFAULT_SETTINGS_PATH));
+  // Mirror cmdDiff's error contract: one-line message to stderr + exit 1 on any
+  // I/O failure (EACCES, EISDIR, TOCTOU unlink) rather than leaking a raw stack.
+  let out: string;
+  try {
+    out = summary(DEFAULT_PROVE_PATH, DEFAULT_SETTINGS_PATH);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`claude-prove schema: ${msg}`);
+    return 1;
+  }
+  console.log(out);
   return 0;
 }

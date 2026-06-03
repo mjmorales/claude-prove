@@ -97,6 +97,21 @@ function handleInfo(store: Store): number {
     console.log('no domains registered');
     return 0;
   }
+
+  // Domains register via side-effect imports independently of whether
+  // `store migrate` has ever run. Ensure the log table exists before querying
+  // it so `store info` reports v0 for unmigrated domains instead of throwing
+  // "no such table: _migrations_log" on a fresh database.
+  store.exec(
+    `CREATE TABLE IF NOT EXISTS _migrations_log (
+      domain TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      description TEXT NOT NULL,
+      applied_at TEXT NOT NULL,
+      PRIMARY KEY (domain, version)
+    )`,
+  );
+
   console.log('domains:');
   for (const domain of domains) {
     const rows = store.all<{ version: number }>(

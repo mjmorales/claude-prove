@@ -16,6 +16,7 @@
 
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
+import { gatherMilestoneStories, reconcileMilestoneClosed } from '../reconcile';
 import { type ScrumStore, openScrumStore } from '../store';
 import type { MilestoneStatus } from '../types';
 import { generateId } from './scrum-utils';
@@ -26,6 +27,8 @@ export interface MilestoneCmdFlags {
   targetState?: string;
   id?: string;
   status?: string;
+  /** `create`: initiative grouping label; `list`: filter to one initiative. */
+  initiative?: string;
   workspaceRoot?: string;
 }
 
@@ -67,7 +70,7 @@ export function runMilestoneCmd(
       case 'show':
         return doShow(store, positional[0]);
       case 'close':
-        return doClose(store, positional[0]);
+        return doClose(store, positional[0], workspaceRoot);
       case 'activate':
         return doActivate(store, positional[0]);
       case 'reopen':
@@ -98,6 +101,7 @@ function doCreate(store: ScrumStore, flags: MilestoneCmdFlags): number {
     title: flags.title,
     description: flags.description ?? null,
     targetState: flags.targetState ?? null,
+    initiative: flags.initiative ?? null,
   });
   process.stdout.write(`${JSON.stringify(milestone)}\n`);
   process.stderr.write(`scrum milestone create: ${milestone.id}\n`);
@@ -115,7 +119,7 @@ function doList(store: ScrumStore, flags: MilestoneCmdFlags): number {
     }
     status = flags.status as MilestoneStatus;
   }
-  const rows = store.listMilestones(status);
+  const rows = store.listMilestones(status, flags.initiative);
   process.stdout.write(`${JSON.stringify(rows)}\n`);
   process.stderr.write(`scrum milestone list: ${rows.length} milestones\n`);
   return 0;
@@ -139,14 +143,47 @@ function doShow(store: ScrumStore, id: string | undefined): number {
   return 0;
 }
 
-function doClose(store: ScrumStore, id: string | undefined): number {
+function doClose(store: ScrumStore, id: string | undefined, workspaceRoot: string): number {
   if (id === undefined || id.length === 0) {
     process.stderr.write('scrum milestone close: <id> positional argument required\n');
     return 1;
   }
+  // Capture prior status before the close so the close-transition work fires
+  // only on a real planned/active → closed transition. Re-closing an
+  // already-closed milestone must not re-emit curation_proposed events — the
+  // forced bubble-up fires once per close transition.
+  const prior = store.getMilestone(id);
   const milestone = store.closeMilestone(id);
+
+  // Emit the close result immediately after the durable store mutation so
+  // callers always receive the closed milestone JSON, regardless of whether
+  // the secondary curation/rollup steps succeed.
   process.stdout.write(`${JSON.stringify(milestone)}\n`);
-  process.stderr.write(`scrum milestone close: ${id}\n`);
+
+  let closeNote = '';
+  if (prior !== null && prior.status !== 'closed') {
+    // Curation and rollup are best-effort post-close work: the milestone is
+    // already closed in the store, so a failure here should warn but not
+    // change the exit code or suppress the close result already on stdout.
+    try {
+      const curation = reconcileMilestoneClosed(id, store, workspaceRoot);
+      // The same close transition surfaces the stakeholder milestone brief.
+      // The brief is rendered on demand via `acb milestone-brief render
+      // --milestone <id>`; here we just report how many constituent stories
+      // it will roll up so the operator knows the rollup is available.
+      const stories = gatherMilestoneStories(id, store, workspaceRoot);
+      const compactNote =
+        curation.compactedTeams.length > 0
+          ? `; journal compaction: ${curation.compactedTeams.length} terminating team(s) summarized`
+          : '';
+      closeNote = ` (curation: ${curation.emitted.length} task(s) proposed${compactNote}; milestone brief: ${stories.length} stor(ies) — render via 'acb milestone-brief render --milestone ${id}')`;
+    } catch (curationErr) {
+      const msg = curationErr instanceof Error ? curationErr.message : String(curationErr);
+      process.stderr.write(`scrum milestone close: WARNING: post-close curation failed: ${msg}\n`);
+    }
+  }
+
+  process.stderr.write(`scrum milestone close: ${id}${closeNote}\n`);
   return 0;
 }
 

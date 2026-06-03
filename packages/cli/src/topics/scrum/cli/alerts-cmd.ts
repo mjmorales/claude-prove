@@ -1,11 +1,18 @@
 /**
  * `claude-prove scrum alerts [--human] [--stalled-after-days N] [--workspace-root W]`
  *
- * Operator-facing signal aggregator. Emits two classes of alert:
+ * Operator-facing signal aggregator. Emits these classes of alert:
  *
  *   - stalled_wip: tasks in `in_progress` or `review` whose
  *     `last_event_at` is older than the stalled-after threshold (default
  *     7 days).
+ *   - stale_escalations: open `blocker_raised` escalations on non-terminal
+ *     tasks, stalest-first.
+ *   - pending_gates: open `gate`-kind acceptance criteria awaiting a human
+ *     approve/reject verdict (verdict still `gate_pending`) on non-terminal
+ *     tasks. This is the out-of-turn pull path: a gate decided neither in an
+ *     interactive turn nor via `scrum gate respond` surfaces here so the
+ *     operator can resolve it. Each line names the exact resolution command.
  *   - orphan_runs: orchestrator run directories under
  *     `<workspaceRoot>/.prove/runs/<branch>/<slug>/` that have no row in
  *     `scrum_run_links`. Missing `.prove/runs/` directory is a clean
@@ -23,7 +30,7 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
 import { type ScrumStore, openScrumStore } from '../store';
-import type { ScrumTask, TaskStatus } from '../types';
+import type { EscalationType, ScrumTask, TaskStatus } from '../types';
 
 export interface AlertsCmdFlags {
   human?: boolean;
@@ -48,9 +55,26 @@ interface OrphanRun {
   run_path: string;
 }
 
+interface StaleEscalation {
+  id: string;
+  title: string;
+  escalation_type: EscalationType;
+  escalated_days: number;
+}
+
+interface PendingGate {
+  task_id: string;
+  title: string;
+  criterion_id: string;
+  criterion_text: string;
+  resolve: string;
+}
+
 interface AlertsReport {
   stalled_after_days: number;
   stalled_wip: StalledEntry[];
+  stale_escalations: StaleEscalation[];
+  pending_gates: PendingGate[];
   orphan_runs: OrphanRun[];
 }
 
@@ -64,10 +88,14 @@ export function runAlertsCmd(flags: AlertsCmdFlags): number {
   const store = openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
   try {
     const stalled = findStalledWip(store, stalledAfterDays);
+    const escalations = findStaleEscalations(store);
+    const pendingGates = findPendingGates(store);
     const orphans = findOrphanRuns(store, workspaceRoot);
     const report: AlertsReport = {
       stalled_after_days: stalledAfterDays,
       stalled_wip: stalled,
+      stale_escalations: escalations,
+      pending_gates: pendingGates,
       orphan_runs: orphans,
     };
     if (flags.human === true) {
@@ -76,7 +104,7 @@ export function runAlertsCmd(flags: AlertsCmdFlags): number {
       process.stdout.write(`${JSON.stringify(report)}\n`);
     }
     process.stderr.write(
-      `scrum alerts: ${stalled.length} stalled WIP, ${orphans.length} orphan runs\n`,
+      `scrum alerts: ${stalled.length} stalled WIP, ${escalations.length} open escalations, ${pendingGates.length} pending gates, ${orphans.length} orphan runs\n`,
     );
     return 0;
   } finally {
@@ -111,6 +139,43 @@ function findStalledWip(store: ScrumStore, stalledAfterDays: number): StalledEnt
   }
   stalled.sort((a, b) => b.stalled_days - a.stalled_days);
   return stalled;
+}
+
+/**
+ * Open escalations across non-terminal tasks, stalest-first. An
+ * open escalation is alert-worthy regardless of age — it is an unresolved
+ * blocker raised by a worker — so this surfaces every one, ranked by age so
+ * the most overdue float to the top (the same staleness signal `nextReady`
+ * auto-bubbles into its ranking).
+ */
+function findStaleEscalations(store: ScrumStore): StaleEscalation[] {
+  const now = Date.now();
+  return store.listOpenEscalations().map((e) => {
+    const ms = Date.parse(e.ts);
+    const escalated_days = Number.isNaN(ms) ? 0 : Math.floor((now - ms) / (24 * 60 * 60 * 1000));
+    return {
+      id: e.task_id,
+      title: e.title,
+      escalation_type: e.escalation_type,
+      escalated_days,
+    };
+  });
+}
+
+/**
+ * Open `gate`-kind acceptance criteria awaiting a human verdict, across
+ * non-terminal tasks. Each carries the exact `scrum gate respond` command that
+ * resolves it (criterion id positional, `--task` scoping the lookup), so the
+ * operator can act without re-deriving the invocation.
+ */
+function findPendingGates(store: ScrumStore): PendingGate[] {
+  return store.listPendingGates().map((g) => ({
+    task_id: g.task_id,
+    title: g.title,
+    criterion_id: g.criterion_id,
+    criterion_text: g.criterion_text,
+    resolve: `scrum gate respond ${g.criterion_id} approve|reject --task ${g.task_id}`,
+  }));
 }
 
 function pickLastEventTs(task: ScrumTask): Date | null {
@@ -157,6 +222,25 @@ function renderHumanTable(report: AlertsReport): string {
   } else {
     for (const entry of report.stalled_wip) {
       lines.push(`  [${entry.status}] ${entry.id}  ${entry.stalled_days}d  ${entry.title}`);
+    }
+  }
+  lines.push('');
+  lines.push(`Open escalations (${report.stale_escalations.length}):`);
+  if (report.stale_escalations.length === 0) {
+    lines.push('  (none)');
+  } else {
+    for (const e of report.stale_escalations) {
+      lines.push(`  [${e.escalation_type}] ${e.id}  ${e.escalated_days}d  ${e.title}`);
+    }
+  }
+  lines.push('');
+  lines.push(`Pending gates (${report.pending_gates.length}):`);
+  if (report.pending_gates.length === 0) {
+    lines.push('  (none)');
+  } else {
+    for (const gate of report.pending_gates) {
+      lines.push(`  ${gate.task_id} / ${gate.criterion_id}  ${gate.criterion_text}`);
+      lines.push(`    resolve: ${gate.resolve}`);
     }
   }
   lines.push('');

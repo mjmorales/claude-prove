@@ -115,6 +115,85 @@ One delta this skill applies beyond the schedule:
 
 ---
 
+## Durable execution directives (`execution` block)
+
+A plan task carries an optional `execution` block of declarative directives the driver
+honors and the run record persists. The engine **records** them; the driver **executes**
+them — they are control flow, not judgment.
+
+| Directive | Shape | Driver behavior |
+|-----------|-------|-----------------|
+| `retry` | `{ max: N }` | On a task's terminal failure, re-dispatch it up to `N` times before halt-and-drain. Rebuild on the current integration HEAD (the same reset path a merge-conflict rebound uses). |
+| `loop` | `{ max_iterations: N }` | Repeat the task body until its own exit condition or `N` iterations — `N` is the runaway floor, NOT a target; the body decides early exit. |
+| `fanout` | `{ batch_size: N }` | Fan the task's sub-work out `N`-wide; split larger sets into sequential batches at the cap (the same batching `wave-plan` applies per wave). |
+| `on_fail` | `<task-id>` | On terminal failure, branch to the named task instead of halting the branch. Absent = halt-and-drain (the default). |
+| `concurrency` | `parallel \| singleton` | `singleton` = at most one in-flight instance of this task across the run; a second dispatch waits for the first to reach a terminal state. `parallel` = no limit. (A story-close task runs `singleton`.) |
+
+Absent block = run-once, no retry, no loop, fan-out 1, halt-on-fail, parallel — the
+pre-directive behavior. The directives compose: a retried task that still fails takes its
+`on_fail` branch; a `singleton` task's retries never overlap. Because they live in the
+durable run record, a re-dispatch after a session break reads the same directives — the run's
+retry/loop/fanout/branch policy survives the handoff rather than resetting.
+
+---
+
+## Cross-team step: `kind:<team-slug>`
+
+A plan step whose `kind` names a **team slug** (rather than a normal implementation
+step) is a request to *another team* — it delegates the work to that team and waits for
+the team's published output. This is **sugar** over the cross-team ask protocol: it
+files an ask, lets the responding team triage it, and collects the team's exposed
+outputs once the delegated work is done. You compose three CLI primitives — you do not
+reimplement the ask flow.
+
+When you hit a `kind:<team-slug>` step, drive this loop. The judgment (the triage
+verdict) belongs to the responding team's driver; the polling is mechanical.
+
+1. **File the ask.** The blocking artifact is the step's own task — it stays blocked
+   until the other team delivers.
+
+   ```bash
+   claude-prove scrum ask file \
+     --from-team <this-team> --to-team <team-slug> \
+     --ask-type <type> --blocking-artifact <this-step-task-id>
+   ```
+
+   The final stdout line is the new ask id. Capture it.
+
+2. **Let the responding team triage.** The to-team's driver decides accept / reject /
+   counter and applies the verdict with `claude-prove scrum ask respond <ask-id>
+   --verdict accept|reject|counter [--comment …]`. On `accept` the store creates one
+   child task under the to-team and wires the dependency automatically.
+
+3. **Poll for resolution.** Re-run the mechanical primitive until it reports a
+   **terminal** phase (`terminal: true` in its JSON). It spawns no model and never
+   mutates — it just derives the current phase:
+
+   ```bash
+   claude-prove scrum ask await <ask-id>
+   ```
+
+   | `phase` | Meaning | `terminal` | What the step does |
+   |---------|---------|-----------|--------------------|
+   | `pending` | Filed, not yet triaged. | false | Poll again later. |
+   | `waiting` | Accepted; the delegated child task is not `done` yet. | false | Poll again later. |
+   | `ready` | Accepted and the child reached `done`. | true | Read `outputs` (the to-team's published outputs) and continue the plan. |
+   | `rejected` | The team declined; `reason` carries why. | true | **Surface and stop** — do not loop. |
+   | `countered` | The team proposed an alternative; `reason` carries it. | true | **Surface and stop** — re-plan or re-file against the counter. |
+
+4. **Collect the outputs.** On `ready`, the report's `outputs` array is the responding
+   team's published outputs (its active exposed interface) — that is the value the step
+   returns to the rest of the plan.
+
+**Reject and counter never hang.** They are terminal phases the poll surfaces explicitly,
+so a `kind:<team-slug>` step that the other team declines or counters resolves the step
+with a visible result the calling plan can act on — it never spins waiting for a delivery
+that will not come. Treat a `rejected`/`countered` step like a halted task: surface the
+`reason`, stop polling, and re-plan (drop the step, narrow scope, or re-file against the
+counter) rather than blocking the wave.
+
+---
+
 ## Phase 4: Mirror status back to scrum (milestone target only)
 
 Resolve `<scrum-id>` from `scrum-map.json` (Phase 1). After each task reaches a terminal
@@ -166,6 +245,21 @@ counts and the blocked subtree, if any.
   independent branches, and for a milestone target mark the task blocked via Phase 4. The
   rebound count is tracked per task, reset each run.
 - **Plan-only target.** Skip Phases 1 and 4 entirely; just init + execute.
+- **Stopping a wave → the Layer-1 interrupt floor.** To abort in-flight tasks, do not
+  wait on cooperation: `scrum task cancel <id> --cascade` → `run-state init --overwrite`
+  → re-dispatch, with the `/workflows` token budget + subagent timeout as the hard stop.
+  See `skills/orchestrator/SKILL.md` → "Interrupting a run — the Layer-1 floor".
+- **Stopping a wave gracefully → the Layer-2 cooperative checkpoint-interrupt.** When you
+  want in-flight work preserved rather than discarded, raise a cancel-flag instead of a
+  hard abort: write a `CANCEL` file under the run dir
+  (`.prove/runs/<branch>/<slug>/CANCEL`, resolved from the main worktree). Task subagents
+  poll it at natural checkpoints — when set, each writes a `synthesis` graceful-handoff
+  entry (`claude-prove acb log append`), commits work-in-progress, and self-exits, so a
+  re-dispatch RESUMES from the handoff. Clear the flag (`rm -f .../CANCEL`) before
+  re-dispatching. This is best-effort and layers ON TOP of the Layer-1 floor — it never
+  replaces it: a non-polling or stuck task only stops at the token budget / subagent
+  timeout, so Layer 1 stays the backstop. The worker-side protocol ships in the prompt
+  emitted by `claude-prove orchestrator task-prompt`.
 
 ---
 
@@ -173,5 +267,8 @@ counts and the blocked subtree, if any.
 
 - Phase 1 compile = `scrum compile-plan`; Phase 3 scheduling = `orchestrator wave-plan`;
   rebound reset = `claude-prove worktree reset`.
+- Cross-team `kind:<team-slug>` step = `scrum ask file` → (responder `scrum ask respond`)
+  → poll `scrum ask await` until terminal. `await` is the mechanical primitive; the
+  triage verdict is the responding team's judgment.
 - For large milestones, run the session at high effort (`xhigh`/`ultracode`) — the research
  recommends it for extended async fan-out.

@@ -2,7 +2,7 @@
   "name": "new_plan_empty",
   "artifact": "plan",
   "data": {
-    "schema_version": "1",
+    "schema_version": "4",
     "kind": "plan",
     "mode": "simple",
     "tasks": []

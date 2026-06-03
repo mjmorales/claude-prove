@@ -2,7 +2,7 @@
   "name": "prd_from_md",
   "artifact": "prd",
   "data": {
-    "schema_version": "1",
+    "schema_version": "4",
     "kind": "prd",
     "context": "Reasons for this run.",
     "goals": [

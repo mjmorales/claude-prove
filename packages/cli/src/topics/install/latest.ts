@@ -13,10 +13,10 @@
  *
  * `local` comes from `claude plugin list --json`, filtered to `prove@prove`
  * and sorted by semver (newest wins). If multiple entries share the newest
- * version, we prefer the most recently updated one so stale project-scope
- * caches never win over a fresh user-scope install. This guarantees the
- * `/prove:update` skill always targets the cache directory the user is
- * actually running against.
+ * version, the tie is broken by the lexicographically-smallest `installPath`
+ * (deterministic but NOT recency-aware — `claude plugin list` does not expose
+ * an updated-at timestamp in this shape). Callers needing a specific cache
+ * directory must set `CLAUDE_PLUGIN_ROOT`.
  *
  * `remote` comes from the GitHub Releases API (`/releases/latest`). It is
  * an optional field — the command succeeds even when the network call
@@ -100,8 +100,9 @@ export async function runLatest(flags: LatestFlags): Promise<number> {
 
 /**
  * Shell out to `claude plugin list --json` (or the override command) and
- * pick the prove@prove entry with the highest semver. Ties broken by
- * `lastUpdated` recency so the freshest cache wins.
+ * pick the prove@prove entry with the highest semver. Ties are broken by the
+ * lexicographically-smallest `installPath` (deterministic; recency is not
+ * exposed in this output shape).
  */
 function resolveLocal(): { value: LocalPlugin | null; error?: string } {
   const cmd = process.env.PROVE_PLUGIN_LIST_CMD ?? 'claude plugin list --json';

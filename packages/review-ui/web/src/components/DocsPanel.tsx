@@ -172,15 +172,24 @@ type PlanShape = {
     wave?: number;
     deps?: string[];
     description?: string;
-    acceptance_criteria?: string[];
+    acceptance_criteria?: PlanCrit[];
     steps?: Array<{
       id: string;
       title: string;
       description?: string;
-      acceptance_criteria?: string[];
+      acceptance_criteria?: PlanCrit[];
     }>;
   }>;
 };
+
+/** A plan-task/step criterion: a v3 structured dict, or a legacy v2 bare string. */
+type PlanCrit = string | { text: string; verifies_by?: string; check?: string };
+
+/** Display text for a criterion — v3 `text` (+ kind), or the legacy string verbatim. */
+function critText(c: PlanCrit): string {
+  if (typeof c === "string") return c;
+  return c.verifies_by ? `${c.text} (${c.verifies_by}${c.check ? `: ${c.check}` : ""})` : c.text;
+}
 
 function renderPlan(p: PlanShape): string {
   const lines: string[] = [`# Plan (${p.mode ?? "simple"} mode)`, ""];
@@ -190,13 +199,13 @@ function renderPlan(p: PlanShape): string {
     lines.push(`**Deps:** ${task.deps?.length ? task.deps.join(", ") : "none"}`, "");
     if (task.description) lines.push(task.description, "");
     if (task.acceptance_criteria?.length) {
-      lines.push("**Acceptance:**", "", ...task.acceptance_criteria.map((c) => `- ${c}`), "");
+      lines.push("**Acceptance:**", "", ...task.acceptance_criteria.map((c) => `- ${critText(c)}`), "");
     }
     for (const step of task.steps ?? []) {
       lines.push(`### Step ${step.id}: ${step.title}`, "");
       if (step.description) lines.push(step.description, "");
       if (step.acceptance_criteria?.length) {
-        lines.push(...step.acceptance_criteria.map((c) => `- ${c}`), "");
+        lines.push(...step.acceptance_criteria.map((c) => `- ${critText(c)}`), "");
       }
     }
   }

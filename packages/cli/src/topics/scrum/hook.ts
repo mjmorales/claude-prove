@@ -19,9 +19,21 @@
 
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { readDevMode } from '../acb/hook';
+import { resolveActiveRunDir } from '../run-state/hooks/capture';
 import { pyJsonDump } from '../run-state/hooks/json-compat';
 import { EMPTY_HOOK_RESULT, type HookResult, readCwd } from '../run-state/hooks/types';
-import { ORPHAN_TASK_ID, reconcileRunCompleted, sweepUnreconciled } from './reconcile';
+import { type GateVerdict, evaluateSessionEndGate } from './handoff-gate';
+import {
+  type BoundAction,
+  ORPHAN_TASK_ID,
+  type StaleEscalationSweepResult,
+  type TriggerBinding,
+  bubbleStaleEscalations,
+  computeBoundActions,
+  reconcileRunCompleted,
+  sweepUnreconciled,
+} from './reconcile';
 import { type ScrumStore, openScrumStore } from './store';
 import type { ScrumEvent, ScrumTask } from './types';
 
@@ -48,6 +60,7 @@ const STALL_THRESHOLD_HOURS = 24;
 const DIGEST_MAX_ACTIVE = 10;
 const DIGEST_MAX_STALLED = 5;
 const DIGEST_MAX_RECENT = 15;
+const DIGEST_MAX_BOUND = 10;
 
 // ---------------------------------------------------------------------------
 // Public handlers
@@ -57,20 +70,27 @@ export interface SessionStartDigest {
   active_tasks: Array<{ id: string; title: string; status: string; last_event_at: string | null }>;
   stalled_wip: Array<{ id: string; title: string; last_event_at: string | null }>;
   recent_events: Array<{ task_id: string; kind: string; ts: string }>;
+  auto_bubbled: StaleEscalationSweepResult['bubbled'];
+  /** Pending bound next-actions from the declared trigger table (1.4). */
+  bound_actions: BoundAction[];
 }
 
 /**
- * SessionStart: emit active tasks + stalled WIP + recent events so the new
- * session inherits awareness of in-flight scrum state. Never throws —
- * errors land on stderr with exit 0 so a broken scrum store never bricks
- * a session.
+ * SessionStart: auto-bubble any escalation that aged past the staleness floor,
+ * then emit active tasks + stalled WIP + recent events so the new session
+ * inherits awareness of in-flight scrum state. The escalation sweep is the ONLY
+ * firing point for the staleness floor — there is no resident loop; it runs on
+ * each session-start transition and its results surface via `alerts` /
+ * `nextReady`. Never throws — errors land on stderr with exit 0 so a broken
+ * scrum store never bricks a session.
  */
 export function onSessionStart(payload: Record<string, unknown> | null): HookResult {
   try {
     const project = resolveProjectDir(payload);
     const store = openScrumStore({ cwd: project });
     try {
-      const digest = computeDigest(store);
+      const sweep = bubbleStaleEscalations(store, Date.now());
+      const digest = computeDigest(store, sweep, readTriggers(project));
       if (isEmptyDigest(digest)) return EMPTY_HOOK_RESULT;
       const body = pyJsonDump({
         hookSpecificOutput: {
@@ -92,10 +112,12 @@ export function onSessionStart(payload: Record<string, unknown> | null): HookRes
 }
 
 /**
- * SubagentStop: reconcile the subagent's run directory. Filter-mismatch
- * (unrelated subagent type) returns EMPTY_HOOK_RESULT silently. Exit 1
- * fires only on unexpected errors after the filter passes — those
- * indicate a real problem worth surfacing to the orchestrator.
+ * SubagentStop: enforce the end-of-session handoff/synthesis gate, then
+ * reconcile the subagent's run directory. Filter-mismatch (unrelated subagent
+ * type) returns EMPTY_HOOK_RESULT silently. A worker that touched an artifact
+ * but logged no compliant synthesis is BLOCKED via a `decision: block` payload
+ * carrying remediation. Exit 1 fires only on unexpected errors after the
+ * filter passes — those indicate a real problem worth surfacing.
  */
 export function onSubagentStop(payload: Record<string, unknown> | null): HookResult {
   if (!payload) return EMPTY_HOOK_RESULT;
@@ -109,12 +131,26 @@ export function onSubagentStop(payload: Record<string, unknown> | null): HookRes
     if (!statePath) return EMPTY_HOOK_RESULT;
 
     const project = resolveProjectDir(payload);
+
+    // Handoff/synthesis floor: a worker that mutated artifacts must declare
+    // its outcome before it stops. Block here, before reconcile, so the next
+    // tool call is the synthesis the worker owes — reconcile happens only once
+    // the session is allowed to end.
+    const gate = evaluateSessionEndGate(dirname(statePath), readDevMode(project));
+    if (!gate.ok) return blockSessionEnd(gate);
+
     const store = openScrumStore({ cwd: project });
     try {
-      const result = reconcileRunCompleted(statePath, store);
+      // Pass `project` so rebuildContextBundle resolves run paths against the
+      // correct root when firing from a linked worktree or a subdirectory.
+      const result = reconcileRunCompleted(statePath, store, project);
       if (result.kind === 'skipped') return EMPTY_HOOK_RESULT;
+      // Surface the blocking reason (e.g. story-close floor rejection, orphan
+      // task-not-found) so the operator sees WHY reconcile stalled, not just
+      // that a run was processed.
+      const reasonSuffix = result.reason ? ` — ${result.reason}` : '';
       const body = pyJsonDump({
-        systemMessage: `scrum: reconciled ${result.kind} run (task=${result.taskId ?? ORPHAN_TASK_ID})`,
+        systemMessage: `scrum: reconciled ${result.kind} run (task=${result.taskId ?? ORPHAN_TASK_ID})${reasonSuffix}`,
       });
       return { exitCode: 0, stdout: body, stderr: '' };
     } finally {
@@ -130,13 +166,31 @@ export function onSubagentStop(payload: Record<string, unknown> | null): HookRes
 }
 
 /**
- * Stop: read the last-sweep cursor, sweep every state.json newer than it,
- * write back the updated cursor. Non-blocking — any failure is logged
- * to stderr with exit 0.
+ * Stop: enforce the end-of-session handoff/synthesis gate for the active run,
+ * then read the last-sweep cursor, sweep every state.json newer than it, and
+ * write back the updated cursor.
+ *
+ * The GATE is blocking: a session that touched an artifact but logged no
+ * compliant synthesis is BLOCKED via a `decision: block` payload. The SWEEP
+ * stays non-blocking — any sweep failure is logged to stderr with exit 0 — so
+ * a broken scrum store never bricks a session that already satisfied the gate.
  */
 export function onStop(payload: Record<string, unknown> | null): HookResult {
   try {
-    const project = resolveProjectDir(payload);
+    // Resolve cwd/project inside the catch-all so a process.cwd() ENOENT
+    // (e.g. the session's worktree was removed) cannot escape as an uncaught
+    // throw — safeResolveProjectDir falls back to CLAUDE_PROJECT_DIR or '.'
+    // so the gate and sweep still run against a best-effort directory.
+    const cwd = safeReadCwd(payload);
+    const project = safeResolveProjectDir(payload);
+
+    // Evaluate the gate before the non-blocking sweep so a synthesis block is
+    // never swallowed by the sweep's error catch. Run-dir resolution is wrapped
+    // so a resolver throw passes the session — the gate blocks only on a
+    // positively-detected violation, never on its own infrastructure failure.
+    const gate = evaluateSessionEndGate(safeResolveActiveRunDir(cwd), readDevMode(project));
+    if (!gate.ok) return blockSessionEnd(gate);
+
     const sinceTs = readLastSweep(project);
     const store = openScrumStore({ cwd: project });
     try {
@@ -167,7 +221,11 @@ export function onStop(payload: Record<string, unknown> | null): HookResult {
 // Session-start digest helpers
 // ---------------------------------------------------------------------------
 
-function computeDigest(store: ScrumStore): SessionStartDigest {
+function computeDigest(
+  store: ScrumStore,
+  sweep: StaleEscalationSweepResult,
+  triggers: TriggerBinding[],
+): SessionStartDigest {
   const nowMs = Date.now();
   const stallCutoffMs = nowMs - STALL_THRESHOLD_HOURS * 3600 * 1000;
 
@@ -182,7 +240,13 @@ function computeDigest(store: ScrumStore): SessionStartDigest {
 
   const recent = store.listRecentEvents(DIGEST_MAX_RECENT).map(toRecentRow);
 
-  return { active_tasks: active, stalled_wip: stalled, recent_events: recent };
+  return {
+    active_tasks: active,
+    stalled_wip: stalled,
+    recent_events: recent,
+    auto_bubbled: sweep.bubbled,
+    bound_actions: computeBoundActions(store, triggers, DIGEST_MAX_BOUND),
+  };
 }
 
 function isStalled(task: ScrumTask, stallCutoffMs: number): boolean {
@@ -213,8 +277,39 @@ function isEmptyDigest(digest: SessionStartDigest): boolean {
   return (
     digest.active_tasks.length === 0 &&
     digest.stalled_wip.length === 0 &&
-    digest.recent_events.length === 0
+    digest.recent_events.length === 0 &&
+    digest.auto_bubbled.length === 0 &&
+    digest.bound_actions.length === 0
   );
+}
+
+/**
+ * Read the declared trigger bindings from `<project>/.claude/.prove.json`
+ * (`triggers[]`). Returns `[]` when the file is absent, unparseable, or carries
+ * no triggers — mirrors `readDevMode`'s tolerant config read so a malformed
+ * config never bricks the session-start hook.
+ */
+function readTriggers(projectDir: string): TriggerBinding[] {
+  try {
+    const configPath = join(projectDir, '.claude', '.prove.json');
+    if (!existsSync(configPath)) return [];
+    const config = JSON.parse(readFileSync(configPath, 'utf8')) as { triggers?: unknown };
+    if (!Array.isArray(config.triggers)) return [];
+    return config.triggers.filter(
+      (t): t is TriggerBinding =>
+        typeof t === 'object' &&
+        t !== null &&
+        typeof (t as TriggerBinding).on === 'string' &&
+        typeof (t as TriggerBinding).workflow === 'string' &&
+        // Validate description so the asserted type fully covers the field.
+        // An absent or string description is fine; any other type is rejected
+        // rather than silently propagated to consumers.
+        ((t as TriggerBinding).description === undefined ||
+          typeof (t as TriggerBinding).description === 'string'),
+    );
+  } catch {
+    return [];
+  }
 }
 
 function formatDigest(digest: SessionStartDigest): string {
@@ -235,6 +330,23 @@ function formatDigest(digest: SessionStartDigest): string {
     lines.push(`- recent events (${digest.recent_events.length}):`);
     for (const event of digest.recent_events) {
       lines.push(`  - ${event.ts} ${event.task_id} ${event.kind}`);
+    }
+  }
+  if (digest.auto_bubbled.length > 0) {
+    lines.push(`- auto-bubbled escalations (${digest.auto_bubbled.length}):`);
+    for (const bubble of digest.auto_bubbled) {
+      lines.push(
+        `  - ${bubble.task_id}: ${bubble.from_layer} → ${bubble.to_layer} (aged ${bubble.age_hours}h, id ${bubble.from_id} → ${bubble.to_id})`,
+      );
+    }
+  }
+  if (digest.bound_actions.length > 0) {
+    lines.push(`- bound next-actions (${digest.bound_actions.length}):`);
+    for (const action of digest.bound_actions) {
+      const note = action.description ? ` — ${action.description}` : '';
+      lines.push(
+        `  - ${action.task_id} [${action.status}] → ${action.workflow}${note} (${action.title})`,
+      );
     }
   }
   return lines.join('\n');
@@ -300,6 +412,57 @@ function writeLastSweep(project: string, tsMs: number): void {
   mkdirSync(dirname(path), { recursive: true });
   const body = `${JSON.stringify({ ts: tsMs, iso: new Date(tsMs).toISOString() }, null, 2)}\n`;
   writeFileSync(path, body, 'utf8');
+}
+
+// ---------------------------------------------------------------------------
+// Handoff/synthesis gate helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Encode a gate failure as a Claude Code `decision: block` payload on stdout.
+ * Exit 0 is intentional: Claude Code treats the `{decision:"block"}` JSON — not
+ * the exit code — as the block signal for Stop / SubagentStop hooks (mirrors
+ * the acb post-commit hook). The `reason` carries the actionable remediation.
+ */
+function blockSessionEnd(gate: GateVerdict): HookResult {
+  const body = pyJsonDump({ decision: 'block', reason: gate.message });
+  return { exitCode: 0, stdout: body, stderr: '' };
+}
+
+/**
+ * Resolve the active run dir for the gate, swallowing any resolver throw to
+ * `null`. The gate treats `null` as "no run to gate" and passes, so a resolver
+ * infrastructure failure can never block a session — only a positively-read
+ * reasoning-log violation does.
+ */
+function safeResolveActiveRunDir(cwd: string): string | null {
+  try {
+    return resolveActiveRunDir(cwd);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read the cwd from the hook payload without ever calling process.cwd().
+ * Returns an empty string when the payload carries no cwd field so callers
+ * can fall through to safeResolveProjectDir without risking an ENOENT throw.
+ */
+function safeReadCwd(payload: Record<string, unknown> | null): string {
+  return readCwd(payload ?? {}) || '';
+}
+
+/**
+ * Resolve the project directory from the hook payload without throwing.
+ * Falls back to CLAUDE_PROJECT_DIR then '.' so a missing or unlinked cwd
+ * (e.g. a removed worktree) never causes an uncaught ENOENT from process.cwd().
+ */
+function safeResolveProjectDir(payload: Record<string, unknown> | null): string {
+  try {
+    return resolveProjectDir(payload);
+  } catch {
+    return process.env.CLAUDE_PROJECT_DIR ?? '.';
+  }
 }
 
 // ---------------------------------------------------------------------------

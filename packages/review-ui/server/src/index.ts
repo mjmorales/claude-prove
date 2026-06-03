@@ -50,7 +50,13 @@ async function main() {
     : null;
 
   const app = Fastify({ logger: { level: process.env.LOG_LEVEL ?? "info" } });
-  await app.register(cors, { origin: true });
+  // Restrict CORS to the same-origin SPA only. Reflecting all origins
+  // (`origin: true`) would let any page the operator visits drive credentialed
+  // cross-origin GETs against this loopback server, turning the git-executing
+  // endpoints into a CSRF-reachable surface (no CSRF token, all reads are GET).
+  await app.register(cors, {
+    origin: [`http://${HOST}:${PORT}`, `http://localhost:${PORT}`],
+  });
 
   app.get("/api/health", async () => ({ ok: true, repoRoot, webRoot }));
 

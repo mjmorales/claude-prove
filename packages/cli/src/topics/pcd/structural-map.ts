@@ -2,9 +2,8 @@
  * PCD Round 0a: deterministic structural map generator.
  *
  * Produces dependency graphs and file clusters from import analysis. Reuses
- * the shared project walker and CAFI cache loader. Originally ported from
- * `tools/pcd/structural_map.py` (retired in v0.40.0); TypeScript is now the
- * source of truth for output shape and traversal order.
+ * the shared project walker and CAFI cache loader. TypeScript is the source
+ * of truth for output shape and traversal order.
  */
 
 import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
@@ -124,10 +123,17 @@ export function _resolveImportToFile(
   projectFiles: Set<string>,
   projectRoot: string,
   workspaces: WorkspaceMap = new Map(),
+  sortedProjectFiles?: string[],
 ): string | null {
   if (language === 'python') return resolvePython(module, projectFiles);
   if (language === 'rust') return resolveRust(module, projectFiles);
-  if (language === 'go') return resolveGo(module, projectFiles, projectRoot);
+  if (language === 'go') {
+    // Go resolution iterates the project files in sorted order; reuse a
+    // graph-build-wide sorted view when the caller supplies one, else derive
+    // it here so a standalone call still resolves identically.
+    const sorted = sortedProjectFiles ?? [...projectFiles].sort();
+    return resolveGo(module, projectRoot, sorted);
+  }
   if (language === 'javascript' || language === 'typescript') {
     return resolveJsTs(sourceFile, module, projectFiles, workspaces);
   }
@@ -171,22 +177,54 @@ function resolveRust(module: string, projectFiles: Set<string>): string | null {
   return null;
 }
 
-function resolveGo(module: string, projectFiles: Set<string>, projectRoot: string): string | null {
-  // Read go.mod to find the module prefix, if any.
+/**
+ * Cache of `projectRoot` → go.mod module prefix (empty string when absent).
+ * `resolveGo` runs once per Go import per Go file (O(F*I)), but the prefix is
+ * invariant for a given root — memoizing collapses the reads to one per root.
+ * Tests that mutate go.mod between generations call `_clearGoModCache()`.
+ */
+const goModPrefixCache = new Map<string, string>();
+
+/** Read + parse the go.mod module prefix for `projectRoot`, memoized. */
+function getGoModulePrefix(projectRoot: string): string {
+  const cached = goModPrefixCache.get(projectRoot);
+  if (cached !== undefined) return cached;
+
   let modulePrefix = '';
   try {
     const goMod = readFileSync(join(projectRoot, 'go.mod'), 'utf8');
     for (const rawLine of goMod.split('\n')) {
       const line = rawLine.trim();
       if (line.startsWith('module ')) {
-        const remainder = line.slice('module '.length).trim();
-        modulePrefix = remainder;
+        modulePrefix = line.slice('module '.length).trim();
         break;
       }
     }
   } catch {
-    // No go.mod — fall through with empty prefix.
+    // No go.mod — empty prefix (cached so the miss isn't re-read per import).
   }
+
+  goModPrefixCache.set(projectRoot, modulePrefix);
+  return modulePrefix;
+}
+
+/** Test hook: drop memoized go.mod prefixes (e.g. after rewriting go.mod). */
+export function _clearGoModCache(): void {
+  goModPrefixCache.clear();
+}
+
+/**
+ * `sortedProjectFiles` is the project file set in sorted order, matching
+ * Python's `for pf in sorted(project_files)` deterministic resolution. The
+ * caller supplies it (hoisted once per graph build) so this resolver does not
+ * re-sort the full file set on every Go import.
+ */
+function resolveGo(
+  module: string,
+  projectRoot: string,
+  sortedProjectFiles: string[],
+): string | null {
+  const modulePrefix = getGoModulePrefix(projectRoot);
 
   let rel: string;
   if (modulePrefix !== '' && module.startsWith(modulePrefix)) {
@@ -195,9 +233,7 @@ function resolveGo(module: string, projectFiles: Set<string>, projectRoot: strin
     rel = module;
   }
 
-  // Match Python's `for pf in sorted(project_files)` order.
-  const sorted = [...projectFiles].sort();
-  for (const pf of sorted) {
+  for (const pf of sortedProjectFiles) {
     if (pf.startsWith(`${rel}/`) && pf.endsWith('.go')) return pf;
     if (pf === `${rel}.go`) return pf;
   }
@@ -388,6 +424,9 @@ interface DependencyGraph {
  */
 export function _buildDependencyGraph(files: string[], projectRoot: string): DependencyGraph {
   const projectFiles = new Set(files);
+  // Sorted view of the (fixed) project file set, computed once and shared
+  // read-only across every Go import resolution this build performs.
+  const sortedProjectFiles = [...projectFiles].sort();
   const workspaces = _discoverWorkspacePackages(projectRoot);
   const allImports: ImportEntry[] = [];
   const adjacency = new Map<string, string[]>();
@@ -419,6 +458,7 @@ export function _buildDependencyGraph(files: string[], projectRoot: string): Dep
         projectFiles,
         projectRoot,
         workspaces,
+        sortedProjectFiles,
       );
       if (target !== null && target !== relPath && !seen.has(target)) {
         seen.add(target);
@@ -551,6 +591,12 @@ export function _clusterFiles(
  * (used by scoped steward-review). Otherwise the shared walker enumerates
  * files honoring `.claude/.prove.json` excludes + size cap. The resulting
  * map is written to `.prove/steward/pcd/structural-map.json` and returned.
+ *
+ * Throws on artifact-write failure (`mkdirSync`/`writeFileSync`) and on a
+ * clustering/walk divergence (a file with no assigned cluster). The pcd CLI
+ * dispatch wraps this in try/catch (topics/pcd.ts) and converts throws to a
+ * clean `Error: <msg>` + exit 1; callers outside that dispatch (e.g. a skill
+ * or agent using this as a library function) must handle the thrown errors.
  */
 export function generateStructuralMap(projectRoot: string, scope?: string[]): StructuralMap {
   const absRoot = resolve(projectRoot);
@@ -594,7 +640,15 @@ export function generateStructuralMap(projectRoot: string, scope?: string[]): St
 
   const cachePath = join(absRoot, CACHE_PATH);
   const cafiCache = loadCache(cachePath);
-  const cafiFiles = cafiCache.files as Record<string, { description?: string } | undefined>;
+  // `loadCache` validates only `version`, so a partial/hand-edited cache like
+  // `{"version":1}` has no `files` key. Degrade a missing/malformed `files`
+  // to `{}` (matching loadCache's own cache-miss semantics) rather than
+  // casting `undefined` through and throwing on the first lookup below.
+  const rawCafiFiles = cafiCache.files;
+  const cafiFiles: Record<string, { description?: string } | undefined> =
+    rawCafiFiles !== null && typeof rawCafiFiles === 'object' && !Array.isArray(rawCafiFiles)
+      ? (rawCafiFiles as Record<string, { description?: string } | undefined>)
+      : {};
 
   const modules: StructuralMapModule[] = [];
   const dependencyEdges: StructuralMapEdge[] = [];
@@ -614,6 +668,17 @@ export function generateStructuralMap(projectRoot: string, scope?: string[]): St
     const cafiDesc = rawDesc !== undefined && rawDesc !== '' ? rawDesc : null;
 
     const importsFrom = [...new Set(adjacency.get(relPath) ?? [])].sort();
+    // Invariant: _clusterFiles BFS-walks the same `files` array that produced
+    // these modules, so every module must be assigned a cluster. A miss means
+    // clustering and the module walk diverged (e.g. future scope/exclude
+    // drift between _buildDependencyGraph and _clusterFiles); fail fast rather
+    // than silently mislabeling the orphan as cluster 0 (a real cluster).
+    const clusterId = fileToCluster.get(relPath);
+    if (clusterId === undefined) {
+      throw new Error(
+        `structural-map: file '${relPath}' was not assigned to any cluster (clustering/walk divergence)`,
+      );
+    }
     const module: StructuralMapModule = {
       path: relPath,
       lines,
@@ -621,7 +686,7 @@ export function generateStructuralMap(projectRoot: string, scope?: string[]): St
       exports: [],
       imports_from: importsFrom,
       imported_by: importedBy.get(relPath) ?? [],
-      cluster_id: fileToCluster.get(relPath) ?? 0,
+      cluster_id: clusterId,
     };
     if (cafiDesc !== null) module.cafi_description = cafiDesc;
     modules.push(module);

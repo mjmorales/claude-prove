@@ -19,11 +19,21 @@ JavaScript/TypeScript (npm)
 - File naming: kebab-case
 - Test files: *.test.ext (dot)
 
+## Validation
+
+Run before committing:
+
+- **llm**: `skill claude-skills:comment-audit`
+
 ## References
 
 ### claude-prove CLI Reference
 
 @__PLUGIN_DIR__/references/claude-prove-reference.md
+
+### Design Principles
+
+@__PLUGIN_DIR__/references/design-principles.md
 
 ### LLM-Optimized Coding Standards
 
@@ -50,6 +60,7 @@ JavaScript/TypeScript (npm)
 - `/prove:brainstorm` — Explore options and record decisions
 - `/prove:comprehend` — Socratic quiz on recent diffs to build code comprehension
 - `/prove:index` — Update the file index (run after significant changes)
+- `/prove:intake` — Render a charter/team/decompose HTML intake form, validate the pasted-back payload, and drive the one writer
 - `/prove:orchestrator` — Unified entry point for orchestrator, autopilot, and full-auto execution
 - `/prove:plan` — Plan a task or a specific step from the active plan.json
 - `/prove:review-ui` — Docker-based review UI for inspecting prove runs, ACB intent groups, and verdicts

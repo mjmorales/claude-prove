@@ -38,10 +38,24 @@ export function runStepInfo(stepId: string, flags: StepInfoFlags): number {
     console.error(`error: no plan.json at ${resolved.paths.plan}`);
     return 1;
   }
-  const plan = JSON.parse(readFileSync(resolved.paths.plan, 'utf8')) as PlanData;
-  const state: StateData | null = existsSync(resolved.paths.state)
-    ? loadState(resolved.paths)
-    : null;
+  let plan: PlanData;
+  try {
+    plan = JSON.parse(readFileSync(resolved.paths.plan, 'utf8')) as PlanData;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`error: invalid plan.json at ${resolved.paths.plan}: ${msg}`);
+    return 1;
+  }
+  let state: StateData | null = null;
+  if (existsSync(resolved.paths.state)) {
+    try {
+      state = loadState(resolved.paths);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`error: cannot load state at ${resolved.paths.state}: ${msg}`);
+      return 1;
+    }
+  }
 
   for (const task of plan.tasks ?? []) {
     for (const step of task.steps ?? []) {

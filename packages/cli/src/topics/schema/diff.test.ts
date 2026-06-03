@@ -74,6 +74,32 @@ describe('configDiff', () => {
     }
   });
 
+  test('malformed JSON returns a displayable error instead of throwing', () => {
+    const dir = tmp();
+    try {
+      const path = join(dir, '.prove.json');
+      writeFileSync(path, '{ not valid json');
+      const out = configDiff(path);
+      expect(out).toContain(`Invalid JSON in ${path}:`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('settings.json is detected by basename even without a .claude parent', () => {
+    const dir = tmp();
+    try {
+      // No .claude in the path — F-4-006: basename-alone detection.
+      const path = join(dir, 'settings.json');
+      writeJson(path, {});
+      const out = configDiff(path);
+      expect(out).toContain('=== Config Diff: .claude/settings.json ===');
+      expect(out).not.toContain('Cannot auto-detect schema');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('settings config with no issues renders valid line', () => {
     const dir = tmp();
     try {

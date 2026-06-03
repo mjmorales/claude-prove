@@ -28,6 +28,7 @@
  *     injected context (if any) to stdout, exits 0.
  */
 
+import { readFileSync } from 'node:fs';
 import type { CAC } from 'cac';
 import { runGate } from './cafi/gate';
 import {
@@ -160,8 +161,15 @@ function cmdContext(root: string): number {
   return 0;
 }
 
-async function cmdGate(root: string): Promise<number> {
-  const rawStdin = await Bun.stdin.text();
+function cmdGate(root: string): number {
+  // Drain stdin (FD 0) synchronously so the gate path has no Bun-specific
+  // dependency and is testable by passing a string directly to runGate.
+  let rawStdin: string;
+  try {
+    rawStdin = readFileSync(0, 'utf8');
+  } catch {
+    rawStdin = '';
+  }
   const result = runGate(rawStdin, { cwd: root });
   if (result.stdout !== '') {
     process.stdout.write(result.stdout);

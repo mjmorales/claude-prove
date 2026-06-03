@@ -34,6 +34,14 @@ export interface SettingsFile {
 
 export interface Options {
   force?: boolean;
+  /**
+   * Tool names (matching `ProveHookSpec.tool` / the `tools.<name>` keys in
+   * `.claude/.prove.json`) whose hook blocks should NOT be installed. A
+   * disabled tool's prove-owned block is omitted on a fresh write and removed
+   * if already present. When omitted, every tool is treated as enabled — so
+   * existing callers and the byte-shape parity test keep emitting all blocks.
+   */
+  disabledTools?: ReadonlySet<string>;
 }
 
 /** Thrown when `.claude/settings.json` exists but cannot be parsed as JSON. */
@@ -85,6 +93,13 @@ export const PROVE_HOOK_BLOCKS: readonly ProveHookSpec[] = [
     timeout: 5000,
   },
   {
+    event: 'PostToolUse',
+    matcher: '*',
+    tool: 'run_state',
+    commandSuffix: 'run-state hook capture',
+    timeout: 5000,
+  },
+  {
     event: 'PreToolUse',
     matcher: 'Glob|Grep',
     tool: 'cafi',
@@ -96,6 +111,13 @@ export const PROVE_HOOK_BLOCKS: readonly ProveHookSpec[] = [
     matcher: 'Write|Edit|MultiEdit',
     tool: 'run_state',
     commandSuffix: 'run-state hook guard',
+    timeout: 5000,
+  },
+  {
+    event: 'PreToolUse',
+    matcher: 'Read|Write|Edit|MultiEdit|Bash',
+    tool: 'run_state',
+    commandSuffix: 'run-state hook bounds',
     timeout: 5000,
   },
   {
@@ -186,7 +208,12 @@ function readSettings(path: string): SettingsFile {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
       return { hooks: {} };
     }
-    throw err;
+    // Non-ENOENT fs errors (EACCES, EISDIR, …) carry an OS-dependent message
+    // with no path context. Wrap with the path so the CLI dispatch surface
+    // reports an actionable error matching the SettingsParseError sibling.
+    throw new Error(`Failed to read settings file at ${path}: ${(err as Error).message}`, {
+      cause: err,
+    });
   }
   try {
     const parsed = JSON.parse(raw) as SettingsFile;
@@ -211,6 +238,30 @@ function findProveBlock(
 }
 
 /**
+ * Report whether the first hook entry in a prove-owned block is already in
+ * sync with `spec` and `desiredCommand`.
+ *
+ * The `entry.if === spec.if` check is sound even when both are `undefined`
+ * because buildHookEntry omits the `if` key entirely when `spec.if` is
+ * undefined — so `undefined === undefined` is the correct equality for the
+ * "both absent" case. Do NOT replace this with `'if' in entry` / `'if' in spec`:
+ * spec is a plain object where `'if' in spec` is true regardless of the value,
+ * which would break the comparison for specs without a conditional.
+ */
+function entryInSync(
+  entry: HookEntry | undefined,
+  spec: ProveHookSpec,
+  desiredCommand: string,
+): boolean {
+  return (
+    entry !== undefined &&
+    entry.command === desiredCommand &&
+    entry.timeout === spec.timeout &&
+    entry.if === spec.if // equality is sound because buildHookEntry omits the key when spec.if is undefined
+  );
+}
+
+/**
  * Merge prove-owned hook blocks into `settingsPath`.
  *
  * Behavior:
@@ -219,6 +270,7 @@ function findProveBlock(
  * - Existing prove block with stale command → rewrite command + timeout,
  *   preserve any extra keys on the block.
  * - Missing prove block → append.
+ * - Tool in `opts.disabledTools` → block omitted (and removed if present).
  * - Blocks without `_tool` are never touched.
  *
  * Writes atomically via `<path>.tmp` + rename. Validates the parsed source
@@ -243,15 +295,27 @@ export function writeSettingsHooks(
     const desiredCommand = buildCommand(prefix, spec.commandSuffix);
     const existing = findProveBlock(eventBlocks, spec.matcher, spec.tool);
 
-    if (existing) {
-      const entry = existing.hooks[0];
-      const inSync =
-        entry !== undefined &&
-        entry.command === desiredCommand &&
-        entry.timeout === spec.timeout &&
-        entry.if === spec.if;
+    // Disabled tool: never install its block, and remove a stale one if it was
+    // installed by a prior run when the tool was enabled.
+    if (opts.disabledTools?.has(spec.tool)) {
+      if (existing) {
+        const arr = hooks[spec.event];
+        if (arr) {
+          const idx = arr.indexOf(existing);
+          if (idx >= 0) {
+            arr.splice(idx, 1);
+            mutated = true;
+          }
+          // Drop the event key if removing our block left it empty, but keep
+          // it when user-authored blocks remain.
+          if (arr.length === 0) delete hooks[spec.event];
+        }
+      }
+      continue;
+    }
 
-      if (inSync && !opts.force) continue;
+    if (existing) {
+      if (entryInSync(existing.hooks[0], spec, desiredCommand) && !opts.force) continue;
 
       // Rewrite the single hook entry while preserving any extra keys on
       // the outer block (e.g. future metadata users may add alongside

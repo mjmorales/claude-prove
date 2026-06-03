@@ -1,14 +1,14 @@
 /**
  * Tests for `acb/assembler.ts` — merge logic, dedup rules, and hash parity.
  *
- * Ports every case in `tools/acb/test_assembler.py` plus adds byte-parity
- * fixtures against the Python reference (`__fixtures__/assembler/python-
- * captures/`). Each test opens a fresh `:memory:` AcbStore via
+ * Byte-parity hash fixtures live under `__fixtures__/assembler/python-
+ * captures/`. Each test opens a fresh `:memory:` AcbStore via
  * `openAcbStore` so registry migrations run end-to-end.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   AGENT_ID,
@@ -392,6 +392,35 @@ describe('assemble', () => {
     expect(doc.intent_groups).toEqual([]);
     expect(doc.negative_space).toEqual([]);
     expect(doc.open_questions).toEqual([]);
+  });
+
+  test('explicit cwd binds the diff (uncovered_files) to that worktree', () => {
+    // Build a throwaway git repo with a known committed change, then assert
+    // assemble() runs `git diff` in opts.cwd — not process.cwd() — so an
+    // uncovered file from THAT tree surfaces. Guards F-1-002.
+    const repo = mkdtempSync(join(tmpdir(), 'acb-assemble-cwd-'));
+    try {
+      const run = (cmd: string[]) => {
+        const p = Bun.spawnSync({ cmd, cwd: repo, stdout: 'pipe', stderr: 'pipe' });
+        if (p.exitCode !== 0) throw new Error(`${cmd.join(' ')} failed`);
+      };
+      run(['git', '-c', 'init.defaultBranch=main', 'init', '--quiet']);
+      run(['git', 'config', 'user.email', 'test@example.com']);
+      run(['git', 'config', 'user.name', 'test']);
+      run(['git', 'config', 'commit.gpgsign', 'false']);
+      writeFileSync(join(repo, 'base.txt'), 'base\n', 'utf8');
+      run(['git', 'add', '.']);
+      run(['git', 'commit', '--quiet', '-m', 'init']);
+      writeFileSync(join(repo, 'changed.txt'), 'new\n', 'utf8');
+      run(['git', 'add', '.']);
+      run(['git', 'commit', '--quiet', '-m', 'add changed']);
+
+      // No manifests → every diffed file is uncovered.
+      const doc = assemble({ store, branch: 'feat/x', baseRef: 'HEAD~1', cwd: repo });
+      expect(doc.uncovered_files).toContain('changed.txt');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
   });
 });
 

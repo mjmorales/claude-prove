@@ -12,7 +12,14 @@ import type { PlanData, StateData } from '../state';
 
 export function loadPlanOrNull(paths: RunPaths): PlanData | null {
   if (!existsSync(paths.plan)) return null;
-  return JSON.parse(readFileSync(paths.plan, 'utf8')) as PlanData;
+  // Return null rather than crashing: a corrupt plan.json must not mask a
+  // state mutation that already landed. renderSummary degrades to id-only
+  // titles when plan is null, which is preferable to an uncaught SyntaxError.
+  try {
+    return JSON.parse(readFileSync(paths.plan, 'utf8')) as PlanData;
+  } catch {
+    return null;
+  }
 }
 
 export function printMutationResult(

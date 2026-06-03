@@ -31,7 +31,15 @@ export function runCollapse(flags: CollapseFlags): number {
     return 1;
   }
 
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as TriageManifest;
+  let manifest: TriageManifest;
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as TriageManifest;
+  } catch (err) {
+    console.error(
+      `Error: failed to parse triage manifest: ${manifestPath}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+    return 1;
+  }
   const tokenBudget = flags.tokenBudget ?? 8000;
   const collapsed = collapseManifest(manifest, tokenBudget);
 

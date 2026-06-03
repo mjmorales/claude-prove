@@ -7,7 +7,7 @@ summary: Operate the scrum store backed by `.prove/prove.db` (tasks, milestones,
 
 # Scrum
 
-Agentic task management on the unified prove store. Tasks, milestones, tags, and run-links live in `.prove/prove.db`; CC-lifecycle hooks reconcile state at task boundaries (not commits). Architecture: `.prove/decisions/2026-04-21-scrum-architecture.md`.
+Agentic task management on the unified prove store. Tasks, milestones, tags, and run-links live in `.prove/prove.db`; CC-lifecycle hooks reconcile state at task boundaries (not commits).
 
 The first token of `$ARGUMENTS` selects the route. No argument → print this routing table and exit.
 

@@ -78,7 +78,10 @@ const BASE_PLAN = {
       id: '1',
       title: 'hello-world',
       description: 'Build the hello-world feature.',
-      acceptance_criteria: ['AC-1', 'AC-2'],
+      acceptance_criteria: [
+        { text: 'AC-1', verifies_by: 'bash', check: 'bun test' },
+        { text: 'AC-2' },
+      ],
       steps: [
         { id: '1.1', title: 'scaffold' },
         { id: '1.2', title: 'wire up' },
@@ -113,7 +116,9 @@ describe('orchestrator task-prompt', () => {
     expect(stdoutBuf).toContain('cd /tmp/worktree-1');
     expect(stdoutBuf).toContain('**Task 1: hello-world**');
     expect(stdoutBuf).toContain('Build the hello-world feature.');
-    expect(stdoutBuf).toContain('- AC-1');
+    // Structured criterion with verifies_by renders the kind+check annotation;
+    // a bare { text } renders just the text.
+    expect(stdoutBuf).toContain('- AC-1 (bash: bun test)');
     expect(stdoutBuf).toContain('- AC-2');
     expect(stdoutBuf).toContain('- `1.1` scaffold');
     expect(stdoutBuf).toContain('- `1.2` wire up');
@@ -121,6 +126,61 @@ describe('orchestrator task-prompt', () => {
     expect(stdoutBuf).toContain('Run the bun suite.');
     expect(stdoutBuf).toContain('- Build: `bun tsc --build`');
     expect(stdoutBuf).toContain('- Tests: `bun test`');
+  });
+
+  test('injects the cooperative checkpoint-interrupt protocol with the cancel-flag path', () => {
+    writePlan(BASE_PLAN);
+    writePrd(BASE_PRD);
+    const code = runTaskPrompt({ runDir, taskId: '1', projectRoot: project });
+    expect(code).toBe(0);
+    // Section header + the three terms the acceptance grep scans for.
+    expect(stdoutBuf).toContain('## Cooperative checkpoint-interrupt (Layer 2)');
+    expect(stdoutBuf).toContain('cancel-flag');
+    expect(stdoutBuf).toContain('graceful handoff');
+    // The cancel-flag read path resolves against the run dir.
+    expect(stdoutBuf).toContain(join(runDir, 'CANCEL'));
+    // The handoff is a synthesis reasoning-log entry appended via acb log.
+    expect(stdoutBuf).toContain('`synthesis` reasoning-log entry');
+    expect(stdoutBuf).toContain(`claude-prove acb log append --run-dir "${runDir}"`);
+    // Layering: best-effort on top of the Layer-1 floor, never replacing it.
+    expect(stdoutBuf).toContain('layers ON TOP of the Layer-1 cancel-and-redispatch floor');
+    expect(stdoutBuf).toContain('token budget and subagent timeout remain the hard backstop');
+  });
+
+  test('forbids opening the shared store from the worktree (no schema pollution)', () => {
+    writePlan(BASE_PLAN);
+    writePrd(BASE_PRD);
+    const code = runTaskPrompt({ runDir, taskId: '1', projectRoot: project });
+    expect(code).toBe(0);
+    expect(stdoutBuf).toContain('## Resource Constraints');
+    // Workers share one `.prove/prove.db`; opening it auto-migrates the shared
+    // store to the worktree's in-flight schema. The prompt must forbid it.
+    expect(stdoutBuf).toContain('**DO NOT** run `claude-prove store');
+    expect(stdoutBuf).toContain('AUTO-MIGRATES that shared store');
+    expect(stdoutBuf).toContain('--workspace-root <tmpdir>');
+  });
+
+  test('relative run dir → cancel-flag + handoff paths absolutized under projectRoot', () => {
+    // Production passes a relative --run-dir (".prove/runs/<branch>/<slug>").
+    // The worker cd's into its task worktree first, where `.prove/` is
+    // gitignored and absent — so a relative flag path would resolve there and
+    // never see the driver's flag. The renderer absolutizes it against
+    // projectRoot (the main worktree root).
+    writePlan(BASE_PLAN);
+    writePrd(BASE_PRD);
+    const prevCwd = process.cwd();
+    process.chdir(root);
+    try {
+      const code = runTaskPrompt({ runDir: 'run', taskId: '1', projectRoot: root });
+      expect(code).toBe(0);
+      const absRunDir = join(root, 'run');
+      expect(stdoutBuf).toContain(`test -f "${join(absRunDir, 'CANCEL')}"`);
+      expect(stdoutBuf).toContain(`claude-prove acb log append --run-dir "${absRunDir}"`);
+      // No bare relative flag path leaks into the emitted worker prompt.
+      expect(stdoutBuf).not.toContain('test -f "run/CANCEL"');
+    } finally {
+      process.chdir(prevCwd);
+    }
   });
 
   test('no worktree flag → omits the cd block', () => {

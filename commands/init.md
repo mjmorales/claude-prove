@@ -1,12 +1,27 @@
 ---
-description: Detect project tech stack and generate .claude/.prove.json configuration
+description: Detect project tech stack, generate .claude/.prove.json, and bootstrap project-identity artifacts (charter, team, contributor)
 ---
 
-# Initialize .claude/.prove.json
+# Initialize a prove project
 
-Delegate stack detection and validator emission to `claude-prove install init-config`, then layer interactive UX for scope, validator review, `.gitignore`, references, and CLAUDE.md.
+Two halves run here:
+
+1. **Stack config** — delegate detection and validator emission to `claude-prove install init-config`, then layer interactive UX for scope, validator review, `.gitignore`, references, and CLAUDE.md.
+2. **Project-identity bootstrap** — drive a conversational interview (or honor selection flags) and author `charter.md`, `team.md`, and a contributor record. The CLI runs the mechanical pre-flight checks and scaffolds skip-if-exists skeletons; you author the prose content into them.
 
 `claude-prove install init-config` is the source of truth for validator detection. It writes `<cwd>/.claude/.prove.json`, preserves user-custom validators, and carries every other top-level key (`scopes`, `reporters`, `claude_md`, `tools`, ...) across re-runs.
+
+## Invocation modes
+
+Read the slash-command arguments to pick the identity-bootstrap scope. Flags map to the artifact set:
+
+- `--with-charter` → charter only (combinable with `--with-team`)
+- `--with-team` → team only (combinable with `--with-charter`)
+- `--full` → charter + team + contributor
+- `--form` → full set, but batch every interview question into one form (collect all answers up front), then author all artifacts in one pass
+- (no flag) → ask the operator which artifacts to bootstrap, then proceed
+
+**Division of labor:** the CLI does the mechanical work — pre-flight checks and skip-if-exists scaffolding; you do the interview and write the prose. Author only into skeletons the CLI just created; never overwrite a `skipped` (already-existing) artifact, and never re-run or reimplement the pre-flight/scaffolding yourself — call the CLI for it.
 
 ## Step 0: Guard
 
@@ -51,6 +66,53 @@ On "Re-detect":
 ```bash
 "${PROVE_CLI[@]}" install init-config --cwd "$TARGET_CWD" --force
 ```
+
+## Step 3.5: Project-identity bootstrap
+
+Bootstrap `charter.md`, `team.md`, and a contributor record. Scope comes from the flags mapped under [Invocation modes](#invocation-modes).
+
+### Choose scope
+
+If no flag was passed, `AskUserQuestion` (header: "Identity"):
+- "Full (Recommended)" — charter, team, and a contributor record
+- "Charter only" — project vision/mission/outcome bet
+- "Skip" — leave identity artifacts unmanaged
+
+On "Skip", proceed to Step 4.
+
+### Resolve the contributor id
+
+A contributor record needs a slug. Derive a default from `git config user.name` (lowercase, spaces → hyphens); confirm or let the operator override with free-form input. Bind to `$CONTRIBUTOR_ID`.
+
+### Pre-flight + scaffold (dry-run first)
+
+Run the mechanical checks and see what is missing without writing:
+
+```bash
+"${PROVE_CLI[@]}" install bootstrap-identity --cwd "$TARGET_CWD" \
+  <selection-flags> --contributor "$CONTRIBUTOR_ID" --dry-run --json
+```
+
+The result reports `preflightFailures` (each with a concrete `fix`) and the `artifacts` that would be `created` vs `skipped`. If `ok` is `false`, relay every failure and its fix to the operator, then stop — do not bootstrap until the tree is a clean checkout on an integration branch inside a git repo with the CLI on PATH.
+
+When `ok` is `true`, run the same command without `--dry-run` to scaffold the skeletons:
+
+```bash
+"${PROVE_CLI[@]}" install bootstrap-identity --cwd "$TARGET_CWD" \
+  <selection-flags> --contributor "$CONTRIBUTOR_ID" --json
+```
+
+Each scaffolded file carries a YAML frontmatter `schema_version` + `provenance` block (`created_by`, `created_at`, `last_modified_by`, `last_modified_at`) above a skeleton body with `<!-- ... -->` prompts. `skipped` artifacts already exist — leave them untouched.
+
+### Interview + author
+
+For every artifact the CLI reports as `created`, run a short interview and write the answers into the skeleton body. Ask one question per exchange (in `--form` mode, batch all questions into one form, then author every artifact in a single pass):
+
+- **charter.md** — vision (future state), mission (what it does, for whom, why), outcome bet (the measurable result). Replace each `<!-- ... -->` prompt with the answer.
+- **team.md** — each team member's name, role, and responsibilities; fill the roster table.
+- **contributor** (`contributors/$CONTRIBUTOR_ID.md`) — the operator's name, handle, role, and current focus.
+
+Leave the frontmatter `provenance` and `schema_version` values untouched — the CLI stamps them. Author into `created` skeletons only; skip every `skipped` artifact.
 
 ## Step 4: Show sections
 
@@ -158,7 +220,8 @@ bash "$PLUGIN_DIR/scripts/install-skills.sh"
 
 ## Step 10: Summary
 
-Report what was created or updated. Suggest next steps:
+Report what was created or updated, including any identity artifacts (`charter.md`, `team.md`, `contributors/<id>.md`) and which were scaffolded vs skipped. Suggest next steps:
 - Review and customize validators in `$TARGET_CWD/.claude/.prove.json`
-- Commit `.claude/.prove.json` and `.gitignore`
+- Review the authored charter / team / contributor content
+- Commit `.claude/.prove.json`, `.gitignore`, and any new identity artifacts
 - Run `/prove:plan --task` or `/prove:orchestrator --autopilot`
