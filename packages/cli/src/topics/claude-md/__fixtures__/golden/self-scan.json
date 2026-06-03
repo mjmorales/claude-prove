@@ -83,6 +83,10 @@
       "summary": "Update the file index (run after significant changes)"
     },
     {
+      "name": "intake",
+      "summary": "Render a charter/team/decompose HTML intake form, validate the pasted-back payload, and drive the one writer"
+    },
+    {
       "name": "orchestrator",
       "summary": "Unified entry point for orchestrator, autopilot, and full-auto execution"
     },
@@ -103,6 +107,6 @@
       "summary": "Run a milestone/task tree as parallel waves via orchestrator full-mode, mirroring status to scrum"
     }
   ],
-  "plugin_version": "2.9.1",
-  "plugin_dir": "/Users/manuelmorales/dev/claude-prove"
+  "plugin_version": "__PLUGIN_VERSION__",
+  "plugin_dir": "__PLUGIN_DIR__"
 }

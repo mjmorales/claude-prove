@@ -1,8 +1,8 @@
 <!-- prove:managed:start -->
 # claude-prove
 
-<!-- prove:plugin-version:2.9.1 -->
-**Prove plugin v2.9.1** — if `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts --version` does not match v2.9.1, run `/prove:update` to sync.
+<!-- prove:plugin-version:__PLUGIN_VERSION__ -->
+**Prove plugin v__PLUGIN_VERSION__** — if `bun run __PLUGIN_DIR__/packages/cli/bin/run.ts --version` does not match v__PLUGIN_VERSION__, run `/prove:update` to sync.
 
 JavaScript/TypeScript (npm)
 
@@ -29,11 +29,11 @@ Run before committing:
 
 ### claude-prove CLI Reference
 
-@/Users/manuelmorales/dev/claude-prove/references/claude-prove-reference.md
+@__PLUGIN_DIR__/references/claude-prove-reference.md
 
 ### Design Principles
 
-@/Users/manuelmorales/dev/claude-prove/references/design-principles.md
+@__PLUGIN_DIR__/references/design-principles.md
 
 ### LLM-Optimized Coding Standards
 
@@ -60,6 +60,7 @@ Run before committing:
 - `/prove:brainstorm` — Explore options and record decisions
 - `/prove:comprehend` — Socratic quiz on recent diffs to build code comprehension
 - `/prove:index` — Update the file index (run after significant changes)
+- `/prove:intake` — Render a charter/team/decompose HTML intake form, validate the pasted-back payload, and drive the one writer
 - `/prove:orchestrator` — Unified entry point for orchestrator, autopilot, and full-auto execution
 - `/prove:plan` — Plan a task or a specific step from the active plan.json
 - `/prove:review-ui` — Docker-based review UI for inspecting prove runs, ACB intent groups, and verdicts
