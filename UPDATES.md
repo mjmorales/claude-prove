@@ -6,6 +6,25 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.10.0 — CLI robustness hardening: clean failures, honest exit codes
+
+*(Behavior changes, no config migration and nothing to adopt — review the consumer-contract notes below only if you script against CLI output.)* A hardening sweep across run-state, scrum, schema, pcd, acb, install, notify, report, claude-md, and cafi. Two systemic fixes plus targeted contract changes:
+
+- **Corrupt artifacts fail clean.** Every on-disk artifact read (`plan.json`, `state.json`, triage/collapsed manifests, report inputs, schema configs) reports a one-line error and exits 1 instead of escaping as a raw `SyntaxError` stack trace.
+- **Durable writes win.** Commands that commit a store row and then run a secondary write (contributor/team artifact mirrors, milestone-close curation, charter sync) emit the result JSON immediately after the commit; a secondary failure degrades to a stderr warning with exit 0 instead of masking the successful write as a command failure. `scrum decision recover` is now transactional — a mid-walk git failure rolls back every recovered row.
+- **`schema validate` / `diff` error channel.** FAIL summaries, per-error lines, and warnings move from stdout to stderr; stdout carries only the PASS line. Consumers parsing validation failures from stdout must read stderr.
+- **`run-state migrate` sweep isolation.** A corrupt run no longer aborts the remaining sweep. Summary format is `N processed, M failed` (was `N runs processed`); exit 1 only when failures exist.
+- **`install upgrade` content-type check.** An HTML-denylist replaces the binary allowlist: any content-type is accepted except HTML/XHTML (or a body opening with an HTML doctype), so an upstream CDN content-type change cannot break upgrades.
+- **Bootstrap never migrates `schema_version`.** Re-emitting `.claude/.prove.json` preserves an older on-disk version so `schema migrate` owns the upgrade; a newer on-disk version now errors (downgrade guard) instead of being silently relabeled.
+- **Reporters time out.** `notify dispatch` kills a reporter process after 10s and continues with a warning; a hung reporter previously wedged the dispatcher indefinitely.
+- **`report` inputs are shape-checked.** `brief`, `milestone-brief`, `timeline`, and `decompose-preview` validate the input file's shape and exit 1 with a readable message instead of crashing on a wrong-typed file.
+- **`store info` survives a fresh database.** It reports v0 per domain instead of throwing `no such table: _migrations_log`.
+- **Hooks cannot brick a session.** The scrum Stop/SubagentStop hooks survive a removed-worktree cwd, and the bounds PreToolUse hook passes permissively on malformed bounds rows; the SubagentStop message now surfaces the reason when a story-close floor blocks a task transition.
+- **YAML frontmatter is quote-safe.** Contributor and team artifact writers escape scalars that would corrupt YAML (colons, leading specials, boolean/null keywords).
+- **Performance.** `scrum status` computes the tree rollup in a single pass (previously one store query per node per level); `cafi status`/index reuse cached hashes for files whose mtime+size are unchanged (stat-only fast path, additive cache fields, no cache invalidation); glob `**` matching is memoized, collapsing exponential backtracking.
+
+---
+
 ## v3.9.0 — Interactive intake forms: `intake/v1` + the `/prove:intake` skill
 
 *(Additive — new `intake` CLI topic + `intake` skill, nothing to adopt.)* A self-contained interactive HTML form surface for the charter, team, and decomposition-kickoff Q&A. The operator fills the form, copies the answers to the clipboard, and pastes them back; a skill validates the payload and drives the **same** writer the conversational interview drives. The form and the conversation are two front-ends to one writer.
