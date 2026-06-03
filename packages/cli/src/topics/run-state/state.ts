@@ -9,11 +9,12 @@
  * `JSON.stringify(..., null, 2)` (two-space indent), and files end with a
  * trailing newline.
  *
- * Atomic write: temp-file (`<path>.tmp`) + rename to target. The lock file
- * (`state.json.lock`) is a presence-flag sidecar (advisory; not an OS file
- * lock). Single-
- * process orchestrator runs are typical — callers should funnel through
- * this module rather than writing state.json directly.
+ * Atomic write: temp-file (`<path>.tmp`) + rename to target. `state.json` is
+ * single-writer-by-convention: there is no locking. The `state.json.lock`
+ * sidecar is a presence-flag only — it is never acquired, tested, or held, so
+ * it provides no write-serialization. Concurrent mutators would interleave
+ * load -> mutate -> write with last-write-wins; callers must funnel every
+ * mutation through this module to keep the single-writer invariant.
  */
 
 import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -23,6 +24,8 @@ import {
   CURRENT_SCHEMA_VERSION,
   PLAN_SCHEMA,
   PRD_SCHEMA,
+  STEP_STATUSES,
+  TASK_STATUSES,
   VALIDATOR_PHASES,
   VALIDATOR_STATUSES,
 } from './schemas';
@@ -216,8 +219,10 @@ export function utcnowIso(): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Ensure the lock sidecar exists so its presence mirrors the Python source.
- * Python uses fcntl.flock on this fd; TS keeps the sidecar for on-disk parity.
+ * Ensure the `state.json.lock` sidecar exists. This is a presence-flag only:
+ * it is never acquired or held, so it grants no write-serialization. It is
+ * retained because the on-disk run layout and the `.gitignore` shipped with a
+ * run both expect the file to be present.
  */
 function touchLock(lockPath: string): void {
   mkdirSync(dirname(lockPath), { recursive: true });
@@ -405,13 +410,13 @@ function stateExists(paths: RunPaths): boolean {
   }
 }
 
-/** Read the current state.json under the file lock. */
+/** Read the current state.json. Touches the presence-flag sidecar (no lock). */
 export function loadState(paths: RunPaths): StateData {
   touchLock(paths.state_lock);
   return readJson(paths.state) as unknown as StateData;
 }
 
-/** Write state back. Bumps `updated_at` and goes through atomic write + lock. */
+/** Write state back. Bumps `updated_at` and goes through atomic write. */
 export function saveState(paths: RunPaths, state: StateData): void {
   state.updated_at = utcnowIso();
   touchLock(paths.state_lock);
@@ -702,11 +707,24 @@ export function dispatchHas(paths: RunPaths, key: string): boolean {
 // Auto-advance / finalize helpers
 // ---------------------------------------------------------------------------
 
+// Terminal-status sets keyed to each finalize predicate's own vocabulary. They
+// are split by domain — step statuses vs task statuses — because the two enums
+// differ: a step may be 'skipped' but a task never can. Sharing one literal
+// across both predicates makes 'skipped' read as legal for tasks, which it is
+// not. Membership is asserted against the closed enums so the predicate cannot
+// drift from the schema.
+const TERMINAL_STEP_STATUSES: ReadonlySet<StepStatus> = new Set(
+  STEP_STATUSES.filter((s): s is StepStatus => s === 'completed' || s === 'skipped'),
+);
+
+const TERMINAL_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set(
+  TASK_STATUSES.filter((s): s is TaskStatus => s === 'completed'),
+);
+
 function maybeFinalizeTask(task: TaskData): void {
   const statuses = new Set(task.steps.map((s) => s.status));
   if (statuses.size === 0) return;
-  const terminal = new Set(['completed', 'skipped']);
-  const allTerminal = [...statuses].every((s) => terminal.has(s));
+  const allTerminal = [...statuses].every((s) => TERMINAL_STEP_STATUSES.has(s));
   if (allTerminal && task.status !== 'completed') {
     assertTransition(task.status, 'completed', TASK_TRANSITIONS);
     task.status = 'completed';
@@ -745,8 +763,7 @@ function maybeAdvanceCurrent(state: StateData, task: TaskData, step: StepData): 
 function maybeFinalizeRun(state: StateData): void {
   const statuses = new Set(state.tasks.map((t) => t.status));
   if (statuses.size === 0) return;
-  const terminal = new Set(['completed', 'skipped']);
-  const allTerminal = [...statuses].every((s) => terminal.has(s));
+  const allTerminal = [...statuses].every((s) => TERMINAL_TASK_STATUSES.has(s));
   if (allTerminal) {
     state.run_status = 'completed';
     if (!state.ended_at) state.ended_at = utcnowIso();
@@ -771,15 +788,13 @@ export function reportWrite(paths: RunPaths, report: ReportData): string {
   const stepId = report.step_id;
   if (!stepId) throw new StateError("report is missing 'step_id'");
   mkdirSync(paths.reports_dir, { recursive: true });
-  const filename = `${stepId.replace(/\./g, '_')}.json`;
-  const target = `${paths.reports_dir}/${filename}`;
+  const target = paths.reportFile(stepId);
   writeJsonAtomic(target, report);
   return target;
 }
 
 export function reportRead(paths: RunPaths, stepId: string): ReportData | null {
-  const filename = `${stepId.replace(/\./g, '_')}.json`;
-  const target = `${paths.reports_dir}/${filename}`;
+  const target = paths.reportFile(stepId);
   try {
     return readJson(target) as unknown as ReportData;
   } catch {

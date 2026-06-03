@@ -366,6 +366,8 @@ export interface MigrationResult {
   stateWritten: boolean;
   tasksFound: number;
   stepsFound: number;
+  /** Present when this run failed; the run was skipped without partial writes. */
+  error?: string;
 }
 
 export interface MigrateRunOptions {
@@ -412,7 +414,13 @@ export function migrateRun(runDir: string, opts: MigrateRunOptions): MigrationRe
     if (!dryRun) writeJsonAtomic(paths.plan, plan);
     planWritten = true;
   } else if (existsSync(paths.plan)) {
-    plan = JSON.parse(readFileSync(paths.plan, 'utf8')) as Record<string, unknown>;
+    try {
+      plan = JSON.parse(readFileSync(paths.plan, 'utf8')) as Record<string, unknown>;
+    } catch (e) {
+      throw new MigrationError(
+        `existing plan.json is not valid JSON at ${paths.plan}: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
   }
 
   // State
@@ -484,14 +492,30 @@ export function migrateAll(runsRoot: string, opts: MigrateAllOptions = {}): Migr
       branch = rel[0] ?? 'main';
       slug = rel[rel.length - 1] ?? '';
     }
-    results.push(
-      migrateRun(path, {
-        branch,
-        slug,
-        dryRun: opts.dryRun,
-        overwrite: opts.overwrite,
-      }),
-    );
+    // Per-run isolation: a corrupt artifact in one run must not abort
+    // the remaining sweep. Collect a failure marker so the caller can
+    // print a complete manifest of what succeeded and what was skipped.
+    try {
+      results.push(
+        migrateRun(path, {
+          branch,
+          slug,
+          dryRun: opts.dryRun,
+          overwrite: opts.overwrite,
+        }),
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      results.push({
+        runDir: path,
+        prdWritten: false,
+        planWritten: false,
+        stateWritten: false,
+        tasksFound: 0,
+        stepsFound: 0,
+        error: msg,
+      });
+    }
   }
 
   return results;

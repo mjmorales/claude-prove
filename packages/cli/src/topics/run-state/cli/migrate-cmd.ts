@@ -36,12 +36,19 @@ export function runMigrate(flags: MigrateFlags): number {
     return 1;
   }
   const tag = flags.dryRun ? '[dry]' : '';
+  const failures: typeof results = [];
   for (const r of results) {
-    console.log(
-      `${tag} ${r.runDir} — prd=${r.prdWritten} plan=${r.planWritten} ` +
-        `state=${r.stateWritten} tasks=${r.tasksFound} steps=${r.stepsFound}`,
-    );
+    if (r.error !== undefined) {
+      console.error(`FAILED ${r.runDir}: ${r.error}`);
+      failures.push(r);
+    } else {
+      console.log(
+        `${tag} ${r.runDir} — prd=${r.prdWritten} plan=${r.planWritten} ` +
+          `state=${r.stateWritten} tasks=${r.tasksFound} steps=${r.stepsFound}`,
+      );
+    }
   }
-  console.log(`\n${results.length} runs processed`);
-  return 0;
+  const processed = results.length - failures.length;
+  console.log(`\n${processed} processed, ${failures.length} failed`);
+  return failures.length > 0 ? 1 : 0;
 }

@@ -8,7 +8,7 @@
 import { readFileSync } from 'node:fs';
 import { type PlanData, type PrdData, StateError, initRun } from '../state';
 import { validateData } from '../validate';
-import { ResolveError, defaultRunsRoot } from './resolve';
+import { defaultRunsRoot } from './resolve';
 
 export interface InitFlags {
   branch?: string;
@@ -79,7 +79,7 @@ export function runInit(flags: InitFlags): number {
     console.log(`initialized: ${paths.root}`);
     return 0;
   } catch (err) {
-    if (err instanceof StateError || err instanceof ResolveError) {
+    if (err instanceof StateError) {
       console.error(`error: ${err.message}`);
       return 2;
     }

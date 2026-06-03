@@ -117,8 +117,7 @@ export function runShowReport(stepId: string, flags: ShowReportFlags): number {
     }
     throw err;
   }
-  const normalized = stepId.replace(/\./g, '_');
-  const target = `${resolved.paths.reports_dir}/${normalized}.json`;
+  const target = resolved.paths.reportFile(stepId);
   if (!existsSync(target)) {
     console.error(`error: no report for step ${stepId}`);
     return 1;
@@ -182,6 +181,14 @@ export function runCurrent(flags: CurrentFlags): number {
     }
     if (err instanceof SyntaxError) {
       console.error(`error: invalid JSON in ${resolved.paths.state}: ${err.message}`);
+      return 1;
+    }
+    // Plain Node errors (EACCES, EISDIR, ENOSPC) from loadState's lock-touch
+    // (touchLock -> mkdirSync/openSync) are not SyntaxError or LoadError.
+    // Catch them here so I/O failures on the run directory exit 1 with a clean
+    // message rather than crashing with a raw stack trace.
+    if (err instanceof Error) {
+      console.error(`error: cannot read ${resolved.paths.state}: ${err.message}`);
       return 1;
     }
     throw err;

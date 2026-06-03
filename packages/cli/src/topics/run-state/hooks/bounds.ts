@@ -110,7 +110,18 @@ export function runBoundsHook(
   // Scope wall first: a path-scope violation denies the call outright and must
   // NOT consume the tool-call budget (a blocked call did no work). Only when
   // the scope check passes do we count the call against the budget.
-  const scope = checkScope(toolName, payload, bounds, projectRoot);
+  //
+  // Wrapped for the same permissive reason as resolveActiveBounds above:
+  // a hand-edited or schema-mismatched bounds row (e.g. `write: "src/**"` as a
+  // bare string rather than an array) can cause matchesAny → Array.some to
+  // throw a TypeError. The hook's never-false-block invariant requires that
+  // any unexpected shape passes silently rather than exiting abnormally.
+  let scope: HookResult;
+  try {
+    scope = checkScope(toolName, payload, bounds, projectRoot);
+  } catch {
+    return EMPTY_HOOK_RESULT;
+  }
   if (scope.stdout !== '') return scope;
 
   // Budget wall: increment the per-task tool-call counter and soft-warn /
@@ -285,6 +296,10 @@ export function toProjectRelative(target: string, projectRoot: string): string |
 
 /** True when `path` matches any glob in `globs`. */
 export function matchesAny(path: string, globs: string[]): boolean {
+  // Array.isArray guard: a malformed bounds row may pass a non-array here
+  // (e.g. a bare string). Treat non-arrays as empty — no globs → no match →
+  // permissive path falls through to EMPTY_HOOK_RESULT in callers.
+  if (!Array.isArray(globs)) return false;
   return globs.some((g) => globMatch(path, g));
 }
 
@@ -397,7 +412,12 @@ function hasEnforceableBound(bounds: TaskBounds): boolean {
 
 /** True when the bounds declare at least one read or write path glob. */
 function hasPathGlobs(bounds: TaskBounds): boolean {
-  return (bounds.read?.length ?? 0) > 0 || (bounds.write?.length ?? 0) > 0;
+  // Guard against malformed store rows where read/write is a non-array value:
+  // treat any non-array as "no globs declared" (permissive) so the hook never
+  // throws on unexpected input.
+  const hasRead = Array.isArray(bounds.read) && bounds.read.length > 0;
+  const hasWrite = Array.isArray(bounds.write) && bounds.write.length > 0;
+  return hasRead || hasWrite;
 }
 
 /** True when the bounds declare a positive `tool_calls` budget. */
