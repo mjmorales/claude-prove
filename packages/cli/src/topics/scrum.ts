@@ -72,6 +72,8 @@
  *   claude-prove scrum escalation resolve <id>   --mode resolve|re_decompose|re_escalate [--note TEXT] [--by ID]   (receiver resolution: resolve→resolved, re_decompose→resolved+signal, re_escalate→walks one rung up)
  *   claude-prove scrum escalation chain <id>     [--human]   (reconstruct the full walk-up chain one escalation climbed, root rung first)
  *   claude-prove scrum manifest show             [--human]   (cross-team contracts: every team's active accepts[] + exposes[], both-teams-visible)
+ *   claude-prove scrum ask file                  --from-team A --to-team B --ask-type T --blocking-artifact ART   (file a cross-team ask; to-team must accept T; ART must exist)
+ *   claude-prove scrum ask respond <ask-id>      --verdict accept|reject|counter [--comment TEXT] [--by ID]   (mechanically apply a triage verdict: accept wires a child + blocked_by dep; reject/counter record --comment; no model spawn)
  *   claude-prove scrum link-run <task-id> <run-path> [--branch B] [--slug G]
  *   claude-prove scrum hook <event>              (event: session-start | subagent-stop | stop)
  *
@@ -247,6 +249,11 @@ interface ScrumFlags {
   fromTeam?: string;
   toTeam?: string;
   blockingArtifact?: string;
+  // `ask respond` (v25). `verdict` is the closed triage verdict (accept | reject
+  // | counter); `comment` (shared with `gate respond` above) is the
+  // verdict-specific rationale (rejected_reason / counter_proposal); `by` (shared
+  // with decision/escalation above) is who produced the verdict.
+  verdict?: string;
   // `escalation raise`/`resolve` (v24). `type` is the closed escalation kind
   // (blocked | ambiguous | conflict | missing_context); `summary` the
   // receiver-facing prose; `mode` the resolution mode (resolve | re_decompose |
@@ -386,6 +393,10 @@ export function register(cli: CAC): void {
     .option(
       '--blocking-artifact <task-id>',
       'ask file: the task id blocked on the ask (must be an existing task)',
+    )
+    .option(
+      '--verdict <v>',
+      'ask respond: the triage verdict (accept | reject | counter); accept wires a child + dep, reject/counter record --comment only',
     )
     .option(
       '--type <t>',
@@ -675,14 +686,17 @@ function dispatch(
 
     case 'ask':
       if (arg1 === undefined) {
-        console.error('error: scrum ask: sub-action required (one of: file)');
+        console.error('error: scrum ask: sub-action required (one of: file | respond)');
         return 1;
       }
-      return runAskCmd(arg1, {
+      return runAskCmd(arg1, [arg2], {
         fromTeam: flags.fromTeam,
         toTeam: flags.toTeam,
         askType: flags.askType,
         blockingArtifact: flags.blockingArtifact,
+        verdict: flags.verdict,
+        comment: flags.comment,
+        by: flags.by,
         human: flags.human,
         workspaceRoot: flags.workspaceRoot,
       });

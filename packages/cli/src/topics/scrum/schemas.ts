@@ -1008,6 +1008,46 @@ CREATE INDEX idx_scrum_escalations_task_state ON scrum_escalations(task_id, stat
 CREATE INDEX idx_scrum_escalations_walked_up_from ON scrum_escalations(walked_up_from);
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v25 — ask triage/respond: response provenance on scrum_asks
+// ---------------------------------------------------------------------------
+
+/**
+ * v25: three additive columns on `scrum_asks` completing the ask triage/respond
+ * step. A filed ask is triaged to one of three verdicts — accept, reject, or
+ * counter — and the verdict's provenance lands on the ask row itself rather than
+ * a new table, because a response is a one-to-one property of the ask it answers
+ * (an ask is filed once and responded to once). All three are
+ * `ALTER TABLE ... ADD COLUMN` so the migration is forward-only and preserves
+ * every existing row — a pre-v25 (still-`filed`) ask reads all three NULL.
+ *
+ *   mapped_artifact  — set ONLY on an `accept`: the `scrum_tasks.id` of the
+ *                      single child task the accepting team created under its
+ *                      tree to satisfy the ask. A SOFT reference (no FK) so it
+ *                      matches how the escalation roster and operator history
+ *                      hold their referents; the accept path creates the child
+ *                      in the same transaction, so the id always resolves at
+ *                      write time. NULL on `reject` / `counter`.
+ *   rejected_reason  — set ONLY on a `reject`: the responder's free-text
+ *                      rationale for declining the ask. NULL otherwise.
+ *   counter_proposal — set ONLY on a `counter`: the responder's free-text
+ *                      counter-proposal (a different artifact, scope, or
+ *                      interface than the ask requested). NULL otherwise.
+ *
+ * The `state` column (v23) carries the verdict itself — `accepted` | `rejected`
+ * | `countered` — extending the closed `AskState` set documented on the `AskRow`
+ * type; the column keeps no CHECK, matching the v2–v24 forward-compatible-TEXT
+ * convention. The "exactly one of the three columns is non-NULL, and it matches
+ * the verdict" invariant is enforced at the store boundary in `respondAsk`, not
+ * by SQL — it spans the verdict and three columns and is not expressible as a
+ * column CHECK.
+ */
+export const SCRUM_MIGRATION_V25_SQL = `
+ALTER TABLE scrum_asks ADD COLUMN mapped_artifact TEXT;
+ALTER TABLE scrum_asks ADD COLUMN rejected_reason TEXT;
+ALTER TABLE scrum_asks ADD COLUMN counter_proposal TEXT;
+`;
+
 /**
  * Current scrum-domain store version — the highest migration version this
  * module registers. Stamped as the per-artifact `schema_version` on the
@@ -1015,12 +1055,12 @@ CREATE INDEX idx_scrum_escalations_walked_up_from ON scrum_escalations(walked_up
  * scrum row reports the schema it was read under. Bump in lockstep with the
  * top migration version on every additive hop.
  */
-export const SCRUM_SCHEMA_VERSION = 24;
+export const SCRUM_SCHEMA_VERSION = 25;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
  * side-effect AND from tests that have hit `clearRegistry()` — both
- * paths land a single scrum/{v1..v23} entry set. Matches
+ * paths land a single scrum/{v1..vN} entry set. Matches
  * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
  * module cache across test files, so a module-scoped `registerSchema` runs
  * only once per process and cannot recover after a registry wipe.
@@ -1217,6 +1257,14 @@ export function ensureScrumSchemaRegistered(): void {
           'create scrum_escalations (typed escalation walk-up chain + four-state machine + resolution modes) + idx_scrum_escalations_task_state + idx_scrum_escalations_walked_up_from',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V24_SQL);
+        },
+      },
+      {
+        version: 25,
+        description:
+          'add scrum_asks.mapped_artifact + scrum_asks.rejected_reason + scrum_asks.counter_proposal for the ask triage/respond verdict provenance',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V25_SQL);
         },
       },
     ],
