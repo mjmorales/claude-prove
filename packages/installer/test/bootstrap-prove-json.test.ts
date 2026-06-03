@@ -175,7 +175,9 @@ describe('bootstrapProveJson — file lifecycle', () => {
 
       bootstrapProveJson(dir, { force: true });
       const after = readConfig(dir);
-      expect(after.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+      // Bootstrap never migrates: an older on-disk schema_version is preserved
+      // so `schema migrate` owns the upgrade path.
+      expect(after.schema_version).toBe('3');
       expect(after.validators).toEqual([
         { name: 'build', command: 'go build ./...', phase: 'build' },
         { name: 'lint', command: 'go vet ./...', phase: 'lint' },

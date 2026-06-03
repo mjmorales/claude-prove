@@ -1,3 +1,0 @@
-  ERROR: schema_version: required field is missing
-
-FAIL: 1 error(s), 0 warning(s)

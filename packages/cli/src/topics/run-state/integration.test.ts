@@ -503,7 +503,7 @@ describe('run-state CLI integration', () => {
 
       const result = runCli(['migrate', '--runs-root', runsRoot], root);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('1 runs processed');
+      expect(result.stdout).toContain('1 processed, 0 failed');
       const plan = JSON.parse(readFileSync(join(legacy, 'plan.json'), 'utf8'));
       expect(plan.kind).toBe('plan');
       expect(plan.tasks.length).toBe(1);

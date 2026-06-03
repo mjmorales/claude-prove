@@ -107,14 +107,14 @@ describe('schema CLI — error paths', () => {
     );
   });
 
-  test('validate on missing file prints error and exits 1', () => {
-    const { stdout, exitCode } = runCli([
+  test('validate on missing file prints error to stderr and exits 1', () => {
+    const { stderr, exitCode } = runCli([
       'schema',
       'validate',
       '--file',
       '/definitely/not/a/real/path/.prove.json',
     ]);
     expect(exitCode).toBe(1);
-    expect(stdout).toContain('file not found');
+    expect(stderr).toContain('file not found');
   });
 });
