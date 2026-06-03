@@ -6,6 +6,20 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.7.1 — Record acceptance-criterion verdicts from the CLI (`scrum task acceptance verify`)
+
+*(Bug fix — no schema change, no migration, nothing to adopt.)* Closes a close-floor deadlock: a `layer=story` task carrying `verifies_by: agent` (or any heavy-kind) acceptance criteria could not reach `done`, because the close floor reads `verification.verdict === 'verified'` and nothing wired that recording to a CLI. The verdict for an `agent` criterion is judged driver-side and was therefore unrecordable out-of-turn — the story wedged at close.
+
+**New verb — `scrum task acceptance verify <task-id> --verdict verified|failed [--criterion ID] [--reason R] [--by WHO]`.** Stamps the recorded verification verdict the story-close floor reads:
+- With `--criterion <id>`: records one criterion's verdict.
+- Without `--criterion`: records the verdict on every *active, applies-to-self, non-`gate`* criterion on the task (the whole-task form). Skips `gate` criteria (their verdict lives in `gate.verdict`, resolved via `scrum gate respond`), superseded criteria, and `descendants`-scoped goalposts.
+- `--by` is the verification contributor of record (else the run env `PROVE_WORKER_ID`, else NULL); `--reason` carries the failing detail on a `failed` verdict.
+- Targeting a `gate` criterion, or a verify with no applicable non-gate criterion, exits non-zero with guidance.
+
+This is the symmetric counterpart to `scrum gate respond` (which records the human verdict for `gate` criteria): `verify` records the engine/driver verdict for `assert`/`bash`/`agent` criteria out-of-turn, complementing the orchestrator validation gate's inline recording.
+
+---
+
 ## v3.7.0 — Inter-agent communication: cross-team asks, escalations, handoff enforcement
 
 A cross-team request protocol, a typed escalation chain with staleness auto-promotion, and an enforced end-of-session declaration — so blocked work routes to the team that owns the interface, unresolved blockers climb the authority chain on their own, and no worker session ends without recording its outcome.
