@@ -123,10 +123,17 @@ export function _resolveImportToFile(
   projectFiles: Set<string>,
   projectRoot: string,
   workspaces: WorkspaceMap = new Map(),
+  sortedProjectFiles?: string[],
 ): string | null {
   if (language === 'python') return resolvePython(module, projectFiles);
   if (language === 'rust') return resolveRust(module, projectFiles);
-  if (language === 'go') return resolveGo(module, projectFiles, projectRoot);
+  if (language === 'go') {
+    // Go resolution iterates the project files in sorted order; reuse a
+    // graph-build-wide sorted view when the caller supplies one, else derive
+    // it here so a standalone call still resolves identically.
+    const sorted = sortedProjectFiles ?? [...projectFiles].sort();
+    return resolveGo(module, projectRoot, sorted);
+  }
   if (language === 'javascript' || language === 'typescript') {
     return resolveJsTs(sourceFile, module, projectFiles, workspaces);
   }
@@ -206,7 +213,17 @@ export function _clearGoModCache(): void {
   goModPrefixCache.clear();
 }
 
-function resolveGo(module: string, projectFiles: Set<string>, projectRoot: string): string | null {
+/**
+ * `sortedProjectFiles` is the project file set in sorted order, matching
+ * Python's `for pf in sorted(project_files)` deterministic resolution. The
+ * caller supplies it (hoisted once per graph build) so this resolver does not
+ * re-sort the full file set on every Go import.
+ */
+function resolveGo(
+  module: string,
+  projectRoot: string,
+  sortedProjectFiles: string[],
+): string | null {
   const modulePrefix = getGoModulePrefix(projectRoot);
 
   let rel: string;
@@ -216,9 +233,7 @@ function resolveGo(module: string, projectFiles: Set<string>, projectRoot: strin
     rel = module;
   }
 
-  // Match Python's `for pf in sorted(project_files)` order.
-  const sorted = [...projectFiles].sort();
-  for (const pf of sorted) {
+  for (const pf of sortedProjectFiles) {
     if (pf.startsWith(`${rel}/`) && pf.endsWith('.go')) return pf;
     if (pf === `${rel}.go`) return pf;
   }
@@ -409,6 +424,9 @@ interface DependencyGraph {
  */
 export function _buildDependencyGraph(files: string[], projectRoot: string): DependencyGraph {
   const projectFiles = new Set(files);
+  // Sorted view of the (fixed) project file set, computed once and shared
+  // read-only across every Go import resolution this build performs.
+  const sortedProjectFiles = [...projectFiles].sort();
   const workspaces = _discoverWorkspacePackages(projectRoot);
   const allImports: ImportEntry[] = [];
   const adjacency = new Map<string, string[]>();
@@ -440,6 +458,7 @@ export function _buildDependencyGraph(files: string[], projectRoot: string): Dep
         projectFiles,
         projectRoot,
         workspaces,
+        sortedProjectFiles,
       );
       if (target !== null && target !== relPath && !seen.has(target)) {
         seen.add(target);
