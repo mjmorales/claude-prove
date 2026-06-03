@@ -196,8 +196,13 @@ function renderContributorArtifact(row: Contributor): string {
   const frontmatter = renderProvenanceFrontmatter(row.created_at);
   // Splice the contributor field block into the rendered frontmatter, just
   // before its closing `---`, so the file stays a single YAML block.
-  const closing = frontmatter.lastIndexOf('---');
-  const head = frontmatter.slice(0, closing);
+  // Anchor on `\n---` to avoid matching the opening fence, then advance past
+  // the newline so the injected block lands on its own line.
+  const closing = frontmatter.lastIndexOf('\n---');
+  if (closing < 0) {
+    throw new Error('renderContributorArtifact: provenance frontmatter has no closing --- marker');
+  }
+  const head = frontmatter.slice(0, closing + 1);
   const contributorBlock = [
     'contributor:',
     `  id: ${row.id}`,
@@ -225,9 +230,24 @@ function renderContributorArtifact(row: Contributor): string {
   return `${head}${contributorBlock}\n\n${body}`;
 }
 
-/** Render a nullable scalar as a YAML value (`null` when absent). */
+/**
+ * Render a nullable scalar as a safe YAML value. Plain scalars are emitted
+ * verbatim when they consist only of word characters, dots, spaces, and common
+ * identifier punctuation, and do not collide with YAML boolean/null keywords.
+ * Anything else — free-text display names, RFC-permitted email local parts,
+ * strings with colons, leading special characters, or keyword collisions — is
+ * emitted as a JSON double-quoted string, which is valid YAML-1.2 scalar syntax
+ * with correct escape handling.
+ */
 function yamlValue(value: string | null): string {
-  return value === null ? 'null' : value;
+  if (value === null) return 'null';
+  if (
+    /^[A-Za-z0-9][\w .@+-]*$/.test(value) &&
+    !/^(true|false|null|yes|no|on|off|~)$/i.test(value)
+  ) {
+    return value;
+  }
+  return JSON.stringify(value);
 }
 
 // ---------------------------------------------------------------------------

@@ -204,7 +204,13 @@ function compile(
   }
 
   const planTasks: PlanTask[] = ordered.map((task) => {
-    const planId = scrumToPlan.get(task.id) as string;
+    // Every task in `ordered` was inserted into scrumToPlan above; a miss here
+    // means the population loop and the ordered array are out of sync — enforce
+    // the invariant explicitly so corrupt plan ids never reach run-state.
+    const planId = scrumToPlan.get(task.id);
+    if (planId === undefined) {
+      throw new Error(`compile bug: no plan id for scrum task '${task.id}'`);
+    }
     const wave = (level.get(task.id) ?? 0) + 1;
     const description = task.description ?? '';
     // Forward the FULL structured criterion (run-state v3 shape) so the
@@ -225,7 +231,15 @@ function compile(
       id: planId,
       title: task.title,
       wave,
-      deps: (deps.get(task.id) ?? []).map((id) => scrumToPlan.get(id) as string),
+      deps: (deps.get(task.id) ?? []).map((id) => {
+        // Every dep was intersected with `inScope` (lines above), so it must
+        // have a plan id; a miss signals a scope-filter inconsistency.
+        const depPlanId = scrumToPlan.get(id);
+        if (depPlanId === undefined) {
+          throw new Error(`compile bug: dep '${id}' of '${task.id}' has no plan id`);
+        }
+        return depPlanId;
+      }),
       description,
       acceptance_criteria: acceptanceCriteria,
       worktree: { path: '', branch: '' },

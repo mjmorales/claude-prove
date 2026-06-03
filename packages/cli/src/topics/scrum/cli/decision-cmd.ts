@@ -443,6 +443,18 @@ function renderStaleTable(rows: StaleDecision[], days: number): string {
 const DECISIONS_GLOB = '.prove/decisions/*.md';
 
 /**
+ * Thrown inside the recover transaction to signal a git failure at a specific
+ * commit SHA. Using a typed error lets the catch block distinguish this
+ * controlled rollback from unexpected store errors that should re-throw.
+ */
+class GitFailureError extends Error {
+  constructor(public readonly sha: string) {
+    super(`git diff-tree failed at ${sha}`);
+    this.name = 'GitFailureError';
+  }
+}
+
+/**
  * Walk every commit that ever touched `.prove/decisions/*.md` (oldest-first
  * so the newest version wins naturally on upsert) and read each blob at its
  * commit SHA. Each blob is parsed via `parseDecisionFile` and upserted.
@@ -482,25 +494,45 @@ function doRecover(store: ScrumStore, workspaceRoot: string, flags: DecisionCmdF
   }
 
   const recoveredIds = new Set<string>();
-  for (const sha of shas) {
-    const paths = listDecisionPathsAtCommit(workspaceRoot, sha);
-    if (paths === null) {
-      process.stderr.write(`scrum decision recover: git diff-tree failed at ${sha}\n`);
+  // Buffer per-blob messages so we only emit them after the transaction commits —
+  // a message claiming a row was recovered must not appear if the transaction rolls back.
+  const pendingMessages: string[] = [];
+
+  // Wrap the entire commit walk in a single transaction so a mid-walk git failure
+  // leaves scrum_decisions untouched — all-or-nothing matches operator expectations
+  // on retry (mirrors the seed-atomically pattern used in init-cmd).
+  try {
+    store.transaction(() => {
+      for (const sha of shas) {
+        const paths = listDecisionPathsAtCommit(workspaceRoot, sha);
+        if (paths === null) {
+          // Throw to roll back every upsert written so far in this walk.
+          throw new GitFailureError(sha);
+        }
+        for (const path of paths) {
+          const content = readBlobAtCommit(workspaceRoot, sha, path);
+          if (content === null) continue;
+          if (!isAdrBlob(content)) continue;
+
+          const input = parseDecisionFile(content, path);
+          store.recordDecision(input);
+          recoveredIds.add(input.id);
+          pendingMessages.push(
+            `scrum decision recover: recovered ${input.id} from ${sha.slice(0, 8)}\n`,
+          );
+        }
+      }
+    });
+  } catch (err) {
+    if (err instanceof GitFailureError) {
+      process.stderr.write(`scrum decision recover: git diff-tree failed at ${err.sha}\n`);
       return 1;
     }
-    for (const path of paths) {
-      const content = readBlobAtCommit(workspaceRoot, sha, path);
-      if (content === null) continue;
-      if (!isAdrBlob(content)) continue;
-
-      const input = parseDecisionFile(content, path);
-      store.recordDecision(input);
-      recoveredIds.add(input.id);
-      process.stderr.write(
-        `scrum decision recover: recovered ${input.id} from ${sha.slice(0, 8)}\n`,
-      );
-    }
+    throw err;
   }
+
+  // Only flush per-blob messages now that the transaction has committed.
+  for (const msg of pendingMessages) process.stderr.write(msg);
 
   const ids = Array.from(recoveredIds).sort();
   process.stdout.write(`${JSON.stringify({ recovered: ids.length, ids })}\n`);

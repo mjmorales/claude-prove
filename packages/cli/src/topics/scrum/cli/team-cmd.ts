@@ -251,9 +251,16 @@ function doCreate(store: ScrumStore, workspaceRoot: string, flags: TeamCmdFlags)
     terminatesOnMilestone: emptyToNull(flags.terminatesOn),
   });
 
-  const artifactPath = reconcileTeamArtifact(store, workspaceRoot, row);
   process.stdout.write(`${JSON.stringify(row)}\n`);
-  process.stderr.write(`scrum team create: ${row.slug} (${row.team_type}) -> ${artifactPath}\n`);
+  let createWhere = '';
+  try {
+    const artifactPath = reconcileTeamArtifact(store, workspaceRoot, row);
+    createWhere = ` -> ${artifactPath}`;
+  } catch (artifactErr) {
+    const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
+    process.stderr.write(`scrum team create: store updated but artifact write failed: ${msg}\n`);
+  }
+  process.stderr.write(`scrum team create: ${row.slug} (${row.team_type})${createWhere}\n`);
   return 0;
 }
 
@@ -319,8 +326,12 @@ export function reconcileTeamArtifact(store: ScrumStore, workspaceRoot: string, 
   const iface = store.getTeamInterface(row.slug);
   const lores = store.listLores(row.slug);
   const dir = join(workspaceRoot, 'teams');
-  mkdirSync(dir, { recursive: true });
   const path = join(dir, `${row.slug}.md`);
+  // The artifact is a mirror of the store row; a write failure is a cosmetic
+  // sync gap, not a store-level mutation failure. Callers guard this with their
+  // own try/catch so a filesystem error is reported as a non-fatal warning and
+  // does not mask a successful store operation.
+  mkdirSync(dir, { recursive: true });
   writeFileSync(path, renderTeamArtifact(row, scopes, roster, iface, lores), 'utf8');
   return path;
 }
@@ -429,9 +440,24 @@ function renderTeamArtifact(
   return `${frontmatter}\n\n${body}`;
 }
 
-/** Render a nullable scalar as a YAML value (`null` when absent). */
+/**
+ * Render a nullable scalar as a YAML value (`null` when absent).
+ *
+ * User-supplied free-text (charter, terminates_on_milestone) can contain colons,
+ * leading special characters, or YAML keyword tokens that would produce invalid or
+ * semantically-wrong frontmatter if emitted verbatim.  Anything that does not match
+ * the safe-identifier pattern, or that matches a YAML boolean/null keyword, is
+ * JSON.stringify'd — valid YAML-1.2 scalar syntax with correct escape handling.
+ */
 function yamlValue(value: string | null): string {
-  return value === null ? 'null' : value;
+  if (value === null) return 'null';
+  if (
+    /^[A-Za-z0-9][\w .@+-]*$/.test(value) &&
+    !/^(true|false|null|yes|no|on|off|~)$/i.test(value)
+  ) {
+    return value;
+  }
+  return JSON.stringify(value);
 }
 
 /** Render a string array as a YAML flow sequence (`[]` when empty). */
@@ -515,10 +541,17 @@ function doScopeSet(
     process.stderr.write(`scrum team scope-set: no team '${slug}'\n`);
     return 1;
   }
-  const artifactPath = reconcileTeamArtifact(store, workspaceRoot, row);
   process.stdout.write(`${JSON.stringify(saved)}\n`);
+  let scopeWhere = '';
+  try {
+    const artifactPath = reconcileTeamArtifact(store, workspaceRoot, row);
+    scopeWhere = ` -> ${artifactPath}`;
+  } catch (artifactErr) {
+    const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
+    process.stderr.write(`scrum team scope-set: store updated but artifact write failed: ${msg}\n`);
+  }
   process.stderr.write(
-    `scrum team scope-set: ${slug} read=${saved.read.length} write=${saved.write.length} -> ${artifactPath}\n`,
+    `scrum team scope-set: ${slug} read=${saved.read.length} write=${saved.write.length}${scopeWhere}\n`,
   );
   return 0;
 }
@@ -589,18 +622,23 @@ function doRotate(
     reason: emptyToNull(flags.reason),
   });
 
-  const team = store.getTeam(slug);
-  // The team exists — rotateTeamMember already guarded it — so this is total.
-  const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
-
   process.stdout.write(`${JSON.stringify(row)}\n`);
-  const where = artifactPath !== null ? ` -> ${artifactPath}` : '';
-  process.stderr.write(
-    `scrum team rotate: ${slug} ${row.role} -> ${row.contributor_id} from ${row.from_ts}${where}\n`,
-  );
   if (warning !== null) {
     process.stderr.write(`scrum team rotate: WARNING: ${warning}\n`);
   }
+  let rotateWhere = '';
+  try {
+    const team = store.getTeam(slug);
+    // The team exists — rotateTeamMember already guarded it — so this is total.
+    const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+    rotateWhere = artifactPath !== null ? ` -> ${artifactPath}` : '';
+  } catch (artifactErr) {
+    const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
+    process.stderr.write(`scrum team rotate: store updated but artifact write failed: ${msg}\n`);
+  }
+  process.stderr.write(
+    `scrum team rotate: ${slug} ${row.role} -> ${row.contributor_id} from ${row.from_ts}${rotateWhere}\n`,
+  );
   return 0;
 }
 
@@ -661,12 +699,20 @@ function doAcceptAdd(
   // surface as exit 1 via the runTeamCmd catch.
   const accept = store.addTeamAccept(slug, flags.askType);
 
-  const team = store.getTeam(slug);
-  const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
   process.stdout.write(`${JSON.stringify(accept)}\n`);
-  const where = artifactPath !== null ? ` -> ${artifactPath}` : '';
+  let acceptAddWhere = '';
+  try {
+    const team = store.getTeam(slug);
+    const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+    acceptAddWhere = artifactPath !== null ? ` -> ${artifactPath}` : '';
+  } catch (artifactErr) {
+    const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
+    process.stderr.write(
+      `scrum team accept-add: store updated but artifact write failed: ${msg}\n`,
+    );
+  }
   process.stderr.write(
-    `scrum team accept-add: ${slug} accepts '${accept.ask_type}' (id ${accept.id})${where}\n`,
+    `scrum team accept-add: ${slug} accepts '${accept.ask_type}' (id ${accept.id})${acceptAddWhere}\n`,
   );
   return 0;
 }
@@ -694,12 +740,20 @@ function doAcceptSupersede(
   // target; both surface as exit 1 via the runTeamCmd catch.
   const accept = store.supersedeTeamAccept(id, flags.reason, by);
 
-  const team = store.getTeam(slug);
-  const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
   process.stdout.write(`${JSON.stringify(accept)}\n`);
-  const where = artifactPath !== null ? ` -> ${artifactPath}` : '';
+  let acceptSupWhere = '';
+  try {
+    const team = store.getTeam(slug);
+    const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+    acceptSupWhere = artifactPath !== null ? ` -> ${artifactPath}` : '';
+  } catch (artifactErr) {
+    const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
+    process.stderr.write(
+      `scrum team accept-supersede: store updated but artifact write failed: ${msg}\n`,
+    );
+  }
   process.stderr.write(
-    `scrum team accept-supersede: ${slug} retired accept id ${accept.id} ('${accept.ask_type}')${where}\n`,
+    `scrum team accept-supersede: ${slug} retired accept id ${accept.id} ('${accept.ask_type}')${acceptSupWhere}\n`,
   );
   return 0;
 }
@@ -725,12 +779,20 @@ function doExposeAdd(
 
   const expose = store.addTeamExpose(slug, { name: flags.name, schemaRef: flags.schemaRef });
 
-  const team = store.getTeam(slug);
-  const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
   process.stdout.write(`${JSON.stringify(expose)}\n`);
-  const where = artifactPath !== null ? ` -> ${artifactPath}` : '';
+  let exposeAddWhere = '';
+  try {
+    const team = store.getTeam(slug);
+    const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+    exposeAddWhere = artifactPath !== null ? ` -> ${artifactPath}` : '';
+  } catch (artifactErr) {
+    const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
+    process.stderr.write(
+      `scrum team expose-add: store updated but artifact write failed: ${msg}\n`,
+    );
+  }
   process.stderr.write(
-    `scrum team expose-add: ${slug} exposes '${expose.name}' (id ${expose.id})${where}\n`,
+    `scrum team expose-add: ${slug} exposes '${expose.name}' (id ${expose.id})${exposeAddWhere}\n`,
   );
   return 0;
 }
@@ -756,12 +818,20 @@ function doExposeSupersede(
 
   const expose = store.supersedeTeamExpose(id, flags.reason, by);
 
-  const team = store.getTeam(slug);
-  const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
   process.stdout.write(`${JSON.stringify(expose)}\n`);
-  const where = artifactPath !== null ? ` -> ${artifactPath}` : '';
+  let exposeSupWhere = '';
+  try {
+    const team = store.getTeam(slug);
+    const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+    exposeSupWhere = artifactPath !== null ? ` -> ${artifactPath}` : '';
+  } catch (artifactErr) {
+    const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
+    process.stderr.write(
+      `scrum team expose-supersede: store updated but artifact write failed: ${msg}\n`,
+    );
+  }
   process.stderr.write(
-    `scrum team expose-supersede: ${slug} retired expose id ${expose.id} ('${expose.name}')${where}\n`,
+    `scrum team expose-supersede: ${slug} retired expose id ${expose.id} ('${expose.name}')${exposeSupWhere}\n`,
   );
   return 0;
 }
@@ -807,12 +877,18 @@ function doTerminate(
   // both surface as exit 1 via the runTeamCmd catch.
   const result = store.teamTerminate(slug, reason);
 
-  const team = store.getTeam(slug);
-  const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
   process.stdout.write(`${JSON.stringify(result)}\n`);
-  const where = artifactPath !== null ? ` -> ${artifactPath}` : '';
+  let terminateWhere = '';
+  try {
+    const team = store.getTeam(slug);
+    const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+    terminateWhere = artifactPath !== null ? ` -> ${artifactPath}` : '';
+  } catch (artifactErr) {
+    const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
+    process.stderr.write(`scrum team terminate: store updated but artifact write failed: ${msg}\n`);
+  }
   process.stderr.write(
-    `scrum team terminate: ${slug} disbanded (scopes cleared=${result.scopesCleared}, exposes retired=${result.exposesRetired}, roster vacated=${result.rosterVacated})${where}\n`,
+    `scrum team terminate: ${slug} disbanded (scopes cleared=${result.scopesCleared}, exposes retired=${result.exposesRetired}, roster vacated=${result.rosterVacated})${terminateWhere}\n`,
   );
   return 0;
 }

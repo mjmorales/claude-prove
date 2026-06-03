@@ -97,9 +97,17 @@ function doSet(store: ScrumStore, workspaceRoot: string, flags: OperatorCmdFlags
     fromTs: emptyToUndef(flags.fromTs),
   });
 
-  const synced = syncCharterOperator(workspaceRoot, row.contributor_id);
+  // Emit the row before attempting the charter sync so callers always receive
+  // the result JSON regardless of whether the filesystem write succeeds.
   process.stdout.write(`${JSON.stringify(row)}\n`);
-  const where = synced ? ' -> charter.md' : '';
+  let where = '';
+  try {
+    const synced = syncCharterOperator(workspaceRoot, row.contributor_id);
+    where = synced ? ' -> charter.md' : '';
+  } catch (syncErr) {
+    const msg = syncErr instanceof Error ? syncErr.message : String(syncErr);
+    process.stderr.write(`scrum operator set: store updated but charter sync failed: ${msg}\n`);
+  }
   process.stderr.write(
     `scrum operator set: ${row.contributor_id} held from ${row.from_ts}${where}\n`,
   );

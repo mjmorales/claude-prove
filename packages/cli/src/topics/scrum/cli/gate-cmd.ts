@@ -113,10 +113,21 @@ function doRespond(
   }
 
   const verdict = verdictArg === 'approve' ? 'approved' : 'rejected';
-  const responder = flags.by && flags.by.length > 0 ? flags.by : (process.env.PROVE_AGENT ?? '');
+  // Mirror decision-cmd's resolveResponder: `--by` wins, then PROVE_AGENT, else null.
+  // The null is coerced to '' only to satisfy respondGate's non-null signature;
+  // the store normalizes empty string to null when persisting, so true absence is recorded.
+  const responder: string | null =
+    flags.by && flags.by.length > 0
+      ? flags.by
+      : process.env.PROVE_AGENT && process.env.PROVE_AGENT.length > 0
+        ? process.env.PROVE_AGENT
+        : null;
   const comment = flags.comment && flags.comment.length > 0 ? flags.comment : null;
 
-  const task = store.respondGate(flags.task, criterionId, verdict, { responder, comment });
+  const task = store.respondGate(flags.task, criterionId, verdict, {
+    responder: responder ?? '',
+    comment,
+  });
   const resolved = task.acceptance?.criteria.find((c) => c.id === criterionId);
   const payload = {
     responded: true,
@@ -128,7 +139,7 @@ function doRespond(
   };
   process.stdout.write(`${JSON.stringify(payload)}\n`);
   process.stderr.write(
-    `scrum gate respond: ${flags.task} / ${criterionId} -> ${verdict}${responder.length > 0 ? ` (by ${responder})` : ''}\n`,
+    `scrum gate respond: ${flags.task} / ${criterionId} -> ${verdict}${responder !== null ? ` (by ${responder})` : ''}\n`,
   );
   return 0;
 }

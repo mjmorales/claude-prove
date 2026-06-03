@@ -266,8 +266,17 @@ interface PlanJsonLite {
  * the linked task's context bundle. Does not throw on orphan runs — returns
  * a `kind: 'orphan'` result instead. Malformed JSON returns `kind: 'skipped'`
  * with `reason` populated so callers can surface the failure.
+ *
+ * `projectRoot` anchors repo-relative run paths during the bundle rebuild; it
+ * defaults to `process.cwd()`. The Stop-hook sweep passes the project dir it
+ * resolved from the Claude Code payload so the rebuild stays correct when the
+ * reconcile runs from a subdirectory or a linked worktree.
  */
-export function reconcileRunCompleted(runStatePath: string, store: ScrumStore): ReconcileRunResult {
+export function reconcileRunCompleted(
+  runStatePath: string,
+  store: ScrumStore,
+  projectRoot: string = process.cwd(),
+): ReconcileRunResult {
   const runDir = dirname(runStatePath);
   const planPath = join(runDir, 'plan.json');
 
@@ -304,10 +313,10 @@ export function reconcileRunCompleted(runStatePath: string, store: ScrumStore): 
   linkRunForTask(store, taskId, runDir, state);
   appendRunCompletedEvent(store, taskId, runDir, state);
   appendStewardVerdictIfPresent(store, taskId, state);
-  transitionTaskIfTerminal(store, task, state);
-  rebuildContextBundle(store, taskId);
+  const blockedReason = transitionTaskIfTerminal(store, task, state);
+  rebuildContextBundle(store, taskId, projectRoot);
 
-  return { kind: 'reconciled', taskId, runPath: runDir };
+  return { kind: 'reconciled', taskId, runPath: runDir, reason: blockedReason ?? undefined };
 }
 
 // ---------------------------------------------------------------------------
@@ -321,14 +330,24 @@ export function reconcileRunCompleted(runStatePath: string, store: ScrumStore): 
  * what state.json already records), decisions cited (events kind
  * `decision_linked`), last 5 run summaries, and a concatenated summary of
  * recent event titles.
+ *
+ * `projectRoot` anchors repo-relative run paths read from linked runs'
+ * state.json; it defaults to `process.cwd()`. Callers that know the project
+ * root (the Stop-hook sweep resolves it from the Claude Code payload, which
+ * may differ from cwd) pass it so bundle aggregation stays correct when the
+ * reconcile runs from a subdirectory or a linked worktree.
  */
-export function buildContextBundle(taskId: string, store: ScrumStore): ContextBundle {
+export function buildContextBundle(
+  taskId: string,
+  store: ScrumStore,
+  projectRoot: string = process.cwd(),
+): ContextBundle {
   const runs = store.listRunsForTask(taskId);
   const events = store.listEventsForTask(taskId, 200);
 
-  const files = collectFilesTouched(runs);
+  const files = collectFilesTouched(runs, projectRoot);
   const decisions = collectDecisions(events, store);
-  const runSummaries = summarizeRuns(runs).slice(-5);
+  const runSummaries = summarizeRuns(runs, projectRoot).slice(-5);
   const summary_text = buildSummaryText(events);
 
   return {
@@ -375,7 +394,7 @@ export function sweepUnreconciled(
     if (mtimeMs <= sinceTs) continue;
 
     try {
-      const outcome = reconcileRunCompleted(statePath, store);
+      const outcome = reconcileRunCompleted(statePath, store, root);
       if (outcome.kind === 'reconciled' || outcome.kind === 'orphan') {
         result.reconciled++;
       }
@@ -843,23 +862,41 @@ function appendStewardVerdictIfPresent(
 /**
  * Only `completed` runs drive the task to `done`. Halted/failed runs leave
  * status alone — the orchestrator may retry, and a human review may still
- * push the task forward. Transition errors (e.g., illegal edge from a
- * terminal status) are swallowed because the event log already records
- * the run outcome.
+ * push the task forward.
+ *
+ * Returns `null` when the task transitioned (or no transition was due), and a
+ * surfaceable message when the transition was attempted but the store rejected
+ * it. Two rejection classes are distinguished:
+ *   - An illegal-edge rejection (`invalid transition ...`) is an expected
+ *     no-op — the run_completed event already records the outcome, so it is
+ *     swallowed silently and returns `null`.
+ *   - A story close-floor rejection (unmet acceptance criteria, missing
+ *     synthesis) or store corruption means the engine TRIED to close the story
+ *     and could not — exactly the condition the close-floors exist to catch.
+ *     Its message is returned so the caller can carry it on the reconcile
+ *     result instead of losing it, rather than reporting a clean reconcile that
+ *     masks a story stuck short of `done`.
  */
-function transitionTaskIfTerminal(store: ScrumStore, task: ScrumTask, state: StateJsonLite): void {
-  if (state.run_status !== 'completed') return;
-  if (task.status === 'done' || task.status === 'cancelled') return;
+function transitionTaskIfTerminal(
+  store: ScrumStore,
+  task: ScrumTask,
+  state: StateJsonLite,
+): string | null {
+  if (state.run_status !== 'completed') return null;
+  if (task.status === 'done' || task.status === 'cancelled') return null;
 
   try {
     store.updateTaskStatus(task.id, 'done');
-  } catch {
-    // Invalid transition — event log already captured the run_completed signal.
+    return null;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('invalid transition')) return null;
+    return message;
   }
 }
 
-function rebuildContextBundle(store: ScrumStore, taskId: string): void {
-  const bundle = buildContextBundle(taskId, store);
+function rebuildContextBundle(store: ScrumStore, taskId: string, projectRoot: string): void {
+  const bundle = buildContextBundle(taskId, store, projectRoot);
   store.saveContextBundle(taskId, bundle);
 }
 
@@ -915,10 +952,13 @@ function ensureOrphanTask(store: ScrumStore): void {
 // Internals — context bundle aggregation
 // ---------------------------------------------------------------------------
 
-function collectFilesTouched(runs: ReturnType<ScrumStore['listRunsForTask']>): string[] {
+function collectFilesTouched(
+  runs: ReturnType<ScrumStore['listRunsForTask']>,
+  projectRoot: string,
+): string[] {
   const seen = new Set<string>();
   for (const run of runs) {
-    const statePath = resolveRunStatePath(run.run_path);
+    const statePath = resolveRunStatePath(run.run_path, projectRoot);
     const state = readJsonOrNull<StateJsonLite>(statePath);
     if (!state || !Array.isArray(state.tasks)) continue;
     // state.json v1 carries no per-file diffs; fall back to commit shas so
@@ -974,9 +1014,12 @@ function collectDecisions(
   return out;
 }
 
-function summarizeRuns(runs: ReturnType<ScrumStore['listRunsForTask']>): ContextBundle['runs'] {
+function summarizeRuns(
+  runs: ReturnType<ScrumStore['listRunsForTask']>,
+  projectRoot: string,
+): ContextBundle['runs'] {
   return runs.map((run) => {
-    const statePath = resolveRunStatePath(run.run_path);
+    const statePath = resolveRunStatePath(run.run_path, projectRoot);
     const state = readJsonOrNull<StateJsonLite>(statePath);
     return {
       slug: run.slug ?? '',
@@ -1058,12 +1101,16 @@ function toRunPath(runDir: string): string {
 }
 
 /**
- * Resolve `join(cwdOrProject, runPath)` with an absolute-path shortcut so
+ * Resolve `join(projectRoot, runPath)` with an absolute-path shortcut so
  * bundle aggregation handles both stored forms (repo-relative + absolute).
+ * `projectRoot` anchors repo-relative run paths; the sweep passes the
+ * project dir it already resolved so the lookup stays correct when the
+ * reconcile is invoked from a subdirectory or a linked worktree (matching
+ * the `isAbsolute` anchoring `collectStoryEntries` uses).
  */
-function resolveRunStatePath(runPath: string): string {
+function resolveRunStatePath(runPath: string, projectRoot: string): string {
   if (isAbsolute(runPath)) return join(runPath, 'state.json');
-  return join(process.cwd(), runPath, 'state.json');
+  return join(projectRoot, runPath, 'state.json');
 }
 
 function safeRealpath(p: string): string {

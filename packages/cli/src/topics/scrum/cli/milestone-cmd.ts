@@ -155,22 +155,34 @@ function doClose(store: ScrumStore, id: string | undefined, workspaceRoot: strin
   const prior = store.getMilestone(id);
   const milestone = store.closeMilestone(id);
 
+  // Emit the close result immediately after the durable store mutation so
+  // callers always receive the closed milestone JSON, regardless of whether
+  // the secondary curation/rollup steps succeed.
+  process.stdout.write(`${JSON.stringify(milestone)}\n`);
+
   let closeNote = '';
   if (prior !== null && prior.status !== 'closed') {
-    const curation = reconcileMilestoneClosed(id, store, workspaceRoot);
-    // The same close transition surfaces the stakeholder milestone brief. The
-    // brief is rendered on demand via `acb milestone-brief render --milestone
-    // <id>`; here we just report how many constituent stories it will roll up
-    // so the operator knows the rollup is available.
-    const stories = gatherMilestoneStories(id, store, workspaceRoot);
-    const compactNote =
-      curation.compactedTeams.length > 0
-        ? `; journal compaction: ${curation.compactedTeams.length} terminating team(s) summarized`
-        : '';
-    closeNote = ` (curation: ${curation.emitted.length} task(s) proposed${compactNote}; milestone brief: ${stories.length} stor(ies) — render via 'acb milestone-brief render --milestone ${id}')`;
+    // Curation and rollup are best-effort post-close work: the milestone is
+    // already closed in the store, so a failure here should warn but not
+    // change the exit code or suppress the close result already on stdout.
+    try {
+      const curation = reconcileMilestoneClosed(id, store, workspaceRoot);
+      // The same close transition surfaces the stakeholder milestone brief.
+      // The brief is rendered on demand via `acb milestone-brief render
+      // --milestone <id>`; here we just report how many constituent stories
+      // it will roll up so the operator knows the rollup is available.
+      const stories = gatherMilestoneStories(id, store, workspaceRoot);
+      const compactNote =
+        curation.compactedTeams.length > 0
+          ? `; journal compaction: ${curation.compactedTeams.length} terminating team(s) summarized`
+          : '';
+      closeNote = ` (curation: ${curation.emitted.length} task(s) proposed${compactNote}; milestone brief: ${stories.length} stor(ies) — render via 'acb milestone-brief render --milestone ${id}')`;
+    } catch (curationErr) {
+      const msg = curationErr instanceof Error ? curationErr.message : String(curationErr);
+      process.stderr.write(`scrum milestone close: WARNING: post-close curation failed: ${msg}\n`);
+    }
   }
 
-  process.stdout.write(`${JSON.stringify(milestone)}\n`);
   process.stderr.write(`scrum milestone close: ${id}${closeNote}\n`);
   return 0;
 }

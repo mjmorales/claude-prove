@@ -46,6 +46,7 @@
  * which enforces the wall-clock timeout natively.
  */
 
+import { createHash } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -275,9 +276,18 @@ function persistFailure(
  * author-supplied, so any character outside the safe set collapses to `-`, and
  * any `.` run collapses to a single `-` too — that closes the `..` traversal
  * the dot would otherwise permit — keeping the transcript path inside `runDir`.
+ *
+ * The result is capped at 120 chars. Longer sanitized names are truncated and
+ * suffixed with an 8-hex-char hash of the original id, so the basename stays
+ * well under NAME_MAX (255 on most filesystems) while remaining deterministic
+ * and collision-resistant for distinct long ids.
  */
 function safeName(id: string): string {
-  const cleaned = id.replace(/[^A-Za-z0-9_-]+/g, '-');
+  let cleaned = id.replace(/[^A-Za-z0-9_-]+/g, '-');
+  if (cleaned.length > 120) {
+    const h = createHash('sha1').update(id).digest('hex').slice(0, 8);
+    cleaned = `${cleaned.slice(0, 111)}-${h}`;
+  }
   return cleaned.length > 0 ? cleaned : 'criterion';
 }
 

@@ -141,10 +141,16 @@ export function onSubagentStop(payload: Record<string, unknown> | null): HookRes
 
     const store = openScrumStore({ cwd: project });
     try {
-      const result = reconcileRunCompleted(statePath, store);
+      // Pass `project` so rebuildContextBundle resolves run paths against the
+      // correct root when firing from a linked worktree or a subdirectory.
+      const result = reconcileRunCompleted(statePath, store, project);
       if (result.kind === 'skipped') return EMPTY_HOOK_RESULT;
+      // Surface the blocking reason (e.g. story-close floor rejection, orphan
+      // task-not-found) so the operator sees WHY reconcile stalled, not just
+      // that a run was processed.
+      const reasonSuffix = result.reason ? ` — ${result.reason}` : '';
       const body = pyJsonDump({
-        systemMessage: `scrum: reconciled ${result.kind} run (task=${result.taskId ?? ORPHAN_TASK_ID})`,
+        systemMessage: `scrum: reconciled ${result.kind} run (task=${result.taskId ?? ORPHAN_TASK_ID})${reasonSuffix}`,
       });
       return { exitCode: 0, stdout: body, stderr: '' };
     } finally {
@@ -170,17 +176,21 @@ export function onSubagentStop(payload: Record<string, unknown> | null): HookRes
  * a broken scrum store never bricks a session that already satisfied the gate.
  */
 export function onStop(payload: Record<string, unknown> | null): HookResult {
-  const cwd = readCwd(payload ?? {}) || process.cwd();
-  const project = resolveProjectDir(payload);
-
-  // Run the gate first and outside the sweep's catch-all, so a block is never
-  // swallowed by the non-blocking sweep contract. Run-dir resolution is wrapped
-  // so a resolver throw passes the session — the gate only blocks on a
-  // positively-detected violation, never on its own infrastructure failure.
-  const gate = evaluateSessionEndGate(safeResolveActiveRunDir(cwd), readDevMode(project));
-  if (!gate.ok) return blockSessionEnd(gate);
-
   try {
+    // Resolve cwd/project inside the catch-all so a process.cwd() ENOENT
+    // (e.g. the session's worktree was removed) cannot escape as an uncaught
+    // throw — safeResolveProjectDir falls back to CLAUDE_PROJECT_DIR or '.'
+    // so the gate and sweep still run against a best-effort directory.
+    const cwd = safeReadCwd(payload);
+    const project = safeResolveProjectDir(payload);
+
+    // Evaluate the gate before the non-blocking sweep so a synthesis block is
+    // never swallowed by the sweep's error catch. Run-dir resolution is wrapped
+    // so a resolver throw passes the session — the gate blocks only on a
+    // positively-detected violation, never on its own infrastructure failure.
+    const gate = evaluateSessionEndGate(safeResolveActiveRunDir(cwd), readDevMode(project));
+    if (!gate.ok) return blockSessionEnd(gate);
+
     const sinceTs = readLastSweep(project);
     const store = openScrumStore({ cwd: project });
     try {
@@ -290,7 +300,12 @@ function readTriggers(projectDir: string): TriggerBinding[] {
         typeof t === 'object' &&
         t !== null &&
         typeof (t as TriggerBinding).on === 'string' &&
-        typeof (t as TriggerBinding).workflow === 'string',
+        typeof (t as TriggerBinding).workflow === 'string' &&
+        // Validate description so the asserted type fully covers the field.
+        // An absent or string description is fine; any other type is rejected
+        // rather than silently propagated to consumers.
+        ((t as TriggerBinding).description === undefined ||
+          typeof (t as TriggerBinding).description === 'string'),
     );
   } catch {
     return [];
@@ -425,6 +440,28 @@ function safeResolveActiveRunDir(cwd: string): string | null {
     return resolveActiveRunDir(cwd);
   } catch {
     return null;
+  }
+}
+
+/**
+ * Read the cwd from the hook payload without ever calling process.cwd().
+ * Returns an empty string when the payload carries no cwd field so callers
+ * can fall through to safeResolveProjectDir without risking an ENOENT throw.
+ */
+function safeReadCwd(payload: Record<string, unknown> | null): string {
+  return readCwd(payload ?? {}) || '';
+}
+
+/**
+ * Resolve the project directory from the hook payload without throwing.
+ * Falls back to CLAUDE_PROJECT_DIR then '.' so a missing or unlinked cwd
+ * (e.g. a removed worktree) never causes an uncaught ENOENT from process.cwd().
+ */
+function safeResolveProjectDir(payload: Record<string, unknown> | null): string {
+  try {
+    return resolveProjectDir(payload);
+  } catch {
+    return process.env.CLAUDE_PROJECT_DIR ?? '.';
   }
 }
 

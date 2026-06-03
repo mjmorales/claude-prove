@@ -123,18 +123,32 @@ function doRecord(
     authorContributorId: flags.author,
   });
 
-  const team = store.getTeam(slug);
-  // The team exists — recordLore already guarded it — so this is total.
-  const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
-
+  // Emit the stdout result before attempting the artifact mirror so callers
+  // always receive the row JSON regardless of whether the filesystem write
+  // succeeds.
   process.stdout.write(`${JSON.stringify(row)}\n`);
-  const where = artifactPath !== null ? ` -> ${artifactPath}` : '';
-  process.stderr.write(
-    `scrum lore record: ${slug} entry ${row.id} by ${row.author_contributor_id}${where}\n`,
-  );
   if (warning !== null) {
     process.stderr.write(`scrum lore record: WARNING: ${warning}\n`);
   }
+
+  // The artifact mirror is a best-effort secondary write: the row is already
+  // durably stored, so a filesystem failure should warn but not exit 1.
+  let where = '';
+  try {
+    const team = store.getTeam(slug);
+    // The team exists — recordLore already guarded it — so this is total.
+    const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+    where = artifactPath !== null ? ` -> ${artifactPath}` : '';
+  } catch (artifactErr) {
+    const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
+    process.stderr.write(
+      `scrum lore record: WARNING: row ${row.id} recorded but team artifact reconcile failed: ${msg}\n`,
+    );
+  }
+
+  process.stderr.write(
+    `scrum lore record: ${slug} entry ${row.id} by ${row.author_contributor_id}${where}\n`,
+  );
   return 0;
 }
 
