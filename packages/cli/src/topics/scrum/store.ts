@@ -33,6 +33,8 @@ import type {
   AddAnnotationInput,
   AnnotationRow,
   AnnotationTargetKind,
+  AskAwaitPhase,
+  AskAwaitReport,
   AskRow,
   AskState,
   AskVerdict,
@@ -99,6 +101,7 @@ import type { AddTeamExposeInput, CreateTeamInput } from './types';
 import {
   ACCEPTANCE_SCOPES,
   ANNOTATION_TARGET_KINDS,
+  ASK_AWAIT_TERMINAL_PHASES,
   ASK_VERDICTS,
   ASK_VERDICT_STATE,
   ESCALATION_CHAIN,
@@ -3173,6 +3176,92 @@ export class ScrumStore {
       ) as AskRow;
     });
     return apply();
+  }
+
+  /**
+   * Poll a filed ask and report its mechanical phase — the read primitive the
+   * team-as-workflow-kind sugar composes. A `kind:<team-slug>` workflow step
+   * files an ask, the driver triages and responds, and the step then polls THIS
+   * method until it reports a TERMINAL phase. The dividing line is the engine
+   * boundary: filing and responding are mutations the driver drives; computing
+   * "is it answered yet, and if accepted is the child done, and what does the
+   * to-team expose" is pure derivation — so it spawns no model and never mutates.
+   *
+   * The phase derives from the ask's `state` plus, when accepted, the
+   * `mapped_artifact` child task's `status`:
+   *   - `filed`     → `pending`   (NON-terminal — poll again)
+   *   - `accepted`  → `waiting`   when the child is not yet `done` (NON-terminal)
+   *   - `accepted`  → `ready`     when the child IS `done`; `outputs` carries the
+   *                               to-team's ACTIVE exposes (TERMINAL success)
+   *   - `rejected`  → `rejected`  with `reason = rejected_reason` (TERMINAL)
+   *   - `countered` → `countered` with `reason = counter_proposal` (TERMINAL)
+   *
+   * `outputs` is populated ONLY on `ready` — the to-team's exposed outputs are
+   * the value the step returns. Reject/counter set a non-null `reason` so the
+   * calling script surfaces a terminal result instead of waiting forever.
+   * Rejects an unknown ask id (the one error path); every existing ask yields a
+   * report.
+   */
+  awaitAsk(id: number): AskAwaitReport {
+    const ask = this.getAsk(id);
+    if (ask === null) {
+      throw new Error(`awaitAsk: unknown ask id '${id}'`);
+    }
+
+    const base = {
+      ask_id: ask.id,
+      state: ask.state,
+      mapped_artifact: ask.mapped_artifact,
+      to_team: ask.to_team,
+    };
+
+    if (ask.state === 'filed') {
+      return this.buildAwaitReport(base, 'pending', { artifactStatus: null });
+    }
+    if (ask.state === 'rejected') {
+      return this.buildAwaitReport(base, 'rejected', { reason: ask.rejected_reason });
+    }
+    if (ask.state === 'countered') {
+      return this.buildAwaitReport(base, 'countered', { reason: ask.counter_proposal });
+    }
+
+    // state === 'accepted': the phase hinges on the mapped child's status. A
+    // missing child (soft-deleted out from under the ask) reads as not-done.
+    const child = ask.mapped_artifact !== null ? this.getTask(ask.mapped_artifact) : null;
+    const artifactStatus: TaskStatus | null = child?.status ?? null;
+    if (artifactStatus !== 'done') {
+      return this.buildAwaitReport(base, 'waiting', { artifactStatus });
+    }
+    // The child is done — expose the to-team's ACTIVE published outputs.
+    return this.buildAwaitReport(base, 'ready', {
+      artifactStatus,
+      outputs: this.listTeamExposes(ask.to_team),
+    });
+  }
+
+  /**
+   * Assemble an `AskAwaitReport` from a phase plus the variable parts. Centralizes
+   * the `terminal` derivation (a phase in `ASK_AWAIT_TERMINAL_PHASES`) and the
+   * defaulting of `artifact_status` / `outputs` / `reason`, so `awaitAsk`'s branch
+   * arms stay one line each.
+   */
+  private buildAwaitReport(
+    base: Pick<AskAwaitReport, 'ask_id' | 'state' | 'mapped_artifact' | 'to_team'>,
+    phase: AskAwaitPhase,
+    parts: {
+      artifactStatus?: TaskStatus | null;
+      outputs?: TeamExposeRow[];
+      reason?: string | null;
+    },
+  ): AskAwaitReport {
+    return {
+      ...base,
+      phase,
+      terminal: ASK_AWAIT_TERMINAL_PHASES.includes(phase),
+      artifact_status: parts.artifactStatus ?? null,
+      outputs: parts.outputs ?? [],
+      reason: parts.reason ?? null,
+    };
   }
 
   // ==========================================================================
