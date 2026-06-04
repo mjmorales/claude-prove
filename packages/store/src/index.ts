@@ -36,3 +36,19 @@ export {
   registerSchema,
   type SchemaDef,
 } from './registry';
+export {
+  type Acceptance,
+  type AcceptanceCriterion,
+  type AcceptanceCriterionStatus,
+  type AcceptancePolicy,
+  type AcceptanceScope,
+  type AcceptanceVerifiesBy,
+  type GateState,
+  type GateVerdict,
+  type TaskLayer,
+  type TaskStatus,
+  type TransitionTask,
+  updateTaskStatus,
+  type VerificationRecord,
+  type VerificationVerdict,
+} from './services/scrum-writes';
