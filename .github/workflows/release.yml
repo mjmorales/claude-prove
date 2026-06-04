@@ -56,7 +56,11 @@ jobs:
           # the review UI — that path has its own Docker-image release channel.
           # `:(exclude)` pathspec filters out commits that changed only
           # packages/review-ui/ or the review-ui workflow file.
-          EXCLUDES=(':(exclude)packages/review-ui' ':(exclude).github/workflows/review-ui-image.yml')
+          # CLAUDE.md is excluded too: its managed block pins the plugin
+          # version, so each release requires a docs sync commit — counting
+          # that commit as release-relevant would cut another release and
+          # stale the pin again, forever.
+          EXCLUDES=(':(exclude)packages/review-ui' ':(exclude).github/workflows/review-ui-image.yml' ':(exclude)CLAUDE.md')
           if [ "$LATEST_TAG" = "v0.0.0" ]; then
             COMMITS=$(git log --pretty=format:"%s%n%b" HEAD -- . "${EXCLUDES[@]}")
           else
@@ -111,8 +115,9 @@ jobs:
           fi
 
           # Match the bump step: keep review-ui commits out of the plugin
-          # CHANGELOG. They ship separately via the GHCR image.
-          EXCLUDES=(':(exclude)packages/review-ui' ':(exclude).github/workflows/review-ui-image.yml')
+          # CHANGELOG (they ship separately via the GHCR image) and CLAUDE.md
+          # version-pin syncs out of release-relevance.
+          EXCLUDES=(':(exclude)packages/review-ui' ':(exclude).github/workflows/review-ui-image.yml' ':(exclude)CLAUDE.md')
 
           {
             echo "changelog<<CHANGELOG_EOF"
