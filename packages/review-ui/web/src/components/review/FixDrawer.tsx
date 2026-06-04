@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useWriteAffordancesDisabled } from "../BehindSchemaBanner";
 
 export function FixDrawer({
   open,
@@ -20,6 +21,12 @@ export function FixDrawer({
   const [note, setNote] = useState(initialNote);
   const [copied, setCopied] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
+  // A behind-schema project would have the rework write refused server-side;
+  // reflect that read-only state visually so the compose CTA is never a
+  // clickable no-op. The drawer's triggers are gated, but a stale record could
+  // still open it.
+  const writesDisabled = useWriteAffordancesDisabled();
+  const canCompose = !generating && !writesDisabled;
 
   useEffect(() => {
     if (open) {
@@ -69,7 +76,7 @@ export function FixDrawer({
                   onCancel();
                 } else if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                   e.preventDefault();
-                  onGenerate(note.trim());
+                  if (canCompose) onGenerate(note.trim());
                 }
               }}
               rows={10}
@@ -77,12 +84,12 @@ export function FixDrawer({
               className="w-full bg-bg-void border border-bg-line rounded-md px-3 py-2.5 font-mono text-[12.5px] text-fg-bright placeholder:text-fg-faint focus:outline-none focus:border-amber focus:ring-1 focus:ring-amber"
             />
             <button
-              onClick={() => onGenerate(note.trim())}
-              disabled={generating}
-              className={`btn btn-warning btn-lg w-full ${generating ? "is-disabled" : ""}`}
+              onClick={() => canCompose && onGenerate(note.trim())}
+              disabled={!canCompose}
+              className={`btn btn-warning btn-lg w-full ${!canCompose ? "is-disabled" : ""}`}
             >
               <span>{generating ? "Composing…" : "Compose rework brief"}</span>
-              {!generating && <span className="kbd kbd-on-solid">⌘↩</span>}
+              {canCompose && <span className="kbd kbd-on-solid">⌘↩</span>}
             </button>
             <p className="text-[11px] text-fg-dim leading-relaxed">
               Marks verdict <span className="text-amber font-medium">rework</span> and mints a

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useWriteAffordancesDisabled } from "../BehindSchemaBanner";
 
 export function DiscussDrawer({
   open,
@@ -15,6 +16,12 @@ export function DiscussDrawer({
 }) {
   const [note, setNote] = useState(initial);
   const ref = useRef<HTMLTextAreaElement>(null);
+  // A behind-schema project would have the submit refused server-side; reflect
+  // that read-only state visually so the drawer's CTA is never a clickable
+  // no-op. The drawer is normally unreachable while disabled (its triggers are
+  // gated), but a stale record could still open it.
+  const writesDisabled = useWriteAffordancesDisabled();
+  const canSubmit = note.trim().length > 0 && !writesDisabled;
 
   useEffect(() => {
     if (open) {
@@ -59,7 +66,7 @@ export function DiscussDrawer({
                 onCancel();
               } else if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
                 e.preventDefault();
-                if (note.trim()) onSubmit(note.trim());
+                if (canSubmit) onSubmit(note.trim());
               }
             }}
             rows={6}
@@ -72,9 +79,9 @@ export function DiscussDrawer({
               <span className="kbd">esc</span> cancel
             </span>
             <button
-              onClick={() => note.trim() && onSubmit(note.trim())}
-              disabled={!note.trim()}
-              className={`btn btn-info ${!note.trim() ? "is-disabled" : ""}`}
+              onClick={() => canSubmit && onSubmit(note.trim())}
+              disabled={!canSubmit}
+              className={`btn btn-info ${!canSubmit ? "is-disabled" : ""}`}
             >
               <span>Mark as discuss</span>
             </button>
