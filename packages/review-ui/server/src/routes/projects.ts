@@ -135,7 +135,17 @@ export function projectStoreInfo(
   const dbPath = path.join(projectRoot, ".prove", "prove.db");
   if (!fs.existsSync(dbPath)) return { schema_version: null, behind: null };
 
-  const applied = appliedVersions(dbPath);
+  // `existsSync` only proves the file is present, not that it is a readable
+  // sqlite db: a corrupt, truncated, transiently-locked, or non-file (dir) path
+  // makes `openStore` or the first SELECT throw. One such project must not fail
+  // the whole listing, so degrade it to the same null/null block an absent db
+  // reports and let every other project resolve.
+  let applied: Map<string, number>;
+  try {
+    applied = appliedVersions(dbPath);
+  } catch {
+    return { schema_version: null, behind: null };
+  }
 
   // High-water mark across every applied row; 0 when the log is empty.
   let schemaVersion = 0;

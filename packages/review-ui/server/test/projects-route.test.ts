@@ -15,7 +15,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -148,10 +148,42 @@ describe("GET /api/projects", () => {
       const body = res.json() as { projects: Array<{ path: string; store: unknown }> };
       const row = body.projects.find((p) => p.path === root);
       expect(row).toBeDefined();
-      // The real scrum/acb domains register too, so the seeded v1-only db is
-      // behind the binary's expected heads; assert only the version high-water
+      // `clearRegistry` in beforeEach wipes the in-memory domain registry, and
+      // the route's acb/scrum side-effect imports only `registerSchema` once at
+      // module load — they do not re-register after the clear — so `widgets` is
+      // the sole registered domain here. We assert only the version high-water
       // mark, which the seed controls deterministically.
       expect((row as { store: { schema_version: number } }).store.schema_version).toBe(1);
+    } finally {
+      await app.close();
+    }
+  });
+
+  test("degrades one unreadable-db project to null/null and still lists the healthy sibling", async () => {
+    process.env.CLAUDE_PROVE_HOME = baseDir;
+    registerSchema({ domain: TEST_DOMAIN, migrations: [MIGRATION_V1] });
+    const healthyRoot = makeProjectAtHome("healthy");
+    const brokenRoot = makeProjectWithUnreadableDb("broken");
+
+    const app = await buildApp({ repoRoot: "/nonexistent-repo-root", webRoot: null });
+    await app.ready();
+    try {
+      const res = await app.inject({ method: "GET", url: "/api/projects" });
+      // One bad project must not 500 the whole listing.
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as {
+        projects: Array<{ path: string; store: { schema_version: number | null; behind: boolean | null } }>;
+      };
+
+      // The corrupt db degrades to the same null/null block an absent db reports.
+      const brokenRow = body.projects.find((p) => p.path === brokenRoot);
+      expect(brokenRow).toBeDefined();
+      expect(brokenRow?.store).toEqual({ schema_version: null, behind: null });
+
+      // The healthy sibling still resolves with its real applied version.
+      const healthyRow = body.projects.find((p) => p.path === healthyRoot);
+      expect(healthyRow).toBeDefined();
+      expect(healthyRow?.store.schema_version).toBe(1);
     } finally {
       await app.close();
     }
@@ -168,6 +200,19 @@ function makeProjectAtHome(name: string): string {
   } finally {
     store.close();
   }
+  registryAdd(root);
+  return root;
+}
+
+/**
+ * Register a project whose `.prove/prove.db` is present on disk (survives the
+ * registry's existsSync prune) but is not a readable sqlite db — non-sqlite
+ * bytes make `openStore`/the first SELECT throw. Returns the root path.
+ */
+function makeProjectWithUnreadableDb(name: string): string {
+  const root = join(workspace, name);
+  mkdirSync(join(root, ".prove"), { recursive: true });
+  writeFileSync(join(root, ".prove", "prove.db"), "this is not a sqlite database");
   registryAdd(root);
   return root;
 }
