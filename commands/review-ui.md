@@ -65,7 +65,7 @@ claude-prove review-ui serve start            # or: serve restart
 
 Read the `port` field from that stdout JSON — it is the authoritative port the daemon bound, which may differ from the requested one when the original was busy. Use it for the browser open and the report.
 
-If the command exits non-zero, surface its stderr (the health-poll timeout or spawn error) and stop. Inspect `~/.claude-prove/review-ui/review-ui.log` for the server's own output.
+If the command exits non-zero and stderr reports `already running`, do not treat it as a failure — run `claude-prove review-ui serve status`, read the reported port, and open the browser there instead. For any other non-zero exit, surface its stderr (the health-poll timeout or spawn error) and stop. Inspect `~/.claude-prove/review-ui/review-ui.log` for the server's own output.
 
 ### Open browser
 
