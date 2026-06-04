@@ -138,6 +138,12 @@ export function ActiveProjectProvider({
 
   const setProjectKey = useCallback((key: string | null) => {
     persistProjectKey(key);
+    // Update the fetch funnel BEFORE the state update: query refetches fired by
+    // the key change run in child effects, which commit before this provider's
+    // own funnel-sync effect — updating only in the effect lets the first
+    // post-switch fetch go out with the previous project's wire param and
+    // cache the wrong project's data under the new key.
+    setActiveProjectKeyForRequests(key);
     setProjectKeyState(key);
   }, []);
 
