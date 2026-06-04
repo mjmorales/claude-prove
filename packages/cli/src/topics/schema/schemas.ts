@@ -40,7 +40,7 @@ export interface Schema {
   fields: Record<string, FieldSpec>;
 }
 
-export const CURRENT_SCHEMA_VERSION = '10';
+export const CURRENT_SCHEMA_VERSION = '11';
 
 /**
  * Shape of `tools.scrum` introduced in schema v5. The v4 -> v5 migration
@@ -222,7 +222,13 @@ export const PROVE_SCHEMA: Schema = {
       description:
         'Tool activation state and configuration overrides. Known entries: ' +
         'acb, cafi, pcd, run_state, scrum (see TOOL_SCRUM_SCHEMA). Each entry ' +
-        "has { enabled: bool, scope?: 'user' | 'project', config?: object }.",
+        "has { enabled: bool, scope?: 'user' | 'project', config?: object }. " +
+        'The config object is free-form per tool. For acb, the supported ' +
+        'config keys are base_branch and review_ui_port; review_ui_image and ' +
+        'review_ui_tag are no longer part of the acb.config contract (the ' +
+        'review UI image/tag are pinned by the tooling rather than the ' +
+        'project config), and review_ui_port relocates to a machine-global ' +
+        'setting via a separate operator step.',
     },
     brief: {
       type: 'dict',
