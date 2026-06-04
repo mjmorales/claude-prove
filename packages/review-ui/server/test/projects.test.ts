@@ -49,15 +49,20 @@ afterEach(() => {
 });
 
 describe("resolveProjectRoot", () => {
-  test("resolves a registered key (the encoded path) to its absolute root", () => {
+  // The resolver expects an ALREADY-DECODED key — the value Fastify hands a
+  // handler via `req.query.project` after URL-decoding the query string once.
+  // These unit tests therefore pass the raw registry path directly (the decoded
+  // form), NOT `encodeURIComponent(path)`, so the single-decode contract holds:
+  // the resolver does no decode of its own. The HTTP-level tests still send
+  // encoded values in URLs and let Fastify do the one decode.
+  test("resolves a registered key (the raw decoded path) to its absolute root", () => {
     const root = registerLiveProject("alpha");
-    const key = encodeURIComponent(root);
-    expect(resolveProjectRoot(key, baseDir)).toBe(root);
+    expect(resolveProjectRoot(root, baseDir)).toBe(root);
   });
 
   test("rejects an unregistered key", () => {
     registerLiveProject("alpha");
-    const stranger = encodeURIComponent(join(workspace, "not-registered"));
+    const stranger = join(workspace, "not-registered");
     expect(resolveProjectRoot(stranger, baseDir)).toBeNull();
   });
 
@@ -65,7 +70,7 @@ describe("resolveProjectRoot", () => {
     const root = registerLiveProject("alpha");
     // `<root>/../alpha-sibling` normalizes to a sibling of the registered root —
     // path-shaped, escapes the root, and is not itself registered.
-    const traversal = encodeURIComponent(join(root, "..", "alpha-sibling"));
+    const traversal = join(root, "..", "alpha-sibling");
     expect(resolveProjectRoot(traversal, baseDir)).toBeNull();
   });
 
@@ -75,24 +80,22 @@ describe("resolveProjectRoot", () => {
     // MUST still resolve (the normalized path equals a registered root) — this
     // asserts normalization is applied so traversal cannot be used to smuggle a
     // non-root through, while a path that genuinely normalizes to a root works.
-    const normalized = encodeURIComponent(join(root, "sub", ".."));
+    const normalized = join(root, "sub", "..");
     expect(resolveProjectRoot(normalized, baseDir)).toBe(root);
     // The parent dir itself (a prefix of the root) is NOT registered → rejected.
-    const parent = encodeURIComponent(join(root, ".."));
+    const parent = join(root, "..");
     expect(resolveProjectRoot(parent, baseDir)).toBeNull();
   });
 
   test("rejects an absolute path that is not a registered root", () => {
     registerLiveProject("alpha");
-    expect(resolveProjectRoot(encodeURIComponent("/etc/passwd"), baseDir)).toBeNull();
-    // Raw (un-encoded) absolute path also fails — no passthrough.
     expect(resolveProjectRoot("/etc/passwd", baseDir)).toBeNull();
   });
 
   test("rejects a leading-dash key", () => {
     registerLiveProject("alpha");
     expect(resolveProjectRoot("--output=/tmp/pwn", baseDir)).toBeNull();
-    expect(resolveProjectRoot(encodeURIComponent("-rf"), baseDir)).toBeNull();
+    expect(resolveProjectRoot("-rf", baseDir)).toBeNull();
   });
 
   test("rejects an empty key", () => {
@@ -100,9 +103,21 @@ describe("resolveProjectRoot", () => {
     expect(resolveProjectRoot("", baseDir)).toBeNull();
   });
 
-  test("treats a malformed percent-escape as a miss, not an exception", () => {
-    registerLiveProject("alpha");
-    expect(resolveProjectRoot("%E0%A4%A", baseDir)).toBeNull();
+  test("resolves a registered root containing a literal `%` (single-decode round-trip)", () => {
+    // A registry root whose basename contains a literal `%`. After the one
+    // decode Fastify performs on the wire, the handler holds this exact decoded
+    // path; the resolver must NOT decode it again (a second decode would mangle
+    // `%2x`-looking byte sequences) and must match it verbatim.
+    const root = registerLiveProject("pct%2Fname");
+    expect(root).toContain("%");
+    // The resolver receives the decoded key verbatim and matches it.
+    expect(resolveProjectRoot(root, baseDir)).toBe(root);
+    // Prove the end-to-end shape: encode → single decode → resolve, which is
+    // exactly what the HTTP path does. The single decode reproduces the raw
+    // registry path; a SECOND decode here would corrupt it and miss.
+    const onceDecoded = decodeURIComponent(encodeURIComponent(root));
+    expect(onceDecoded).toBe(root);
+    expect(resolveProjectRoot(onceDecoded, baseDir)).toBe(root);
   });
 });
 
@@ -147,10 +162,13 @@ describe("requireProject", () => {
     return { reply, captured };
   }
 
+  // `req.query.project` carries the value Fastify already URL-decoded, so the
+  // tests pass the raw registry path as the query value (the decoded form a
+  // handler sees), not `encodeURIComponent(path)`.
   test("returns a ProjectRef for a registered key", () => {
     const root = registerLiveProject("alpha");
     const { reply, captured } = fakeReply();
-    const req = { query: { project: encodeURIComponent(root) } } as never;
+    const req = { query: { project: root } } as never;
     const ref = requireProject(req, reply as never, baseDir);
     expect(ref).toEqual({ id: encodeURIComponent(root), path: root, name: "alpha" });
     expect(captured.code).toBeUndefined();
@@ -168,7 +186,7 @@ describe("requireProject", () => {
   test("404s an unknown project key, echoing it back", () => {
     registerLiveProject("alpha");
     const { reply, captured } = fakeReply();
-    const stranger = encodeURIComponent(join(workspace, "not-registered"));
+    const stranger = join(workspace, "not-registered");
     const req = { query: { project: stranger } } as never;
     expect(requireProject(req, reply as never, baseDir)).toBeNull();
     expect(captured.code).toBe(404);
@@ -202,9 +220,10 @@ describe("read-only resolve path", () => {
     const before = registryBytes();
     // A dead root lingers in the read-only view, so resolving it still succeeds
     // (the route's own fs call is the existence re-check). Crucially, the
-    // resolve leaves the registry file untouched — no prune write.
-    expect(resolveProjectRoot(encodeURIComponent(dead), baseDir)).toBe(dead);
-    expect(resolveProjectRoot(encodeURIComponent(live), baseDir)).toBe(live);
+    // resolve leaves the registry file untouched — no prune write. Keys are the
+    // raw decoded paths the resolver expects (single-decode contract).
+    expect(resolveProjectRoot(dead, baseDir)).toBe(dead);
+    expect(resolveProjectRoot(live, baseDir)).toBe(live);
     expect(registryBytes()).toBe(before);
   });
 });
@@ -235,12 +254,27 @@ describe("makeProjectResolver", () => {
     expect(captured.code).toBeUndefined();
   });
 
+  test("explicit empty-string ?project= also falls back to the startup root", () => {
+    // Pinned policy: an EMPTY `?project=` is treated identically to an absent
+    // one — it falls back to the startup root rather than 404ing. A client that
+    // sends `?project=` with no value (or clears the selector) must still reach
+    // the booted repo, not get rejected.
+    const fallback = registerLiveProject("alpha");
+    const resolve = makeProjectResolver(fallback, baseDir);
+    const { reply, captured } = fakeReply();
+    const req = { query: { project: "" } } as never;
+    expect(resolve(req, reply as never)).toBe(fallback);
+    expect(captured.code).toBeUndefined();
+  });
+
+  // `req.query.project` carries the already-decoded value, so these pass the
+  // raw registry path as the query value (single-decode contract).
   test("present registered ?project= resolves to that root, ignoring the fallback", () => {
     const fallback = registerLiveProject("alpha");
     const other = registerLiveProject("beta");
     const resolve = makeProjectResolver(fallback, baseDir);
     const { reply } = fakeReply();
-    const req = { query: { project: encodeURIComponent(other) } } as never;
+    const req = { query: { project: other } } as never;
     expect(resolve(req, reply as never)).toBe(other);
   });
 
@@ -248,7 +282,7 @@ describe("makeProjectResolver", () => {
     const fallback = registerLiveProject("alpha");
     const resolve = makeProjectResolver(fallback, baseDir);
     const { reply, captured } = fakeReply();
-    const stranger = encodeURIComponent(join(workspace, "not-registered"));
+    const stranger = join(workspace, "not-registered");
     const req = { query: { project: stranger } } as never;
     expect(resolve(req, reply as never)).toBeNull();
     expect(captured.code).toBe(404);

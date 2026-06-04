@@ -143,6 +143,34 @@ describe('per-request project scoping on data routes', () => {
     }
   });
 
+  test('(a) a registered root containing a literal `%` resolves via a properly-encoded URL', async () => {
+    // Single-decode contract: Fastify decodes the query value once on the wire,
+    // so the handler sees the raw registry path (with its literal `%`), and the
+    // resolver must NOT decode again. A second decode would mangle the `%`-bytes
+    // and miss the registered root, breaking that project fail-closed.
+    const alpha = registerLiveProject('alpha');
+    const pct = registerLiveProject('pct%2Fname');
+    expect(pct).toContain('%');
+    const alphaContent = seedRunDoc(alpha, 'main', 'add-login', 'plan.json');
+    const pctContent = seedRunDoc(pct, 'main', 'add-login', 'plan.json');
+
+    // Startup root is alpha; the `%`-bearing root is selected explicitly.
+    const app = await build(alpha);
+    try {
+      const res = await app.inject({
+        method: 'GET',
+        url: `/api/runs/main%2Fadd-login/doc/plan.json?project=${encodeURIComponent(pct)}`,
+      });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { path: string; content: string };
+      expect(body.content).toBe(pctContent);
+      expect(body.content).not.toBe(alphaContent);
+      expect(body.path.startsWith(pct)).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
   test('(c) absent ?project= falls back to the startup root', async () => {
     const alpha = registerLiveProject('alpha');
     const alphaContent = seedRunDoc(alpha, 'main', 'add-login', 'plan.json');

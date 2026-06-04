@@ -12,6 +12,13 @@
  * mutate scrum state via the CLI (`claude-prove scrum task ...`) or the
  * scrum-master agent. Any mutation would bypass event sourcing + agent
  * provenance and is therefore rejected at the route registration boundary.
+ *
+ * If a server-side scrum WRITE is ever added here, it MUST first call
+ * `storeBehindSchema(repoRoot)` from `./schema-guard.js` and refuse with HTTP
+ * 409 on a behind-schema project, exactly as the acb verdict write paths do —
+ * writing through an unmigrated foreign db assumes a table shape that may not
+ * yet exist there. Reads stay unguarded so a behind project is still
+ * inspectable.
  */
 
 import fs from 'node:fs';
