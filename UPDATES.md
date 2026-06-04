@@ -6,6 +6,25 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.5.0 — Review UI goes Docker-free: native in-process daemon + schema v11
+
+*(Config schema v10 → v11 — run `/prove:update` or `claude-prove schema migrate --file .claude/.prove.json`. The review UI no longer ships or pulls a container image; if you have a stale container from an earlier version, remove it once with `docker rm -f prove-review`.)* The review UI's entire Docker delivery path is retired. There is no Dockerfile, no GitHub Container Registry image, and no `docker pull` on launch — the server now runs as a native in-process loopback daemon owned directly by the CLI.
+
+**Native daemon (`/prove:review-ui` / `claude-prove review-ui serve`).** The review UI is one long-lived detached loopback server per machine, driven through a pidfile:
+
+- `claude-prove review-ui serve start` spawns the detached server, polls `/api/health` until it answers, and prints `{"running":true,"pid":<int>,"port":<int>}` on stdout. `stop` SIGTERMs the recorded pid and reaps the pidfile; `status` prints `{"running":<bool>,"pid":<int|null>,"port":<int>}`; `restart` stops any recorded daemon then runs the start path.
+- The pidfile (`review-ui.pid`) and the combined server log (`review-ui.log`) live under `~/.claude-prove/review-ui/`. Tail that log for server output — there is no container or external process to inspect.
+- The server binds `127.0.0.1` only. It runs git against the operator's repos, so the listener must never be reachable off the loopback interface.
+- The daemon outlives the Claude session that started it; a later `serve start` that finds the pid alive refuses to double-start, and you reconnect by reading `serve status` and opening the reported port.
+
+**Every registered project in one UI (`~/.claude-prove/projects.json`).** The daemon serves an auto-registry of every prove project on the machine. A project auto-registers the first time the CLI runs against it (the entry folds sub-task worktrees back to their main repo root, so worktrees never appear as distinct projects), and the UI exposes a project switcher in its header so one daemon covers them all. `claude-prove review-ui project <list|hide|remove|add> [path]` operates the registry by hand — `list` shows visible projects (pruning dead roots on read), `hide` drops a project from the switcher while retaining it on disk, `remove` deletes the entry, and `add` (re-)surfaces a root explicitly.
+
+**Machine-global port (`~/.claude-prove/config.json::review_ui_port`).** Because the daemon is one per-machine listener serving every project, the listen port is a machine-global setting, not a per-project one. The port resolves from the top-level `review_ui_port` key in `~/.claude-prove/config.json` (default `5174`), then an upward scan past any busy port. Pin a port across runs by setting that key; a per-project `tools.acb.config.review_ui_port` left in a `.claude/.prove.json` is informational only and no longer governs the listener. The `serve start`/`restart` `--port <N>` flag overrides resolution for a single run.
+
+**Schema v10 → v11 — `review_ui_image` / `review_ui_tag` removed.** With no container image to pin, the migration strips the `review_ui_image` and `review_ui_tag` keys from `tools.acb.config` when present, preserving every other `acb.config` key byte-for-byte. The hop is otherwise a pure version bump. Run it via `/prove:update` (which applies the migration in its migration step) or directly with `claude-prove schema migrate --file .claude/.prove.json` at the repo root; commit the updated file and delete the generated `.bak`.
+
+**Migration summary.** Run `/prove:update` once to land schema v11 and the stripped keys. If an earlier Docker-based version left a `prove-review` container running, remove it once with `docker rm -f prove-review` — nothing recreates it. No other action is needed; the next `/prove:review-ui` starts the native daemon.
+
 ## Unreleased — `plugin-cache-cleanup` skill + `/prove:cache-cleanup`
 
 *(Additive — new skill and thin command wrapper, discovered automatically on plugin load; nothing to configure.)* Claude Code keeps every installed plugin version under `<plugins-root>/cache/<marketplace>/<plugin>/<version>/` and never prunes superseded ones, so agents can Glob/Grep their way into stale skills, references, and CLI code from old prove versions. The `plugin-cache-cleanup` skill discovers all plugin roots (including claude-env's `~/.claude-envs/*/plugins`), builds the active set from every `installed_plugins.json`, classifies prove version dirs as active vs stale, and deletes the stale ones behind a single human gate — never touching manifests, `marketplaces/`, `data/`, or other plugins' caches. Invoke via `/prove:cache-cleanup` or trigger phrases ("prune the plugin cache", "remove old prove versions").

@@ -26,7 +26,7 @@ Examples below omit the prefix.
 - Gather session-handoff context (git + artifacts) -> `handoff`
 - Dispatch reporter event (Slack/Discord/MCP) -> `notify`
 - Inspect/migrate/reset `.prove/prove.db` -> `store`
-- Review UI config -> `review-ui`; commit message check -> `commit`
+- Serve/inspect the review UI daemon, manage its project registry -> `review-ui`; commit message check -> `commit`
 - Render an HTML surface (brief, dashboard, timeline, decompose preview) -> `report`; interactive intake form (charter/team/decompose) -> `intake`
 
 ## Topics
@@ -99,9 +99,9 @@ Compiles a closed block-document model to a self-contained HTML page (inline CSS
 Actions: `render` `validate` `spec` `list`. Flags: `--form <charter|team|decompose>` `--file <spec.json>` `--payload <p.json>` (validate) `--out <path>` `--open` (render).
 `render` emits a self-contained interactive form (copy-payload-to-clipboard); `render --open` launches it via `artifacts.html_open` (same contract as `report --open`); `validate` PASS/FAILs a pasted-back payload (the gate before any write); `spec`/`list` inspect built-ins. `secret`/`file` field types are rejected. Two front-ends (form + interview) drive one writer. Ex: `intake render --form charter --out charter.html --open`.
 
-### review-ui — review UI config
+### review-ui — native in-process review UI daemon
 
-Action: `config`. Flag: `--cwd`. Ex: `review-ui config`.
+Actions: `serve <start|stop|status|restart>` `project <hide|remove|add|list>`. Flag: `--cwd` (serve) `--port` (serve start/restart). `serve` drives a detached loopback daemon (pidfile + log under `~/.claude-prove/review-ui/`, binds `127.0.0.1` only); the listen port resolves machine-globally from `~/.claude-prove/config.json::review_ui_port` (default 5174, then a busy-port scan). `project` operates the machine-global `~/.claude-prove/projects.json` registry the daemon serves. No Docker, no image pull. Ex: `review-ui serve start`.
 
 ### commit — conventional commit validator
 
