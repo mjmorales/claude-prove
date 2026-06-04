@@ -24,6 +24,7 @@
  */
 
 import { existsSync } from 'node:fs';
+import { DEV_INVOCATION_PREFIX } from '@claude-prove/installer';
 import type { LogEntry } from '../acb/reasoning-log';
 import { listEntries } from '../acb/reasoning-log-store';
 
@@ -221,13 +222,11 @@ function isHandoffReason(value: string): value is HandoffReason {
 /**
  * The `acb log append` invocation prefix, branched on dev_mode so the emitted
  * command resolves on the user's machine: installed users get the bare
- * `claude-prove`; plugin developers running from a checkout get the working-
- * tree entry point.
+ * `claude-prove`; plugin developers get the shell-interpolated working-tree
+ * form that `$CLAUDE_PROVE_PLUGIN_DIR` resolves when the command runs.
  */
 function logAppendCommand(devMode: boolean): string {
-  return devMode
-    ? 'bun run <plugin-dir>/packages/cli/bin/run.ts acb log append'
-    : 'claude-prove acb log append';
+  return devMode ? `${DEV_INVOCATION_PREFIX} acb log append` : 'claude-prove acb log append';
 }
 
 function renderMissingSynthesis(runDir: string, devMode: boolean): string {
