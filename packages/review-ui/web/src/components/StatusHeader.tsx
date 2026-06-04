@@ -4,8 +4,10 @@ import { useQuery } from "@tanstack/react-query";
 import { api, type GroupVerdict } from "../lib/api";
 import { useSelection } from "../lib/store";
 import { useConnection } from "../hooks/useConnection";
+import { useActiveProject } from "../lib/active-project";
 import { cn } from "../lib/cn";
 import { PALETTE } from "./review/verdictTokens";
+import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
 const SURFACES: Array<{ to: string; label: string }> = [
   { to: "/acb", label: "ACB" },
@@ -30,6 +32,7 @@ export function StatusHeader({
   onOpenPalette: (query?: string) => void;
 }) {
   const { state } = useConnection();
+  const { project } = useActiveProject();
   const slug = useSelection((s) => s.slug);
   const branch = useSelection((s) => s.branch);
   const reviewMode = useSelection((s) => s.reviewMode);
@@ -98,6 +101,8 @@ export function StatusHeader({
           ))}
         </nav>
 
+        <WorkspaceSwitcher />
+
         {slug ? (
           <div className="flex items-center gap-4 min-w-0">
             <div className="flex items-center gap-2 min-w-0">
@@ -120,7 +125,9 @@ export function StatusHeader({
             )}
           </div>
         ) : (
-          <span className="text-fg-dim text-[13.5px]">Select a run to begin</span>
+          <span className="text-fg-dim text-[13.5px]">
+            {project ? `${project.name} — select a run to begin` : "Select a run to begin"}
+          </span>
         )}
 
         <div className="ml-auto flex items-center gap-2">
