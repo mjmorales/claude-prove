@@ -119,7 +119,7 @@ Tracks config format for migration. Missing field = v0 (pre-schema). Run `/prove
 | ... | (see `migrate.ts` for intermediate versions) |
 | `"7"` | Validators gain an optional `skill` field (skill-invoked gates) |
 | `"10"` | Optional `artifacts` block (`html_open` opener command template for `--open`) |
-| `"11"` | Drops `review_ui_image`/`review_ui_tag` from `tools.acb.config` — the review UI runs as a native in-process loopback daemon, so there is no container image to pin. The listen port also leaves the project config: it now resolves machine-globally from `~/.claude-prove/config.json::review_ui_port` (default `5174`), so a per-project `tools.acb.config.review_ui_port` is informational only |
+| `"11"` | Drops `review_ui_image`/`review_ui_tag` from `tools.acb.config` — the review UI runs as a native in-process loopback daemon, so there is no container image to pin. The listen port also leaves the project config: it resolves machine-globally from `~/.claude-prove/config.json::review_ui_port` (default `5174`), so a per-project `tools.acb.config.review_ui_port` is informational only |
 
 ### Validator Fields
 
