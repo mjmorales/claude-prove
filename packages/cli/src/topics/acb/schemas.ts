@@ -10,6 +10,8 @@
  * Errors accumulate; validators never short-circuit past the structural head.
  */
 
+import { VERDICT_VALUES, type VerdictValue } from '@claude-prove/store';
+
 // ---------------------------------------------------------------------------
 // Version constants
 // ---------------------------------------------------------------------------
@@ -41,26 +43,17 @@ export const NEGATIVE_SPACE_REASONS = [
 ] as const;
 
 /**
- * Canonical verdict vocabulary. Used both by the on-disk manifest schema
- * (Python-compatible, mirrors `tools/acb/schemas.py`) AND by the review-UI's
- * live `acb_group_verdicts` DB table via `GroupVerdict` in `./store.ts`.
- *
- * `'rework'` is an extension beyond the Python manifest schema — it
- * represents a review-UI-only state where the group is rejected with a
- * generated fix brief. The Python manifest validator tolerates it because
- * `isVerdictValue` here is the single source of truth.
- *
- * Legacy values written by earlier TS builds (`'approved'`, `'discuss'`)
- * are coerced to canonical at the DB read boundary via
- * `coerceLegacyVerdict` in `./store.ts`; do not add them back here.
+ * Canonical verdict vocabulary. Single-sourced from `@claude-prove/store`'s acb
+ * write-service so the on-disk manifest schema (the `isVerdictValue` validator),
+ * the review-UI's live `acb_group_verdicts` table, and the write path all share
+ * one tuple — drift between parallel copies is a silent data-integrity defect,
+ * so there is no second definition. `'rework'` is a review-UI-only state (the
+ * group is rejected with a generated fix brief); the manifest validator tolerates
+ * it because `isVerdictValue` reads this same shared vocabulary. Legacy values
+ * (`'approved'`, `'discuss'`) are coerced to canonical at the DB read boundary in
+ * `./store.ts`; they are not members here.
  */
-export const VERDICT_VALUES = [
-  'accepted',
-  'rejected',
-  'needs_discussion',
-  'pending',
-  'rework',
-] as const;
+export { VERDICT_VALUES, type VerdictValue };
 
 export const OVERALL_VERDICTS = ['approved', 'changes_requested', 'pending'] as const;
 
@@ -68,7 +61,6 @@ export type Classification = (typeof CLASSIFICATIONS)[number];
 export type AmbiguityTag = (typeof AMBIGUITY_TAGS)[number];
 export type AnnotationType = (typeof ANNOTATION_TYPES)[number];
 export type NegativeSpaceReason = (typeof NEGATIVE_SPACE_REASONS)[number];
-export type VerdictValue = (typeof VERDICT_VALUES)[number];
 export type OverallVerdict = (typeof OVERALL_VERDICTS)[number];
 
 // ---------------------------------------------------------------------------
