@@ -14,6 +14,7 @@ import { registerEventsRoute } from "./routes/events.js";
 import { registerProveRoutes } from "./routes/prove.js";
 import { registerManifestRoute } from "./routes/manifest.js";
 import { registerReviewRoutes } from "./routes/review.js";
+import { registerProjectsRoute } from "./routes/projects.js";
 import { registerScrumRoutes } from "./scrum.js";
 
 const PORT = Number(process.env.PORT ?? 5174);
@@ -103,6 +104,9 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   registerProveRoutes(app, repoRoot);
   registerManifestRoute(app, repoRoot);
   registerReviewRoutes(app, repoRoot);
+  // Machine-global: spans every registered project, not the booted repo, so it
+  // takes no repoRoot.
+  registerProjectsRoute(app);
   registerScrumRoutes(app, repoRoot);
 
   if (webRoot) {
