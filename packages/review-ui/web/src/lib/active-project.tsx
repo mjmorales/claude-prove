@@ -126,7 +126,15 @@ export function ActiveProjectProvider({
   children: ReactNode;
   project?: ProjectInfo | null;
 }) {
-  const [projectKey, setProjectKeyState] = useState<string | null>(seedProjectKey);
+  const [projectKey, setProjectKeyState] = useState<string | null>(() => {
+    const seeded = seedProjectKey();
+    // Seed the fetch funnel synchronously: queries fired during the first
+    // render must already carry `?project=` — the update effect below runs
+    // only after paint, and a deep-linked page's first fetch would otherwise
+    // hit the startup root and cache a miss under the correct key.
+    setActiveProjectKeyForRequests(seeded);
+    return seeded;
+  });
 
   const setProjectKey = useCallback((key: string | null) => {
     persistProjectKey(key);
