@@ -7,8 +7,9 @@
  * `.claude/settings.local.json` env (where `CLAUDE_PROVE_PLUGIN_DIR` lives):
  *
  *   - repoRoot : `git rev-parse --show-toplevel` from cwd, else cwd itself.
- *   - port     : `review-ui config` port, then an upward scan past any busy
- *                port (warning when the requested one is taken).
+ *   - port     : the machine-global `review_ui_port` (from
+ *                `~/.claude-prove/config.json`), then an upward scan past any
+ *                busy port (warning when the requested one is taken).
  *   - webRoot  : resolved HERE via the server's `resolveWebRoot()` three-tier
  *                lookup (which reads `CLAUDE_PROVE_PLUGIN_DIR`), then threaded
  *                to the child as a concrete path. A null resolution warns and
@@ -25,15 +26,15 @@
 
 import { type SpawnOptions, spawn } from 'node:child_process';
 import { execFileSync } from 'node:child_process';
-import { openSync, readFileSync } from 'node:fs';
+import { openSync } from 'node:fs';
 import { connect } from 'node:net';
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { runningFromCompiledBinary } from '@claude-prove/installer';
 import { resolvePluginRoot } from '@claude-prove/installer/plugin-root';
-import { resolveReviewUiConfig } from './config';
 import type { DaemonOptions, DaemonStatus, SpawnContext, SpawnFn } from './daemon';
 import * as daemon from './daemon';
+import { resolveReviewUiPort } from './port-config';
 import {
   CHILD_PORT_ENV,
   CHILD_REPO_ROOT_ENV,
@@ -65,13 +66,18 @@ const PORT_PROBE_TIMEOUT_MS = 300;
 export interface RunServeOptions {
   /** Lifecycle verb (an unknown value is rejected by the dispatcher). */
   verb: string;
-  /** Project root to resolve `review-ui config` from / spawn the child in. Defaults to cwd. */
+  /** Repo root to resolve from / spawn the child in. Defaults to cwd. */
   cwd?: string;
   /** Base-dir override for the daemon pidfile/log — the test seam. */
   baseOverride?: string;
   /**
+   * Machine-config base-dir override (the `~/.claude-prove` root) for port
+   * resolution — the test seam. Unset reads the developer's real config.
+   */
+  machineConfigBase?: string;
+  /**
    * Pin the listen port, bypassing config + busy-scan. Tests use this to drive
-   * a deterministic port; unset selects the config port then scans upward.
+   * a deterministic port; unset selects the machine-global port then scans upward.
    */
   port?: number;
   /** Injected spawn for tests; defaults to the real detached spawn. */
@@ -102,7 +108,7 @@ export async function runServe(opts: RunServeOptions): Promise<number> {
 
   switch (opts.verb) {
     case 'status':
-      return runStatus(cwd, opts);
+      return runStatus(opts);
     case 'stop':
       return runStop(opts.baseOverride);
     case 'start':
@@ -117,8 +123,8 @@ function isServeVerb(value: string): value is ServeVerb {
 }
 
 /** `status` prints `{ running, pid, port }` as a JSON line on stdout. */
-async function runStatus(cwd: string, opts: RunServeOptions): Promise<number> {
-  const port = opts.port ?? (await resolvePort(cwd)).port;
+async function runStatus(opts: RunServeOptions): Promise<number> {
+  const port = opts.port ?? (await resolvePort(opts)).port;
   const st: DaemonStatus = await daemon.status({
     baseOverride: opts.baseOverride,
     host: HOST,
@@ -198,8 +204,8 @@ async function resolveStartInputs(
 ): Promise<StartInputs> {
   const repoRoot = resolveRepoRoot(cwd);
 
-  // A pinned port skips the config lookup + busy-scan entirely.
-  const port = opts.port ?? (await selectPort(cwd, warn));
+  // A pinned port skips the machine-config lookup + busy-scan entirely.
+  const port = opts.port ?? (await selectPort(opts, warn));
 
   const resolveWeb = opts.resolveWebRoot ?? defaultResolveWebRoot;
   const webRoot = await resolveWeb();
@@ -212,9 +218,9 @@ async function resolveStartInputs(
   return { repoRoot, port, webRoot };
 }
 
-/** Config port then upward busy-scan; warns when the requested port is bumped. */
-async function selectPort(cwd: string, warn: (m: string) => void): Promise<number> {
-  const { port, requested } = await resolvePort(cwd);
+/** Machine-global port then upward busy-scan; warns when the requested port is bumped. */
+async function selectPort(opts: RunServeOptions, warn: (m: string) => void): Promise<number> {
+  const { port, requested } = await resolvePort(opts);
   if (port !== requested) {
     warn(`review-ui serve: port ${requested} is busy, using ${port}`);
   }
@@ -235,28 +241,23 @@ export function resolveRepoRoot(cwd: string): string {
 }
 
 /**
- * Resolve the listen port: the configured `review-ui config` port, then scan
- * upward past any busy port. Reports both the chosen and the originally
- * requested port so the caller can warn on a bump. A busy port is one a
- * loopback TCP connect succeeds against — something already listens there.
+ * Resolve the listen port: the machine-global `review_ui_port` (from
+ * `~/.claude-prove/config.json`), then scan upward past any busy port. Reports
+ * both the chosen and the originally requested port so the caller can warn on a
+ * bump. A busy port is one a loopback TCP connect succeeds against — something
+ * already listens there. The review UI is one per-machine daemon serving every
+ * registered project, so its port is a machine-global setting, not per-project.
  */
-export async function resolvePort(cwd: string): Promise<{ port: number; requested: number }> {
-  const requested = resolveReviewUiConfig(readProveJson(cwd)).port;
+export async function resolvePort(
+  opts: { machineConfigBase?: string } = {},
+): Promise<{ port: number; requested: number }> {
+  const requested = resolveReviewUiPort({ baseOverride: opts.machineConfigBase });
   for (let candidate = requested; candidate < requested + PORT_SCAN_SPAN; candidate += 1) {
     if (!(await isPortBusy(candidate))) return { port: candidate, requested };
   }
   // Every candidate was busy; hand back the requested one and let the daemon's
   // health poll surface the bind failure rather than silently picking nothing.
   return { port: requested, requested };
-}
-
-/** Read `<cwd>/.claude/.prove.json` for port resolution; undefined when absent/bad. */
-function readProveJson(cwd: string): unknown {
-  try {
-    return JSON.parse(readFileSync(join(cwd, '.claude', '.prove.json'), 'utf8'));
-  } catch {
-    return undefined;
-  }
 }
 
 /** True when a loopback TCP connect to `port` succeeds — something listens. */

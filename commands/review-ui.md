@@ -26,7 +26,7 @@ Parse `$ARGUMENTS`:
 - `--stop` — `serve stop`, then exit. No start, no browser.
 - `--status` — `serve status`, print the JSON, then exit. No start, no browser.
 - `--restart` — `serve restart` instead of `serve start`.
-- `--port <N>` — pin the listen port, bypassing config resolution and the busy-port scan.
+- `--port <N>` — pin the listen port, bypassing machine-config resolution and the busy-port scan.
 - `--no-open` — start (or restart) but do not open a browser.
 
 Empty `$ARGUMENTS` runs the default start-and-open flow.
@@ -61,7 +61,7 @@ Pick the verb from the arguments — `serve restart` when `--restart` is set, ot
 claude-prove review-ui serve start            # or: serve restart
 ```
 
-`start` resolves the repo root from the current directory, resolves the port (config value, then an upward scan past any busy port — a bump is warned on stderr), resolves the web bundle in the parent (a missing bundle warns on stderr and boots API-only), spawns the detached loopback child, and polls `/api/health` until it answers. On success it prints `{"running":true,"pid":<int>,"port":<int>}` on stdout. `restart` stops any recorded daemon first, then runs the same start path.
+`start` resolves the repo root from the current directory, resolves the port (the machine-global `~/.claude-prove/config.json::review_ui_port`, then an upward scan past any busy port — a bump is warned on stderr), resolves the web bundle in the parent (a missing bundle warns on stderr and boots API-only), spawns the detached loopback child, and polls `/api/health` until it answers. On success it prints `{"running":true,"pid":<int>,"port":<int>}` on stdout. `restart` stops any recorded daemon first, then runs the same start path.
 
 Read the `port` field from that stdout JSON — it is the authoritative port the daemon bound, which may differ from the requested one when the original was busy. Use it for the browser open and the report.
 
@@ -93,7 +93,7 @@ Status:  claude-prove review-ui serve status
 Logs:    ~/.claude-prove/review-ui/review-ui.log
 ```
 
-Pull `$PID` and `$PORT` from the start command's stdout JSON. To pin a port across runs, set `.claude/.prove.json` → `tools.acb.config.review_ui_port`; inspect the resolved value with `claude-prove review-ui config`.
+Pull `$PID` and `$PORT` from the start command's stdout JSON. The review UI is one per-machine loopback daemon serving every registered project, so its port is machine-global. To pin a port across runs, set `~/.claude-prove/config.json` → `review_ui_port` (the daemon falls back to 5174 when unset).
 
 ## Notes
 
