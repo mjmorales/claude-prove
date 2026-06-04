@@ -1,5 +1,10 @@
 import { useNavigate } from "react-router-dom";
-import type { ScrumTask, TaskStatus } from "@claude-prove/cli/scrum/types";
+import type {
+  AcceptanceCriterion,
+  ScrumTask,
+  TaskLayer,
+  TaskStatus,
+} from "@claude-prove/cli/scrum/types";
 import { useScrumSelection } from "../../lib/scrumStore";
 import { cn } from "../../lib/cn";
 
@@ -134,6 +139,101 @@ export function ErrorBox({ error }: { error: unknown }) {
       Error: {msg}
     </div>
   );
+}
+
+const LAYER_META: Record<TaskLayer, { label: string; color: string }> = {
+  epic: { label: "Epic", color: "#bd93f9" },
+  story: { label: "Story", color: "#8be9fd" },
+  task: { label: "Task", color: "#6272a4" },
+};
+
+/**
+ * Containment-tier badge for a task. A null layer (flat/untiered task) renders
+ * nothing — the absence of a badge is itself the signal that the task sits
+ * outside the epic→story→task ladder.
+ */
+export function LayerBadge({ layer }: { layer: TaskLayer | null }) {
+  if (layer === null) return null;
+  const meta = LAYER_META[layer];
+  if (!meta) return null;
+  return (
+    <span
+      className="inline-flex items-center px-1.5 h-5 rounded text-[10px] mono uppercase tracking-wider"
+      style={{ color: meta.color, background: `${meta.color}14`, border: `1px solid ${meta.color}55` }}
+    >
+      {meta.label}
+    </span>
+  );
+}
+
+const VERIFIES_BY_GLYPH: Record<AcceptanceCriterion["verifies_by"], string> = {
+  bash: "$",
+  assert: "≡",
+  gate: "⌘",
+  agent: "✦",
+};
+
+/**
+ * Render a task's authored acceptance criteria. Only `active` criteria are
+ * shown — a superseded criterion is retained in the store for audit but is not
+ * a live goalpost, so it stays out of the operator view. Each row surfaces the
+ * criterion text, its `verifies_by` kind glyph, and the recorded verification /
+ * gate verdict (the standing state the story-close floor reads), never a live
+ * evaluation.
+ */
+export function AcceptanceCriteria({ criteria }: { criteria: AcceptanceCriterion[] }) {
+  const active = criteria.filter((c) => c.status === "active");
+  if (active.length === 0) {
+    return <p className="text-fg-faint text-[11.5px] mono">No acceptance criteria.</p>;
+  }
+  return (
+    <ul className="space-y-1.5">
+      {active.map((c) => (
+        <li key={c.id} className="flex items-start gap-2 text-[12px]">
+          <span
+            className="mono text-fg-faint shrink-0 w-4 text-center"
+            title={`verifies by ${c.verifies_by}`}
+            aria-label={`verifies by ${c.verifies_by}`}
+          >
+            {VERIFIES_BY_GLYPH[c.verifies_by] ?? "•"}
+          </span>
+          <span className="flex-1 min-w-0 text-fg-base">{c.text}</span>
+          <CriterionVerdict criterion={c} />
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * The standing verdict pill for one criterion. A `gate`-kind criterion reads
+ * its decision from `gate.verdict`; every other kind reads the orchestrator
+ * gate's recorded `verification.verdict`. Both default to a pending tone when
+ * no verdict is on record yet — never an evaluation triggered here.
+ */
+function CriterionVerdict({ criterion }: { criterion: AcceptanceCriterion }) {
+  const { label, color } = criterionVerdictTone(criterion);
+  return (
+    <span
+      className="shrink-0 mono text-[10px] uppercase tracking-wider px-1 h-4 inline-flex items-center rounded"
+      style={{ color, background: `${color}14`, border: `1px solid ${color}44` }}
+    >
+      {label}
+    </span>
+  );
+}
+
+function criterionVerdictTone(criterion: AcceptanceCriterion): { label: string; color: string } {
+  if (criterion.verifies_by === "gate") {
+    const verdict = criterion.gate?.verdict ?? "gate_pending";
+    if (verdict === "approved") return { label: "approved", color: "#50fa7b" };
+    if (verdict === "rejected") return { label: "rejected", color: "#ff5555" };
+    return { label: "pending", color: "#6272a4" };
+  }
+  const verdict = criterion.verification?.verdict ?? "pending";
+  if (verdict === "verified") return { label: "verified", color: "#50fa7b" };
+  if (verdict === "failed") return { label: "failed", color: "#ff5555" };
+  return { label: "pending", color: "#6272a4" };
 }
 
 /**

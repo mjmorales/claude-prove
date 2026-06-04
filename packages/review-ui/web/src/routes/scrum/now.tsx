@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { ScrumEvent } from "@claude-prove/cli/scrum/types";
 import { scrumApi } from "../../lib/scrumApi";
+import { useActiveProject } from "../../lib/active-project";
 import { EmptyState, ErrorBox, Loading, TaskCard, relTime } from "./_components";
 
 const STALE_MS = 30_000;
@@ -15,13 +16,15 @@ const STALE_MS = 30_000;
  * one-way: no mutation UI, no optimistic updates.
  */
 export function ScrumNowView() {
+  const { projectKey } = useActiveProject();
+
   const inProgress = useQuery({
-    queryKey: ["scrum", "tasks", { status: "in_progress" }],
+    queryKey: ["scrum", "tasks", { status: "in_progress" }, projectKey],
     queryFn: () => scrumApi.tasks({ status: "in_progress" }),
     staleTime: STALE_MS,
   });
   const recent = useQuery({
-    queryKey: ["scrum", "events", "recent", 50],
+    queryKey: ["scrum", "events", "recent", 50, projectKey],
     queryFn: () => scrumApi.recentEvents(50),
     staleTime: STALE_MS,
   });
