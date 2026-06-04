@@ -348,25 +348,183 @@ const LOG_DIRNAME = 'log';
 /**
  * Whether any reasoning-log entry under `<runDir>/log/<agent>/*.json` is a
  * `synthesis` entry. The on-disk layout is one JSON file per entry under a
- * per-agent subdirectory. A missing log dir => no synthesis. A file whose JSON
- * does not parse throws (the caller fails closed). This is the narrow read the
- * synthesis floor needs — not the full strict entry validator.
+ * per-agent subdirectory. A missing log dir => no synthesis.
+ *
+ * This mirrors the reasoning-log store's STRICT read: it walks every entry file
+ * in the same per-agent, name-sorted order and runs the same closed-schema
+ * validator (`validateScanEntry`) on each. Any malformed or schema-invalid entry
+ * — anywhere in the tree, of any type — THROWS before the synthesis match is
+ * decided, so the caller's surrounding try/catch fails the floor closed. The
+ * floor must reject a story it cannot prove was synthesized; a lenient scan that
+ * skipped bad entries would wave one through.
+ *
+ * The validator is duplicated rather than imported because the store package
+ * must not depend on `@claude-prove/cli`; consolidation lands when the
+ * reasoning-log read path migrates store-side.
  */
 function hasSynthesisEntry(runDir: string): boolean {
   const root = join(runDir, LOG_DIRNAME);
   if (!existsSync(root)) return false;
 
+  return scanEntryFiles(root).some((entry) => entry.type === 'synthesis');
+}
+
+/**
+ * Walk `<root>/<agent>/*.json` in agent-then-name sorted order, strict-validate
+ * each file, and return the validated entries. Throws path-qualified on the
+ * first malformed-JSON or schema-invalid file — the fail-closed boundary the
+ * synthesis floor relies on.
+ */
+function scanEntryFiles(root: string): ScanEntry[] {
+  const entries: ScanEntry[] = [];
   for (const agentDir of readdirSync(root).sort()) {
     const dir = join(root, agentDir);
     if (!statSync(dir).isDirectory()) continue;
     for (const name of readdirSync(dir).sort()) {
       if (!name.endsWith('.json')) continue;
-      const raw = readFileSync(join(dir, name), 'utf8');
-      const parsed = JSON.parse(raw) as { type?: unknown };
-      if (parsed.type === 'synthesis') return true;
+      const file = join(dir, name);
+      const raw = readFileSync(file, 'utf8');
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(`invalid JSON in log entry ${file}: ${msg}`);
+      }
+      const errors = validateScanEntry(parsed);
+      if (errors.length > 0) {
+        throw new Error(`invalid log entry: ${errors.join('; ')} (in ${file})`);
+      }
+      entries.push(parsed as ScanEntry);
     }
   }
-  return false;
+  return entries;
+}
+
+// ---------------------------------------------------------------------------
+// Strict reasoning-log entry validator (store-side copy)
+//
+// A faithful, scope-narrowed copy of the reasoning-log store's closed-schema
+// validator: same envelope requirements, same per-type required/optional
+// fields, same strict-closed unknown-key rejection. It exists only so the
+// synthesis floor's scan throws exactly where the canonical strict read throws.
+// It is NOT a general re-export of the log schema — only what the floor's
+// fail-closed read needs. Kept here (not imported) because store ← cli, never
+// the inverse; consolidation lands when the read path migrates store-side.
+// ---------------------------------------------------------------------------
+
+/** Minimal validated entry shape the synthesis floor reads — only `type`. */
+interface ScanEntry {
+  type: string;
+}
+
+/** The closed reasoning-log entry type taxonomy. */
+const SCAN_ENTRY_TYPES = [
+  'decision',
+  'discovery',
+  'context',
+  'bailout',
+  'hack',
+  'risk',
+  'assumption',
+  'synthesis',
+  'review_feedback',
+  'verification',
+  'capture',
+] as const;
+
+/** Severity enum carried by `risk` entries. */
+const SCAN_RISK_SEVERITIES = ['low', 'medium', 'high', 'critical'] as const;
+
+/** Envelope keys present on every entry regardless of type. */
+const SCAN_ENVELOPE_FIELDS = ['id', 'ts', 'type', 'agent', 'run_path', 'body'] as const;
+
+const isScanStr = (v: unknown): v is string => typeof v === 'string';
+const isScanStrArray = (v: unknown): boolean => Array.isArray(v) && v.every(isScanStr);
+const isScanBool = (v: unknown): boolean => typeof v === 'boolean';
+const isScanStrOrNull = (v: unknown): boolean => v === null || isScanStr(v);
+const isScanRiskSeverity = (v: unknown): boolean =>
+  isScanStr(v) && (SCAN_RISK_SEVERITIES as readonly string[]).includes(v);
+
+interface ScanFieldSpec {
+  fields: Record<string, (value: unknown) => boolean>;
+  optional?: Record<string, (value: unknown) => boolean>;
+}
+
+/** Per-type required (and optional) fields beyond the envelope. */
+const SCAN_TYPE_SPECS: Record<string, ScanFieldSpec> = {
+  decision: { fields: { alternatives: isScanStrArray, selected_rationale: isScanStr } },
+  discovery: { fields: {} },
+  context: { fields: {} },
+  bailout: { fields: { attempted: isScanStr, reason_abandoned: isScanStr } },
+  hack: { fields: { file_refs: isScanStrArray, cleanup_condition: isScanStr } },
+  risk: { fields: { severity: isScanRiskSeverity, mitigation: isScanStr } },
+  assumption: { fields: { resolved: isScanBool, resolution_ref: isScanStrOrNull } },
+  synthesis: { fields: { outcome: isScanStr } },
+  review_feedback: { fields: {} },
+  verification: { fields: {} },
+  capture: { fields: { tool: isScanStr }, optional: { target: isScanStr } },
+};
+
+/**
+ * Validate a parsed JSON value against the closed entry union, returning a flat
+ * list of error messages (empty = valid). STRICT: missing envelope fields,
+ * unknown `type`, non-string envelope values, missing/ill-typed per-type
+ * fields, and unknown top-level or per-type keys are all errors.
+ */
+function validateScanEntry(data: unknown): string[] {
+  if (typeof data !== 'object' || data === null || Array.isArray(data)) {
+    return ['Log entry must be a JSON object'];
+  }
+  const obj = data as Record<string, unknown>;
+  const errors: string[] = [];
+
+  for (const field of SCAN_ENVELOPE_FIELDS) {
+    if (!(field in obj)) errors.push(`Missing required field: ${field}`);
+  }
+
+  const type = obj.type;
+  if (typeof type !== 'string' || !(SCAN_ENTRY_TYPES as readonly string[]).includes(type)) {
+    errors.push(`Invalid type '${String(type)}' (expected one of: ${SCAN_ENTRY_TYPES.join(', ')})`);
+    return errors;
+  }
+
+  for (const field of SCAN_ENVELOPE_FIELDS) {
+    if (field === 'type') continue;
+    const value = obj[field];
+    if (value !== undefined && !isScanStr(value)) {
+      errors.push(`Field '${field}' must be a string`);
+    }
+  }
+
+  // `type` is proven a member of SCAN_ENTRY_TYPES above, so the spec is present.
+  const spec = SCAN_TYPE_SPECS[type] as ScanFieldSpec;
+  const optionalFields = spec.optional ?? {};
+  const allowedKeys = new Set<string>([
+    ...SCAN_ENVELOPE_FIELDS,
+    ...Object.keys(spec.fields),
+    ...Object.keys(optionalFields),
+  ]);
+
+  for (const [field, check] of Object.entries(spec.fields)) {
+    if (!(field in obj)) {
+      errors.push(`Missing required field for type '${type}': ${field}`);
+      continue;
+    }
+    if (!check(obj[field])) errors.push(`Invalid value for '${field}' on type '${type}'`);
+  }
+
+  for (const [field, check] of Object.entries(optionalFields)) {
+    if (field in obj && !check(obj[field])) {
+      errors.push(`Invalid value for '${field}' on type '${type}'`);
+    }
+  }
+
+  for (const key of Object.keys(obj)) {
+    if (!allowedKeys.has(key)) errors.push(`Unknown field '${key}' for type '${type}'`);
+  }
+
+  return errors;
 }
 
 // ---------------------------------------------------------------------------

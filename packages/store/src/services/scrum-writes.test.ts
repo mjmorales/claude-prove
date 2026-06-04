@@ -321,6 +321,71 @@ describe('updateTaskStatus — story synthesis floor', () => {
     }
   });
 
+  function writeRawEntry(runDir: string, agent: string, fileStem: string, json: string): void {
+    const dir = join(runDir, 'log', agent);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `${fileStem}.json`), `${json}\n`, 'utf8');
+  }
+
+  test('a schema-invalid synthesis entry (missing outcome) fails the floor closed', () => {
+    // The entry IS type:'synthesis' but omits the required `outcome` field. A
+    // lenient `.type === 'synthesis'` scan would wave the close through; the
+    // strict read must THROW on the schema-invalid entry so the floor rejects.
+    const runDir = mkdtempSync(join(tmpdir(), 'scrum-synth-bad-'));
+    try {
+      seedStartedStory('s');
+      writeRawEntry(
+        runDir,
+        'worker',
+        'synth-no-outcome',
+        JSON.stringify({
+          id: 'synth-no-outcome',
+          ts: '2026-06-01T00:00:00Z',
+          type: 'synthesis',
+          agent: 'worker',
+          run_path: runDir,
+          body: 'episode wrapped',
+          // outcome intentionally omitted — required on synthesis entries.
+        }),
+      );
+      store.run('INSERT INTO scrum_run_links (task_id, run_path, linked_at) VALUES (?, ?, ?)', [
+        's',
+        runDir,
+        '2026-06-01T00:00:00Z',
+      ]);
+      expect(() => updateTaskStatus(store, 's', 'done')).toThrow(
+        /no synthesis reasoning-log entry/,
+      );
+      expect(eventCount('s', 'status_changed')).toBe(0);
+    } finally {
+      rmSync(runDir, { recursive: true, force: true });
+    }
+  });
+
+  test('a malformed non-synthesis entry alongside a valid synthesis entry fails the floor closed', () => {
+    // A valid synthesis entry is present, but a SEPARATE non-synthesis file is
+    // malformed JSON. The strict read walks every file and THROWS on the bad one
+    // before the synthesis match is decided, so the floor must reject rather than
+    // pass on the valid entry it would otherwise have found.
+    const runDir = mkdtempSync(join(tmpdir(), 'scrum-synth-mixed-'));
+    try {
+      seedStartedStory('s');
+      writeSynthesis(runDir, 'aaa-worker'); // valid synthesis, sorts first by agent
+      writeRawEntry(runDir, 'zzz-worker', 'broken', '{ not valid json');
+      store.run('INSERT INTO scrum_run_links (task_id, run_path, linked_at) VALUES (?, ?, ?)', [
+        's',
+        runDir,
+        '2026-06-01T00:00:00Z',
+      ]);
+      expect(() => updateTaskStatus(store, 's', 'done')).toThrow(
+        /no synthesis reasoning-log entry/,
+      );
+      expect(eventCount('s', 'status_changed')).toBe(0);
+    } finally {
+      rmSync(runDir, { recursive: true, force: true });
+    }
+  });
+
   test('only the most-recent linked run is consulted for synthesis', () => {
     const olderRun = mkdtempSync(join(tmpdir(), 'scrum-synth-old-'));
     const newerRun = mkdtempSync(join(tmpdir(), 'scrum-synth-new-'));
