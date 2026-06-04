@@ -4,9 +4,9 @@ description: Point this machine at its claude-prove checkout — writes the per-
 
 # Prove Local Env
 
-Write this machine's claude-prove checkout path into the `env` block of `.claude/settings.local.json` (auto-gitignored, injected by Claude Code into hooks and Bash).
+Write this machine's claude-prove checkout path into the `env` block of `.claude/settings.local.json` (auto-gitignored, injected by Claude Code into hooks and Bash), and refresh the reference symlink chain `.claude/prove-plugin → ~/.claude-prove/latest → checkout`.
 
-Why: git-tracked artifacts (hook commands in `.claude/settings.json`, CLAUDE.md command examples) reference `${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}` instead of an absolute checkout path, so each machine supplies its own value here.
+Why: git-tracked artifacts carry no machine paths — hook commands and CLAUDE.md command examples reference `${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}` (the env block supplies the value), and CLAUDE.md `@`-references load through the symlink chain (the links supply the path). Each machine sets both here in one step.
 
 ## Step 1: Detect the checkout
 
@@ -36,9 +36,10 @@ On failure, surface the CLI error verbatim and stop.
 
 ## Step 4: Verify and repair drift
 
-Run `claude-prove install doctor` and inspect the two related checks:
+Run `claude-prove install doctor` and inspect the three related checks:
 
 - `plugin-dir-env` — must PASS now (source `process-env` or `settings.local.json`)
+- `stable-root` — must PASS when CLAUDE.md carries `@.claude/prove-plugin/...` references (the symlink chain resolves)
 - `hook-paths[...]` — a WARN mentioning "machine-absolute dev prefix" means `.claude/settings.json` still carries the pre-portable format
 
 If the drift warning appears, `AskUserQuestion` with header "Regenerate":

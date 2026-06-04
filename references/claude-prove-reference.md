@@ -87,7 +87,7 @@ Actions: `migrate` `info` `reset` (requires `--confirm`). Ex: `store info`.
 ### install — `.claude/` scaffolding + binary upgrade
 
 Actions: `init` `init-hooks` `init-config` `local-env` `doctor` `upgrade`. Flags: `--project` `--cwd` `--settings <path>` `--force` `--plugin-dir <path>` (local-env) `--prefix <dir>` (default `~/.local/bin`). Ex: `install doctor`.
-`local-env` writes `env.CLAUDE_PROVE_PLUGIN_DIR` into the gitignored `.claude/settings.local.json` so the portable `${CLAUDE_PROVE_PLUGIN_DIR:-...}` hook commands and docs resolve on this machine (driven by `/prove:local-env`; `doctor`'s `plugin-dir-env` check verifies it).
+`local-env` writes `env.CLAUDE_PROVE_PLUGIN_DIR` into the gitignored `.claude/settings.local.json` so the portable `${CLAUDE_PROVE_PLUGIN_DIR:-...}` hook commands resolve on this machine, and refreshes the reference symlink chain `.claude/prove-plugin → ~/.claude-prove/latest → plugin dir` that generated CLAUDE.md `@`-references load through (driven by `/prove:local-env`; `doctor`'s `plugin-dir-env` and `stable-root` checks verify both).
 
 ### report — report/v1 HTML renderer
 

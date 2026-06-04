@@ -205,8 +205,10 @@ describe('compose', () => {
     expect(compose(scan)).not.toContain('## Discovery Protocol');
   });
 
-  test('plugin_dir override appears in rendered commands', () => {
-    expect(compose(fullScan(), '/custom/path')).toContain('/custom/path');
+  test('no resolved plugin path ever lands in the output', () => {
+    // Commands carry the env-interpolated prefix; plugin refs carry the
+    // stable root. A pluginDir override must leave no trace either way.
+    expect(compose(fullScan(), '/custom/path')).not.toContain('/custom/path');
   });
 });
 
@@ -238,7 +240,7 @@ describe('references', () => {
     expect(r).toContain('### Security Policy');
   });
 
-  test('resolves $PLUGIN_DIR in paths', () => {
+  test('substitutes $PLUGIN_DIR with the project-link bridge', () => {
     const scan = fullScan();
     scan.prove_config.references = [
       {
@@ -246,11 +248,12 @@ describe('references', () => {
         label: 'LLM Coding Standards',
       },
     ];
-    // /srv is outside both the project root and any home dir, so the
-    // resolved path stays absolute.
+    // The pluginDir argument is irrelevant to refs: the stable-root symlink
+    // is the per-machine variable, so the emitted bytes never vary.
     const r = compose(scan, '/srv/plugins/prove');
-    expect(r).toContain('@/srv/plugins/prove/references/llm-coding-standards.md');
+    expect(r).toContain('@.claude/prove-plugin/references/llm-coding-standards.md');
     expect(r).not.toContain('$PLUGIN_DIR');
+    expect(r).not.toContain('/srv/plugins/prove');
   });
 
   test('reference inside the project root renders project-relative', () => {
@@ -263,11 +266,11 @@ describe('references', () => {
     expect(r).not.toContain('@/work/my-project');
   });
 
-  test('built-ins render project-relative when the plugin dir is the project root', () => {
+  test('built-ins render the stable root even when the plugin dir is the project root', () => {
     const scan = fullScan();
     scan.project_root = '/opt/prove';
     const r = compose(scan, '/opt/prove');
-    expect(r).toContain('@references/claude-prove-reference.md');
+    expect(r).toContain('@.claude/prove-plugin/references/claude-prove-reference.md');
     expect(r).not.toContain('@/opt/prove/references');
   });
 
@@ -284,13 +287,13 @@ describe('references', () => {
     const r = compose(fullScan(), '/opt/prove');
     expect(r).toContain('## References');
     expect(r).toContain('### claude-prove CLI Reference');
-    expect(r).toContain('@/opt/prove/references/claude-prove-reference.md');
+    expect(r).toContain('@.claude/prove-plugin/references/claude-prove-reference.md');
   });
 
   test('built-in agent routing map injected when prove exists', () => {
     const r = compose(fullScan(), '/opt/prove');
     expect(r).toContain('### Agent Routing Map');
-    expect(r).toContain('@/opt/prove/references/agent-routing.md');
+    expect(r).toContain('@.claude/prove-plugin/references/agent-routing.md');
   });
 
   test('built-in appears before user-configured references', () => {

@@ -37,15 +37,15 @@ Only fall back to Glob/Grep when the index doesn't cover what you need.
 
 ### claude-prove CLI Reference
 
-@references/claude-prove-reference.md
+@.claude/prove-plugin/references/claude-prove-reference.md
 
 ### Design Principles
 
-@references/design-principles.md
+@.claude/prove-plugin/references/design-principles.md
 
 ### Agent Routing Map
 
-@references/agent-routing.md
+@.claude/prove-plugin/references/agent-routing.md
 
 ### LLM-Optimized Coding Standards
 
@@ -122,7 +122,7 @@ When adding/removing/renaming `PROVE_SCHEMA` fields:
 - **Hand-written markdown** (agent defs, commands, skills, references, docs): always invoke as bare `claude-prove <topic> <args>`. Assume the CLI is on `PATH`. Never emit `bun run` prefixes or absolute paths; instead, emit the bare command.
 - **Codegen output** (composer.ts renderers, settings hook blocks, ACB hook template, etc.): route the invocation prefix through `.claude/.prove.json::dev_mode`. Installed-binary mode (`dev_mode: false`, the default) emits bare `claude-prove`; plugin-developer mode (`dev_mode: true`) emits the shell-interpolated `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts"` (`DEV_INVOCATION_PREFIX` in `@claude-prove/installer`). NEVER emit a machine-absolute checkout path into a generated artifact; instead emit the interpolated prefix — the per-machine value lives in the gitignored `.claude/settings.local.json` `env` block, written by `claude-prove install local-env` (driven by `/prove:local-env`).
 - **Runtime agent prompts** (Claude Code hook `decision: block` payloads): read `dev_mode` at fire time (e.g., `readDevMode(workspaceRoot)` in `acb/hook.ts`) so the emitted command resolves correctly on the user's machine regardless of install shape.
-- **CLAUDE.md `@`-references** cannot expand env vars: the composer emits project-relative paths when the plugin dir IS the project root, `~/...` when under the home dir, absolute otherwise.
+- **CLAUDE.md `@`-references**: the importer loads ONLY project-relative paths (env vars never expand; `~/...` and absolute imports outside the project silently fail) but follows symlinks. Plugin built-ins therefore render the constant `@.claude/prove-plugin/references/<file>.md`, resolved through the gitignored chain `.claude/prove-plugin → ~/.claude-prove/latest → plugin dir` (`ensureProjectLink`/`ensureStableRoot` in `@claude-prove/installer`, refreshed by `install init`/`local-env` and `claude-md generate`). NEVER emit a `~/...` or absolute plugin path into an `@`-reference; instead emit the project-link form.
 
 ## Self-Contained Artifact Rule
 

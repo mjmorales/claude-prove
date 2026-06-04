@@ -21,6 +21,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { ensureProjectLink, ensureStableRoot } from '@claude-prove/installer';
 import { compose, composeSubagentContext, writeClaudeMd } from '../composer';
 import { scanProject } from '../scanner';
 
@@ -71,6 +72,19 @@ export function runGenerate(opts: ClaudeMdOpts): number {
   const pluginDir = resolvePluginDir(opts);
   const guard = assertNotPluginInstall(projectRoot);
   if (guard !== null) return guard;
+
+  // The composed References section hardcodes .claude/prove-plugin/...;
+  // refresh both hops of the symlink chain (project link -> stable root ->
+  // plugin dir) so the imports resolve the moment the file is written.
+  // Secondary writes: a failure warns without blocking generation.
+  try {
+    ensureStableRoot(pluginDir);
+    ensureProjectLink(projectRoot);
+  } catch (err) {
+    process.stderr.write(
+      `WARN: reference-symlink refresh failed (generated @-references may not resolve): ${err instanceof Error ? err.message : String(err)}\n`,
+    );
+  }
 
   const scan = scanProject(projectRoot, pluginDir);
 

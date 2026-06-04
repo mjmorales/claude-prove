@@ -14,3 +14,4 @@ export {
 export * from './write-settings-hooks';
 export * from './bootstrap-prove-json';
 export * from './write-local-env';
+export * from './stable-root';

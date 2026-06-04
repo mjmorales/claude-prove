@@ -29,15 +29,15 @@ Run before committing:
 
 ### claude-prove CLI Reference
 
-@references/claude-prove-reference.md
+@.claude/prove-plugin/references/claude-prove-reference.md
 
 ### Design Principles
 
-@references/design-principles.md
+@.claude/prove-plugin/references/design-principles.md
 
 ### Agent Routing Map
 
-@references/agent-routing.md
+@.claude/prove-plugin/references/agent-routing.md
 
 ### LLM-Optimized Coding Standards
 

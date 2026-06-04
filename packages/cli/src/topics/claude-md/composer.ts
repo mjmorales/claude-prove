@@ -14,7 +14,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, sep } from 'node:path';
-import { DEV_INVOCATION_PREFIX } from '@claude-prove/installer';
+import { DEV_INVOCATION_PREFIX, PROJECT_LINK_REL } from '@claude-prove/installer';
 import type {
   CoreCommand,
   ReferenceEntry,
@@ -51,11 +51,12 @@ export const PLUGIN_DEFAULT_REFERENCES: ReadonlyArray<ReferenceEntry> = [
  * Compose CLAUDE.md from scan results.
  *
  * @param scan Output from {@link scanProject}.
- * @param pluginDir Path to prove plugin. Falls back to `scan.plugin_dir`.
+ * @param _pluginDir Accepted for caller compatibility, unused: commands emit
+ *   the env-interpolated prefix and plugin references emit the stable root —
+ *   neither embeds a resolved plugin path.
  * @returns The full CLAUDE.md content as a single string (includes sentinels).
  */
-export function compose(scan: ScanResult, pluginDir?: string): string {
-  const resolvedPluginDir = pluginDir ?? scan.plugin_dir ?? '';
+export function compose(scan: ScanResult, _pluginDir?: string): string {
   const prove = scan.prove_config;
   const prefix = cliPrefix(prove.dev_mode);
 
@@ -101,7 +102,7 @@ export function compose(scan: ScanResult, pluginDir?: string): string {
   // References — plugin built-ins first, then user-configured (deduped by path)
   const mergedRefs = mergeReferences(prove.exists, prove.references);
   if (mergedRefs.length > 0) {
-    parts.push(renderReferences(mergedRefs, resolvedPluginDir, scan.project_root ?? ''));
+    parts.push(renderReferences(mergedRefs, scan.project_root ?? ''));
   }
 
   // Prove commands (if prove is configured)
@@ -304,16 +305,23 @@ function cliPrefix(devMode: boolean): string {
 }
 
 /**
- * Make a resolved reference path portable across contributor machines.
+ * Make a configured reference path portable across contributor machines.
  *
- * CLAUDE.md `@`-includes cannot expand env vars, so the interpolated-prefix
- * trick used for commands is unavailable here. Instead:
- *   - paths inside the project emit project-relative (the prove-repo case,
- *     where the plugin dir IS the project root);
- *   - paths under the home dir emit the `~/...` form `@`-includes support
- *     (the installed-plugin case — `~/.claude/plugins/prove/...`);
- *   - anything else stays absolute (a dev checkout outside both — only that
- *     machine's CLAUDE.md can address it).
+ * The CLAUDE.md importer ONLY loads project-relative paths (env vars never
+ * expand; `~/...` and absolute imports outside the project silently fail),
+ * but it follows symlinks transparently. The filesystem therefore supplies
+ * the per-machine variable:
+ *
+ *   - `$PLUGIN_DIR/...` entries (the plugin built-ins) hardcode the
+ *     project-relative bridge `.claude/prove-plugin/...` — a gitignored
+ *     symlink chain (`.claude/prove-plugin -> ~/.claude-prove/latest ->
+ *     plugin dir`) maintained by `claude-md generate` and the `install`
+ *     verbs. The emitted bytes are identical on every machine.
+ *   - absolute paths inside the project emit project-relative;
+ *   - absolute paths under the home dir emit the `~/...` form (best effort
+ *     for user-authored entries that are home-anchored by design);
+ *   - anything else passes through verbatim (already-relative user entries,
+ *     `~/...` entries, or genuinely machine-local absolute paths).
  */
 function portableRefPath(resolved: string, projectRoot: string): string {
   if (projectRoot.length > 0 && resolved.startsWith(projectRoot + sep)) {
@@ -326,17 +334,13 @@ function portableRefPath(resolved: string, projectRoot: string): string {
   return resolved;
 }
 
-function renderReferences(
-  references: ReferenceEntry[],
-  pluginDir: string,
-  projectRoot: string,
-): string {
+function renderReferences(references: ReferenceEntry[], projectRoot: string): string {
   const lines: string[] = ['## References', ''];
   for (const ref of references) {
     const label = ref.label;
     const path = ref.path;
     const resolved = path
-      ? portableRefPath(path.replaceAll('$PLUGIN_DIR', pluginDir), projectRoot)
+      ? portableRefPath(path.replaceAll('$PLUGIN_DIR', PROJECT_LINK_REL), projectRoot)
       : '';
     if (label) {
       lines.push(`### ${label}`);

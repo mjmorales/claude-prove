@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -139,6 +139,67 @@ describe('claude-prove install doctor', () => {
       expect(combined).toContain('[FAIL] plugin-dir-env');
       expect(combined).toContain('install local-env');
       expect(combined).toContain('[FAIL] hook-paths[run_state:Write|Edit|MultiEdit]');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('stable-root fails when CLAUDE.md references the project link and it is absent', () => {
+    const root = makeTmpProject('stable-root-missing');
+    try {
+      scaffoldHealthy(root);
+      writeFileSync(
+        join(root, 'CLAUDE.md'),
+        '# proj\n\n@.claude/prove-plugin/references/claude-prove-reference.md\n',
+      );
+
+      const { stdout, stderr, status } = runDoctor(root);
+      const combined = `${stdout}\n${stderr}`;
+
+      expect(status).toBe(1);
+      expect(combined).toContain('[FAIL] stable-root');
+      expect(combined).toContain('does not exist');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('stable-root fails when the chain dangles', () => {
+    const root = makeTmpProject('stable-root-dangling');
+    try {
+      scaffoldHealthy(root);
+      writeFileSync(
+        join(root, 'CLAUDE.md'),
+        '# proj\n\n@.claude/prove-plugin/references/claude-prove-reference.md\n',
+      );
+      symlinkSync(join(root, 'nowhere'), join(root, '.claude', 'prove-plugin'));
+
+      const { stdout, stderr, status } = runDoctor(root);
+      const combined = `${stdout}\n${stderr}`;
+
+      expect(status).toBe(1);
+      expect(combined).toContain('[FAIL] stable-root');
+      expect(combined).toContain('dangles');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('stable-root passes when the chain resolves', () => {
+    const root = makeTmpProject('stable-root-ok');
+    try {
+      scaffoldHealthy(root);
+      writeFileSync(
+        join(root, 'CLAUDE.md'),
+        '# proj\n\n@.claude/prove-plugin/references/claude-prove-reference.md\n',
+      );
+      symlinkSync(REPO_ROOT, join(root, '.claude', 'prove-plugin'));
+
+      const { stdout, status } = runDoctor(root);
+
+      expect(status).toBe(0);
+      expect(stdout).toContain('[PASS] stable-root');
+      expect(stdout).toContain(`-> ${REPO_ROOT}`);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

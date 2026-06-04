@@ -12,6 +12,8 @@ import { dirname, join, resolve } from 'node:path';
 import {
   bootstrapProveJson,
   detectMode,
+  ensureProjectLink,
+  ensureStableRoot,
   resolveBinaryPath,
   resolvePluginRoot,
   writeSettingsHooks,
@@ -46,6 +48,19 @@ export function runInit(opts: InitOptions): number {
     disabledTools,
   });
   bootstrapProveJson(projectRoot, { force: opts.force });
+
+  // Refresh the symlink chain the generated @-references resolve through
+  // (project link -> stable root -> plugin dir). Secondary writes: a failure
+  // degrades to a warning so it never masks the successful settings/config
+  // bootstrap above.
+  try {
+    ensureStableRoot(pluginRoot);
+    ensureProjectLink(projectRoot);
+  } catch (err) {
+    console.warn(
+      `claude-prove install init: reference-symlink refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 
   const configPath = join(projectRoot, '.claude', '.prove.json');
   console.log(

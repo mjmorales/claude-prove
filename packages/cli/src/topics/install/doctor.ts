@@ -20,17 +20,30 @@
  *                           `.claude/settings.local.json` env block, then the
  *                           default plugin install path — contains the dev
  *                           entry point
- *   5. hook-paths         — each prove-owned hook block in
+ *   5. stable-root        — (only when the project CLAUDE.md references
+ *                           `@.claude/prove-plugin`) the reference symlink
+ *                           chain (project link -> ~/.claude-prove/latest ->
+ *                           plugin dir) exists and resolves; a broken hop
+ *                           means those @-imports silently fail to load
+ *   6. hook-paths         — each prove-owned hook block in
  *                           `.claude/settings.json` points at an executable
  *                           command (interpolated forms are expanded the way
  *                           the firing shell would); machine-absolute dev
  *                           prefixes from the pre-portable format warn
- *   6. prove-json-version — `.claude/.prove.json` parses and its
+ *   7. prove-json-version — `.claude/.prove.json` parses and its
  *                           schema_version matches CURRENT_SCHEMA_VERSION
- *   7. claude-cli         — `which claude` (warn on miss, never fail)
+ *   8. claude-cli         — `which claude` (warn on miss, never fail)
  */
 
-import { constants, accessSync, existsSync, readFileSync, statSync } from 'node:fs';
+import {
+  constants,
+  accessSync,
+  existsSync,
+  lstatSync,
+  readFileSync,
+  readlinkSync,
+  statSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { type Mode, detectMode } from '@claude-prove/installer/detect-mode';
@@ -95,11 +108,70 @@ export function runDoctor(opts: DoctorOptions = {}): CheckResult[] {
     results.push(checkPluginDirEnv(localPluginDir));
   }
 
+  const stableRoot = checkStableRoot(cwd);
+  if (stableRoot) results.push(stableRoot);
+
   results.push(...checkSettingsHookPaths(cwd, localPluginDir.dir));
   results.push(checkProveJsonSchemaVersion(cwd));
   results.push(checkClaudeCli());
 
   return results;
+}
+
+/**
+ * Verify the symlink chain behind the project's generated
+ * `@.claude/prove-plugin/...` references
+ * (`.claude/prove-plugin -> ~/.claude-prove/latest -> plugin dir`).
+ * Runs only when the project's CLAUDE.md actually references the project
+ * link; a missing or dangling hop means every such import silently fails
+ * to load.
+ */
+function checkStableRoot(cwd: string): CheckResult | undefined {
+  let claudeMd: string;
+  try {
+    claudeMd = readFileSync(join(cwd, 'CLAUDE.md'), 'utf8');
+  } catch {
+    return undefined;
+  }
+  const refToken = '.claude/prove-plugin';
+  if (!claudeMd.includes(`@${refToken}`)) return undefined;
+
+  const linkPath = join(cwd, refToken);
+  const fix =
+    'run `claude-prove claude-md generate --project-root "$(pwd)"` (or `claude-prove install local-env --plugin-dir <checkout>` on dev machines) to rebuild the symlink chain';
+
+  let target: string;
+  try {
+    const st = lstatSync(linkPath);
+    if (!st.isSymbolicLink()) {
+      return {
+        name: 'stable-root',
+        status: 'fail',
+        message: `${linkPath} exists but is not a symlink`,
+        fix: 'move it aside, then re-run the fix command',
+      };
+    }
+    target = readlinkSync(linkPath);
+  } catch {
+    return {
+      name: 'stable-root',
+      status: 'fail',
+      message: `CLAUDE.md references @${refToken} but ${linkPath} does not exist`,
+      fix,
+    };
+  }
+
+  // existsSync follows the whole chain — false means some hop dangles
+  // (typically the machine-global ~/.claude-prove/latest hop).
+  if (!existsSync(linkPath)) {
+    return {
+      name: 'stable-root',
+      status: 'fail',
+      message: `${linkPath} chain dangles (-> ${target})`,
+      fix,
+    };
+  }
+  return { name: 'stable-root', status: 'pass', message: `${linkPath} -> ${target}` };
 }
 
 // ---------------------------------------------------------------------------

@@ -29,3 +29,4 @@ review-ui-*.jpeg
 page-*.yml
 console-*.log
 bin/prove
+.claude/prove-plugin

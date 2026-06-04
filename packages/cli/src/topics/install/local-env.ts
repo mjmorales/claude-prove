@@ -10,7 +10,12 @@
 
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { resolvePluginRoot, writeLocalEnv } from '@claude-prove/installer';
+import {
+  ensureProjectLink,
+  ensureStableRoot,
+  resolvePluginRoot,
+  writeLocalEnv,
+} from '@claude-prove/installer';
 
 export interface LocalEnvOptions {
   /** Plugin checkout directory. Defaults to the resolved plugin root. */
@@ -44,6 +49,16 @@ export function runLocalEnv(opts: LocalEnvOptions): number {
   console.log(
     `claude-prove install local-env: ${wrote ? 'wrote' : 'up-to-date'} ${settingsPath} (CLAUDE_PROVE_PLUGIN_DIR=${pluginDir})`,
   );
+
+  // The symlink chain is the @-reference half of the per-machine contract:
+  // generated CLAUDE.md imports resolve through
+  // .claude/prove-plugin -> ~/.claude-prove/latest -> plugin dir.
+  const link = ensureStableRoot(pluginDir);
+  console.log(`claude-prove install local-env: ${link} -> ${pluginDir}`);
+  const projectRoot = opts.settings ? dirname(dirname(settingsPath)) : process.cwd();
+  const projectLink = ensureProjectLink(projectRoot);
+  console.log(`claude-prove install local-env: ${projectLink} -> ${link}`);
+
   if (wrote) {
     console.log('note: restart the Claude Code session so the env block is injected into hooks.');
   }
