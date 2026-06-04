@@ -23,6 +23,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render } from "@testing-library/react";
 import { MemoryRouter, Navigate, Route, Routes } from "react-router-dom";
 import { useUrlState } from "../hooks/useUrlState";
+import { ActiveProjectProvider } from "../lib/active-project";
 import { useSelection } from "../lib/store";
 import { useScrumSelection } from "../lib/scrumStore";
 import { ScrumRoute } from "./scrum";
@@ -35,13 +36,18 @@ function AcbStub() {
   return <div data-testid="acb-surface">acb:{slug ?? "none"}</div>;
 }
 
+// Mirrors `App.tsx`, which mounts `ActiveProjectProvider` above the router so
+// every scrum view can read the active project key. The scrum views thread that
+// key into their query keys, so the provider is required for them to mount.
 function AppStub() {
   return (
-    <Routes>
-      <Route path="/" element={<Navigate to="/acb" replace />} />
-      <Route path="/acb/*" element={<AcbStub />} />
-      <Route path="/scrum/*" element={<ScrumRoute />} />
-    </Routes>
+    <ActiveProjectProvider>
+      <Routes>
+        <Route path="/" element={<Navigate to="/acb" replace />} />
+        <Route path="/acb/*" element={<AcbStub />} />
+        <Route path="/scrum/*" element={<ScrumRoute />} />
+      </Routes>
+    </ActiveProjectProvider>
   );
 }
 
@@ -95,6 +101,10 @@ describe("App routes", () => {
     // Clear any residual query string between tests — useUrlState reads
     // window.location.search on mount.
     window.history.replaceState(null, "", "/");
+    // ActiveProjectProvider seeds its key from the URL then localStorage; clear
+    // both so projectKey deterministically resolves to null (the startup-root
+    // default), matching the `[..., null]` shape the seeded query keys use.
+    localStorage.clear();
   });
   afterEach(() => {
     cleanup();
@@ -206,8 +216,10 @@ describe("App routes", () => {
       return { status: 404, body: { error: "not found" } };
     };
     const qc = makeClient();
-    qc.setQueryData(["scrum", "milestones", {}], { milestones });
-    qc.setQueryData(["scrum", "tasks", {}], {
+    // projectKey defaults to null (the startup-root default) under the bare
+    // ActiveProjectProvider, so seed under the project-scoped key shape.
+    qc.setQueryData(["scrum", "milestones", {}, null], { milestones });
+    qc.setQueryData(["scrum", "tasks", {}, null], {
       tasks: [mkTask("t1", "done"), mkTask("t2", "in_progress")],
     });
     const r = render(
@@ -273,7 +285,7 @@ describe("App routes", () => {
       return { status: 404, body: { error: "not found" } };
     };
     const qc = makeClient();
-    qc.setQueryData(["scrum", "task", "abc123"], fixture);
+    qc.setQueryData(["scrum", "task", "abc123", null], fixture);
     const r = render(
       <QueryClientProvider client={qc}>
         <MemoryRouter initialEntries={["/scrum/task/abc123"]}>

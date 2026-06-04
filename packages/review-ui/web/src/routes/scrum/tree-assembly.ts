@@ -62,13 +62,20 @@ function layerRank(layer: TaskLayer | null): number {
  * A task whose `parent_id` names a task in a DIFFERENT milestone (or a missing
  * task) is treated as a root of its own milestone group rather than dropped, so
  * a cross-milestone or dangling parent edge never makes a task disappear.
+ *
+ * A task whose `milestone_id` is NOT in the supplied milestones list (a dangling
+ * reference to a deleted/unknown milestone) is folded into the unassigned bucket
+ * rather than spawning a second `milestone === null` group — a separate dangling
+ * group would carry the same null key as the genuine unassigned bucket and one
+ * would clobber the other in `sortGroups`, silently dropping tasks. Folding
+ * preserves the no-drop invariant by concatenation.
  */
 export function buildMilestoneTrees(
   tasks: ScrumTask[],
   milestones: ScrumMilestone[],
 ): MilestoneTreeGroup[] {
-  const byMilestone = bucketTasksByMilestone(tasks);
   const milestoneById = new Map(milestones.map((m) => [m.id, m] as const));
+  const byMilestone = bucketTasksByMilestone(tasks, milestoneById);
 
   const groups: MilestoneTreeGroup[] = [];
   for (const [milestoneId, groupTasks] of byMilestone) {
@@ -85,15 +92,22 @@ export function buildMilestoneTrees(
 }
 
 /**
- * Bucket tasks into a `milestone_id → tasks` map, routing every milestone-less
- * task into the `UNASSIGNED_GROUP_ID` bucket. Insertion order is preserved so a
+ * Bucket tasks into a `milestone_id → tasks` map. A task is routed to the
+ * `UNASSIGNED_GROUP_ID` bucket when it carries no `milestone_id` OR when its
+ * `milestone_id` is absent from `milestoneById` (a dangling reference). Folding
+ * dangling-milestone tasks into the one unassigned bucket keeps a single null
+ * key, so no group overwrites another. Insertion order is preserved so a
  * milestone with no tasks never produces an empty bucket here (empty milestones
  * are merged back in by `sortGroups`).
  */
-function bucketTasksByMilestone(tasks: ScrumTask[]): Map<string, ScrumTask[]> {
+function bucketTasksByMilestone(
+  tasks: ScrumTask[],
+  milestoneById: Map<string, ScrumMilestone>,
+): Map<string, ScrumTask[]> {
   const byMilestone = new Map<string, ScrumTask[]>();
   for (const task of tasks) {
-    const key = task.milestone_id ?? UNASSIGNED_GROUP_ID;
+    const known = task.milestone_id !== null && milestoneById.has(task.milestone_id);
+    const key = known ? task.milestone_id! : UNASSIGNED_GROUP_ID;
     const bucket = byMilestone.get(key);
     if (bucket) bucket.push(task);
     else byMilestone.set(key, [task]);

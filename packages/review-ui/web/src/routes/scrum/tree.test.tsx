@@ -25,6 +25,7 @@ import type {
 } from "@claude-prove/cli/scrum/types";
 import { ActiveProjectProvider } from "../../lib/active-project";
 import { setActiveProjectKeyForRequests } from "../../lib/fetch-utils";
+import { ScrumBoardView } from "./board";
 import { ScrumTreeView } from "./tree";
 import { buildMilestoneTrees, UNASSIGNED_GROUP_ID } from "./tree-assembly";
 
@@ -164,6 +165,25 @@ describe("buildMilestoneTrees", () => {
     expect(groups[0]!.taskCount).toBe(0);
     expect(groups[0]!.roots).toEqual([]);
   });
+
+  test("a dangling-milestone task folds into unassigned without clobbering a genuinely-unassigned task", () => {
+    // `dangling` points at a milestone absent from the milestones list (deleted/
+    // unknown); `loose` carries no milestone at all. Both must land in the one
+    // unassigned bucket — neither overwrites the other, neither vanishes.
+    const tasks = [
+      mkTask({ id: "dangling", milestone_id: "gone" }),
+      mkTask({ id: "loose", milestone_id: null }),
+    ];
+    const groups = buildMilestoneTrees(tasks, [mkMilestone("m1", "Alpha")]);
+
+    // One known (empty) milestone group + exactly one unassigned group — not two
+    // colliding null-keyed groups.
+    const unassignedGroups = groups.filter((g) => g.milestone === null);
+    expect(unassignedGroups).toHaveLength(1);
+    const unassigned = unassignedGroups[0]!;
+    expect(unassigned.taskCount).toBe(2);
+    expect(unassigned.roots.map((n) => n.task.id).sort()).toEqual(["dangling", "loose"]);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -208,6 +228,55 @@ function renderTree(qc: QueryClient) {
     </QueryClientProvider>,
   );
 }
+
+function renderBoard(qc: QueryClient) {
+  return render(
+    <QueryClientProvider client={qc}>
+      <ActiveProjectProvider>
+        <MemoryRouter initialEntries={["/scrum/board"]}>
+          <ScrumBoardView />
+        </MemoryRouter>
+      </ActiveProjectProvider>
+    </QueryClientProvider>,
+  );
+}
+
+// A representative legacy view (the board) must carry the active projectKey in
+// its query key so a workspace switch caches under a fresh, non-colliding key —
+// the same project-scoping the tree view applies. Cache distinctness across two
+// keys is the assertion (matching the tree view's pattern); this describe does
+// NOT own the happy-dom teardown — the `ScrumTreeView` block (which sorts last)
+// owns the unregister.
+describe("ScrumBoardView project-scoped query key", () => {
+  beforeEach(() => {
+    window.history.replaceState(null, "", "/scrum/board");
+    localStorage.clear();
+    setActiveProjectKeyForRequests(null);
+    installFetchMock();
+  });
+  afterEach(cleanup);
+
+  test("board tasks cache under the active projectKey, distinct from another project's key", async () => {
+    const tasks = [mkTask({ id: "a", title: "Repo A task", milestone_id: "m1" })];
+    fetchStub = (url) =>
+      url.startsWith("/api/scrum/tasks")
+        ? { status: 200, body: { tasks } }
+        : { status: 404, body: { error: "not found" } };
+
+    window.history.replaceState(null, "", "/scrum/board?project=%2Fhome%2Fme%2Frepo-a");
+    const qc = makeClient();
+    const r = renderBoard(qc);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // The board's key is `["scrum","tasks",{},projectKey]`, scoped to repo-a.
+    expect(qc.getQueryData(["scrum", "tasks", {}, "/home/me/repo-a"])).toBeDefined();
+    // A different project's key is absent — distinct keys never collide.
+    expect(qc.getQueryData(["scrum", "tasks", {}, "/home/me/repo-b"])).toBeUndefined();
+    r.unmount();
+  });
+});
 
 describe("ScrumTreeView", () => {
   beforeEach(() => {

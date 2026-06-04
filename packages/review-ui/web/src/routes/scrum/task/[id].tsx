@@ -8,6 +8,7 @@ import type {
   ScrumTask,
 } from "@claude-prove/cli/scrum/types";
 import { scrumApi } from "../../../lib/scrumApi";
+import { useActiveProject } from "../../../lib/active-project";
 import { useScrumSelection } from "../../../lib/scrumStore";
 import {
   EmptyState,
@@ -33,6 +34,7 @@ const STALE_MS = 30_000;
  */
 export function ScrumTaskDetailView() {
   const { id = "" } = useParams<{ id: string }>();
+  const { projectKey } = useActiveProject();
   const setTaskId = useScrumSelection((s) => s.setTaskId);
 
   useEffect(() => {
@@ -40,7 +42,7 @@ export function ScrumTaskDetailView() {
   }, [id, setTaskId]);
 
   const q = useQuery({
-    queryKey: ["scrum", "task", id],
+    queryKey: ["scrum", "task", id, projectKey],
     queryFn: () => scrumApi.task(id),
     staleTime: STALE_MS,
     enabled: !!id,
@@ -83,7 +85,7 @@ export function ScrumTaskDetailView() {
         )}
       </section>
 
-      <ContextBundlePanel taskId={id} />
+      <ContextBundlePanel taskId={id} projectKey={projectKey} />
     </div>
   );
 }
@@ -262,10 +264,10 @@ function DecisionsList({
   );
 }
 
-function ContextBundlePanel({ taskId }: { taskId: string }) {
+function ContextBundlePanel({ taskId, projectKey }: { taskId: string; projectKey: string | null }) {
   const [open, setOpen] = useState(false);
   const q = useQuery({
-    queryKey: ["scrum", "context-bundle", taskId],
+    queryKey: ["scrum", "context-bundle", taskId, projectKey],
     queryFn: () => scrumApi.contextBundle(taskId),
     staleTime: STALE_MS,
     enabled: open,

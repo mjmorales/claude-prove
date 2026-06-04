@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { ScrumMilestone, ScrumTask, TaskStatus } from "@claude-prove/cli/scrum/types";
 import { scrumApi } from "../../lib/scrumApi";
+import { useActiveProject } from "../../lib/active-project";
 import { EmptyState, ErrorBox, Loading, TASK_STATUSES, statusMeta } from "./_components";
 
 const STALE_MS = 30_000;
@@ -39,13 +40,15 @@ function rollupsByMilestone(tasks: ScrumTask[]): Map<string, MilestoneRollup> {
  * `milestone_id` — no per-milestone request fan-out.
  */
 export function ScrumMilestonesView() {
+  const { projectKey } = useActiveProject();
+
   const list = useQuery({
-    queryKey: ["scrum", "milestones", {}],
+    queryKey: ["scrum", "milestones", {}, projectKey],
     queryFn: () => scrumApi.milestones(),
     staleTime: STALE_MS,
   });
   const tasksQ = useQuery({
-    queryKey: ["scrum", "tasks", {}],
+    queryKey: ["scrum", "tasks", {}, projectKey],
     queryFn: () => scrumApi.tasks(),
     staleTime: STALE_MS,
   });
