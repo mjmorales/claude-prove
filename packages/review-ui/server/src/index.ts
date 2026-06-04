@@ -119,9 +119,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   registerBranchRoutes(app, resolveProject);
   registerDiffRoutes(app, resolveProject);
   registerStatusRoutes(app, resolveProject);
-  // SSE/events stays on the captured startup root — its namespacing is owned
-  // elsewhere; per-request project scoping does not apply to the stream.
-  registerEventsRoute(app, repoRoot);
+  registerEventsRoute(app, resolveProject);
   registerProveRoutes(app, resolveProject);
   registerManifestRoute(app, resolveProject);
   registerReviewRoutes(app, resolveProject);
