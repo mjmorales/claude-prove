@@ -4,53 +4,87 @@
  * cac dispatches on the first positional arg only, so sub-actions live
  * under a single `review-ui <action>` command:
  *
- *   claude-prove review-ui config [--cwd <path>]
+ *   claude-prove review-ui config                              [--cwd <path>]
+ *   claude-prove review-ui project <hide|remove|add|list> [path]
  *
  * Semantics:
- *   - config : emit `{ port, image, tag }` as a JSON line on stdout,
- *              filling in hardcoded defaults for any missing key.
- *              Consumed by `commands/review-ui.md` via `jq -r .port` etc.,
- *              replacing three `python3 -c 'import json,...'` one-liners.
+ *   - config  : emit `{ port, image, tag }` as a JSON line on stdout,
+ *               filling in hardcoded defaults for any missing key.
+ *               Consumed by `commands/review-ui.md` via `jq -r .port` etc.
+ *   - project : operate the machine-global project registry — hide / remove /
+ *               add a project root, or list visible projects (prune-on-read).
+ *               The sub-verb is the second positional (or `--project-verb`);
+ *               the `[path]` positional rides the third arg and mutating verbs
+ *               default it to cwd.
  */
 
 import type { CAC } from 'cac';
 import { type RunConfigOptions, runConfig } from './config';
+import { runProject } from './project';
 
-type ReviewUiAction = 'config';
+type ReviewUiAction = 'config' | 'project';
 
-const REVIEW_UI_ACTIONS: ReviewUiAction[] = ['config'];
+const REVIEW_UI_ACTIONS: ReviewUiAction[] = ['config', 'project'];
 
 interface ReviewUiFlags {
   cwd?: string;
+  projectVerb?: string;
 }
 
 export function register(cli: CAC): void {
   cli
-    .command('review-ui <action>', `Review UI helpers (action: ${REVIEW_UI_ACTIONS.join(' | ')})`)
+    .command(
+      'review-ui <action> [sub] [path]',
+      `Review UI helpers (action: ${REVIEW_UI_ACTIONS.join(
+        ' | ',
+      )}; project sub-action: hide | remove | add | list)`,
+    )
     .option('--cwd <path>', 'Project root to resolve .claude/.prove.json from (default: cwd)')
-    .action((action: string, flags: ReviewUiFlags) => {
-      if (!isReviewUiAction(action)) {
-        console.error(
-          `claude-prove review-ui: unknown action '${action}'. expected one of: ${REVIEW_UI_ACTIONS.join(
-            ', ',
-          )}`,
-        );
-        process.exit(1);
-      }
-      const code = dispatch(action, flags);
-      process.exit(code);
-    });
+    // cac's per-command `--help` renders option descriptions but not the command
+    // description, so the project sub-verbs are named here to keep them
+    // discoverable from `review-ui project --help`. The flag is an alternative
+    // to the positional sub-action; when both are given the positional wins.
+    .option(
+      '--project-verb <v>',
+      'project sub-action: hide | remove | add | list (or pass it positionally)',
+    )
+    .action(
+      (action: string, sub: string | undefined, path: string | undefined, flags: ReviewUiFlags) => {
+        if (!isReviewUiAction(action)) {
+          console.error(
+            `claude-prove review-ui: unknown action '${action}'. expected one of: ${REVIEW_UI_ACTIONS.join(
+              ', ',
+            )}`,
+          );
+          process.exit(1);
+        }
+        const code = dispatch(action, sub, path, flags);
+        process.exit(code);
+      },
+    );
 }
 
 function isReviewUiAction(value: string): value is ReviewUiAction {
   return (REVIEW_UI_ACTIONS as string[]).includes(value);
 }
 
-function dispatch(action: ReviewUiAction, flags: ReviewUiFlags): number {
+function dispatch(
+  action: ReviewUiAction,
+  sub: string | undefined,
+  path: string | undefined,
+  flags: ReviewUiFlags,
+): number {
   switch (action) {
     case 'config': {
       const opts: RunConfigOptions = { cwd: flags.cwd };
       return runConfig(opts);
+    }
+    case 'project': {
+      // The positional sub-action is primary; `--project-verb` is the
+      // help-discoverable fallback. With neither, runProject prints usage
+      // naming hide/remove/add/list and exits 1.
+      const verb = sub ?? flags.projectVerb ?? '';
+      return runProject({ action: verb, path });
     }
   }
 }
