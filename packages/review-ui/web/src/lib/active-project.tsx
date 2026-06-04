@@ -2,10 +2,12 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from "react";
+import { setActiveProjectKeyForRequests } from "./fetch-utils";
 
 /**
  * One project row from `GET /api/projects`. The `id` is the URL-safe
@@ -95,6 +97,14 @@ export function ActiveProjectProvider({
     persistProjectKey(key);
     setProjectKeyState(key);
   }, []);
+
+  // Broadcast the active key to the fetch layer, which injects it as the
+  // `?project=` param on every data request. This effect is the sole writer of
+  // that module-level value, keeping project-key injection single-sourced in
+  // fetch-utils rather than threaded per-route.
+  useEffect(() => {
+    setActiveProjectKeyForRequests(projectKey);
+  }, [projectKey]);
 
   const value = useMemo<ActiveProjectValue>(
     () => ({ projectKey, setProjectKey, project }),
