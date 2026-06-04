@@ -15,7 +15,6 @@
 
 import type { Database, Statement } from 'bun:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
-import { join } from 'node:path';
 import {
   type Store,
   type StoreOptions,
