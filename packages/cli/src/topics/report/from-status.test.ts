@@ -80,8 +80,8 @@ describe('statusSnapshotToReportDocument', () => {
     const table = treeSection?.type === 'section' ? treeSection.blocks[0] : undefined;
     expect(table?.type).toBe('table');
     if (table?.type === 'table') {
-      expect(table.rows[0]?.[0]).toBe('e1: Epic'); // root, no indent
-      expect(table.rows[1]?.[0]).toBe('— s1: Story'); // child, one indent
+      expect(table.rows[0]?.[0]).toBe('`e1`: Epic'); // root, no indent
+      expect(table.rows[1]?.[0]).toBe('— `s1`: Story'); // child, one indent
     }
   });
 

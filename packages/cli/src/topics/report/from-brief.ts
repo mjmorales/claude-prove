@@ -10,7 +10,13 @@
 
 import type { AttentionItem, BriefDecision, ReviewBrief } from '../acb/brief';
 import type { MilestoneBrief } from '../acb/milestone-brief';
-import type { Block, ReportDocument, Tone } from './blocks';
+import {
+  type Block,
+  REPORT_SCHEMA_VERSION,
+  type ReportDocument,
+  type Tone,
+  codeSpan,
+} from './blocks';
 
 /** Attention kind → callout tone. A hack wants cleanup; a risk is the loudest. */
 function attentionTone(kind: AttentionItem['kind']): Tone {
@@ -124,15 +130,15 @@ export function reviewBriefToReportDocument(brief: ReviewBrief): ReportDocument 
         type: 'table',
         columns: ['Decision', 'Closed by', 'Entries'],
         rows: brief.provenance.map((e) => [
-          e.decision_id,
-          e.closed_by_id ?? '(open)',
+          codeSpan(e.decision_id),
+          e.closed_by_id ? codeSpan(e.closed_by_id) : '(open)',
           String(e.entry_count),
         ]),
       },
     ],
   });
 
-  return { schema_version: '1', title: 'Review Brief', blocks };
+  return { schema_version: REPORT_SCHEMA_VERSION, title: 'Review Brief', blocks };
 }
 
 /** Compile a Milestone Brief into a report/v1 document (4 stakeholder sections). */
@@ -161,7 +167,7 @@ export function milestoneBriefToReportDocument(brief: MilestoneBrief): ReportDoc
       {
         type: 'table',
         columns: ['Story', 'Title', 'Outcome'],
-        rows: brief.outcomes.map((o) => [o.story_id, o.title, o.outcome]),
+        rows: brief.outcomes.map((o) => [codeSpan(o.story_id), o.title, o.outcome]),
       },
     ],
   });
@@ -189,11 +195,20 @@ export function milestoneBriefToReportDocument(brief: MilestoneBrief): ReportDoc
             {
               type: 'table',
               columns: ['Story', 'Title', 'Reason', 'Detail'],
-              rows: brief.did_not_ship.map((d) => [d.story_id, d.title, d.reason, d.detail]),
+              rows: brief.did_not_ship.map((d) => [
+                codeSpan(d.story_id),
+                d.title,
+                d.reason,
+                d.detail,
+              ]),
             },
           ]
         : [{ type: 'paragraph', text: 'Everything in scope shipped.' }],
   });
 
-  return { schema_version: '1', title: `Milestone Brief: ${brief.milestone_id}`, blocks };
+  return {
+    schema_version: REPORT_SCHEMA_VERSION,
+    title: `Milestone Brief: ${brief.milestone_id}`,
+    blocks,
+  };
 }

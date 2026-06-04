@@ -69,7 +69,7 @@ describe('runStateToReportDocument', () => {
     const doc = runStateToReportDocument(state({ run_status: 'halted' }));
     const kv = doc.blocks.find((b) => b.type === 'keyValue');
     const items = kv?.type === 'keyValue' ? kv.items : [];
-    expect(items.find((i) => i.key === 'Run')?.value).toBe('feature/add-login');
+    expect(items.find((i) => i.key === 'Run')?.value).toBe('`feature/add-login`');
     expect(items.find((i) => i.key === 'Status')?.value).toBe('halted');
   });
 

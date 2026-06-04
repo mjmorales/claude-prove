@@ -10,7 +10,7 @@
  * importable module).
  */
 
-import type { Block, ReportDocument } from './blocks';
+import { type Block, REPORT_SCHEMA_VERSION, type ReportDocument, codeSpan } from './blocks';
 
 /** One acceptance criterion as the planner proposes it (mirrors childrenSchema). */
 export interface DecomposeAcceptance {
@@ -34,6 +34,9 @@ export interface DecomposeList {
   children: DecomposeChild[];
 }
 
+/** Verification kinds whose `check` is executable code, not a prose instruction. */
+const CODE_CHECK_KINDS = new Set(['bash', 'assert']);
+
 /** One proposed child → a section (description + deps + acceptance table). */
 function childSection(child: DecomposeChild, index: number): Block {
   const inner: Block[] = [{ type: 'paragraph', text: child.description }];
@@ -48,11 +51,23 @@ function childSection(child: DecomposeChild, index: number): Block {
     inner.push({
       type: 'table',
       columns: ['Criterion', 'Verifies by', 'Check'],
-      rows: acceptance.map((a) => [a.text, a.verifies_by ?? '', a.check ?? '']),
+      rows: acceptance.map((a) => {
+        // bash/assert checks are code (chip them); agent/gate checks are prose
+        const check = a.check ?? '';
+        const isCode = CODE_CHECK_KINDS.has(a.verifies_by ?? '');
+        return [a.text, a.verifies_by ?? '', isCode ? codeSpan(check) : check];
+      }),
     });
   }
 
   return { type: 'section', title: `${index + 1}. ${child.title}`, blocks: inner };
+}
+
+/** Pluralize a decompose layer name for the preview callout. */
+function pluralizeLayer(layer: string | undefined, count: number): string {
+  if (!layer) return count === 1 ? 'child' : 'children';
+  if (count === 1) return layer;
+  return layer === 'story' ? 'stories' : `${layer}s`;
 }
 
 /**
@@ -66,7 +81,7 @@ export function decomposeListToReportDocument(list: DecomposeList): ReportDocume
     {
       type: 'callout',
       tone: 'info',
-      title: `${children.length} proposed ${list.layer ?? 'child'}${children.length === 1 ? '' : 'ren'}`,
+      title: `${children.length} proposed ${pluralizeLayer(list.layer, children.length)}`,
       body: 'Review the proposed children below before accepting them into the tree.',
     },
   ];
@@ -77,5 +92,9 @@ export function decomposeListToReportDocument(list: DecomposeList): ReportDocume
     blocks.push({ type: 'paragraph', text: 'The planner proposed no children.' });
   }
 
-  return { schema_version: '1', title: `Decomposition preview${layerSuffix}`, blocks };
+  return {
+    schema_version: REPORT_SCHEMA_VERSION,
+    title: `Decomposition preview${layerSuffix}`,
+    blocks,
+  };
 }

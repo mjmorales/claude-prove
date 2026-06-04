@@ -4,11 +4,11 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { type ReportDocument, validateReportDocument } from './blocks';
+import { type ReportDocument, codeSpan, validateReportDocument } from './blocks';
 import { renderReportDocument } from './render';
 
 function doc(overrides: Partial<ReportDocument> = {}): ReportDocument {
-  return { schema_version: '1', title: 'Report', blocks: [], ...overrides };
+  return { schema_version: '2', title: 'Report', blocks: [], ...overrides };
 }
 
 describe('validateReportDocument', () => {
@@ -22,6 +22,7 @@ describe('validateReportDocument', () => {
         { type: 'badge', label: 'done', tone: 'success' },
         { type: 'keyValue', items: [{ key: 'k', value: 'v' }] },
         { type: 'callout', tone: 'warn', title: 't', body: 'b' },
+        { type: 'code', text: 'bun test', label: 'check' },
         { type: 'section', title: 's', blocks: [{ type: 'paragraph', text: 'nested' }] },
         { type: 'divider' },
       ],
@@ -30,8 +31,13 @@ describe('validateReportDocument', () => {
   });
 
   test('rejects a wrong schema_version', () => {
-    const errors = validateReportDocument(doc({ schema_version: '2' as never }));
+    const errors = validateReportDocument(doc({ schema_version: '1' as never }));
     expect(errors.some((e) => e.includes('schema_version'))).toBe(true);
+  });
+
+  test('rejects a code block without text', () => {
+    const errors = validateReportDocument(doc({ blocks: [{ type: 'code' } as never] }));
+    expect(errors.some((e) => e.includes('blocks[0].text'))).toBe(true);
   });
 
   test('rejects an unknown block type', () => {
@@ -134,5 +140,82 @@ describe('renderReportDocument', () => {
   test('is deterministic — same document renders byte-identical', () => {
     const d = doc({ blocks: [{ type: 'badge', label: 'x', tone: 'info' }] });
     expect(renderReportDocument(d)).toBe(renderReportDocument(d));
+  });
+
+  test('wraps the title in a masthead header and tables in an overflow figure', () => {
+    const html = renderReportDocument(
+      doc({ blocks: [{ type: 'table', columns: ['Col'], rows: [['Cell']] }] }),
+    );
+    expect(html).toContain('<header class="report-masthead">');
+    expect(html).toContain('<figure class="table-wrap">');
+    expect(html).toContain('</table>\n</figure>');
+  });
+
+  test('stylesheet ships dark-scheme, print, and reduced-motion media queries', () => {
+    const html = renderReportDocument(doc());
+    expect(html).toContain('@media (prefers-color-scheme:dark)');
+    expect(html).toContain('@media print');
+    expect(html).toContain('prefers-reduced-motion:no-preference');
+  });
+
+  test('backtick spans in flowing text render as inline code chips', () => {
+    const html = renderReportDocument(
+      doc({
+        blocks: [
+          { type: 'paragraph', text: 'run `bun test` locally' },
+          { type: 'table', columns: ['Check'], rows: [['`go vet ./...`']] },
+          { type: 'keyValue', items: [{ key: 'Commit', value: '`abc1234`' }] },
+          { type: 'callout', tone: 'info', body: 'see `cli/app.py`' },
+          { type: 'list', ordered: false, items: ['edit `blocks.ts`'] },
+        ],
+      }),
+    );
+    expect(html).toContain('run <code>bun test</code> locally');
+    expect(html).toContain('<td><code>go vet ./...</code></td>');
+    expect(html).toContain('<dd><code>abc1234</code></dd>');
+    expect(html).toContain('see <code>cli/app.py</code>');
+    expect(html).toContain('<li>edit <code>blocks.ts</code></li>');
+  });
+
+  test('an unpaired backtick stays literal and label voices never chip', () => {
+    const html = renderReportDocument(
+      doc({
+        blocks: [
+          { type: 'paragraph', text: 'a ` stray backtick' },
+          { type: 'heading', level: 1, text: 'has `ticks`' },
+          { type: 'badge', label: '`x`', tone: 'neutral' },
+        ],
+      }),
+    );
+    expect(html).toContain('<p>a ` stray backtick</p>');
+    expect(html).toContain('<h2>has `ticks`</h2>');
+    expect(html).toContain('>`x`</span>');
+  });
+
+  test('escaped markup inside a code span renders as text, not markup', () => {
+    const html = renderReportDocument(
+      doc({ blocks: [{ type: 'paragraph', text: 'use `<script>` carefully' }] }),
+    );
+    expect(html).toContain('<code>&lt;script&gt;</code>');
+  });
+
+  test('renders a code block as a labeled panel', () => {
+    const html = renderReportDocument(
+      doc({ blocks: [{ type: 'code', text: 'bun run build\nbun test', label: 'verify' }] }),
+    );
+    expect(html).toContain('<figure class="code-block">');
+    expect(html).toContain('<figcaption class="code-label">verify</figcaption>');
+    expect(html).toContain('<pre><code>bun run build\nbun test</code></pre>');
+  });
+});
+
+describe('codeSpan', () => {
+  test('wraps a value in backticks', () => {
+    expect(codeSpan('bun test')).toBe('`bun test`');
+  });
+
+  test('leaves empty and backtick-bearing values untouched', () => {
+    expect(codeSpan('')).toBe('');
+    expect(codeSpan('echo `date`')).toBe('echo `date`');
   });
 });

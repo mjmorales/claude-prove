@@ -6,6 +6,21 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — report/v2: galley-proof redesign + first-class code rendering
+
+*(Auto-adopted — no config migration. Hand-authored `report render --file <doc.json>` inputs must move to `schema_version: "2"`.)* The report/v1 HTML renderer's visual language is redesigned and the block model learns to distinguish prose from code.
+
+**Visual redesign ("galley proof").** Every HTML surface (brief, milestone brief, status dashboard, run timeline, decompose preview) renders as a print-grade editorial document: warm paper ground, system serif stacks (Charter/Sitka body, Iowan/Palatino display), monospace micro-labels, ledger-style tables (rules, not grids), stamped badges/callouts, automatic dark scheme via `prefers-color-scheme`, a print stylesheet, and CSS-only staggered reveal guarded by `prefers-reduced-motion`. Still self-contained: inline CSS, zero network, zero JavaScript, byte-stable.
+
+**Code vs prose (`schema_version: "2"`).** Two additions, mirroring the GitHub/Stack Overflow pattern:
+
+- **Inline code convention** — in flowing text nodes (paragraph text, list items, table cells, key-value values, callout bodies) a backtick-delimited span renders as an inline `<code>` chip. Label voices (headings, section titles, badge labels, callout titles, key-value keys) render backticks literally. Producers mark values with the `codeSpan` helper; an unpaired or embedded backtick stays literal.
+- **`code` block kind** — `{ "type": "code", "text": "...", "label?": "..." }` renders a block-level code panel with an optional mono caption.
+
+Built-in producers adopt the convention automatically: decompose previews chip `bash`/`assert` acceptance checks (agent/gate checks stay prose), run timelines chip run ids/step ids/commit SHAs, briefs chip decision/story ids, the status dashboard chips task/milestone ids. The decompose preview callout also pluralizes layers correctly ("4 proposed stories", formerly "storyren").
+
+**Migration.** `report validate` and `report render` now require `schema_version: "2"` on document-input files; producer-driven actions (`brief`, `milestone-brief`, `timeline`, `status`, `decompose-preview`) need no changes.
+
 ## v3.0.0 — Structured-agent methodology on prove machinery
 
 *(One major release.)* Layered role-driven decomposition, AC-gated story close, risk-forward briefs, durable curation, contributor identity, trigger bindings, HTML report/intake surfaces, and a CLI robustness pass — shipped together as v3.0.0. Each subsection below documents one surface and its migration steps; run `/prove:update` once to adopt everything (config schema lands at v9, run-state schema at v4).

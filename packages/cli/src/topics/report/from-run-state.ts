@@ -6,11 +6,16 @@
  */
 
 import type { StateData, TaskData } from '../run-state/state';
-import type { Block, ReportDocument } from './blocks';
+import { type Block, REPORT_SCHEMA_VERSION, type ReportDocument, codeSpan } from './blocks';
 
 /** One task → a section with a steps table (the per-task timeline). */
 function taskSection(task: TaskData): Block {
-  const stepRows = task.steps.map((s) => [s.id, s.status, s.commit_sha || '', s.halt_reason || '']);
+  const stepRows = task.steps.map((s) => [
+    codeSpan(s.id),
+    s.status,
+    codeSpan(s.commit_sha || ''),
+    s.halt_reason || '',
+  ]);
   const inner: Block[] = [
     {
       type: 'keyValue',
@@ -36,10 +41,10 @@ export function runStateToReportDocument(state: StateData): ReportDocument {
     {
       type: 'keyValue',
       items: [
-        { key: 'Run', value: `${state.branch}/${state.slug}` },
+        { key: 'Run', value: codeSpan(`${state.branch}/${state.slug}`) },
         { key: 'Status', value: state.run_status },
-        { key: 'Current task', value: state.current_task || '—' },
-        { key: 'Current step', value: state.current_step || '—' },
+        { key: 'Current task', value: state.current_task ? codeSpan(state.current_task) : '—' },
+        { key: 'Current step', value: state.current_step ? codeSpan(state.current_step) : '—' },
         { key: 'Started', value: state.started_at || '—' },
         { key: 'Updated', value: state.updated_at || '—' },
         { key: 'Ended', value: state.ended_at || '—' },
@@ -54,5 +59,9 @@ export function runStateToReportDocument(state: StateData): ReportDocument {
     blocks.push({ type: 'paragraph', text: 'No tasks in this run.' });
   }
 
-  return { schema_version: '1', title: `Run timeline: ${state.branch}/${state.slug}`, blocks };
+  return {
+    schema_version: REPORT_SCHEMA_VERSION,
+    title: `Run timeline: ${state.branch}/${state.slug}`,
+    blocks,
+  };
 }

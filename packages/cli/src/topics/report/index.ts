@@ -1,13 +1,17 @@
 /**
  * Register the `report` topic — the report/v1 block-document renderer surface.
  *
- *   claude-prove report render          --file <doc.json>   [--out <path>]
+ *   claude-prove report render          --file <doc.json>   [--out <path>] [--open]
  *   claude-prove report validate        --file <doc.json>
- *   claude-prove report brief           --file <brief.json> [--out <path>]
- *   claude-prove report milestone-brief --file <mb.json>    [--out <path>]
- *   claude-prove report timeline        --file <state.json> [--out <path>]
- *   claude-prove report status          [--workspace-root <p>] [--out <path>]
- *   claude-prove report decompose-preview --file <children.json> [--out <path>]
+ *   claude-prove report brief           --file <brief.json> [--out <path>] [--open]
+ *   claude-prove report milestone-brief --file <mb.json>    [--out <path>] [--open]
+ *   claude-prove report timeline        --file <state.json> [--out <path>] [--open]
+ *   claude-prove report status          [--workspace-root <p>] [--out <path>] [--open]
+ *   claude-prove report decompose-preview --file <children.json> [--out <path>] [--open]
+ *
+ * `--open` (requires `--out`) hands the written artifact to the opener
+ * configured at `.claude/.prove.json::artifacts.html_open` (platform opener
+ * when unset) — operators choose their surface: editor preview, browser, etc.
  *
  * A report document (see `blocks.ts`) is the closed block model every HTML
  * surface compiles to; the vendored static renderer (`render.ts`) maps it to a
@@ -25,6 +29,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
 import type { CAC } from 'cac';
+import { openHtmlArtifact } from '../../core/artifacts/open-html';
 import type { ReviewBrief } from '../acb/brief';
 import type { MilestoneBrief } from '../acb/milestone-brief';
 import type { StateData } from '../run-state/state';
@@ -59,6 +64,7 @@ const REPORT_ACTIONS: ReportAction[] = [
 interface ReportFlags {
   file?: string;
   out?: string;
+  open?: boolean;
   workspaceRoot?: string;
 }
 
@@ -67,12 +73,20 @@ export function register(cli: CAC): void {
     .command('report <action>', `report/v1 HTML renderer (action: ${REPORT_ACTIONS.join(' | ')})`)
     .option('--file <path>', 'Path to the document/brief/state JSON (all actions except status)')
     .option('--out <path>', 'write HTML here instead of stdout')
+    .option(
+      '--open',
+      'after writing --out, open it with artifacts.html_open (or the platform opener)',
+    )
     .option('--workspace-root <path>', 'status: project root to resolve .prove/prove.db from')
     .action((action: string, flags: ReportFlags) => {
       if (!isReportAction(action)) {
         process.stderr.write(
           `claude-prove report: unknown action '${action}'. expected one of: ${REPORT_ACTIONS.join(', ')}\n`,
         );
+        process.exit(1);
+      }
+      if (flags.open === true && (flags.out === undefined || flags.out.length === 0)) {
+        process.stderr.write(`claude-prove report ${action}: --open requires --out <path>\n`);
         process.exit(1);
       }
       process.exit(action === 'status' ? dispatchStatus(flags) : dispatchFileAction(action, flags));
@@ -235,6 +249,13 @@ function emitHtml(html: string, action: ReportAction, flags: ReportFlags): numbe
     }
     const src = flags.file ?? '(store)';
     process.stderr.write(`claude-prove report ${action}: ${src} -> ${flags.out}\n`);
+    if (flags.open === true) {
+      // the write already succeeded — an opener failure degrades to a warning
+      const projectRoot = flags.workspaceRoot ?? mainWorktreeRoot() ?? process.cwd();
+      openHtmlArtifact(flags.out, projectRoot, (msg) =>
+        process.stderr.write(`claude-prove report ${action}: ${msg}\n`),
+      );
+    }
     return 0;
   }
   process.stdout.write(html);

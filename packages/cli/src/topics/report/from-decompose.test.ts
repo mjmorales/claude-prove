@@ -53,4 +53,40 @@ describe('decomposeListToReportDocument', () => {
     const doc = decomposeListToReportDocument({ children: [] });
     expect(validateReportDocument(doc)).toEqual([]);
   });
+
+  test('marks bash/assert checks as inline code; agent checks stay prose', () => {
+    const doc = decomposeListToReportDocument({
+      children: [
+        {
+          title: 'X',
+          description: 'd',
+          acceptance: [
+            { text: 'builds', verifies_by: 'bash', check: 'bun run build' },
+            { text: 'reviewed', verifies_by: 'agent', check: 'Read the diff and confirm intent.' },
+          ],
+        },
+      ],
+    });
+    const section = doc.blocks.find((b) => b.type === 'section');
+    const table =
+      section?.type === 'section' ? section.blocks.find((b) => b.type === 'table') : undefined;
+    const rows = table?.type === 'table' ? table.rows : [];
+    expect(rows[0]?.[2]).toBe('`bun run build`');
+    expect(rows[1]?.[2]).toBe('Read the diff and confirm intent.');
+  });
+
+  test('pluralizes the proposed-children callout per layer', () => {
+    const callOutTitle = (layer: string | undefined, n: number): string => {
+      const doc = decomposeListToReportDocument({
+        layer,
+        children: Array.from({ length: n }, (_, i) => ({ title: `c${i}`, description: 'd' })),
+      });
+      const callout = doc.blocks.find((b) => b.type === 'callout');
+      return callout?.type === 'callout' ? (callout.title ?? '') : '';
+    };
+    expect(callOutTitle('story', 4)).toBe('4 proposed stories');
+    expect(callOutTitle('story', 1)).toBe('1 proposed story');
+    expect(callOutTitle('epic', 2)).toBe('2 proposed epics');
+    expect(callOutTitle(undefined, 2)).toBe('2 proposed children');
+  });
 });

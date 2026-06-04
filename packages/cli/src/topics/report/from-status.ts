@@ -6,14 +6,14 @@
  */
 
 import type { Snapshot, TreeNode } from '../scrum/cli/status-cmd';
-import type { Block, ReportDocument } from './blocks';
+import { type Block, REPORT_SCHEMA_VERSION, type ReportDocument, codeSpan } from './blocks';
 
 /** Flatten the task forest depth-first into indented `[task, layer, status, derived]` rows. */
 function treeRows(nodes: TreeNode[], depth: number, rows: string[][]): void {
   for (const node of nodes) {
     const indent = '— '.repeat(depth);
     rows.push([
-      `${indent}${node.id}: ${node.title}`,
+      `${indent}${codeSpan(node.id)}: ${node.title}`,
       node.layer ?? '',
       node.status,
       node.derived_status,
@@ -34,7 +34,7 @@ export function statusSnapshotToReportDocument(snapshot: Snapshot): ReportDocume
         ? {
             type: 'table',
             columns: ['Milestone', 'Title', 'Status'],
-            rows: snapshot.milestones.map((m) => [m.id, m.title, m.status]),
+            rows: snapshot.milestones.map((m) => [codeSpan(m.id), m.title, m.status]),
           }
         : { type: 'paragraph', text: 'No open milestones.' },
     ],
@@ -60,11 +60,11 @@ export function statusSnapshotToReportDocument(snapshot: Snapshot): ReportDocume
         ? {
             type: 'table',
             columns: ['Task', 'Status', 'Title'],
-            rows: snapshot.active_tasks.map((t) => [t.id, t.status, t.title]),
+            rows: snapshot.active_tasks.map((t) => [codeSpan(t.id), t.status, t.title]),
           }
         : { type: 'paragraph', text: 'Nothing active.' },
     ],
   });
 
-  return { schema_version: '1', title: 'Scrum Status', blocks };
+  return { schema_version: REPORT_SCHEMA_VERSION, title: 'Scrum Status', blocks };
 }

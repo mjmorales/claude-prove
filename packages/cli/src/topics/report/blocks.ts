@@ -8,6 +8,14 @@
  * The block set is CLOSED — adding a kind is a deliberate change here, mirrored
  * in `render.ts` and `validateReportDocument`. Keeping it closed is what lets a
  * single vendored renderer cover every surface without per-surface markup.
+ *
+ * Inline code convention: in FLOWING text nodes (paragraph text, list items,
+ * table cells, key-value values, callout bodies) a backtick-delimited span
+ * renders as an inline `<code>` chip — the prose/code distinction without
+ * opening the model to markup. Label voices (headings, section titles, badge
+ * labels, callout titles, key-value keys) render backticks literally. Producers
+ * mark code with `codeSpan` rather than hand-writing backticks. Block-level
+ * code uses the `code` block kind.
  */
 
 /** Severity/intent tone shared by badges and callouts (closed enum). */
@@ -38,6 +46,7 @@ export type Block =
   | { type: 'badge'; label: string; tone: Tone }
   | { type: 'keyValue'; items: KeyValuePair[] }
   | { type: 'callout'; tone: Tone; title?: string; body: string }
+  | { type: 'code'; text: string; label?: string }
   | { type: 'section'; title?: string; blocks: Block[] }
   | { type: 'divider' };
 
@@ -50,9 +59,21 @@ export const BLOCK_TYPES: Block['type'][] = [
   'badge',
   'keyValue',
   'callout',
+  'code',
   'section',
   'divider',
 ];
+
+/**
+ * Mark a value as inline code for a flowing text node (see the inline code
+ * convention above). Returns the value backtick-wrapped; left untouched when it
+ * is empty or already contains a backtick (so shell command substitution never
+ * produces a broken span).
+ */
+export function codeSpan(text: string): string {
+  if (text === '' || text.includes('`')) return text;
+  return `\`${text}\``;
+}
 
 /**
  * A report/v1 document: a titled, ordered list of blocks. `schema_version` pins
@@ -60,13 +81,13 @@ export const BLOCK_TYPES: Block['type'][] = [
  * renderer accepts and the only shape producers emit.
  */
 export interface ReportDocument {
-  schema_version: '1';
+  schema_version: '2';
   title: string;
   blocks: Block[];
 }
 
 /** Current report-document model version. Bump on a closed-set change. */
-export const REPORT_SCHEMA_VERSION = '1';
+export const REPORT_SCHEMA_VERSION = '2';
 
 /**
  * Validate a parsed value as a `ReportDocument`. Returns a list of human-readable
@@ -150,6 +171,10 @@ function validateBlock(value: unknown, path: string, errors: string[]): void {
       requireTone(block.tone, `${path}.tone`, errors);
       requireString(block.body, `${path}.body`, errors);
       if (block.title !== undefined) requireString(block.title, `${path}.title`, errors);
+      break;
+    case 'code':
+      requireString(block.text, `${path}.text`, errors);
+      if (block.label !== undefined) requireString(block.label, `${path}.label`, errors);
       break;
     case 'section':
       if (block.title !== undefined) requireString(block.title, `${path}.title`, errors);
