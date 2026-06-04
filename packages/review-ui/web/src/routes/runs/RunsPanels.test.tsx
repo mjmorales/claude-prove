@@ -81,9 +81,9 @@ function resetEnv(): void {
 }
 
 beforeAll(() => {
-  // routes.test.tsx unregisters happy-dom in its afterAll; this file sorts later
-  // and re-registers so its DOM mounts work. Idempotent on an already-registered
-  // global.
+  // No earlier DOM file unregisters happy-dom, so globals normally survive into
+  // this file; re-register defensively in case an earlier file ever tears them
+  // down. Idempotent on an already-registered global.
   if (!GlobalRegistrator.isRegistered) {
     GlobalRegistrator.register({ url: "http://localhost/" });
   }
