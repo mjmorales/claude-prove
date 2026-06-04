@@ -224,11 +224,8 @@ export const PROVE_SCHEMA: Schema = {
         'acb, cafi, pcd, run_state, scrum (see TOOL_SCRUM_SCHEMA). Each entry ' +
         "has { enabled: bool, scope?: 'user' | 'project', config?: object }. " +
         'The config object is free-form per tool. For acb, the supported ' +
-        'config keys are base_branch and review_ui_port; review_ui_image and ' +
-        'review_ui_tag are no longer part of the acb.config contract (the ' +
-        'review UI image/tag are pinned by the tooling rather than the ' +
-        'project config), and review_ui_port relocates to a machine-global ' +
-        'setting via a separate operator step.',
+        'config keys are base_branch and review_ui_port. The review UI ' +
+        'image/tag are pinned by the tooling, never the project config.',
     },
     brief: {
       type: 'dict',
