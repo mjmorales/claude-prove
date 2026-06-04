@@ -836,7 +836,7 @@ describe('TestV10ToV11', () => {
           config: {
             base_branch: 'main',
             review_ui_port: 5174,
-            review_ui_image: 'ghcr.io/mjmorales/claude-prove/review-ui',
+            review_ui_image: 'registry.example.com/retired/review-ui',
             review_ui_tag: 'latest',
           },
         },
@@ -1017,7 +1017,7 @@ describe('TestFullChain', () => {
           config: {
             base_branch: 'main',
             review_ui_port: 5174,
-            review_ui_image: 'ghcr.io/mjmorales/claude-prove/review-ui',
+            review_ui_image: 'registry.example.com/retired/review-ui',
             review_ui_tag: 'latest',
           },
         },

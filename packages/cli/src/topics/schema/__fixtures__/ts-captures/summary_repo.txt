@@ -56,7 +56,7 @@ Target config after migration:
       "config": {
         "base_branch": "main",
         "review_ui_port": 5174,
-        "review_ui_image": "ghcr.io/mjmorales/claude-prove/review-ui",
+        "review_ui_image": "registry.example.com/retired/review-ui",
         "review_ui_tag": "latest"
       }
     },
