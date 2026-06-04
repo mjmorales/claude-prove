@@ -282,6 +282,8 @@ function buildAlerts(store: ScrumStore): AlertsPayload {
 function computeStatusRollup(tasks: ScrumTask[]): Record<TaskStatus, number> {
   const counts: Record<TaskStatus, number> = {
     backlog: 0,
+    proposed: 0,
+    accepted: 0,
     ready: 0,
     in_progress: 0,
     review: 0,
