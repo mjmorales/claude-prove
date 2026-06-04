@@ -6,6 +6,10 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — `plugin-cache-cleanup` skill + `/prove:cache-cleanup`
+
+*(Additive — new skill and thin command wrapper, discovered automatically on plugin load; nothing to configure.)* Claude Code keeps every installed plugin version under `<plugins-root>/cache/<marketplace>/<plugin>/<version>/` and never prunes superseded ones, so agents can Glob/Grep their way into stale skills, references, and CLI code from old prove versions. The `plugin-cache-cleanup` skill discovers all plugin roots (including claude-env's `~/.claude-envs/*/plugins`), builds the active set from every `installed_plugins.json`, classifies prove version dirs as active vs stale, and deletes the stale ones behind a single human gate — never touching manifests, `marketplaces/`, `data/`, or other plugins' caches. Invoke via `/prove:cache-cleanup` or trigger phrases ("prune the plugin cache", "remove old prove versions").
+
 ## Unreleased — Portable plugin paths: `CLAUDE_PROVE_PLUGIN_DIR` + `install local-env` + `/prove:local-env`
 
 *(Behavior change for dev-mode installs — one-time per-machine setup via `/prove:local-env`; installed-binary users are unaffected.)* Generated artifacts no longer bake a machine-absolute plugin checkout path. Dev-mode codegen (settings.json hook blocks, CLAUDE.md command examples, ACB runtime prompts, subagent discovery context) emits the shell-interpolated prefix `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts"`, expanded when the command fires. Compiled-mode hook commands emit `"$HOME/.local/bin/claude-prove"` instead of the expanded home path. Git-tracked artifacts are now byte-identical across contributor machines.
