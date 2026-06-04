@@ -1,5 +1,5 @@
 {
-  "schema_version": "10",
+  "schema_version": "11",
   "artifacts": {
     "html_open": "cursor {file}"
   },
@@ -53,9 +53,7 @@
       "scope": "user",
       "config": {
         "base_branch": "main",
-        "review_ui_port": 5174,
-        "review_ui_image": "ghcr.io/mjmorales/claude-prove/review-ui",
-        "review_ui_tag": "latest"
+        "review_ui_port": 5174
       }
     },
     "cafi": {
