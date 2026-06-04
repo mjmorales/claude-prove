@@ -1,4 +1,4 @@
-Migration plan for <FIXTURE_PATH> (v3 -> v10):
+Migration plan for <FIXTURE_PATH> (v3 -> v11):
   ~ schema_version: "3" -> "4"
   - scopes.tools: tools registry lives under top-level tools.* since v3
   - tools.schema: schema CLI is built-in — no toggleable tool entry
@@ -13,3 +13,4 @@ Migration plan for <FIXTURE_PATH> (v3 -> v10):
   + decomposition: added decompose-ladder defaults (auto_accept_through 'none' — accept gate fires at every layer)
   ~ schema_version: "8" -> "9" (triggers added as optional — absent triggers preserves current behavior)
   ~ schema_version: "9" -> "10" (artifacts added as optional — absent artifacts.html_open means the platform default opener)
+  ~ schema_version: "10" -> "11"

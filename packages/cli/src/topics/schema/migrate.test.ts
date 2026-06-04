@@ -1003,10 +1003,10 @@ describe('TestFullChain', () => {
   });
 
   test('full chain strips acb.config review_ui_image/tag carried from v0', () => {
-    // Sibling of the all-sections chain test: this input DOES carry the two
-    // legacy review_ui_* keys (in the v2->v3 index-derived tools.cafi shape
-    // alongside a pre-existing acb tool), proving the v10->v11 hop strips them
-    // end-to-end while preserving base_branch and review_ui_port.
+    // Sibling of the all-sections chain test: this unversioned (v0) input
+    // carries the two legacy review_ui_* keys directly under tools.acb.config
+    // alongside base_branch and review_ui_port, proving the v10->v11 hop strips
+    // them end-to-end while preserving base_branch and review_ui_port.
     const config = {
       validators: [{ name: 'lint', command: 'ruff', stage: 'lint' }],
       scopes: { plugin: '.' },
