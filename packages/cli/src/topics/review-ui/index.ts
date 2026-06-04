@@ -10,8 +10,8 @@
  *
  * Semantics:
  *   - config  : emit `{ port, image, tag }` as a JSON line on stdout,
- *               filling in hardcoded defaults for any missing key.
- *               Consumed by `commands/review-ui.md` via `jq -r .port` etc.
+ *               filling in hardcoded defaults for any missing key — an
+ *               inspection surface for the resolved review-ui settings.
  *   - project : operate the machine-global project registry — hide / remove /
  *               add a project root, or list visible projects (prune-on-read).
  *               The sub-verb is the second positional (or `--project-verb`);
@@ -36,6 +36,7 @@ const REVIEW_UI_ACTIONS: ReviewUiAction[] = ['config', 'project', 'serve'];
 interface ReviewUiFlags {
   cwd?: string;
   projectVerb?: string;
+  port?: string | number;
 }
 
 export function register(cli: CAC): void {
@@ -57,6 +58,7 @@ export function register(cli: CAC): void {
       '--project-verb <v>',
       'project sub-action: hide | remove | add | list (or pass it positionally)',
     )
+    .option('--port <n>', 'serve start/restart: pin the listen port (skips config + busy-scan)')
     .action(
       async (
         action: string,
@@ -110,6 +112,14 @@ async function dispatch(
         return 0;
       }
       // Empty sub prints usage naming the four verbs and exits 1.
+      if (flags.port !== undefined) {
+        const pinned = Number(flags.port);
+        if (!Number.isInteger(pinned) || pinned <= 0) {
+          console.error(`claude-prove review-ui serve: invalid --port '${flags.port}'`);
+          return 1;
+        }
+        return runServe({ verb: sub ?? '', cwd: flags.cwd, port: pinned });
+      }
       return runServe({ verb: sub ?? '', cwd: flags.cwd });
     }
   }
