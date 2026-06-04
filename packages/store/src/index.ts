@@ -6,6 +6,13 @@ export {
   type DomainSnapshot,
   type MigrationResult,
 } from './migrate';
+export {
+  type MachineConfig,
+  machineConfigFilePath,
+  readMachineConfig,
+  resolveDefaultContributor,
+  setDefaultContributor,
+} from './machine-config';
 export { type ResolveOptions, resolveDbPath } from './paths';
 export {
   clearRegistry,
