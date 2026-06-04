@@ -21,11 +21,11 @@
  * project B's store. The caller resolves the returned CT-UUID against the
  * relevant project's registry later.
  *
- * Legacy migration: an earlier layout kept this map under the XDG location
- * `${XDG_CONFIG_HOME:-~/.config}/claude-prove/config.json`. Reads fall back to
- * that location per-key so an un-migrated machine still resolves; all WRITES go
- * to the `~/.claude-prove/config.json` location only, so the map drifts toward
- * the canonical home one key at a time as values are re-set.
+ * Legacy compatibility: reads fall back per-key to the XDG location
+ * `${XDG_CONFIG_HOME:-~/.config}/claude-prove/config.json` so an un-migrated
+ * machine still resolves; all WRITES go to the `~/.claude-prove/config.json`
+ * location only, so the map drifts toward the canonical home one key at a time
+ * as values are re-set.
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -63,7 +63,7 @@ export function machineConfigFilePath(baseOverride?: string): string {
 /**
  * Resolve the legacy XDG base dir (the parent of `claude-prove/`). Honors an
  * explicit override (test seam), then the process env `XDG_CONFIG_HOME`, else
- * `~/.config` — the convention the prior layout used.
+ * `~/.config` — the XDG default.
  */
 function legacyConfigBaseDir(override?: string): string {
   if (override !== undefined && override.length > 0) return override;
