@@ -1,7 +1,8 @@
 // Client shapes mirror the server JSON-backed types. Run-scoped routes use a
 // composite `<branch>/<slug>` slug — the client URL-encodes it.
 
-import { getJSON } from "./fetch-utils";
+import type { ProjectInfo } from "./active-project";
+import { getJSON, postJSON } from "./fetch-utils";
 
 export type ValidatorStatus = "pending" | "pass" | "fail" | "skipped";
 export type ValidatorPhase = "build" | "lint" | "test" | "custom" | "llm";
@@ -197,6 +198,7 @@ function enc(compositeSlug: string): string {
 }
 
 export const api = {
+  projects: () => getJSON<{ projects: ProjectInfo[] }>("/api/projects"),
   runs: () => getJSON<{ runs: RunSummary[] }>("/api/runs"),
   run: (slug: string) => getJSON<RunSummary>(`/api/runs/${enc(slug)}`),
   runBranches: (slug: string) =>
@@ -311,25 +313,3 @@ export const api = {
       payload,
     ),
 };
-
-async function postJSON<T>(url: string, body: unknown): Promise<T> {
-  const r = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body ?? {}),
-  });
-  if (!r.ok) {
-    // Surface the server's JSON error body (e.g. {error:'milestone not found'})
-    // so callers can show actionable detail instead of a bare status line.
-    let detail = "";
-    try {
-      detail = await r.text();
-    } catch {
-      /* body unreadable — fall back to the status line alone */
-    }
-    throw new Error(
-      `${r.status} ${r.statusText}: ${url}${detail ? ` — ${detail.slice(0, 500)}` : ""}`,
-    );
-  }
-  return r.json() as Promise<T>;
-}

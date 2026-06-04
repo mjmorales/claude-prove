@@ -2,10 +2,12 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from "react";
+import { setActiveProjectKeyForRequests } from "./fetch-utils";
 
 /**
  * One project row from `GET /api/projects`. The `id` is the URL-safe
@@ -39,9 +41,44 @@ export interface ProjectInfo {
  * `project` prop.
  */
 export interface ActiveProjectValue {
+  /**
+   * The DECODED registry path (e.g. `/home/me/repo`), never the encoded
+   * `?project=` id. The fetch funnel re-encodes it exactly once on the way out,
+   * so storing the encoded form here would double-encode the wire param. Feed
+   * `ProjectInfo.path` directly; NEVER feed `ProjectInfo.id` (the encoded
+   * `encodeURIComponent(path)` form) — convert it with `projectIdToPath` first.
+   */
   projectKey: string | null;
+  /**
+   * Set the active project. The argument is the DECODED registry path, matching
+   * `projectKey`. NEVER pass `ProjectInfo.id` or an SSE `event.project` (both
+   * carry the encoded form) — route those through `projectIdToPath` first, or
+   * pass `ProjectInfo.path` directly.
+   */
   setProjectKey: (key: string | null) => void;
   project: ProjectInfo | null;
+}
+
+/**
+ * THE chokepoint for the decoded-path ↔ encoded-id conversion. `projectKey`
+ * (and `ProjectInfo.path`) hold the DECODED registry path; `ProjectInfo.id` and
+ * the SSE payload's `project` field hold the ENCODED `encodeURIComponent(path)`
+ * form the `?project=` wire param uses. Route every cross between the two forms
+ * through this pair so the encode/decode boundary lives in exactly one place.
+ */
+export function pathToProjectId(path: string): string {
+  return encodeURIComponent(path);
+}
+
+/**
+ * Inverse of `pathToProjectId`: turn an encoded project id (a `ProjectInfo.id`
+ * or an SSE `event.project`) back into the decoded registry path that
+ * `setProjectKey`/`projectKey` expect. Pair these for switcher wiring
+ * (`setProjectKey(projectIdToPath(info.id))`) and SSE demux
+ * (`event.project === pathToProjectId(projectKey)`).
+ */
+export function projectIdToPath(id: string): string {
+  return decodeURIComponent(id);
 }
 
 const STORAGE_KEY = "prove-review.active-project.v1";
@@ -95,6 +132,14 @@ export function ActiveProjectProvider({
     persistProjectKey(key);
     setProjectKeyState(key);
   }, []);
+
+  // Broadcast the active key to the fetch layer, which injects it as the
+  // `?project=` param on every data request. This effect is the sole writer of
+  // that module-level value, keeping project-key injection single-sourced in
+  // fetch-utils rather than threaded per-route.
+  useEffect(() => {
+    setActiveProjectKeyForRequests(projectKey);
+  }, [projectKey]);
 
   const value = useMemo<ActiveProjectValue>(
     () => ({ projectKey, setProjectKey, project }),
