@@ -107,6 +107,13 @@ export interface DaemonOptions {
   host?: string;
   /** Bind/probe port. Defaults to the review-ui port. */
   port?: number;
+  /**
+   * Total health-poll budget in ms. Defaults to the ~10s production budget;
+   * tests inject a sub-second value to exercise the timeout path fast.
+   */
+  pollTimeoutMs?: number;
+  /** Interval between health probes in ms. Defaults to the production cadence. */
+  pollIntervalMs?: number;
 }
 
 /**
@@ -282,20 +289,28 @@ export async function start(spawnFn: SpawnFn, opts: DaemonOptions = {}): Promise
   const pid = await spawnFn({ dir, logFile: logfilePath(opts.baseOverride), host, port });
   writePidfile(pid, opts.baseOverride);
 
-  await pollHealth(host, port);
+  await pollHealth(
+    host,
+    port,
+    opts.pollTimeoutMs ?? HEALTH_POLL_TIMEOUT_MS,
+    opts.pollIntervalMs ?? HEALTH_POLL_INTERVAL_MS,
+  );
   return pid;
 }
 
 /** Poll `/api/health` until a 200 or the timeout, throwing on timeout. */
-async function pollHealth(host: string, port: number): Promise<void> {
-  const deadline = Date.now() + HEALTH_POLL_TIMEOUT_MS;
+async function pollHealth(
+  host: string,
+  port: number,
+  timeoutMs: number,
+  intervalMs: number,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await probeHealth(host, port)) return;
-    await delay(HEALTH_POLL_INTERVAL_MS);
+    await delay(intervalMs);
   }
-  throw new Error(
-    `review-ui health check did not pass within ${HEALTH_POLL_TIMEOUT_MS}ms (port ${port})`,
-  );
+  throw new Error(`review-ui health check did not pass within ${timeoutMs}ms (port ${port})`);
 }
 
 /**
