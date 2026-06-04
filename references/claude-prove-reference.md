@@ -90,13 +90,13 @@ Actions: `init` `init-hooks` `init-config` `doctor` `upgrade`. Flags: `--project
 
 ### report — report/v1 HTML renderer
 
-Actions: `render` `validate` `brief` `milestone-brief` `timeline` `status` `decompose-preview`. Flags: `--file <path>` `--out <path>` `--workspace-root <p>` (status).
-Compiles a closed block-document model to a self-contained HTML page (inline CSS, no network, byte-stable). Ex: `report status --out status.html`.
+Actions: `render` `validate` `brief` `milestone-brief` `timeline` `status` `decompose-preview`. Flags: `--file <path>` `--out <path>` `--open` `--workspace-root <p>` (status).
+Compiles a closed block-document model to a self-contained HTML page (inline CSS, no network, byte-stable). `--open` (requires `--out`) launches the written artifact via `.claude/.prove.json::artifacts.html_open` — a command template with a `{file}` placeholder; platform opener when unset. Ex: `report status --out status.html --open`.
 
 ### intake — intake/v1 interactive HTML forms
 
-Actions: `render` `validate` `spec` `list`. Flags: `--form <charter|team|decompose>` `--file <spec.json>` `--payload <p.json>` (validate) `--out <path>`.
-`render` emits a self-contained interactive form (copy-payload-to-clipboard); `validate` PASS/FAILs a pasted-back payload (the gate before any write); `spec`/`list` inspect built-ins. `secret`/`file` field types are rejected. Two front-ends (form + interview) drive one writer. Ex: `intake render --form charter --out charter.html`.
+Actions: `render` `validate` `spec` `list`. Flags: `--form <charter|team|decompose>` `--file <spec.json>` `--payload <p.json>` (validate) `--out <path>` `--open` (render).
+`render` emits a self-contained interactive form (copy-payload-to-clipboard); `render --open` launches it via `artifacts.html_open` (same contract as `report --open`); `validate` PASS/FAILs a pasted-back payload (the gate before any write); `spec`/`list` inspect built-ins. `secret`/`file` field types are rejected. Two front-ends (form + interview) drive one writer. Ex: `intake render --form charter --out charter.html --open`.
 
 ### review-ui — review UI config
 

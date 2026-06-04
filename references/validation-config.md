@@ -30,8 +30,11 @@ A fully-featured `.claude/.prove.json` exercising every top-level key the schema
 
 ```json
 {
-  "schema_version": "9",
+  "schema_version": "10",
   "dev_mode": false,
+  "artifacts": {
+    "html_open": "cursor {file}"
+  },
   "scopes": {
     "api": "src/api/",
     "auth": "src/auth/",
@@ -93,6 +96,7 @@ A fully-featured `.claude/.prove.json` exercising every top-level key the schema
 |-----|---------|---------|
 | `schema_version` | Config format version for migration tracking (`schema migrate` owns transitions) | current version |
 | `dev_mode` | `true` makes codegen emit `bun run <pluginDir>/packages/cli/bin/run.ts` instead of bare `claude-prove` — plugin developers working from a checkout only | `false` |
+| `artifacts.html_open` | Shell command template `--open` uses to launch a written HTML artifact (`report`, `intake render`); `{file}` is replaced with the quoted path (no placeholder → path appended). Examples: `"cursor {file}"`, `"open -a Safari {file}"`, `"xdg-open {file}"` | platform opener |
 | `scopes` | Commit scope name → directory prefix; consumed by the commit skill and conventional-commit validation | — |
 | `validators` | Ordered checks run after each orchestrator step (see Validator Fields) | — |
 | `reporters` | Shell commands fired on lifecycle events (see Reporter Fields) | — |
@@ -114,6 +118,7 @@ Tracks config format for migration. Missing field = v0 (pre-schema). Run `/prove
 | `"1"` | Initial versioned schema |
 | ... | (see `migrate.ts` for intermediate versions) |
 | `"7"` | Validators gain an optional `skill` field (skill-invoked gates) |
+| `"10"` | Optional `artifacts` block (`html_open` opener command template for `--open`) |
 
 ### Validator Fields
 

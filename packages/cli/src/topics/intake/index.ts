@@ -1,10 +1,14 @@
 /**
  * Register the `intake` topic — the intake/v1 interactive HTML form surface.
  *
- *   claude-prove intake render   --form <name> | --file <spec.json> [--out <path>]
+ *   claude-prove intake render   --form <name> | --file <spec.json> [--out <path>] [--open]
  *   claude-prove intake validate --form <name> | --file <spec.json> --payload <p.json>
  *   claude-prove intake spec     --form <name> | --file <spec.json> [--out <path>]
  *   claude-prove intake list
+ *
+ * `render --open` (requires `--out`) hands the written form to the opener
+ * configured at `.claude/.prove.json::artifacts.html_open` (platform opener
+ * when unset) — e.g. an editor's embedded preview or a browser.
  *
  * An intake form (see `forms.ts`) is a closed model of typed fields; the
  * vendored renderer (`render-form.ts`) maps it to a self-contained interactive
@@ -24,7 +28,9 @@
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
+import { mainWorktreeRoot } from '@claude-prove/shared';
 import type { CAC } from 'cac';
+import { openHtmlArtifact } from '../../core/artifacts/open-html';
 import { BUILTIN_FORM_NAMES, getBuiltinForm } from './builtins';
 import { type IntakeForm, validateFormSpec } from './forms';
 import { renderIntakeForm } from './render-form';
@@ -39,6 +45,7 @@ interface IntakeFlags {
   file?: string;
   payload?: string;
   out?: string;
+  open?: boolean;
 }
 
 export function register(cli: CAC): void {
@@ -51,12 +58,26 @@ export function register(cli: CAC): void {
     .option('--file <path>', 'path to a custom intake/v1 form spec JSON')
     .option('--payload <path>', 'validate: path to the pasted-back payload JSON')
     .option('--out <path>', 'render/spec: write output here instead of stdout')
+    .option(
+      '--open',
+      'render: after writing --out, open it with artifacts.html_open (or the platform opener)',
+    )
     .action((action: string, flags: IntakeFlags) => {
       if (!isIntakeAction(action)) {
         process.stderr.write(
           `claude-prove intake: unknown action '${action}'. expected one of: ${INTAKE_ACTIONS.join(', ')}\n`,
         );
         process.exit(1);
+      }
+      if (flags.open === true) {
+        if (action !== 'render') {
+          process.stderr.write(`claude-prove intake ${action}: --open applies to render only\n`);
+          process.exit(1);
+        }
+        if (flags.out === undefined || flags.out.length === 0) {
+          process.stderr.write('claude-prove intake render: --open requires --out <path>\n');
+          process.exit(1);
+        }
       }
       process.exit(dispatch(action, flags));
     });
@@ -163,6 +184,12 @@ function emit(text: string, action: IntakeAction, flags: IntakeFlags): number {
     }
     const src = flags.form ?? flags.file ?? '(form)';
     process.stderr.write(`claude-prove intake ${action}: ${src} -> ${flags.out}\n`);
+    if (flags.open === true) {
+      // the write already succeeded — an opener failure degrades to a warning
+      openHtmlArtifact(flags.out, mainWorktreeRoot() ?? process.cwd(), (msg) =>
+        process.stderr.write(`claude-prove intake ${action}: ${msg}\n`),
+      );
+    }
     return 0;
   }
   process.stdout.write(text);

@@ -14,10 +14,11 @@ Migration Changes:
   + memory: added durable-memory defaults (stale_threshold_days 90)
   + decomposition: added decompose-ladder defaults (auto_accept_through 'none' — accept gate fires at every layer)
   ~ schema_version: "8" -> "9" (triggers added as optional — absent triggers preserves current behavior)
+  ~ schema_version: "9" -> "10" (artifacts added as optional — absent artifacts.html_open means the platform default opener)
 
 Target config after migration:
 {
-  "schema_version": "9",
+  "schema_version": "10",
   "validators": [
     {
       "name": "test",

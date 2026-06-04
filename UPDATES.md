@@ -21,6 +21,15 @@ Built-in producers adopt the convention automatically: decompose previews chip `
 
 **Migration.** `report validate` and `report render` now require `schema_version: "2"` on document-input files; producer-driven actions (`brief`, `milestone-brief`, `timeline`, `status`, `decompose-preview`) need no changes.
 
+## Unreleased — configurable HTML-artifact opener (`artifacts.html_open` + `--open`)
+
+*(Config schema v9 → v10 — run `/prove:update` or `claude-prove schema migrate --file .claude/.prove.json`; the migration is a pure version bump, nothing is seeded.)* Operators consume rendered HTML artifacts (intake forms, decompose previews, briefs, dashboards, timelines) in different surfaces — an editor's embedded preview, a browser, a text editor. Two pieces:
+
+- **`artifacts.html_open`** (optional, `.claude/.prove.json`) — a shell command template; `{file}` is replaced with the quoted artifact path (a template without the placeholder gets the path appended). Examples: `"cursor {file}"`, `"open -a Safari {file}"`, `"xdg-open {file}"`. Empty/absent = the platform default opener (macOS `open`, Windows `start`, else `xdg-open`).
+- **`--open` flag** on `report` (`render`/`brief`/`milestone-brief`/`timeline`/`status`/`decompose-preview`) and `intake render` — after writing `--out`, hands the artifact to the configured opener. Requires `--out`; the viewer is spawned detached, and a launch failure degrades to a stderr warning with exit 0 (it never masks the successful write).
+
+The `intake` and `decompose` skills pass `--open` when rendering operator-facing artifacts, so a Cursor user sets `"artifacts": { "html_open": "cursor {file}" }` once and every intake form / decompose preview lands in their editor.
+
 ## v3.0.0 — Structured-agent methodology on prove machinery
 
 *(One major release.)* Layered role-driven decomposition, AC-gated story close, risk-forward briefs, durable curation, contributor identity, trigger bindings, HTML report/intake surfaces, and a CLI robustness pass — shipped together as v3.0.0. Each subsection below documents one surface and its migration steps; run `/prove:update` once to adopt everything (config schema lands at v9, run-state schema at v4).

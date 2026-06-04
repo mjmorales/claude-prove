@@ -1,5 +1,8 @@
 {
-  "schema_version": "9",
+  "schema_version": "10",
+  "artifacts": {
+    "html_open": "cursor {file}"
+  },
   "scopes": {
     "agents": "agents/",
     "cache": "cache/",

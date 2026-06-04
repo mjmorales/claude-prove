@@ -390,6 +390,28 @@ function migrateV8ToV9(config: ProveConfig): [ProveConfig, MigrationChange[]] {
   return [result, changes];
 }
 
+/**
+ * v9 -> v10: add the OPTIONAL top-level `artifacts` field (rendered-artifact
+ * handling; `artifacts.html_open` is the `--open` command template). Absent
+ * artifacts = platform default opener (the v9 behavior), so no key is seeded —
+ * this is a pure version bump. All other top-level keys pass through untouched.
+ *
+ * Hardcodes target version '10'. Do NOT reference CURRENT_SCHEMA_VERSION —
+ * migrations are frozen-in-time; later version bumps must not retroactively
+ * change what this migration does.
+ */
+function migrateV9ToV10(config: ProveConfig): [ProveConfig, MigrationChange[]] {
+  const result: ProveConfig = { ...config, schema_version: '10' };
+  const changes: MigrationChange[] = [
+    new MigrationChange(
+      'change',
+      'schema_version',
+      '"9" -> "10" (artifacts added as optional — absent artifacts.html_open means the platform default opener)',
+    ),
+  ];
+  return [result, changes];
+}
+
 export const MIGRATIONS: Record<string, MigrationFn> = {
   '0_to_1': migrateV0ToV1,
   '1_to_2': migrateV1ToV2,
@@ -400,6 +422,7 @@ export const MIGRATIONS: Record<string, MigrationFn> = {
   '6_to_7': migrateV6ToV7,
   '7_to_8': migrateV7ToV8,
   '8_to_9': migrateV8ToV9,
+  '9_to_10': migrateV9ToV10,
 };
 
 /**

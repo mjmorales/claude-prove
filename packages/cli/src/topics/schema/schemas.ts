@@ -40,7 +40,7 @@ export interface Schema {
   fields: Record<string, FieldSpec>;
 }
 
-export const CURRENT_SCHEMA_VERSION = '9';
+export const CURRENT_SCHEMA_VERSION = '10';
 
 /**
  * Shape of `tools.scrum` introduced in schema v5. The v4 -> v5 migration
@@ -293,6 +293,27 @@ export const PROVE_SCHEMA: Schema = {
         },
       },
       description: 'Decompose-ladder settings',
+    },
+    artifacts: {
+      type: 'dict',
+      required: false,
+      fields: {
+        html_open: {
+          type: 'str',
+          required: false,
+          description:
+            'Shell command template used by `--open` (on `report` and ' +
+            '`intake render`) to open a written HTML artifact. A `{file}` ' +
+            'placeholder is replaced with the quoted artifact path; a ' +
+            'template without the placeholder gets the path appended. ' +
+            "Examples: 'cursor {file}' (editor embedded preview), " +
+            "'open -a Safari {file}', 'xdg-open {file}'. Empty/absent = " +
+            'the platform default opener (macOS open, Windows start, else ' +
+            'xdg-open).',
+          default: '',
+        },
+      },
+      description: 'Rendered-artifact handling (HTML opener preferences)',
     },
     triggers: {
       type: 'list',

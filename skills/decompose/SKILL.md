@@ -250,12 +250,14 @@ to a visual preview the operator reviews before promotion — write the proposed
 and render it:
 
 ```bash
-claude-prove report decompose-preview --file <children.json> --out <preview.html>
+claude-prove report decompose-preview --file <children.json> --out <preview.html> --open
 ```
 
 The preview is a self-contained report/v1 HTML page (one numbered section per proposed
-child, with its description, `blocked_by` deps, and acceptance criteria). Open it for the
-operator, then run the accept gate below. Skip the preview when the tier is auto-accepted —
+child, with its description, `blocked_by` deps, and acceptance criteria). `--open` launches
+it in the operator's configured surface (`.claude/.prove.json::artifacts.html_open`; the
+platform opener when unset); give the operator the path as well, then run the accept gate
+below. Skip the preview when the tier is auto-accepted —
 there is no gate to inform.
 
 **Accept gate** (`proposed → accepted` — the decomposition review). Acceptance is the trigger
@@ -637,7 +639,7 @@ async function decompose(parent, tierIndex, { milestone, autoAcceptThrough, maxF
       }),
     ); // native Write
     await sh(
-      `claude-prove report decompose-preview --file ${previewJson} --out ${scratch}/preview-${parent.id}-${layer}.html`,
+      `claude-prove report decompose-preview --file ${previewJson} --out ${scratch}/preview-${parent.id}-${layer}.html --open`,
     );
     const verdict = await AskUserQuestion({
       header: "Accept",

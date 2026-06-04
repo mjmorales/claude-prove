@@ -560,8 +560,9 @@ describe('TestV4ToV5', () => {
     expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     // Changes reflect v4->v5 (version bump only, scrum already correct),
     // v5->v6 (version bump + dev_mode add), v6->v7 (version bump only),
-    // v7->v8 (version bump + brief/memory/decomposition seeds), and v8->v9
-    // (version bump only — triggers absent). No tools.scrum mutation.
+    // v7->v8 (version bump + brief/memory/decomposition seeds), v8->v9
+    // (version bump only — triggers absent), and v9->v10 (version bump only —
+    // artifacts absent). No tools.scrum mutation.
     const paths = changes.map((c) => c.path);
     expect(paths).toEqual([
       'schema_version',
@@ -572,6 +573,7 @@ describe('TestV4ToV5', () => {
       'brief',
       'memory',
       'decomposition',
+      'schema_version',
       'schema_version',
     ]);
     // Keys outside the chain-seeded ones untouched.
@@ -758,8 +760,8 @@ describe('TestV8ToV9', () => {
 
     expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     expect('triggers' in target).toBe(false);
-    // The only change this hop emits is the version bump.
-    expect(changes.map((c) => c.path)).toEqual(['schema_version']);
+    // This hop and the v9->v10 follow-on emit only version bumps.
+    expect(changes.map((c) => c.path)).toEqual(['schema_version', 'schema_version']);
   });
 
   test('v8 to v9 preserves an existing triggers table byte-for-byte', () => {
@@ -778,6 +780,42 @@ describe('TestV8ToV9', () => {
     };
     const errors = validateConfig(config, PROVE_SCHEMA);
     expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
+  });
+});
+
+describe('TestV9ToV10', () => {
+  test('v9 to v10 is a pure version bump — artifacts absent, none seeded', () => {
+    const config = { schema_version: '9' };
+    const [target, changes] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect('artifacts' in target).toBe(false);
+    // The only change this hop emits is the version bump.
+    expect(changes.map((c) => c.path)).toEqual(['schema_version']);
+  });
+
+  test('v9 to v10 preserves an existing artifacts block byte-for-byte', () => {
+    const artifacts = { html_open: 'cursor {file}' };
+    const config = { schema_version: '9', artifacts };
+    const [target] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect(target.artifacts).toEqual(artifacts);
+  });
+
+  test('v10 config with an artifacts block validates clean', () => {
+    const config = {
+      schema_version: '10',
+      artifacts: { html_open: 'open -a Safari {file}' },
+    };
+    const errors = validateConfig(config, PROVE_SCHEMA);
+    expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
+  });
+
+  test('a wrong-typed artifacts.html_open is rejected', () => {
+    const config = { schema_version: '10', artifacts: { html_open: 42 } };
+    const errors = validateConfig(config, PROVE_SCHEMA);
+    expect(errors.some((e) => e.severity === 'error')).toBe(true);
   });
 });
 

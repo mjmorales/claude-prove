@@ -56,13 +56,16 @@ same validation and security floor apply.
 Render the form to a self-contained HTML file (inline CSS + JS, no network):
 
 ```bash
-claude-prove intake render --form <name> --out <path>.html
+claude-prove intake render --form <name> --out <path>.html --open
 ```
 
-Give the operator the path and tell them to: open it, fill the fields, click
-**Copy payload**, and paste the copied JSON back into the chat. The page builds
-the payload as they go and copies it to the clipboard (with a select-and-copy
-fallback when the clipboard API is blocked, which is common for a local file).
+`--open` launches the written form in the operator's configured surface —
+`.claude/.prove.json::artifacts.html_open` (an editor's embedded preview, a
+specific browser); the platform opener when unset. Give the operator the path
+as well, and tell them to: fill the fields, click **Copy payload**, and paste
+the copied JSON back into the chat. The page builds the payload as they go and
+copies it to the clipboard (with a select-and-copy fallback when the clipboard
+API is blocked, which is common for a local file).
 
 This is an `AskUserQuestion`-free, open-ended step. Never guess answers or
 pre-fill on the operator's behalf; instead, wait for the operator to paste the

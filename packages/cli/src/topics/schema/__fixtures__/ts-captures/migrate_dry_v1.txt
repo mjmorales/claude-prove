@@ -1,4 +1,4 @@
-Migration plan for <FIXTURE_PATH> (v1 -> v9):
+Migration plan for <FIXTURE_PATH> (v1 -> v10):
   ~ schema_version: "1" -> "2"
   ~ validators[lint].stage: renamed "stage" -> "phase"
   ~ validators[test].stage: renamed "stage" -> "phase"
@@ -16,3 +16,4 @@ Migration plan for <FIXTURE_PATH> (v1 -> v9):
   + memory: added durable-memory defaults (stale_threshold_days 90)
   + decomposition: added decompose-ladder defaults (auto_accept_through 'none' — accept gate fires at every layer)
   ~ schema_version: "8" -> "9" (triggers added as optional — absent triggers preserves current behavior)
+  ~ schema_version: "9" -> "10" (artifacts added as optional — absent artifacts.html_open means the platform default opener)

@@ -1,4 +1,4 @@
-Migration plan for <FIXTURE_PATH> (v2 -> v9):
+Migration plan for <FIXTURE_PATH> (v2 -> v10):
   ~ schema_version: "2" -> "3"
   ~ index: moved to tools.cafi.config
   ~ schema_version: "3" -> "4"
@@ -12,3 +12,4 @@ Migration plan for <FIXTURE_PATH> (v2 -> v9):
   + memory: added durable-memory defaults (stale_threshold_days 90)
   + decomposition: added decompose-ladder defaults (auto_accept_through 'none' — accept gate fires at every layer)
   ~ schema_version: "8" -> "9" (triggers added as optional — absent triggers preserves current behavior)
+  ~ schema_version: "9" -> "10" (artifacts added as optional — absent artifacts.html_open means the platform default opener)
