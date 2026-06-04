@@ -1,16 +1,13 @@
 /**
  * Integration tests for `claude-prove install upgrade`.
  *
- * Dev mode: a fixture with `packages/cli/src/` present forces `detectMode`
- * to return 'dev'; the command must exit 1 with the documented stderr.
- *
- * Compiled mode: a sibling fixture without `packages/cli/src/` plus a
- * Bun.serve() stub on 127.0.0.1 replaces the GitHub CDN. We verify the
- * atomic swap lands the expected payload, at 0o755, under the configured
- * --prefix.
- *
- * CLAUDE_PLUGIN_ROOT is set in the child env so `resolvePluginRoot`
- * bypasses its walk-upward search and classifies the fixture directly.
+ * The dev/compiled gate is provenance-based: a `bun run` source invocation
+ * (which is what these tests spawn) classifies as dev and must exit 1 with
+ * the documented stderr — regardless of what any plugin-root env var points
+ * at. The compiled download path is exercised via the `PROVE_FORCE_MODE=
+ * compiled` override plus a Bun.serve() stub on 127.0.0.1 replacing the
+ * GitHub CDN: we verify the atomic swap lands the expected payload, at
+ * 0o755, under the configured --prefix.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
@@ -31,7 +28,9 @@ interface RunResult {
 
 interface RunEnv {
   CLAUDE_PLUGIN_ROOT?: string;
+  CLAUDE_PROVE_PLUGIN_DIR?: string;
   PROVE_RELEASE_URL_BASE?: string;
+  PROVE_FORCE_MODE?: string;
 }
 
 function runBin(args: string[], env: RunEnv): RunResult {
@@ -54,17 +53,6 @@ function runBin(args: string[], env: RunEnv): RunResult {
   };
 }
 
-function makeDevPluginFixture(): string {
-  const root = mkdtempSync(join(tmpdir(), 'prove-install-upgrade-dev-'));
-  mkdirSync(join(root, 'packages', 'cli', 'src'), { recursive: true });
-  mkdirSync(join(root, '.claude-plugin'), { recursive: true });
-  writeFileSync(
-    join(root, '.claude-plugin', 'plugin.json'),
-    JSON.stringify({ name: 'dev-fixture', version: '0.0.0' }),
-  );
-  return root;
-}
-
 function makeCompiledPluginFixture(): string {
   const root = mkdtempSync(join(tmpdir(), 'prove-install-upgrade-compiled-'));
   mkdirSync(join(root, '.claude-plugin'), { recursive: true });
@@ -81,12 +69,22 @@ function currentTarget(): string {
   return `${platform}-${arch}`;
 }
 
-describe('claude-prove install upgrade — dev mode', () => {
-  test('exits 1 with the dev-mode error when invoked from a dev checkout', () => {
-    const pluginRoot = makeDevPluginFixture();
+describe('claude-prove install upgrade — dev provenance', () => {
+  test('a bun-run source invocation exits 1 with the dev-mode error', () => {
+    const { stderr, status } = runBin(['install', 'upgrade'], {});
+    expect(status).toBe(1);
+    expect(stderr).toContain('upgrade is a compiled-mode command; use git pull in dev checkouts');
+  });
+
+  test('plugin-root env vars cannot flip a source invocation to compiled', () => {
+    // Provenance wins: even a compiled-shaped plugin root (no packages/cli/src)
+    // pinned via both env vars must not unlock the download path when the
+    // process itself runs from sources.
+    const pluginRoot = makeCompiledPluginFixture();
     try {
       const { stderr, status } = runBin(['install', 'upgrade'], {
         CLAUDE_PLUGIN_ROOT: pluginRoot,
+        CLAUDE_PROVE_PLUGIN_DIR: pluginRoot,
       });
       expect(status).toBe(1);
       expect(stderr).toContain('upgrade is a compiled-mode command; use git pull in dev checkouts');
@@ -94,10 +92,18 @@ describe('claude-prove install upgrade — dev mode', () => {
       rmSync(pluginRoot, { recursive: true, force: true });
     }
   });
+
+  test('PROVE_FORCE_MODE=dev refuses even when set explicitly', () => {
+    const { status, stderr } = runBin(['install', 'upgrade'], { PROVE_FORCE_MODE: 'dev' });
+    expect(status).toBe(1);
+    expect(stderr).toContain('upgrade is a compiled-mode command');
+  });
 });
 
 describe('claude-prove install upgrade — compiled mode with stubbed CDN', () => {
-  const pluginRoot = makeCompiledPluginFixture();
+  // bun-run provenance classifies as dev; force compiled to reach the
+  // download path under test.
+  const FORCE = { PROVE_FORCE_MODE: 'compiled' };
   const payload = new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 0x02, 0x01, 0x01, 0x00]); // ELF magic + padding
   const target = currentTarget();
 
@@ -121,14 +127,13 @@ describe('claude-prove install upgrade — compiled mode with stubbed CDN', () =
 
   afterAll(() => {
     server.stop(true);
-    rmSync(pluginRoot, { recursive: true, force: true });
   });
 
   test('downloads payload, chmods +x, and atomic-renames to --prefix', () => {
     const prefix = mkdtempSync(join(tmpdir(), 'prove-install-upgrade-prefix-'));
     try {
       const { stdout, stderr, status } = runBin(['install', 'upgrade', '--prefix', prefix], {
-        CLAUDE_PLUGIN_ROOT: pluginRoot,
+        ...FORCE,
         PROVE_RELEASE_URL_BASE: baseUrl,
       });
       expect(stderr).toBe('');
@@ -156,7 +161,7 @@ describe('claude-prove install upgrade — compiled mode with stubbed CDN', () =
     const prefix = mkdtempSync(join(tmpdir(), 'prove-install-upgrade-404-'));
     try {
       const { stderr, status } = runBin(['install', 'upgrade', '--prefix', prefix], {
-        CLAUDE_PLUGIN_ROOT: pluginRoot,
+        ...FORCE,
         // Point at a path the stub returns 404 for.
         PROVE_RELEASE_URL_BASE: `${baseUrl}/missing`,
       });

@@ -1,4 +1,9 @@
-export { detectMode, type Mode } from './detect-mode';
+export {
+  detectMode,
+  isCompiledEntrypoint,
+  runningFromCompiledBinary,
+  type Mode,
+} from './detect-mode';
 export { PLUGIN_DIR_ENV_VAR, resolvePluginRoot } from './plugin-root';
 export {
   DEV_INVOCATION_PREFIX,

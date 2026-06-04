@@ -5,12 +5,19 @@
  *
  *   claude-prove install upgrade [--prefix <dir>]
  *
- * Dev mode (checkout with `packages/cli/src/`) exits 1 with a pointer to
- * `git pull`; compiled installs fetch
+ * The dev/compiled gate is PROVENANCE-based — how this process was launched
+ * (`runningFromCompiledBinary`), not what `resolvePluginRoot()` points at.
+ * Dev machines export `CLAUDE_PROVE_PLUGIN_DIR` toward their checkout, which
+ * would make a plugin-root-based check classify even the installed binary at
+ * ~/.local/bin as 'dev' and refuse. A `bun run` source invocation exits 1
+ * with a pointer to `git pull`; the compiled binary fetches
  * `${PROVE_RELEASE_URL_BASE}/claude-prove-<target>` (env override; default
- * is the canonical GitHub Releases CDN URL), write to a sibling tmp file,
- * chmod +x, and `rename(2)` onto the destination so a concurrent
+ * is the canonical GitHub Releases CDN URL), writes to a sibling tmp file,
+ * chmods +x, and `rename(2)`s onto the destination so a concurrent
  * `claude-prove` caller never observes a partial file.
+ *
+ * `PROVE_FORCE_MODE=dev|compiled` overrides provenance detection — the
+ * test-suite escape hatch (tests always run via `bun run`).
  *
  * Platform targets (`<platform>-<arch>`) mirror the eventual bash
  * bootstrap (phase 10 task 8): darwin-arm64, darwin-x64, linux-arm64,
@@ -26,7 +33,7 @@
 import { chmodSync, mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { detectMode, resolvePluginRoot } from '@claude-prove/installer';
+import { runningFromCompiledBinary } from '@claude-prove/installer';
 
 const DEFAULT_RELEASE_URL_BASE =
   'https://github.com/mjmorales/claude-prove/releases/latest/download';
@@ -43,8 +50,11 @@ export interface UpgradeFlags {
 }
 
 export async function runUpgrade(flags: UpgradeFlags): Promise<number> {
-  const mode = detectMode(resolvePluginRoot());
-  if (mode === 'dev') {
+  // Provenance gate: only the compiled binary may replace itself. See the
+  // header comment for why this must not consult resolvePluginRoot().
+  const force = process.env.PROVE_FORCE_MODE;
+  const compiled = force !== undefined ? force === 'compiled' : runningFromCompiledBinary();
+  if (!compiled) {
     process.stderr.write(`${DEV_MODE_MESSAGE}\n`);
     return 1;
   }
