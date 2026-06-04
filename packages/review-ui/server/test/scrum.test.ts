@@ -21,6 +21,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openScrumStore } from '@claude-prove/cli/scrum/store';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { makeProjectResolver } from '../src/projects';
 import { registerScrumRoutes } from '../src/scrum';
 
 let repoRoot: string;
@@ -113,7 +114,7 @@ beforeAll(async () => {
   }
 
   app = Fastify({ logger: false });
-  registerScrumRoutes(app, repoRoot);
+  registerScrumRoutes(app, makeProjectResolver(repoRoot));
   await app.ready();
 });
 
@@ -318,7 +319,7 @@ describe('missing .prove/prove.db', () => {
   test('list endpoints return empty payloads instead of 500', async () => {
     const emptyRoot = mkdtempSync(join(tmpdir(), 'prove-scrum-empty-'));
     const emptyApp = Fastify({ logger: false });
-    registerScrumRoutes(emptyApp, emptyRoot);
+    registerScrumRoutes(emptyApp, makeProjectResolver(emptyRoot));
     await emptyApp.ready();
     try {
       const tasks = await emptyApp.inject({ method: 'GET', url: '/api/scrum/tasks' });

@@ -10,11 +10,17 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { add as registryAdd } from "@claude-prove/store";
-import { listProjects, requireProject, resolveProjectRoot } from "../src/projects";
+import { add as registryAdd, registryFilePath } from "@claude-prove/store";
+import {
+  listProjects,
+  listProjectsReadOnly,
+  makeProjectResolver,
+  requireProject,
+  resolveProjectRoot,
+} from "../src/projects";
 
 let baseDir: string;
 let workspace: string;
@@ -165,6 +171,86 @@ describe("requireProject", () => {
     const stranger = encodeURIComponent(join(workspace, "not-registered"));
     const req = { query: { project: stranger } } as never;
     expect(requireProject(req, reply as never, baseDir)).toBeNull();
+    expect(captured.code).toBe(404);
+    expect(captured.body).toEqual({ error: "unknown project", project: stranger });
+  });
+});
+
+describe("read-only resolve path", () => {
+  /**
+   * Mtime-stable witness that the registry file was NOT written: capture the
+   * raw bytes before and after, asserting they are byte-identical. The listing
+   * path (`listProjects`) prunes and rewrites; the per-request path must not.
+   */
+  function registryBytes(): string {
+    const p = registryFilePath(baseDir);
+    return existsSync(p) ? readFileSync(p, "utf8") : "";
+  }
+
+  test("listProjectsReadOnly returns the same refs as listProjects without pruning", () => {
+    const root = registerLiveProject("alpha");
+    expect(listProjectsReadOnly(baseDir)).toEqual([
+      { id: encodeURIComponent(root), path: root, name: "alpha" },
+    ]);
+  });
+
+  test("resolveProjectRoot does NOT prune a dead root from disk (pure read)", () => {
+    const live = registerLiveProject("alpha");
+    const dead = registerLiveProject("beta");
+    rmSync(dead, { recursive: true, force: true });
+
+    const before = registryBytes();
+    // A dead root lingers in the read-only view, so resolving it still succeeds
+    // (the route's own fs call is the existence re-check). Crucially, the
+    // resolve leaves the registry file untouched — no prune write.
+    expect(resolveProjectRoot(encodeURIComponent(dead), baseDir)).toBe(dead);
+    expect(resolveProjectRoot(encodeURIComponent(live), baseDir)).toBe(live);
+    expect(registryBytes()).toBe(before);
+  });
+});
+
+describe("makeProjectResolver", () => {
+  /** Reply double capturing code + body, mirroring requireProject's tests. */
+  function fakeReply() {
+    const captured: { code?: number; body?: unknown } = {};
+    const reply = {
+      code(c: number) {
+        captured.code = c;
+        return reply;
+      },
+      send(b: unknown) {
+        captured.body = b;
+        return reply;
+      },
+    };
+    return { reply, captured };
+  }
+
+  test("absent ?project= falls back to the startup root", () => {
+    const fallback = registerLiveProject("alpha");
+    const resolve = makeProjectResolver(fallback, baseDir);
+    const { reply, captured } = fakeReply();
+    const req = { query: {} } as never;
+    expect(resolve(req, reply as never)).toBe(fallback);
+    expect(captured.code).toBeUndefined();
+  });
+
+  test("present registered ?project= resolves to that root, ignoring the fallback", () => {
+    const fallback = registerLiveProject("alpha");
+    const other = registerLiveProject("beta");
+    const resolve = makeProjectResolver(fallback, baseDir);
+    const { reply } = fakeReply();
+    const req = { query: { project: encodeURIComponent(other) } } as never;
+    expect(resolve(req, reply as never)).toBe(other);
+  });
+
+  test("present unregistered ?project= → 404 and null (reply sent)", () => {
+    const fallback = registerLiveProject("alpha");
+    const resolve = makeProjectResolver(fallback, baseDir);
+    const { reply, captured } = fakeReply();
+    const stranger = encodeURIComponent(join(workspace, "not-registered"));
+    const req = { query: { project: stranger } } as never;
+    expect(resolve(req, reply as never)).toBeNull();
     expect(captured.code).toBe(404);
     expect(captured.body).toEqual({ error: "unknown project", project: stranger });
   });

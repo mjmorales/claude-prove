@@ -9,6 +9,7 @@ import {
 } from "../git.js";
 import { readRunSummary } from "../runs.js";
 import { parseRunKey } from "../parsers.js";
+import type { ProjectResolver } from "../projects.js";
 
 type DiffQuery = { base?: string; head?: string; slug?: string; branch?: string; pending?: string };
 type FileQuery = DiffQuery & { path?: string };
@@ -33,9 +34,11 @@ function isBadPath(p: string): boolean {
   return path.isAbsolute(p) || p.startsWith("-") || path.normalize(p).split(path.sep)[0] === "..";
 }
 
-export function registerDiffRoutes(app: FastifyInstance, repoRoot: string) {
+export function registerDiffRoutes(app: FastifyInstance, resolveProject: ProjectResolver) {
   // Summary: files changed between base...head, optionally from a worktree cwd.
   app.get<{ Querystring: DiffQuery }>("/api/diff", async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     const base = req.query.base;
     const head = req.query.head;
     if (!base || !head) return reply.code(400).send({ error: "base and head required" });
@@ -51,6 +54,8 @@ export function registerDiffRoutes(app: FastifyInstance, repoRoot: string) {
 
   // Unified diff for a single file.
   app.get<{ Querystring: FileQuery }>("/api/diff/file", async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     const { base, head, path: filePath } = req.query;
     if (!base || !head || !filePath) {
       return reply.code(400).send({ error: "base, head, path required" });
@@ -71,6 +76,8 @@ export function registerDiffRoutes(app: FastifyInstance, repoRoot: string) {
   app.get<{ Querystring: { slug?: string; path?: string; branch?: string } }>(
     "/api/diff/pending",
     async (req, reply) => {
+      const repoRoot = resolveProject(req, reply);
+      if (repoRoot === null) return reply;
       const { slug, path: filePath, branch } = req.query;
       if (!slug) return reply.code(400).send({ error: "slug required" });
       if (filePath && isBadPath(filePath)) return reply.code(400).send({ error: "bad path" });

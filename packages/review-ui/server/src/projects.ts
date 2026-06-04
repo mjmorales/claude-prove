@@ -31,6 +31,17 @@ import {
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 /**
+ * Resolve a request to a validated absolute root, replying with a structured
+ * 400/404 and returning null on rejection. The single pre-handler every data
+ * route shares: call it first, bail when it returns null (the reply is sent).
+ *
+ * The closure binds the per-app startup root (the absent-`?project=` fallback)
+ * and the registry test seam, so route registrars receive ONE callable instead
+ * of threading both values into every handler.
+ */
+export type ProjectResolver = (req: FastifyRequest, reply: FastifyReply) => string | null;
+
+/**
  * A registry-backed project the routes operate against. `id` is the URL-safe
  * `?project=` key (the encoded registry path); `path` is the validated absolute
  * root; `name` is the display basename. Constructed ONLY from a registry entry,
@@ -63,12 +74,14 @@ function toRef(entry: ProjectEntry): ProjectRef {
 }
 
 /**
- * List the visible projects as `ProjectRef[]`, most-recently-seen first.
- * Prune-on-read first so a project whose root or `.prove/prove.db` has vanished
- * never appears as a selectable option — the registry's `prune` drops dead
- * roots, then `list` returns the survivors. `baseOverride` is the registry's
- * test seam (a tmp dir), threaded through so tests never touch the real
- * `~/.claude-prove/`.
+ * List the visible projects as `ProjectRef[]`, most-recently-seen first, AFTER
+ * pruning dead roots. Prune-on-read drops a project whose root or
+ * `.prove/prove.db` has vanished so it never appears as a selectable option,
+ * then `list` returns the survivors. This is the ONLY read path that mutates
+ * the registry (prune is a write); the per-request resolve path below uses the
+ * read-only `listProjectsReadOnly` instead so a high-volume data route never
+ * triggers registry writes. `baseOverride` is the registry's test seam (a tmp
+ * dir), threaded through so tests never touch the real `~/.claude-prove/`.
  */
 export function listProjects(baseOverride?: string): ProjectRef[] {
   pruneRegistry(baseOverride);
@@ -76,9 +89,22 @@ export function listProjects(baseOverride?: string): ProjectRef[] {
 }
 
 /**
+ * List the visible projects as `ProjectRef[]` WITHOUT pruning — a pure read.
+ * Per-request resolution uses this so a data route's membership check never
+ * incurs a registry write. A dead root lingers in this view until the
+ * `/api/projects` listing path (the prune owner) next evicts it; that is
+ * acceptable because the resolved root is still re-validated for existence by
+ * the git/fs call the route makes against it.
+ */
+export function listProjectsReadOnly(baseOverride?: string): ProjectRef[] {
+  return listRegistry(baseOverride).map(toRef);
+}
+
+/**
  * Resolve a `?project=` key to a validated absolute root, or null on any
- * rejection. THE security boundary: the only path ever returned is one that
- * EXACTLY equals a currently-registered (visible, alive-after-prune) root.
+ * rejection, WITHOUT pruning the registry (a pure read). THE security boundary
+ * for the per-request data path: the only path ever returned is one that
+ * EXACTLY equals a currently-registered visible root.
  *
  * The check is deliberately strict and membership-based rather than
  * prefix-based, so none of the usual escapes get through:
@@ -109,17 +135,17 @@ export function resolveProjectRoot(key: string, baseOverride?: string): string |
   // here, leaving an exact-equality membership test as the sole gate.
   const candidate = path.resolve(decoded);
 
-  // Membership against the live (pruned) registry: the resolved candidate must
-  // be byte-for-byte one of the registered roots. No prefix/containment check —
+  // Membership against the (read-only) registry: the resolved candidate must be
+  // byte-for-byte one of the registered roots. No prefix/containment check —
   // exact equality is what blocks every traversal and passthrough variant.
-  const roots = listProjects(baseOverride).map((p) => p.path);
+  const roots = listProjectsReadOnly(baseOverride).map((p) => p.path);
   return roots.includes(candidate) ? candidate : null;
 }
 
 /**
  * Resolve the requesting `?project=` key to a `ProjectRef`, or reply with a
- * structured error and return null. The single pre-handler every data route
- * shares: call it first, bail when it returns null (the reply is already sent).
+ * structured error and return null. Shares the per-request resolve path (no
+ * prune); call it first, bail when it returns null (the reply is already sent).
  *
  *   - missing/empty `project` → 400 `{ error: "missing project", project: "" }`
  *   - present but unresolved  → 404 `{ error: "unknown project", project }`
@@ -145,5 +171,38 @@ export function requireProject(
     return null;
   }
 
-  return { id: encodeURIComponent(root), path: root, name: path.basename(root) };
+  return toRef({ path: root, name: path.basename(root), last_seen: "" });
+}
+
+/**
+ * Build the per-app project resolver every data-route registrar receives. The
+ * returned closure resolves each request to a validated absolute root:
+ *
+ *   - `?project=<registered-id>` → that root (the security boundary above).
+ *   - `?project=<unknown/escaping>` → 404, returns null (reply already sent).
+ *   - absent `?project=` → `defaultRoot` (the buildApp startup repoRoot).
+ *
+ * The absent-param fallback keeps the single-project web UI working while the
+ * frontend's project-selector shell is still landing: a request that names no
+ * project transparently scopes to the root the server booted against, exactly
+ * as the pre-multi-project closure did. Once every client sends `?project=`,
+ * this fallback simply stops being exercised — it never weakens the boundary
+ * because a PRESENT key is always membership-checked.
+ *
+ * `baseOverride` is the registry test seam, captured here so route handlers
+ * stay seam-agnostic.
+ */
+export function makeProjectResolver(defaultRoot: string, baseOverride?: string): ProjectResolver {
+  return (req, reply) => {
+    const raw = (req.query as { project?: unknown } | undefined)?.project;
+    const key = typeof raw === "string" ? raw : "";
+    if (key.length === 0) return defaultRoot;
+
+    const root = resolveProjectRoot(key, baseOverride);
+    if (root === null) {
+      reply.code(404).send({ error: "unknown project", project: key } satisfies ProjectError);
+      return null;
+    }
+    return root;
+  };
 }
