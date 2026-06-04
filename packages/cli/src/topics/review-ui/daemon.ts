@@ -56,7 +56,7 @@ export const LOGFILE_NAME = 'review-ui.log';
 /** Loopback host the server binds to; health probes target the same. */
 const DEFAULT_HOST = '127.0.0.1';
 
-/** Default review-ui port — matches the `review-ui config` port default. */
+/** Default review-ui port — matches the machine-global `review_ui_port` default. */
 const DEFAULT_PORT = 5174;
 
 /** Health-poll budget: total wait split into fixed-interval attempts. */

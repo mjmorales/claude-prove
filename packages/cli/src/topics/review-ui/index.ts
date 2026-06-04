@@ -4,14 +4,10 @@
  * cac dispatches on the first positional arg only, so sub-actions live
  * under a single `review-ui <action>` command:
  *
- *   claude-prove review-ui config                              [--cwd <path>]
  *   claude-prove review-ui project <hide|remove|add|list> [path]
  *   claude-prove review-ui serve   <start|stop|status|restart> [--cwd <path>]
  *
  * Semantics:
- *   - config  : emit `{ port, image, tag }` as a JSON line on stdout,
- *               filling in hardcoded defaults for any missing key — an
- *               inspection surface for the resolved review-ui settings.
  *   - project : operate the machine-global project registry — hide / remove /
  *               add a project root, or list visible projects (prune-on-read).
  *               The sub-verb is the second positional (or `--project-verb`);
@@ -21,17 +17,18 @@
  *               pidfile daemon — start (spawn detached + poll health), stop,
  *               status (JSON on stdout), restart. The hidden `serve __child`
  *               token is the detached child's own entry, not an operator verb.
+ *               The listen port resolves machine-globally from
+ *               `~/.claude-prove/config.json::review_ui_port`, not per-project.
  */
 
 import type { CAC } from 'cac';
-import { type RunConfigOptions, runConfig } from './config';
 import { runProject } from './project';
 import { SERVE_CHILD_TOKEN, SERVE_VERBS, runServe } from './serve';
 import { serveChild } from './serve-child';
 
-type ReviewUiAction = 'config' | 'project' | 'serve';
+type ReviewUiAction = 'project' | 'serve';
 
-const REVIEW_UI_ACTIONS: ReviewUiAction[] = ['config', 'project', 'serve'];
+const REVIEW_UI_ACTIONS: ReviewUiAction[] = ['project', 'serve'];
 
 interface ReviewUiFlags {
   cwd?: string;
@@ -49,7 +46,7 @@ export function register(cli: CAC): void {
         ' | ',
       )})`,
     )
-    .option('--cwd <path>', 'Project root to resolve .claude/.prove.json from (default: cwd)')
+    .option('--cwd <path>', 'serve: repo root to resolve from / spawn the child in (default: cwd)')
     // cac's per-command `--help` renders option descriptions but not the command
     // description, so the project sub-verbs are named here to keep them
     // discoverable from `review-ui project --help`. The flag is an alternative
@@ -91,10 +88,6 @@ async function dispatch(
   flags: ReviewUiFlags,
 ): Promise<number> {
   switch (action) {
-    case 'config': {
-      const opts: RunConfigOptions = { cwd: flags.cwd };
-      return runConfig(opts);
-    }
     case 'project': {
       // The positional sub-action is primary; `--project-verb` is the
       // help-discoverable fallback. With neither, runProject prints usage

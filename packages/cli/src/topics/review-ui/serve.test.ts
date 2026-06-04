@@ -14,13 +14,14 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { type Server, createServer } from 'node:http';
 import { connect } from 'node:net';
 import { networkInterfaces, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SpawnContext } from './daemon';
 import { readPidfile, removePidfile, stop } from './daemon';
+import { DEFAULT_REVIEW_UI_PORT } from './port-config';
 import { resolvePort, resolveRepoRoot, runServe } from './serve';
 import { CHILD_PORT_ENV, CHILD_REPO_ROOT_ENV, CHILD_WEB_ROOT_ENV } from './serve-child';
 
@@ -66,13 +67,6 @@ function freePort(): Promise<number> {
       probe.close(() => resolveFree(port));
     });
   });
-}
-
-/** Ensure `<dir>/.claude/` exists and return its path (for a tmp prove config). */
-function claudeDir(dir: string): string {
-  const cd = join(dir, '.claude');
-  mkdirSync(cd, { recursive: true });
-  return cd;
 }
 
 /** First non-internal IPv4 address on this host, or null when none exists. */
@@ -234,22 +228,33 @@ describe('review-ui serve — input resolution', () => {
     expect(process.cwd().startsWith(root)).toBe(true);
   });
 
-  test('resolvePort bumps upward off a busy requested port', async () => {
-    // Bind a free port WE control, then point a tmp `.claude/.prove.json` at it
-    // so the scan starts on a port that is genuinely busy and must bump up.
+  test('resolvePort reads the machine-global port and bumps upward off a busy one', async () => {
+    // Bind a free port WE control, then write it as `review_ui_port` into a tmp
+    // `~/.claude-prove/config.json` (the machine-config base seam) so the scan
+    // starts on a port that is genuinely busy and must bump up.
     const busy = await freePort();
     await startHealthServer(busy);
-    const projectDir = mkdtempSync(join(tmpdir(), 'rui-serve-cfg-'));
+    const machineBase = mkdtempSync(join(tmpdir(), 'rui-serve-mcfg-'));
     writeFileSync(
-      join(claudeDir(projectDir), '.prove.json'),
-      JSON.stringify({ tools: { acb: { config: { review_ui_port: busy } } } }),
+      join(machineBase, 'config.json'),
+      JSON.stringify({ default_contributors: {}, review_ui_port: busy }),
     );
 
-    const { port, requested } = await resolvePort(projectDir);
+    const { port, requested } = await resolvePort({ machineConfigBase: machineBase });
     expect(requested).toBe(busy);
     expect(port).toBeGreaterThan(busy);
 
-    rmSync(projectDir, { recursive: true, force: true });
+    rmSync(machineBase, { recursive: true, force: true });
+  });
+
+  test('resolvePort falls back to the default port when the machine config is absent', async () => {
+    const machineBase = mkdtempSync(join(tmpdir(), 'rui-serve-mcfg-empty-'));
+    try {
+      const { requested } = await resolvePort({ machineConfigBase: machineBase });
+      expect(requested).toBe(DEFAULT_REVIEW_UI_PORT);
+    } finally {
+      rmSync(machineBase, { recursive: true, force: true });
+    }
   });
 });
 
