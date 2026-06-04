@@ -1,7 +1,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
-import Fastify from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import { resolveRepoRoot } from "./repo.js";
@@ -19,31 +19,58 @@ const PORT = Number(process.env.PORT ?? 5174);
 const HOST = process.env.HOST ?? "127.0.0.1";
 
 /**
- * Locate the prebuilt web bundle. The server is typically deployed as:
- *   <package-root>/
- *     server/dist/index.js   <- this file
- *     web/dist/
- * so we walk up two directories from the compiled module.
- *
- * `WEB_ROOT` env overrides for non-standard layouts (e.g. local dev).
+ * Locate web assets baked into the binary. The stub returns null so
+ * `resolveWebRoot` falls through to the on-disk tiers; a real embedded-asset
+ * accessor replaces this body to return the embedded root when present.
  */
-function resolveWebRoot(): string | null {
-  if (process.env.WEB_ROOT) {
-    const p = path.resolve(process.env.WEB_ROOT);
-    return fs.existsSync(p) ? p : null;
-  }
-  const here = path.dirname(fileURLToPath(import.meta.url));
-  const candidates = [
-    path.resolve(here, "../../web/dist"),
-    path.resolve(here, "../web/dist"),
-  ];
-  return candidates.find((c) => fs.existsSync(c)) ?? null;
+function embeddedWebRoot(): string | null {
+  return null;
 }
 
-async function main() {
-  const repoRoot = await resolveRepoRoot();
-  const webRoot = resolveWebRoot();
-  // Read the SPA shell once at startup so the async SPA-fallback handler
+/**
+ * Locate the prebuilt web bundle in three-tier precedence order:
+ *   1. Embedded assets baked into the binary (`embeddedWebRoot`).
+ *   2. The plugin-dir bundle at `<CLAUDE_PROVE_PLUGIN_DIR>/packages/review-ui/web/dist`,
+ *      the layout a plugin install ships.
+ *   3. `WEB_ROOT` env override for non-standard layouts (e.g. local dev).
+ *
+ * Returns null when no tier resolves to an existing directory, leaving the
+ * server to run API-only.
+ *
+ * Intentionally does NOT walk up from the compiled module location: under a
+ * binary or npx/Docker deploy that path is a cache, not the asset root.
+ */
+export function resolveWebRoot(): string | null {
+  const embedded = embeddedWebRoot();
+  if (embedded && fs.existsSync(embedded)) return embedded;
+
+  const pluginDir = process.env.CLAUDE_PROVE_PLUGIN_DIR;
+  if (pluginDir) {
+    const p = path.resolve(pluginDir, "packages/review-ui/web/dist");
+    if (fs.existsSync(p)) return p;
+  }
+
+  if (process.env.WEB_ROOT) {
+    const p = path.resolve(process.env.WEB_ROOT);
+    if (fs.existsSync(p)) return p;
+  }
+
+  return null;
+}
+
+interface AppOptions {
+  repoRoot: string;
+  webRoot: string | null;
+}
+
+/**
+ * Build the configured Fastify instance WITHOUT listening — registers CORS,
+ * every route module, the static/SPA-fallback handler, and `/api/health`.
+ * Importable so the CLI can mount the same app in-process.
+ */
+export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
+  const { repoRoot, webRoot } = opts;
+  // Read the SPA shell once at build time so the async SPA-fallback handler
   // below doesn't block Fastify's event loop with `readFileSync` per 404.
   const indexHtml = webRoot
     ? fs.readFileSync(path.join(webRoot, "index.html"))
@@ -79,7 +106,7 @@ async function main() {
     });
     // SPA fallback: any non-API route falls through to index.html so client-side
     // routing works on deep links and refreshes. Uses the cached buffer read
-    // at startup — no sync FS work per 404.
+    // at build time — no sync FS work per 404.
     app.setNotFoundHandler((req, reply) => {
       if (req.url.startsWith("/api/")) {
         reply.code(404).send({ error: "not_found" });
@@ -91,13 +118,50 @@ async function main() {
     app.log.warn("web bundle not found — running API-only. Set WEB_ROOT or build web/dist.");
   }
 
-  await app.listen({ port: PORT, host: HOST });
-  app.log.info(`review-ui listening on http://${HOST}:${PORT}`);
-  app.log.info(`repo root: ${repoRoot}`);
-  if (webRoot) app.log.info(`web root:  ${webRoot}`);
+  return app;
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+interface StartOptions {
+  host: string;
+  port: number;
+  repoRoot: string;
+  webRoot: string | null;
+}
+
+/**
+ * Build and listen. Resolves once the socket is bound so callers (CLI or the
+ * run-as-script path) can await readiness and inspect the bound coordinates.
+ */
+export async function startServer(
+  opts: StartOptions,
+): Promise<{ app: FastifyInstance; host: string; port: number }> {
+  const { host, port, repoRoot, webRoot } = opts;
+  const app = await buildApp({ repoRoot, webRoot });
+  await app.listen({ port, host });
+  app.log.info(`review-ui listening on http://${host}:${port}`);
+  app.log.info(`repo root: ${repoRoot}`);
+  if (webRoot) app.log.info(`web root:  ${webRoot}`);
+  return { app, host, port };
+}
+
+/**
+ * True when this module is the process entrypoint (`node dist/index.js` /
+ * `tsx src/index.ts`), false when imported. Compares the resolved module path
+ * against argv[1] so importing the module triggers no listen/exit side effect.
+ */
+function isMain(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  return path.resolve(entry) === fileURLToPath(import.meta.url);
+}
+
+if (isMain()) {
+  const repoRoot = await resolveRepoRoot();
+  const webRoot = resolveWebRoot();
+  try {
+    await startServer({ host: HOST, port: PORT, repoRoot, webRoot });
+  } catch (err) {
+    console.error(err);
+    process.exit(1);
+  }
+}
