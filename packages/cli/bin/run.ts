@@ -1,4 +1,14 @@
 #!/usr/bin/env bun
+// Embed the review-ui web bundle into the compiled binary. `bun build --compile`
+// traces this side-effect `type: "file"` import and bakes `web-dist.tar` into the
+// executable's virtual filesystem, where it surfaces at runtime via
+// `Bun.embeddedFiles`. The review-ui server (compiled into the same binary by the
+// daemon entry) reads it from there and materializes it to a cache dir on first
+// boot — see packages/review-ui/server/src/embedded-assets.ts. The committed
+// `web-dist.tar` is a stub the web build overwrites with the real bundle before
+// the compile step; under `bun run`/`tsx` from source the import is inert
+// (`Bun.embeddedFiles` is empty), so nothing reads it.
+import './web-dist.tar' with { type: 'file' };
 import { cac } from 'cac';
 import pjson from '../package.json' with { type: 'json' };
 import { register as registerAcb } from '../src/topics/acb';

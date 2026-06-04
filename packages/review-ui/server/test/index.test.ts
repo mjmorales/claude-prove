@@ -118,4 +118,34 @@ describe('resolveWebRoot tier order', () => {
 
     expect(resolveWebRoot()).toBe(envDist);
   });
+
+  test('injected embedded accessor outranks WEB_ROOT when it returns an existing dir', () => {
+    // The embedded tier is the compiled-binary cache dir; inject a stub returning
+    // it so the tier ordering is exercised without an actual compiled binary.
+    const embeddedDir = join(tmp, 'embedded-cache');
+    mkdirSync(embeddedDir, { recursive: true });
+    const envDist = join(tmp, 'env-dist');
+    mkdirSync(envDist, { recursive: true });
+    process.env.WEB_ROOT = envDist;
+
+    expect(resolveWebRoot(() => embeddedDir)).toBe(embeddedDir);
+  });
+
+  test('falls through past the embedded tier when the accessor returns null', () => {
+    const envDist = join(tmp, 'env-dist');
+    mkdirSync(envDist, { recursive: true });
+    process.env.WEB_ROOT = envDist;
+
+    // A null accessor (not a compiled binary) leaves WEB_ROOT to win.
+    expect(resolveWebRoot(() => null)).toBe(envDist);
+  });
+
+  test('skips a non-existent embedded dir and falls through', () => {
+    const envDist = join(tmp, 'env-dist');
+    mkdirSync(envDist, { recursive: true });
+    process.env.WEB_ROOT = envDist;
+
+    // Accessor returns a path that does not exist — existsSync guard rejects it.
+    expect(resolveWebRoot(() => join(tmp, 'no-such-embedded'))).toBe(envDist);
+  });
 });

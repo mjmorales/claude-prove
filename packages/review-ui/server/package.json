@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@claude-prove/cli": "workspace:*",
+    "@claude-prove/installer": "workspace:*",
     "@claude-prove/shared": "workspace:*",
     "@claude-prove/store": "workspace:*",
     "@fastify/cors": "^10.0.1",
