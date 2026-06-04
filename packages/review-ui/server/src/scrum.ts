@@ -25,6 +25,7 @@ import type {
   TaskStatus,
 } from '@claude-prove/cli/scrum/types';
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { ProjectResolver } from './projects.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -98,11 +99,13 @@ function withStore<T>(
 // Route registration
 // ---------------------------------------------------------------------------
 
-export function registerScrumRoutes(app: FastifyInstance, repoRoot: string) {
+export function registerScrumRoutes(app: FastifyInstance, resolveProject: ProjectResolver) {
   // List tasks with optional filters.
   app.get<{
     Querystring: { status?: string; milestone?: string; tag?: string };
   }>('/api/scrum/tasks', async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     const { status, milestone, tag } = req.query;
     return withStore<{ tasks: ScrumTask[] }>(
       repoRoot,
@@ -127,6 +130,8 @@ export function registerScrumRoutes(app: FastifyInstance, repoRoot: string) {
 
   // Task detail + embedded timeline + linked runs + linked decisions.
   app.get<{ Params: { id: string } }>('/api/scrum/tasks/:id', async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     const { id } = req.params;
     return withStore(repoRoot, reply, { kind: 'not-found', message: 'task not found' }, (store) =>
       buildTaskDetail(store, id, reply),
@@ -135,6 +140,8 @@ export function registerScrumRoutes(app: FastifyInstance, repoRoot: string) {
 
   // Event timeline for one task.
   app.get<{ Params: { id: string } }>('/api/scrum/tasks/:id/events', async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     const { id } = req.params;
     return withStore(repoRoot, reply, { kind: 'not-found', message: 'task not found' }, (store) =>
       buildTaskEvents(store, id, reply),
@@ -143,6 +150,8 @@ export function registerScrumRoutes(app: FastifyInstance, repoRoot: string) {
 
   // List milestones (optionally filtered by status).
   app.get<{ Querystring: { status?: string } }>('/api/scrum/milestones', async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     const { status } = req.query;
     return withStore<{ milestones: ScrumMilestone[] }>(
       repoRoot,
@@ -156,6 +165,8 @@ export function registerScrumRoutes(app: FastifyInstance, repoRoot: string) {
 
   // Milestone rollup: tasks belonging to milestone + status counts.
   app.get<{ Params: { id: string } }>('/api/scrum/milestones/:id', async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     const { id } = req.params;
     return withStore(
       repoRoot,
@@ -166,7 +177,9 @@ export function registerScrumRoutes(app: FastifyInstance, repoRoot: string) {
   });
 
   // Aggregated alerts across the 4 documented categories.
-  app.get('/api/scrum/alerts', async (_req, reply) => {
+  app.get('/api/scrum/alerts', async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     return withStore(
       repoRoot,
       reply,
@@ -182,6 +195,8 @@ export function registerScrumRoutes(app: FastifyInstance, repoRoot: string) {
   app.get<{ Params: { task_id: string } }>(
     '/api/scrum/context-bundles/:task_id',
     async (req, reply) => {
+      const repoRoot = resolveProject(req, reply);
+      if (repoRoot === null) return reply;
       const { task_id: taskId } = req.params;
       return withStore(
         repoRoot,
@@ -198,6 +213,8 @@ export function registerScrumRoutes(app: FastifyInstance, repoRoot: string) {
 
   // Cross-task recent event feed for the Now-view.
   app.get<{ Querystring: { limit?: string } }>('/api/scrum/events/recent', async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     const limit = parseLimit(req.query.limit, RECENT_EVENTS_DEFAULT_LIMIT);
     return withStore<{ events: ScrumEvent[] }>(
       repoRoot,

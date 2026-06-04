@@ -6,6 +6,7 @@ import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
 import { materializeEmbeddedWebRoot } from "./embedded-assets.js";
 import { resolveRepoRoot } from "./repo.js";
+import { makeProjectResolver } from "./projects.js";
 import { registerRunRoutes } from "./routes/runs.js";
 import { registerBranchRoutes } from "./routes/branches.js";
 import { registerDiffRoutes } from "./routes/diff.js";
@@ -67,8 +68,19 @@ export function resolveWebRoot(
 }
 
 interface AppOptions {
+  /**
+   * The startup repo root. Serves as both the `/api/health` reported root and
+   * the absent-`?project=` fallback every data route scopes to until clients
+   * send an explicit project key.
+   */
   repoRoot: string;
   webRoot: string | null;
+  /**
+   * Project-registry base-dir test seam (a tmp dir). Threaded into the
+   * per-request resolver so server tests register fake roots without touching
+   * the real `~/.claude-prove/`. Undefined in production → the real registry.
+   */
+  registryBaseOverride?: string;
 }
 
 /**
@@ -77,7 +89,12 @@ interface AppOptions {
  * Importable so the CLI can mount the same app in-process.
  */
 export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
-  const { repoRoot, webRoot } = opts;
+  const { repoRoot, webRoot, registryBaseOverride } = opts;
+  // One resolver, shared by every data-route registrar: maps each request's
+  // `?project=` key to a validated root (or 404), falling back to `repoRoot`
+  // when the key is absent. The git-executing/fs-reading routes are scoped per
+  // request rather than against a single captured root.
+  const resolveProject = makeProjectResolver(repoRoot, registryBaseOverride);
   // Read the SPA shell once at build time so the async SPA-fallback handler
   // below doesn't block Fastify's event loop with `readFileSync` per 404.
   const indexHtml = webRoot
@@ -93,17 +110,21 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     origin: [`http://${HOST}:${PORT}`, `http://localhost:${PORT}`],
   });
 
+  // Health stays project-agnostic: it reports the startup root, never resolving
+  // a `?project=` key, so the UI can probe readiness without a project context.
   app.get("/api/health", async () => ({ ok: true, repoRoot, webRoot }));
 
-  registerRunRoutes(app, repoRoot);
-  registerBranchRoutes(app, repoRoot);
-  registerDiffRoutes(app, repoRoot);
-  registerStatusRoutes(app, repoRoot);
+  registerRunRoutes(app, resolveProject);
+  registerBranchRoutes(app, resolveProject);
+  registerDiffRoutes(app, resolveProject);
+  registerStatusRoutes(app, resolveProject);
+  // SSE/events stays on the captured startup root — its namespacing is owned
+  // elsewhere; per-request project scoping does not apply to the stream.
   registerEventsRoute(app, repoRoot);
-  registerProveRoutes(app, repoRoot);
-  registerManifestRoute(app, repoRoot);
-  registerReviewRoutes(app, repoRoot);
-  registerScrumRoutes(app, repoRoot);
+  registerProveRoutes(app, resolveProject);
+  registerManifestRoute(app, resolveProject);
+  registerReviewRoutes(app, resolveProject);
+  registerScrumRoutes(app, resolveProject);
 
   if (webRoot) {
     await app.register(fastifyStatic, {
@@ -134,6 +155,8 @@ interface StartOptions {
   port: number;
   repoRoot: string;
   webRoot: string | null;
+  /** Forwarded to `buildApp` as the registry test seam; undefined in prod. */
+  registryBaseOverride?: string;
 }
 
 /**
@@ -143,8 +166,8 @@ interface StartOptions {
 export async function startServer(
   opts: StartOptions,
 ): Promise<{ app: FastifyInstance; host: string; port: number }> {
-  const { host, port, repoRoot, webRoot } = opts;
-  const app = await buildApp({ repoRoot, webRoot });
+  const { host, port, repoRoot, webRoot, registryBaseOverride } = opts;
+  const app = await buildApp({ repoRoot, webRoot, registryBaseOverride });
   await app.listen({ port, host });
   app.log.info(`review-ui listening on http://${host}:${port}`);
   app.log.info(`repo root: ${repoRoot}`);

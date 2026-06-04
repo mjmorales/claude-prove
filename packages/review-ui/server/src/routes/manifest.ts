@@ -8,6 +8,7 @@ import {
 } from "../git.js";
 import { readRunSummary } from "../runs.js";
 import { parseRunKey } from "../parsers.js";
+import type { ProjectResolver } from "../projects.js";
 
 export type ManifestGroup = {
   id: string;
@@ -23,8 +24,10 @@ export type ManifestGroup = {
   files: FileChange[];
 };
 
-export function registerManifestRoute(app: FastifyInstance, repoRoot: string) {
+export function registerManifestRoute(app: FastifyInstance, resolveProject: ProjectResolver) {
   app.get<{ Params: { slug: string } }>("/api/runs/:slug/manifest", async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     const key = parseRunKey(req.params.slug);
     if (!key) return reply.code(400).send({ error: "bad slug" });
     const summary = await readRunSummary(repoRoot, key.branch, key.slug);

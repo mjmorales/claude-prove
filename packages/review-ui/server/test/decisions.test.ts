@@ -20,6 +20,7 @@ import { join } from 'node:path';
 import { openScrumStore } from '@claude-prove/cli/scrum/store';
 import Fastify from 'fastify';
 import { resolveDecisionById } from '../src/decisions';
+import { makeProjectResolver } from '../src/projects';
 import { registerProveRoutes } from '../src/routes/prove';
 
 const DECISION_ID_DB_ONLY = '2026-04-24-db-only';
@@ -130,7 +131,7 @@ describe('resolveDecisionById', () => {
 describe('GET /api/decisions/:id', () => {
   test('returns DB content when the id is in the DB', async () => {
     const app = Fastify({ logger: false });
-    registerProveRoutes(app, repoRoot);
+    registerProveRoutes(app, makeProjectResolver(repoRoot));
     await app.ready();
     try {
       const res = await app.inject({
@@ -154,7 +155,7 @@ describe('GET /api/decisions/:id', () => {
 
   test('returns disk content when only disk has the id', async () => {
     const app = Fastify({ logger: false });
-    registerProveRoutes(app, repoRoot);
+    registerProveRoutes(app, makeProjectResolver(repoRoot));
     await app.ready();
     try {
       const res = await app.inject({
@@ -172,7 +173,7 @@ describe('GET /api/decisions/:id', () => {
 
   test('404 when neither DB nor disk has the id', async () => {
     const app = Fastify({ logger: false });
-    registerProveRoutes(app, repoRoot);
+    registerProveRoutes(app, makeProjectResolver(repoRoot));
     await app.ready();
     try {
       const res = await app.inject({
@@ -188,7 +189,7 @@ describe('GET /api/decisions/:id', () => {
 
   test('400 on malformed id', async () => {
     const app = Fastify({ logger: false });
-    registerProveRoutes(app, repoRoot);
+    registerProveRoutes(app, makeProjectResolver(repoRoot));
     await app.ready();
     try {
       const res = await app.inject({

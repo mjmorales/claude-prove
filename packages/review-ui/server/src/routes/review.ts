@@ -7,6 +7,7 @@ import {
   type GroupVerdictRecord,
 } from "../acb.js";
 import { parseRunKey } from "../parsers.js";
+import type { ProjectResolver } from "../projects.js";
 
 // Canonical `VerdictValue` vocabulary (see `@claude-prove/cli/acb/schemas`).
 // Clients are expected to post canonical strings; legacy aliases (`approved`,
@@ -33,10 +34,12 @@ type FixBody = {
   classification?: unknown;
 };
 
-export function registerReviewRoutes(app: FastifyInstance, repoRoot: string) {
+export function registerReviewRoutes(app: FastifyInstance, resolveProject: ProjectResolver) {
   app.get<{ Params: { slug: string } }>(
     "/api/runs/:slug/review",
     async (req, reply) => {
+      const repoRoot = resolveProject(req, reply);
+      if (repoRoot === null) return reply;
       const key = parseRunKey(req.params.slug);
       if (!key) return reply.code(400).send({ error: "bad slug" });
       const verdicts = listVerdicts(repoRoot, key.composite);
@@ -47,6 +50,8 @@ export function registerReviewRoutes(app: FastifyInstance, repoRoot: string) {
   app.post<{ Params: { slug: string; groupId: string }; Body: VerdictBody }>(
     "/api/runs/:slug/review/:groupId/verdict",
     async (req, reply) => {
+      const repoRoot = resolveProject(req, reply);
+      if (repoRoot === null) return reply;
       const key = parseRunKey(req.params.slug);
       if (!key) return reply.code(400).send({ error: "bad slug" });
       const groupId = req.params.groupId;
@@ -79,6 +84,8 @@ export function registerReviewRoutes(app: FastifyInstance, repoRoot: string) {
   app.post<{ Params: { slug: string; groupId: string }; Body: FixBody }>(
     "/api/runs/:slug/review/:groupId/fix",
     async (req, reply) => {
+      const repoRoot = resolveProject(req, reply);
+      if (repoRoot === null) return reply;
       const key = parseRunKey(req.params.slug);
       if (!key) return reply.code(400).send({ error: "bad slug" });
       const groupId = req.params.groupId;
@@ -116,6 +123,8 @@ export function registerReviewRoutes(app: FastifyInstance, repoRoot: string) {
   app.post<{ Params: { slug: string; groupId: string }; Body: VerdictBody }>(
     "/api/runs/:slug/review/:groupId/discuss",
     async (req, reply) => {
+      const repoRoot = resolveProject(req, reply);
+      if (repoRoot === null) return reply;
       const key = parseRunKey(req.params.slug);
       if (!key) return reply.code(400).send({ error: "bad slug" });
       const groupId = req.params.groupId;

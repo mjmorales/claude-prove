@@ -8,12 +8,23 @@ import {
   sharesOrchestratorHistory,
 } from "../git.js";
 import { parseRunKey } from "../parsers.js";
+import type { ProjectResolver } from "../projects.js";
 
-export function registerBranchRoutes(app: FastifyInstance, repoRoot: string) {
-  app.get("/api/branches", async () => ({ branches: await listAllBranches(repoRoot) }));
-  app.get("/api/worktrees", async () => ({ worktrees: await listWorktrees(repoRoot) }));
+export function registerBranchRoutes(app: FastifyInstance, resolveProject: ProjectResolver) {
+  app.get("/api/branches", async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
+    return { branches: await listAllBranches(repoRoot) };
+  });
+  app.get("/api/worktrees", async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
+    return { worktrees: await listWorktrees(repoRoot) };
+  });
 
   app.get<{ Params: { slug: string } }>("/api/runs/:slug/branches", async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     const key = parseRunKey(req.params.slug);
     if (!key) return reply.code(400).send({ error: "bad slug" });
     const all = await listAllBranches(repoRoot);
