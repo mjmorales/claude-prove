@@ -14,6 +14,7 @@ import { HelpOverlay } from "./HelpOverlay";
 import { CompletionBanner } from "./CompletionBanner";
 import { VERDICTS } from "./verdictTokens";
 import { PanelLoading } from "../PanelLoading";
+import { useWriteAffordancesDisabled } from "../BehindSchemaBanner";
 
 type VerdictKey = Exclude<GroupVerdict, "pending">;
 
@@ -29,6 +30,13 @@ export function ReviewSession() {
   const autoAdvance = useSelection((s) => s.reviewAutoAdvance);
   const setAutoAdvance = useSelection((s) => s.setReviewAutoAdvance);
   const qc = useQueryClient();
+
+  // A store behind schema must not accept writes — a verdict, discuss note, or
+  // rework brief written through a stale schema risks corrupting records the
+  // server can no longer interpret. OR this seam into every write entry point
+  // (verdict CTAs, discuss/fix drawer triggers and submits, undo) so the whole
+  // session goes read-only the moment the active project reports behind-schema.
+  const writesDisabled = useWriteAffordancesDisabled();
 
   const [diffOpen, setDiffOpen] = useState(true);
   const [stampKey, setStampKey] = useState(0);
@@ -159,7 +167,7 @@ export function ReviewSession() {
 
   const submitVerdict = useCallback(
     async (v: VerdictKey, note?: string) => {
-      if (!current || !slug) return;
+      if (!current || !slug || writesDisabled) return;
       setSubmitting(v);
       setSubmitError(null);
       try {
@@ -175,12 +183,12 @@ export function ReviewSession() {
         setSubmitting(null);
       }
     },
-    [current, slug, invalidateReview, advanceAfterVerdict],
+    [current, slug, writesDisabled, invalidateReview, advanceAfterVerdict],
   );
 
   const submitDiscuss = useCallback(
     async (note: string) => {
-      if (!current || !slug) return;
+      if (!current || !slug || writesDisabled) return;
       setSubmitting("needs_discussion");
       setSubmitError(null);
       try {
@@ -195,12 +203,12 @@ export function ReviewSession() {
         setSubmitting(null);
       }
     },
-    [current, slug, invalidateReview, advanceAfterVerdict],
+    [current, slug, writesDisabled, invalidateReview, advanceAfterVerdict],
   );
 
   const composeFix = useCallback(
     async (note: string) => {
-      if (!current || !slug) return;
+      if (!current || !slug || writesDisabled) return;
       setSubmitting("rework");
       setSubmitError(null);
       try {
@@ -220,11 +228,11 @@ export function ReviewSession() {
         setSubmitting(null);
       }
     },
-    [current, slug, invalidateReview],
+    [current, slug, writesDisabled, invalidateReview],
   );
 
   const undoCurrent = useCallback(async () => {
-    if (!current || !slug) return;
+    if (!current || !slug || writesDisabled) return;
     if (currentVerdict === "pending") return;
     if (submitting) return; // guard against a second undo racing in-flight
     setSubmitting("pending");
@@ -238,7 +246,7 @@ export function ReviewSession() {
     } finally {
       setSubmitting(null);
     }
-  }, [current, slug, currentVerdict, submitting, invalidateReview]);
+  }, [current, slug, currentVerdict, submitting, writesDisabled, invalidateReview]);
 
   // On first load: pick head of queue if nothing active.
   const bootRef = useRef(false);
@@ -297,12 +305,14 @@ export function ReviewSession() {
           break;
         case "d":
           e.preventDefault();
-          setDiscussOpen(true);
+          if (!writesDisabled) setDiscussOpen(true);
           break;
         case "f":
           e.preventDefault();
-          setFixOpen(true);
-          setLastFixPrompt(null);
+          if (!writesDisabled) {
+            setFixOpen(true);
+            setLastFixPrompt(null);
+          }
           break;
         case "u":
           e.preventDefault();
@@ -343,6 +353,7 @@ export function ReviewSession() {
     setReviewMode,
     autoAdvance,
     setAutoAdvance,
+    writesDisabled,
   ]);
 
   if (!slug) {
@@ -468,6 +479,7 @@ export function ReviewSession() {
                 endBase={intentsQ.data?.endBase ?? null}
                 endHead={intentsQ.data?.endHead ?? null}
                 onVerdict={(v) => {
+                  if (writesDisabled) return;
                   if (v === "needs_discussion") {
                     setDiscussOpen(true);
                     return;
@@ -542,8 +554,8 @@ export function ReviewSession() {
           </button>
           <button
             onClick={undoCurrent}
-            disabled={currentVerdict === "pending"}
-            className={`btn btn-subtle btn-sm ${currentVerdict === "pending" ? "is-disabled" : ""}`}
+            disabled={currentVerdict === "pending" || writesDisabled}
+            className={`btn btn-subtle btn-sm ${currentVerdict === "pending" || writesDisabled ? "is-disabled" : ""}`}
             title="Undo verdict (u)"
           >
             <span>Undo</span>

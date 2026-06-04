@@ -1,6 +1,7 @@
 import { VERDICTS } from "./verdictTokens";
 import type { GroupVerdict } from "../../lib/api";
 import { cn } from "../../lib/cn";
+import { useWriteAffordancesDisabled } from "../BehindSchemaBanner";
 
 type DecidedVerdict = Exclude<GroupVerdict, "pending">;
 
@@ -24,6 +25,11 @@ export function VerdictBar({
   onUndo: () => void;
   canUndo: boolean;
 }) {
+  // A store behind schema must not accept writes — a verdict written through a
+  // stale schema risks corrupting records the server can no longer interpret.
+  // OR this seam into every write control's disabled predicate so the bar goes
+  // read-only the moment the active project reports behind-schema.
+  const writesDisabled = useWriteAffordancesDisabled();
   return (
     <div className="flex items-center gap-2">
       {ORDER.map((key) => {
@@ -35,11 +41,13 @@ export function VerdictBar({
           <button
             key={key}
             onClick={() => onPick(key)}
+            disabled={writesDisabled}
             title={`${t.label} (${t.keycap})`}
             className={cn(
               "btn",
               live ? t.btnClass : "btn-ghost",
               flash && "ring-2 ring-offset-0",
+              writesDisabled && "is-disabled",
             )}
             style={
               flash
@@ -56,9 +64,9 @@ export function VerdictBar({
       <div className="w-px h-6 bg-bg-line mx-1" />
       <button
         onClick={onUndo}
-        disabled={!canUndo}
+        disabled={!canUndo || writesDisabled}
         title="Undo (u)"
-        className={cn("btn btn-subtle", !canUndo && "is-disabled")}
+        className={cn("btn btn-subtle", (!canUndo || writesDisabled) && "is-disabled")}
       >
         <span className="text-[13px] leading-none">↶</span>
         <span>Undo</span>

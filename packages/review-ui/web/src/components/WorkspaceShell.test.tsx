@@ -24,8 +24,8 @@ import {
   useWriteAffordancesDisabled,
 } from "./BehindSchemaBanner";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
-
-const STORAGE_KEY = "prove-review.active-project.v1";
+import { GroupCard } from "./review/GroupCard";
+import type { IntentGroupView } from "../lib/api";
 
 const REPO_A: ProjectInfo = {
   id: "%2Fhome%2Fme%2Frepo-a",
@@ -179,5 +179,63 @@ describe("behind-schema banner + write-affordances hook", () => {
       wrapper: wrap(null),
     });
     expect(result.current).toBe(false);
+  });
+});
+
+const SAMPLE_GROUP: IntentGroupView = {
+  id: "grp-1",
+  title: "Add login",
+  classification: "explicit",
+  ambiguityTags: [],
+  taskGrounding: "",
+  files: [],
+  fileRefs: [],
+  annotations: [],
+  commits: [],
+};
+
+/** Render the live verdict CTA strip under an active-project context. The CTAs
+ * are the canonical ACB write controls — a behind-schema project must render
+ * them disabled, a current-schema project must leave them clickable. */
+function renderVerdictCtas(project: ProjectInfo | null) {
+  return render(
+    <ActiveProjectProvider project={project}>
+      <GroupCard
+        group={SAMPLE_GROUP}
+        index={1}
+        total={1}
+        verdict="pending"
+        note={null}
+        slug="add-login"
+        diffOpen={false}
+        stampKey={0}
+        endBase={null}
+        endHead={null}
+        onVerdict={() => {}}
+        working={null}
+        focused={false}
+      />
+    </ActiveProjectProvider>,
+  );
+}
+
+describe("ACB write controls honor the schema-state gate", () => {
+  beforeEach(resetEnv);
+  afterEach(cleanup);
+
+  test("a behind-schema project renders the verdict CTAs disabled", () => {
+    const r = renderVerdictCtas(REPO_B_BEHIND);
+    for (const label of ["Approve", "Reject", "Discuss", "Rework"]) {
+      const btn = r.getByRole("button", { name: new RegExp(label) });
+      expect((btn as HTMLButtonElement).disabled).toBe(true);
+    }
+  });
+
+  test("a current-schema project leaves the verdict CTAs enabled", () => {
+    const r = renderVerdictCtas(REPO_A);
+    for (const label of ["Approve", "Reject", "Discuss", "Rework"]) {
+      const btn = r.getByRole("button", { name: new RegExp(label) });
+      expect((btn as HTMLButtonElement).disabled).toBe(false);
+    }
   });
 });
