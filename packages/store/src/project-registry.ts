@@ -75,13 +75,17 @@ const STALE_MS = 24 * 60 * 60 * 1000;
 const WORKTREE_SEGMENT = join('.claude', 'worktrees');
 
 /**
- * Resolve the registry base directory (the parent of `projects.json`). Honors
- * an explicit override, else anchors at `~/.claude-prove`. The override is the
- * test seam — tests pass a tmp dir so they NEVER touch the developer's real
- * `~/.claude-prove/`.
+ * Resolve the registry base directory (the parent of `projects.json`). Honors,
+ * in order: an explicit override, then the process env `CLAUDE_PROVE_HOME`,
+ * else `~/.claude-prove`. The explicit override is the direct test seam; the
+ * env var redirects callers that cannot thread an override param — notably the
+ * best-effort auto-upsert fired from git-root resolution, which tests point at
+ * a tmp dir so they NEVER touch the developer's real `~/.claude-prove/`.
  */
 export function registryBaseDir(override?: string): string {
   if (override !== undefined && override.length > 0) return override;
+  const envHome = process.env.CLAUDE_PROVE_HOME;
+  if (envHome !== undefined && envHome.length > 0) return envHome;
   return join(homedir(), STABLE_ROOT_DIR);
 }
 
