@@ -15,9 +15,13 @@
 
 import type { Database, Statement } from 'bun:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
-import { dirname, isAbsolute, join } from 'node:path';
-import { type Store, type StoreOptions, openStore, runMigrations } from '@claude-prove/store';
-import { listEntries } from '../acb/reasoning-log-store';
+import {
+  type Store,
+  type StoreOptions,
+  openStore,
+  runMigrations,
+  updateTaskStatus as updateTaskStatusViaService,
+} from '@claude-prove/store';
 import { type AssertContext, type CriterionVerification, verifyCriterion } from './assert-grammar';
 import {
   type BashVerifyResult,
@@ -279,32 +283,6 @@ export interface ResolveContributorKey {
   github?: string | null;
   email?: string | null;
 }
-
-// ---------------------------------------------------------------------------
-// Allowed status transitions — rejected at runtime by updateTaskStatus
-// ---------------------------------------------------------------------------
-
-/**
- * Allowed forward transitions. Terminal statuses (`done`, `cancelled`)
- * reject every outgoing edge. Keep in sync with the task lifecycle contract.
- *
- * The decomposition-review states `proposed`/`accepted` slot ahead of `ready`:
- * `backlog → proposed` (decomposed) → `accepted` (review passed — the gate that
- * fires next-layer decompose) → `ready`. `proposed → backlog` is the
- * review-kickback edge. The direct `backlog → ready|in_progress` edges remain
- * for tasks that need no decomposition review.
- */
-const ALLOWED_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
-  backlog: ['proposed', 'ready', 'in_progress', 'cancelled'],
-  proposed: ['accepted', 'backlog', 'cancelled'],
-  accepted: ['ready', 'in_progress', 'backlog', 'cancelled'],
-  ready: ['in_progress', 'blocked', 'cancelled', 'backlog'],
-  in_progress: ['review', 'blocked', 'done', 'cancelled', 'ready'],
-  review: ['in_progress', 'done', 'cancelled'],
-  blocked: ['ready', 'in_progress', 'cancelled'],
-  done: [],
-  cancelled: [],
-};
 
 /**
  * Canonical `scrum_tasks` column list, in declaration order. Every SELECT
@@ -697,47 +675,21 @@ export class ScrumStore {
   }
 
   /**
-   * Update a task's status. Rejects invalid transitions (see
-   * `ALLOWED_TRANSITIONS`) and unknown task ids. Appends a
-   * `status_changed` event inside the same transaction and bumps
-   * `last_event_at`.
+   * Update a task's status. Thin delegate to the `@claude-prove/store`
+   * transition write-service, which is the single owner of the closed
+   * transition table, both story-layer floors (acceptance presence/satisfaction
+   * and synthesis-entry presence), and the in-transaction row update +
+   * `status_changed` event emission.
+   *
+   * Actor resolution stays at this CLI boundary: the `agent` argument is the
+   * already-resolved attribution the caller supplies, forwarded verbatim, and
+   * the service stamps it (`agent ?? null`) — one attribution semantic across
+   * both call paths. The service returns the narrow transition view; this
+   * method re-reads the full decoded `ScrumTask` for callers that depend on
+   * the wider shape.
    */
   updateTaskStatus(id: string, next: TaskStatus, agent?: string | null): ScrumTask {
-    const task = this.getTask(id);
-    if (!task) throw new Error(`updateTaskStatus: unknown task '${id}'`);
-    const allowed = ALLOWED_TRANSITIONS[task.status];
-    if (!allowed.includes(next)) {
-      throw new Error(
-        `updateTaskStatus: invalid transition '${task.status}' -> '${next}' for task '${id}'`,
-      );
-    }
-
-    // Story-layer transition floors. Both are mechanical engine-owned gates:
-    // a `layer=story` task carries obligations a flat `layer=task` does not.
-    // Non-story layers pass straight through.
-    if (task.layer === 'story') {
-      this.assertStoryAcceptanceFloor(task, next);
-      if (next === 'done') this.assertStorySynthesisFloor(task);
-    }
-
-    const ts = isoNow();
-    const { workerId, runId } = resolveRunContext();
-    const tx = this.db.transaction(() => {
-      this.prep(
-        'UPDATE scrum_tasks SET status = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
-      ).run(next, ts, agent ?? null, ts, workerId, runId, id);
-      this.prep(
-        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
-      ).run(
-        id,
-        ts,
-        'status_changed',
-        agent ?? null,
-        JSON.stringify({ from: task.status, to: next }),
-      );
-    });
-    tx();
-
+    updateTaskStatusViaService(this.store, id, next, agent);
     const updated = this.getTask(id);
     if (!updated) throw new Error(`updateTaskStatus: task '${id}' vanished mid-update`);
     return updated;
@@ -924,104 +876,6 @@ export class ScrumStore {
       }),
     );
     return true;
-  }
-
-  // ==========================================================================
-  // Story-layer transition floors (v7)
-  // ==========================================================================
-
-  /**
-   * Reject a `layer=story` transition INTO `ready`/`in_progress`/`done` when
-   * the story has zero APPLICABLE active acceptance criteria, and additionally
-   * reject `→ done` when any applicable criterion is unsatisfied. A story with
-   * no goalposts cannot be started or closed; superseded criteria do not count.
-   * Other target statuses (`blocked`, `review`, `cancelled`, `backlog`) pass —
-   * a story may be parked or abandoned without criteria. Invariant: only
-   * called for `task.layer === 'story'`.
-   *
-   * Applicability honors `scope`: only criteria that apply to the story itself
-   * (`self`/`both`/absent) gate it; a `descendants`-scoped criterion is the
-   * subtree's goalpost, not the parent's, so it never blocks the parent.
-   *
-   * The `→ done` satisfaction gate is split by cost (a store-level floor cannot
-   * run a git worktree, nor does it hold the run/plan context an assert needs):
-   *   - `gate` is decided HERE via the persisted human verdict
-   *     (`criterionSatisfied`) — context-free standing state.
-   *   - `assert`/`bash`/`agent` are decided at the orchestrator validation gate
-   *     (which has the run context + git) and RECORDED onto the criterion's
-   *     `verification`; this floor READS that record. An unsatisfied (`failed`)
-   *     or never-recorded (`pending`/absent) verdict blocks the close.
-   */
-  private assertStoryAcceptanceFloor(task: ScrumTask, next: TaskStatus): void {
-    if (next !== 'ready' && next !== 'in_progress' && next !== 'done') return;
-    const active = task.acceptance?.criteria.filter((c) => c.status === 'active') ?? [];
-    const applicable = active.filter((c) => appliesToSelf(c.scope));
-    if (applicable.length === 0) {
-      throw new Error(
-        `updateTaskStatus: story '${task.id}' has no active acceptance criteria; add at least one (\`scrum task acceptance add ${task.id} ...\`) before '${next}'`,
-      );
-    }
-    if (next !== 'done') return;
-
-    const unsatisfied = applicable.filter((c) => !criterionSatisfiedAtFloor(c));
-    if (unsatisfied.length > 0) {
-      const detail = unsatisfied.map((c) => `${c.id} (${c.verifies_by})`).join(', ');
-      throw new Error(
-        `updateTaskStatus: story '${task.id}' cannot close — unsatisfied acceptance criteria: ${detail}. Approve gate criteria (\`scrum gate respond\`) and record assert/bash/agent verdicts (\`scrum task acceptance verify ${task.id} --verdict verified|failed [--criterion ID]\`, or inline at the orchestrator validation gate) before '${next}'.`,
-      );
-    }
-  }
-
-  /**
-   * Reject a `layer=story` -> `done` transition when the story's most-recent
-   * linked run carries no `synthesis` reasoning-log entry.
-   * The synthesis entry is the worker's hand-off-of-record; closing a story
-   * without it loses the episode's outcome.
-   *
-   * Boundary: the floor applies only once a worker has run — a story with NO
-   * linked runs has no episode to synthesize and passes. The orchestrator
-   * always links a run before dispatch, so the only way to reach `done` with
-   * no run is a manually-driven story, which the floor intentionally does not
-   * gate. Invariant: only called for `task.layer === 'story'`.
-   */
-  private assertStorySynthesisFloor(task: ScrumTask): void {
-    const runs = this.listRunsForTask(task.id);
-    if (runs.length === 0) return;
-
-    // listRunsForTask is ordered by linked_at ASC — the last entry is the
-    // most-recent worker.
-    const latest = runs[runs.length - 1];
-    if (!latest) return;
-    const runDir = this.resolveRunDir(latest.run_path);
-
-    let hasSynthesis = false;
-    try {
-      hasSynthesis = listEntries(runDir).some((e) => e.type === 'synthesis');
-    } catch {
-      // A malformed entry file makes the synthesis status unknowable; treat as
-      // absent so the floor fails closed rather than waving the story through.
-      hasSynthesis = false;
-    }
-
-    if (!hasSynthesis) {
-      throw new Error(
-        `updateTaskStatus: story '${task.id}' cannot close — its most-recent run (${latest.run_path}) has no synthesis reasoning-log entry. The worker must write one before the story reaches 'done'.`,
-      );
-    }
-  }
-
-  /**
-   * Resolve a stored `run_path` to an absolute run directory for reasoning-log
-   * reads. Absolute paths pass through; relative paths resolve against the
-   * workspace root derived from the store's db path
-   * (`<root>/.prove/prove.db`). A `:memory:` store has no root, so relative
-   * paths resolve against cwd — tests linking real run dirs use absolute paths.
-   */
-  private resolveRunDir(runPath: string): string {
-    if (isAbsolute(runPath)) return runPath;
-    const dbPath = this.store.path;
-    const root = dbPath === ':memory:' ? process.cwd() : dirname(dirname(dbPath));
-    return join(root, runPath);
   }
 
   // ==========================================================================
@@ -4452,23 +4306,6 @@ function withGateStatesSeeded(acceptance: Acceptance): Acceptance {
 export function criterionSatisfied(criterion: AcceptanceCriterion): boolean {
   if (criterion.verifies_by !== 'gate') return false;
   return (criterion.gate?.verdict ?? 'gate_pending') === 'approved';
-}
-
-/**
- * Whether a criterion counts as satisfied from the story-CLOSE-floor vantage —
- * the read the floor uses to decide `→ done`. The floor has no git and no
- * run/plan context, so it splits by cost:
- *   - `gate` is decided directly via the persisted human verdict
- *     (`criterionSatisfied`).
- *   - `assert`/`bash`/`agent` are decided upstream at the orchestrator
- *     validation gate, which RECORDS the outcome onto the criterion's
- *     `verification`; the floor reads `verification.verdict === 'verified'`.
- *     An absent or non-`verified` record (`pending`/`failed`) is NOT satisfied —
- *     a never-run heavy criterion blocks the close until the gate records it.
- */
-export function criterionSatisfiedAtFloor(criterion: AcceptanceCriterion): boolean {
-  if (criterion.verifies_by === 'gate') return criterionSatisfied(criterion);
-  return criterion.verification?.verdict === 'verified';
 }
 
 /**
