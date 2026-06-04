@@ -102,7 +102,10 @@ export function StatusHeader({
           ))}
         </nav>
 
-        <WorkspaceSwitcher />
+        <div className="flex items-center gap-2">
+          <span className="eyebrow">Workspace</span>
+          <WorkspaceSwitcher />
+        </div>
 
         {slug ? (
           <div className="flex items-center gap-4 min-w-0">
