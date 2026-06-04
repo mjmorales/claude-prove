@@ -1,0 +1,143 @@
+import { describe, expect, test } from 'bun:test';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  machineConfigFilePath,
+  readMachineConfig,
+  resolveDefaultContributor,
+  setDefaultContributor,
+} from './machine-config';
+
+/** Fresh tmp dir standing in for `~/.claude-prove` (the base-override seam). */
+function makeBaseDir(): string {
+  return mkdtempSync(join(tmpdir(), 'machine-config-'));
+}
+
+/** Write a legacy XDG config under `<base>/claude-prove/config.json`. */
+function writeLegacyConfig(base: string, body: unknown): void {
+  const dir = join(base, 'claude-prove');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'config.json'), JSON.stringify(body), 'utf8');
+}
+
+describe('readMachineConfig', () => {
+  test('returns an empty config when the file is absent', () => {
+    const base = makeBaseDir();
+    try {
+      expect(readMachineConfig(base)).toEqual({ default_contributors: {} });
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test('backs a malformed file aside and returns an empty config', () => {
+    const base = makeBaseDir();
+    try {
+      const path = machineConfigFilePath(base);
+      writeFileSync(path, '{ this is not json', 'utf8');
+
+      expect(readMachineConfig(base)).toEqual({ default_contributors: {} });
+
+      // Original path no longer holds the corrupt bytes; a `.corrupt-*` sibling does.
+      expect(existsSync(path)).toBe(false);
+      const aside = readdirSync(base).filter((n) => n.includes('.corrupt-'));
+      expect(aside.length).toBe(1);
+      expect(readFileSync(join(base, aside[0]), 'utf8')).toBe('{ this is not json');
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('setDefaultContributor', () => {
+  test('writes atomically and round-trips through readMachineConfig', () => {
+    const base = makeBaseDir();
+    try {
+      const key = setDefaultContributor('/repo/alpha', 'CT-aaaa', base);
+      expect(key).toBe('/repo/alpha');
+
+      const path = machineConfigFilePath(base);
+      expect(existsSync(path)).toBe(true);
+      // No tmp sibling left behind — the rename(2) consumed it.
+      expect(readdirSync(base).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+
+      expect(readMachineConfig(base).default_contributors['/repo/alpha']).toBe('CT-aaaa');
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test('preserves unrelated top-level keys across a round-trip', () => {
+    const base = makeBaseDir();
+    try {
+      const path = machineConfigFilePath(base);
+      mkdirSync(base, { recursive: true });
+      writeFileSync(
+        path,
+        JSON.stringify({
+          default_contributors: { '/repo/alpha': 'CT-aaaa' },
+          future_key: { nested: ['preserved'] },
+        }),
+        'utf8',
+      );
+
+      setDefaultContributor('/repo/beta', 'CT-bbbb', base);
+
+      const config = readMachineConfig(base);
+      expect(config.default_contributors).toEqual({
+        '/repo/alpha': 'CT-aaaa',
+        '/repo/beta': 'CT-bbbb',
+      });
+      expect(config.future_key).toEqual({ nested: ['preserved'] });
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('resolveDefaultContributor', () => {
+  test('returns null when the root is unmapped in both locations', () => {
+    const base = makeBaseDir();
+    const legacy = makeBaseDir();
+    try {
+      expect(resolveDefaultContributor('/repo/unmapped', base, legacy)).toBeNull();
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+      rmSync(legacy, { recursive: true, force: true });
+    }
+  });
+
+  test('resolves a legacy-only key via the fallback', () => {
+    const base = makeBaseDir();
+    const legacy = makeBaseDir();
+    try {
+      writeLegacyConfig(legacy, { default_contributors: { '/repo/alpha': 'CT-legacy' } });
+      expect(resolveDefaultContributor('/repo/alpha', base, legacy)).toBe('CT-legacy');
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+      rmSync(legacy, { recursive: true, force: true });
+    }
+  });
+
+  test('new location shadows legacy when both carry the key', () => {
+    const base = makeBaseDir();
+    const legacy = makeBaseDir();
+    try {
+      writeLegacyConfig(legacy, { default_contributors: { '/repo/alpha': 'CT-legacy' } });
+      setDefaultContributor('/repo/alpha', 'CT-current', base);
+      expect(resolveDefaultContributor('/repo/alpha', base, legacy)).toBe('CT-current');
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+      rmSync(legacy, { recursive: true, force: true });
+    }
+  });
+});

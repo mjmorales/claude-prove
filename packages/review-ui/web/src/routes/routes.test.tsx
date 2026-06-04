@@ -14,16 +14,23 @@
  * we use the `render()` return value, which constructs queries lazily via
  * `within(container.parentNode)`.
  *
+ * happy-dom lifecycle: we deliberately do NOT unregister happy-dom in afterAll.
+ * Bun runs every test file in one shared process and sorts them by path; this
+ * file sorts before `routes/runs/RunsPanels.test.tsx` (`rou` < `run`), which is
+ * the last DOM file and owns the final unregister teardown. Unregistering here
+ * would tear `window`/`document` out from under that still-pending DOM file.
+ * Setup is idempotent on register.
+ *
  * For scrum tests we swap in a fresh QueryClient per test and stub `fetch`
  * so the read-only API contract is exercised without a real server.
  */
 import "../test/setup";
-import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render } from "@testing-library/react";
 import { MemoryRouter, Navigate, Route, Routes } from "react-router-dom";
 import { useUrlState } from "../hooks/useUrlState";
+import { ActiveProjectProvider } from "../lib/active-project";
 import { useSelection } from "../lib/store";
 import { useScrumSelection } from "../lib/scrumStore";
 import { ScrumRoute } from "./scrum";
@@ -36,13 +43,18 @@ function AcbStub() {
   return <div data-testid="acb-surface">acb:{slug ?? "none"}</div>;
 }
 
+// Mirrors `App.tsx`, which mounts `ActiveProjectProvider` above the router so
+// every scrum view can read the active project key. The scrum views thread that
+// key into their query keys, so the provider is required for them to mount.
 function AppStub() {
   return (
-    <Routes>
-      <Route path="/" element={<Navigate to="/acb" replace />} />
-      <Route path="/acb/*" element={<AcbStub />} />
-      <Route path="/scrum/*" element={<ScrumRoute />} />
-    </Routes>
+    <ActiveProjectProvider>
+      <Routes>
+        <Route path="/" element={<Navigate to="/acb" replace />} />
+        <Route path="/acb/*" element={<AcbStub />} />
+        <Route path="/scrum/*" element={<ScrumRoute />} />
+      </Routes>
+    </ActiveProjectProvider>
   );
 }
 
@@ -96,19 +108,18 @@ describe("App routes", () => {
     // Clear any residual query string between tests — useUrlState reads
     // window.location.search on mount.
     window.history.replaceState(null, "", "/");
+    // ActiveProjectProvider seeds its key from the URL then localStorage; clear
+    // both so projectKey deterministically resolves to null (the startup-root
+    // default), matching the `[..., null]` shape the seeded query keys use.
+    localStorage.clear();
   });
   afterEach(() => {
     cleanup();
   });
-  // Undo happy-dom globals after this file's tests finish. Bun runs all test
-  // files in one process, so leaving `document`/`Blob`/etc. patched would
-  // break downstream non-DOM tests (e.g. those that pass a Node Blob to
-  // Bun.spawn as stdin).
-  afterAll(async () => {
-    if (GlobalRegistrator.isRegistered) {
-      await GlobalRegistrator.unregister();
-    }
-  });
+  // We deliberately do NOT unregister happy-dom here. Bun runs every test file
+  // in one shared process; this file sorts before `routes/scrum/tree.test.tsx`,
+  // the alphabetically-last DOM test file, which owns the teardown. Setup is
+  // idempotent on register.
 
   test("/ redirects to /acb and renders the ACB surface", () => {
     const r = render(
@@ -212,8 +223,10 @@ describe("App routes", () => {
       return { status: 404, body: { error: "not found" } };
     };
     const qc = makeClient();
-    qc.setQueryData(["scrum", "milestones", {}], { milestones });
-    qc.setQueryData(["scrum", "tasks", {}], {
+    // projectKey defaults to null (the startup-root default) under the bare
+    // ActiveProjectProvider, so seed under the project-scoped key shape.
+    qc.setQueryData(["scrum", "milestones", {}, null], { milestones });
+    qc.setQueryData(["scrum", "tasks", {}, null], {
       tasks: [mkTask("t1", "done"), mkTask("t2", "in_progress")],
     });
     const r = render(
@@ -279,7 +292,7 @@ describe("App routes", () => {
       return { status: 404, body: { error: "not found" } };
     };
     const qc = makeClient();
-    qc.setQueryData(["scrum", "task", "abc123"], fixture);
+    qc.setQueryData(["scrum", "task", "abc123", null], fixture);
     const r = render(
       <QueryClientProvider client={qc}>
         <MemoryRouter initialEntries={["/scrum/task/abc123"]}>

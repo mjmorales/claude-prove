@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useSelection } from "../lib/store";
+import { useActiveProject } from "../lib/active-project";
 import { cn } from "../lib/cn";
 import { PanelLoading } from "./PanelLoading";
 import { Empty } from "./Empty";
@@ -10,10 +11,11 @@ export function IntentsPanel() {
   const slug = useSelection((s) => s.slug);
   const selectCommit = useSelection((s) => s.selectCommit);
   const setRightTab = useSelection((s) => s.setRightTab);
+  const { projectKey } = useActiveProject();
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
 
   const { data, isPending, isFetching, isError } = useQuery({
-    queryKey: ["intents", slug],
+    queryKey: ["intents", projectKey, slug],
     queryFn: () => api.intents(slug!),
     enabled: !!slug,
     retry: false,

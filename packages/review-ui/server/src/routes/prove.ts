@@ -21,6 +21,7 @@ import { filterReferenced, listDecisions, resolveDecisionById } from "../decisio
 import { listStewardReports } from "../steward.js";
 import { readRunSummary } from "../runs.js";
 import { branchesForRun, diffFiles, gitAt, resolveWorktreePath } from "../git.js";
+import type { ProjectResolver } from "../projects.js";
 
 type FileRef = { path: string; ranges: string[] };
 type Annotation = { id: string; type: string; body: string };
@@ -61,9 +62,11 @@ type AssembledIntents = {
   }>;
 };
 
-export function registerProveRoutes(app: FastifyInstance, repoRoot: string) {
+export function registerProveRoutes(app: FastifyInstance, resolveProject: ProjectResolver) {
   // Tasks + steps view derived from plan.json overlaid with state.json.
   app.get<{ Params: { slug: string } }>("/api/runs/:slug/tasks", async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     const key = parseRunKey(req.params.slug);
     if (!key) return reply.code(400).send({ error: "bad slug" });
     const plan = await readJson<PlanJson>(path.join(runDir(repoRoot, key.branch, key.slug), "plan.json"));
@@ -76,6 +79,8 @@ export function registerProveRoutes(app: FastifyInstance, repoRoot: string) {
   app.get<{
     Querystring: { slug?: string; base?: string; head?: string };
   }>("/api/commits", async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     const { slug, base, head } = req.query;
     if (!base || !head) return reply.code(400).send({ error: "base and head required" });
     let cwd: string | undefined;
@@ -92,12 +97,16 @@ export function registerProveRoutes(app: FastifyInstance, repoRoot: string) {
   });
 
   // Intent manifest for a single commit.
-  app.get<{ Params: { sha: string } }>("/api/commits/:sha/intent", async (req) => {
+  app.get<{ Params: { sha: string } }>("/api/commits/:sha/intent", async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     return { sha: req.params.sha, manifest: getManifestForCommit(repoRoot, req.params.sha) };
   });
 
   // All manifests for a branch.
-  app.get<{ Params: { branch: string } }>("/api/branches/:branch/intents", async (req) => {
+  app.get<{ Params: { branch: string } }>("/api/branches/:branch/intents", async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     return {
       branch: req.params.branch,
       manifests: listManifestsForBranch(repoRoot, req.params.branch),
@@ -108,6 +117,8 @@ export function registerProveRoutes(app: FastifyInstance, repoRoot: string) {
   // branch + every task/worktree-agent branch attached to the run, groups by
   // intent_groups[].id, and lists commits without a manifest as orphans.
   app.get<{ Params: { slug: string } }>("/api/runs/:slug/intents", async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     const key = parseRunKey(req.params.slug);
     if (!key) return reply.code(400).send({ error: "bad slug" });
     const runBranches = await branchesForRun(repoRoot, key.slug);
@@ -270,12 +281,16 @@ export function registerProveRoutes(app: FastifyInstance, repoRoot: string) {
   });
 
   // Assembled ACB document for a branch (if `claude-prove acb assemble` ran).
-  app.get<{ Params: { branch: string } }>("/api/branches/:branch/acb", async (req) => {
+  app.get<{ Params: { branch: string } }>("/api/branches/:branch/acb", async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     return { branch: req.params.branch, doc: getAcbDocument(repoRoot, req.params.branch) };
   });
 
   // Decisions referenced by this run's docs (prd.json/plan.json body text).
   app.get<{ Params: { slug: string } }>("/api/runs/:slug/decisions", async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     const key = parseRunKey(req.params.slug);
     if (!key) return reply.code(400).send({ error: "bad slug" });
     const dir = runDir(repoRoot, key.branch, key.slug);
@@ -294,6 +309,8 @@ export function registerProveRoutes(app: FastifyInstance, repoRoot: string) {
   });
 
   app.get<{ Params: { id: string } }>("/api/decisions/:id", async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     const { id } = req.params;
     if (!/^[\w.\-]+$/.test(id)) return reply.code(400).send({ error: "bad id" });
     const resolved = await resolveDecisionById(repoRoot, id);
@@ -304,9 +321,15 @@ export function registerProveRoutes(app: FastifyInstance, repoRoot: string) {
   });
 
   // Steward audit reports.
-  app.get("/api/steward/reports", async () => ({ reports: await listStewardReports(repoRoot) }));
+  app.get("/api/steward/reports", async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
+    return { reports: await listStewardReports(repoRoot) };
+  });
 
   app.get<{ Params: { name: string } }>("/api/steward/reports/:name", async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
     const { name } = req.params;
     if (!/^[\w.\-]+\.md$/.test(name)) return reply.code(400).send({ error: "bad name" });
     const p = path.join(repoRoot, ".prove/steward", name);

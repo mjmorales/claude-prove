@@ -22,14 +22,27 @@
 
 import type { Database } from 'bun:sqlite';
 import {
+  type GroupVerdict,
+  type GroupVerdictRecord,
   type Store,
   type StoreOptions,
+  VERDICT_VALUES,
   listDomains,
   openStore,
   registerSchema,
   runMigrations,
+  upsertGroupVerdict,
 } from '@claude-prove/store';
-import { VERDICT_VALUES, type VerdictValue } from './schemas';
+
+// Re-export the canonical verdict vocabulary so existing
+// `@claude-prove/cli/acb/store` importers (the review-ui server) keep their
+// import site while the definitions single-source in `@claude-prove/store`.
+export {
+  type GroupVerdict,
+  type GroupVerdictRecord,
+  type VerdictValue,
+  VERDICT_VALUES,
+} from '@claude-prove/store';
 
 // ---------------------------------------------------------------------------
 // Schema registration
@@ -187,27 +200,6 @@ const ACB_TABLES = new Set<string>([
   'acb_review_state',
   'acb_group_verdicts',
 ]);
-
-/**
- * Review-UI verdict value set — alias for the canonical `VerdictValue` from
- * `./schemas.ts`. The alias is kept so call sites that reason about the
- * review-UI's DB contract still read idiomatically, but the underlying
- * vocabulary is the same one the manifest schema validator uses.
- *
- * Legacy persisted values (`'approved'`, `'discuss'`) are remapped via
- * `coerceLegacyVerdict` below on every DB read, and migration v3 rewrites
- * stored rows in place — so new code never observes a non-canonical value.
- */
-export type GroupVerdict = VerdictValue;
-
-export interface GroupVerdictRecord {
-  slug: string;
-  groupId: string;
-  verdict: GroupVerdict;
-  note: string | null;
-  fixPrompt: string | null;
-  updatedAt: string;
-}
 
 /**
  * Normalize a verdict string read from the DB to canonical `VerdictValue`.
@@ -451,7 +443,12 @@ export class AcbStore {
     }));
   }
 
-  /** Upsert a verdict on `(slug, groupId)`. Bumps `updated_at` to now(). */
+  /**
+   * Upsert a verdict on `(slug, groupId)`. Bumps `updated_at` to now().
+   *
+   * Thin delegate to the `@claude-prove/store` write-service so the upsert SQL
+   * and the `updated_at` stamp live in exactly one place across every caller.
+   */
   upsertGroupVerdict(
     slug: string,
     groupId: string,
@@ -459,18 +456,7 @@ export class AcbStore {
     note: string | null,
     fixPrompt: string | null,
   ): GroupVerdictRecord {
-    const updatedAt = isoNow();
-    this.store.run(
-      `INSERT INTO acb_group_verdicts (slug, group_id, verdict, note, fix_prompt, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(slug, group_id) DO UPDATE SET
-         verdict    = excluded.verdict,
-         note       = excluded.note,
-         fix_prompt = excluded.fix_prompt,
-         updated_at = excluded.updated_at`,
-      [slug, groupId, verdict, note, fixPrompt, updatedAt],
-    );
-    return { slug, groupId, verdict, note, fixPrompt, updatedAt };
+    return upsertGroupVerdict(this.store, slug, groupId, verdict, note, fixPrompt);
   }
 
   /** Delete the `(slug, groupId)` verdict row. No-op if absent. */

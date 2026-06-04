@@ -15,12 +15,14 @@
  *     missing context, orphaned runs)
  */
 
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openScrumStore } from '@claude-prove/cli/scrum/store';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { makeProjectResolver } from '../src/projects';
 import { registerScrumRoutes } from '../src/scrum';
 
 let repoRoot: string;
@@ -113,7 +115,7 @@ beforeAll(async () => {
   }
 
   app = Fastify({ logger: false });
-  registerScrumRoutes(app, repoRoot);
+  registerScrumRoutes(app, makeProjectResolver(repoRoot));
   await app.ready();
 });
 
@@ -318,7 +320,7 @@ describe('missing .prove/prove.db', () => {
   test('list endpoints return empty payloads instead of 500', async () => {
     const emptyRoot = mkdtempSync(join(tmpdir(), 'prove-scrum-empty-'));
     const emptyApp = Fastify({ logger: false });
-    registerScrumRoutes(emptyApp, emptyRoot);
+    registerScrumRoutes(emptyApp, makeProjectResolver(emptyRoot));
     await emptyApp.ready();
     try {
       const tasks = await emptyApp.inject({ method: 'GET', url: '/api/scrum/tasks' });
@@ -334,3 +336,187 @@ describe('missing .prove/prove.db', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task status transition (the single WRITE route)
+//
+// The transition route delegates to the `@claude-prove/store` `updateTaskStatus`
+// service. These tests assert the HTTP surface around that delegation: the
+// success path (200 + exactly one `status_changed` event), the closed-table
+// rejection (422), the behind-schema refusal (409, no mutation), and a
+// story-layer floor rejection (422). Each test boots a private tmp-rooted app
+// so the shared read-suite fixture is never mutated, and tears it down in
+// `afterEach`.
+// ---------------------------------------------------------------------------
+
+describe('POST /api/scrum/tasks/:id/status', () => {
+  // Each case registers its own app + tmp root here so teardown is uniform and
+  // the read-suite's shared `repoRoot` is never touched by a write.
+  let txApp: FastifyInstance | null = null;
+  let txRoot: string | null = null;
+
+  afterEach(async () => {
+    if (txApp) await txApp.close();
+    if (txRoot) rmSync(txRoot, { recursive: true, force: true });
+    txApp = null;
+    txRoot = null;
+  });
+
+  /** Boot a migrated scrum store at a fresh tmp root and an app bound to it. */
+  async function bootMigrated(seed: (store: ReturnType<typeof openScrumStore>) => void) {
+    const root = mkdtempSync(join(tmpdir(), 'prove-scrum-tx-'));
+    mkdirSync(join(root, '.prove'), { recursive: true });
+    const store = openScrumStore({ override: join(root, '.prove/prove.db') });
+    try {
+      seed(store);
+    } finally {
+      store.close();
+    }
+    const app = Fastify({ logger: false });
+    registerScrumRoutes(app, makeProjectResolver(root));
+    await app.ready();
+    txApp = app;
+    txRoot = root;
+    return { app, root };
+  }
+
+  /** Count `status_changed` events for one task by reading the db read-only. */
+  function statusChangedCount(root: string, taskId: string): number {
+    const db = new Database(join(root, '.prove/prove.db'), { readonly: true });
+    try {
+      const rows = db
+        .prepare<{ n: number }, [string]>(
+          "SELECT COUNT(*) AS n FROM scrum_events WHERE task_id = ? AND kind = 'status_changed'",
+        )
+        .all(taskId);
+      return rows[0]?.n ?? 0;
+    } finally {
+      db.close();
+    }
+  }
+
+  test('valid transition → 200 with the post-write task + exactly one status_changed event', async () => {
+    const { app, root } = await bootMigrated((store) => {
+      store.createTask({ id: 'tx-task', title: 'Flat task', status: 'backlog' });
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/scrum/tasks/tx-task/status',
+      payload: { status: 'ready' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = res.json() as { task: { id: string; status: string } };
+    expect(body.task.id).toBe('tx-task');
+    expect(body.task.status).toBe('ready');
+    // The service emits the transition event exactly once.
+    expect(statusChangedCount(root, 'tx-task')).toBe(1);
+  });
+
+  test('invalid transition → 422 with the service message', async () => {
+    const { app } = await bootMigrated((store) => {
+      // `done` is terminal: every outgoing edge is rejected by the service.
+      store.createTask({ id: 'tx-done', title: 'Done task', status: 'backlog' });
+      store.updateTaskStatus('tx-done', 'ready');
+      store.updateTaskStatus('tx-done', 'in_progress');
+      store.updateTaskStatus('tx-done', 'done');
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/scrum/tasks/tx-done/status',
+      payload: { status: 'ready' },
+    });
+    expect(res.statusCode).toBe(422);
+    const body = res.json() as { error: string };
+    expect(body.error).toContain('invalid transition');
+  });
+
+  test('story-layer floor rejection → 422', async () => {
+    const { app } = await bootMigrated((store) => {
+      // A `layer=story` task with zero acceptance criteria cannot enter `ready`:
+      // the story acceptance floor rejects it from the service.
+      store.createTask({
+        id: 'tx-story',
+        title: 'Story without criteria',
+        status: 'backlog',
+        layer: 'story',
+      });
+    });
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/scrum/tasks/tx-story/status',
+      payload: { status: 'ready' },
+    });
+    expect(res.statusCode).toBe(422);
+    const body = res.json() as { error: string };
+    expect(body.error).toContain('no active acceptance criteria');
+  });
+
+  test('behind-schema project → 409 with the structured body, no mutation', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'prove-scrum-behind-'));
+    mkdirSync(join(root, '.prove'), { recursive: true });
+    // Re-land the live scrum domain so the guard's expected-version lookup sees
+    // scrum's real head — a prior test file's `clearRegistry()` may have wiped
+    // it. Opening an in-memory scrum store calls `ensureScrumSchemaRegistered`.
+    openScrumStore({ path: ':memory:' }).close();
+    // Seed a `_migrations_log` at scrum@1 (below the live scrum head) so the db
+    // reads as behind. The guard refuses before opening the writable store, so
+    // no scrum tables are needed for the refusal.
+    seedBehindScrumDb(root);
+
+    const app = Fastify({ logger: false });
+    registerScrumRoutes(app, makeProjectResolver(root));
+    await app.ready();
+    txApp = app;
+    txRoot = root;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/scrum/tasks/whatever/status',
+      payload: { status: 'ready' },
+    });
+    expect(res.statusCode).toBe(409);
+    const body = res.json() as { error: string; project: string; store: { behind: boolean } };
+    expect(body.error).toBe('store schema behind');
+    expect(body.project).toBe(root);
+    expect(body.store.behind).toBe(true);
+    // The refusal never opened the writable (migrating) store, so the db keeps
+    // its sole seeded `_migrations_log` row and grows no scrum tables.
+    expect(scrumTablesExist(root)).toBe(false);
+  });
+});
+
+/**
+ * Seed `<root>/.prove/prove.db` with only a `_migrations_log` row at scrum@1.
+ * That sits below the live scrum head, so the guard reports the project behind
+ * without the db carrying any scrum domain tables.
+ */
+function seedBehindScrumDb(root: string): void {
+  const db = new Database(join(root, '.prove/prove.db'), { create: true });
+  db.exec(`
+    CREATE TABLE _migrations_log (
+      domain TEXT NOT NULL,
+      version INTEGER NOT NULL,
+      description TEXT NOT NULL,
+      applied_at TEXT NOT NULL,
+      PRIMARY KEY (domain, version)
+    );
+    INSERT INTO _migrations_log (domain, version, description, applied_at)
+      VALUES ('scrum', 1, 'create scrum domain tables', '2026-01-01T00:00:00Z');
+  `);
+  db.close();
+}
+
+/** Whether the db grew any `scrum_`-prefixed table (proof a write opened it). */
+function scrumTablesExist(root: string): boolean {
+  const db = new Database(join(root, '.prove/prove.db'), { readonly: true });
+  try {
+    const rows = db
+      .prepare<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'scrum_%'",
+      )
+      .all();
+    return rows.length > 0;
+  } finally {
+    db.close();
+  }
+}

@@ -1,14 +1,18 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   ScrumDep,
   ScrumEvent,
   ScrumRunLink,
   ScrumTask,
+  TaskStatus,
 } from "@claude-prove/cli/scrum/types";
-import { scrumApi } from "../../../lib/scrumApi";
+import { allowedTransitions, scrumApi } from "../../../lib/scrumApi";
+import { isBehindSchemaError } from "../../../lib/api";
+import { useActiveProject } from "../../../lib/active-project";
 import { useScrumSelection } from "../../../lib/scrumStore";
+import { useWriteAffordancesDisabled } from "../../../components/BehindSchemaBanner";
 import {
   EmptyState,
   ErrorBox,
@@ -33,6 +37,7 @@ const STALE_MS = 30_000;
  */
 export function ScrumTaskDetailView() {
   const { id = "" } = useParams<{ id: string }>();
+  const { projectKey } = useActiveProject();
   const setTaskId = useScrumSelection((s) => s.setTaskId);
 
   useEffect(() => {
@@ -40,7 +45,7 @@ export function ScrumTaskDetailView() {
   }, [id, setTaskId]);
 
   const q = useQuery({
-    queryKey: ["scrum", "task", id],
+    queryKey: ["scrum", "task", id, projectKey],
     queryFn: () => scrumApi.task(id),
     staleTime: STALE_MS,
     enabled: !!id,
@@ -55,6 +60,8 @@ export function ScrumTaskDetailView() {
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6">
       <MetadataHeader task={task} tags={tags} blockedBy={blocked_by} blocking={blocking} />
+
+      <TransitionControls taskId={id} status={task.status} projectKey={projectKey} />
 
       <section aria-labelledby="td-timeline">
         <h2 id="td-timeline" className="eyebrow mb-2">Timeline</h2>
@@ -83,8 +90,107 @@ export function ScrumTaskDetailView() {
         )}
       </section>
 
-      <ContextBundlePanel taskId={id} />
+      <ContextBundlePanel taskId={id} projectKey={projectKey} />
     </div>
+  );
+}
+
+/**
+ * Status-transition controls. Renders one button per allowed forward
+ * transition for the current status (derived from the closed transition table
+ * mirrored in `lib/scrumApi.ts`). Clicking POSTs the target status to the
+ * server's single write route, which delegates to the shared store
+ * `updateTaskStatus` service.
+ *
+ * Outcome routing mirrors the review session's write surface:
+ *   - success → invalidate every `["scrum", ...]` query so the detail, board,
+ *     tree, and now-views refetch the new status.
+ *   - a behind-schema 409 (`isBehindSchemaError`) → the read-only notice.
+ *   - any other failure (the service's 422 invalid-transition / story-floor
+ *     message) → render that message inline so the operator sees why.
+ *
+ * Buttons go inert under `useWriteAffordancesDisabled` (active project behind
+ * schema) and while a transition is in flight.
+ */
+function TransitionControls({
+  taskId,
+  status,
+  projectKey,
+}: {
+  taskId: string;
+  status: TaskStatus;
+  projectKey: string | null;
+}) {
+  const qc = useQueryClient();
+  const writesDisabled = useWriteAffordancesDisabled();
+  const [submitting, setSubmitting] = useState<TaskStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [schemaBlocked, setSchemaBlocked] = useState(false);
+
+  const targets = allowedTransitions(status);
+
+  const transition = useCallback(
+    async (next: TaskStatus) => {
+      if (writesDisabled || submitting) return;
+      setSubmitting(next);
+      setError(null);
+      setSchemaBlocked(false);
+      try {
+        await scrumApi.transitionTask(taskId, next);
+        // The transition touches this task and the rollups every scrum view
+        // reads, so invalidate the whole project-scoped family at once.
+        qc.invalidateQueries({ queryKey: ["scrum"] });
+      } catch (err) {
+        if (isBehindSchemaError(err)) {
+          setSchemaBlocked(true);
+        } else {
+          setError(err instanceof Error ? err.message : String(err));
+        }
+      } finally {
+        setSubmitting(null);
+      }
+    },
+    [writesDisabled, submitting, taskId, qc],
+  );
+
+  if (targets.length === 0) {
+    return (
+      <section aria-labelledby="td-transition">
+        <h2 id="td-transition" className="eyebrow mb-2">Transition</h2>
+        <EmptyState>This status is terminal — no transitions available.</EmptyState>
+      </section>
+    );
+  }
+
+  return (
+    <section aria-labelledby="td-transition">
+      <h2 id="td-transition" className="eyebrow mb-2">Transition</h2>
+      <div className="flex flex-wrap items-center gap-2">
+        {targets.map((next) => (
+          <button
+            key={next}
+            type="button"
+            data-testid={`transition-${next}`}
+            disabled={writesDisabled || submitting !== null}
+            onClick={() => transition(next)}
+            className={`btn btn-subtle btn-sm ${writesDisabled || submitting !== null ? "is-disabled" : ""}`}
+          >
+            <span>→ {next}</span>
+          </button>
+        ))}
+      </div>
+      {schemaBlocked ? (
+        <p role="alert" data-testid="transition-schema-blocked" className="mt-2 text-[12px] text-amber-bright">
+          <span className="text-amber mr-1.5">⚠</span>
+          Read-only — this project sits behind the expected store schema; the
+          transition was refused until it is migrated.
+        </p>
+      ) : error ? (
+        <p role="alert" data-testid="transition-error" className="mt-2 text-[12px] text-anom">
+          Transition failed: {error}
+        </p>
+      ) : null}
+    </section>
   );
 }
 
@@ -262,10 +368,10 @@ function DecisionsList({
   );
 }
 
-function ContextBundlePanel({ taskId }: { taskId: string }) {
+function ContextBundlePanel({ taskId, projectKey }: { taskId: string; projectKey: string | null }) {
   const [open, setOpen] = useState(false);
   const q = useQuery({
-    queryKey: ["scrum", "context-bundle", taskId],
+    queryKey: ["scrum", "context-bundle", taskId, projectKey],
     queryFn: () => scrumApi.contextBundle(taskId),
     staleTime: STALE_MS,
     enabled: open,

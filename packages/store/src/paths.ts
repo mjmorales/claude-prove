@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
+import { upsert } from './project-registry';
 
 export interface ResolveOptions {
   /** Starting directory for the git-root walk. Defaults to `process.cwd()`. */
@@ -19,12 +20,37 @@ const PROVE_DIR = '.prove';
  * git-root discovery. When the walk reaches the filesystem root without
  * finding `.git`, an error is thrown naming the original starting cwd so
  * callers can produce actionable messages.
+ *
+ * Side effect: the git-root branch records the resolved repository in the
+ * machine-global project registry. This is the single choke point every store
+ * consumer reaches (directly or via `openStore`), so registration rides the
+ * resolution that already happens rather than threading a new call site
+ * through each topic. The `override` branch is skipped — an explicit path is a
+ * caller-supplied location with no git-root identity to register.
  */
 export function resolveDbPath(opts: ResolveOptions = {}): string {
   if (opts.override) return resolve(opts.override);
   const start = opts.cwd ?? process.cwd();
   const root = findGitRoot(start);
+  registerProjectRoot(root);
   return join(root, PROVE_DIR, DB_FILENAME);
+}
+
+/**
+ * Record the resolved git root in the project registry, best-effort. The
+ * registry's own new-or-stale gate keeps this cheap on the hot path (a fresh
+ * entry triggers no write), and its worktree→main-root fold means a sub-task
+ * worktree registers its main root. A registry failure must never break the
+ * resolving command, so any throw is swallowed: registration is a convenience,
+ * never a precondition for opening the store.
+ */
+function registerProjectRoot(root: string): void {
+  try {
+    upsert(root);
+  } catch {
+    // Best-effort: the registry is auxiliary state. Swallow and continue so a
+    // corrupt or unwritable `~/.claude-prove/` never fails db resolution.
+  }
 }
 
 function findGitRoot(start: string): string {

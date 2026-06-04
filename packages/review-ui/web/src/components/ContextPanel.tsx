@@ -1,29 +1,33 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useSelection } from "../lib/store";
+import { useActiveProject } from "../lib/active-project";
 import { cn } from "../lib/cn";
 import { PanelLoading } from "./PanelLoading";
 import { Empty } from "./Empty";
 
 export function ContextPanel() {
   const slug = useSelection((s) => s.slug);
+  const { projectKey } = useActiveProject();
 
   const runQ = useQuery({
-    queryKey: ["run", slug],
+    queryKey: ["run", projectKey, slug],
     queryFn: () => api.run(slug!),
     enabled: !!slug,
   });
   const tasksQ = useQuery({
-    queryKey: ["tasks", slug],
+    queryKey: ["tasks", projectKey, slug],
     queryFn: () => api.tasks(slug!),
     enabled: !!slug,
     retry: false,
   });
-  // Include the run slug in the cache key — steward reports are global, but
-  // keying by slug keeps the cache partitioned per run and avoids stale
-  // cross-run data when the user navigates between runs.
+  // Scope the cache key by project (the fetch funnel injects `?project=` at
+  // request time, so an unchanged key would serve a stale project's reports)
+  // and by run slug — steward reports are per-project, and keying by slug keeps
+  // the cache partitioned per run so navigation between runs never shows stale
+  // cross-run data.
   const stewardQ = useQuery({
-    queryKey: ["steward-reports", slug],
+    queryKey: ["steward-reports", projectKey, slug],
     queryFn: () => api.stewardReports(),
   });
 

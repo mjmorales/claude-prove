@@ -1,6 +1,11 @@
 import { useEffect } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { subscribeSse, type SseChangeEvent } from "./sseBus";
+import {
+  setActiveProjectKey,
+  subscribeSse,
+  type SseChangeEvent,
+} from "./sseBus";
+import { pathToProjectId, useActiveProject } from "../lib/active-project";
 
 // Topical groups of react-query keys. The SSE payload's path prefix selects
 // which groups to invalidate -- invalidating all 15 keys on every heartbeat
@@ -67,14 +72,61 @@ function keysForPath(relPath: string): readonly string[] {
   return ALL_KEYS;
 }
 
+/**
+ * Decide whether an SSE change event belongs to the active project.
+ *
+ * Acceptance policy for the null active key: the bus is connected to the
+ * unparameterized `/api/events` stream (the server's startup-root default),
+ * which the client has no project id for. Rather than guess that root's
+ * encoded id, the client accepts every event from that stream — the connection
+ * itself is the demux. Because the bus reconnects on a key change and the
+ * server scopes each stream to one project, no other project's events can
+ * arrive on the null-key stream, so blanket acceptance is correct, not lossy.
+ *
+ * With a non-null active key, only events whose `project` matches it are
+ * accepted; everything else (a late event from a stream being torn down) is
+ * dropped without invalidating, so a project switch never refetches the wrong
+ * project's caches. The two operands live on different axes: `activeKey` is the
+ * DECODED registry path, `evt.project` is the server's encoded id. Compare on
+ * one axis by encoding the key once (`pathToProjectId`) — never decode both,
+ * which a literal-`%` path like `/repos/100%done` would crash with `URIError`.
+ */
+function eventMatchesActiveProject(
+  evt: SseChangeEvent,
+  activeKey: string | null,
+): boolean {
+  if (activeKey === null) return true;
+  if (evt.project === undefined) return false;
+  return evt.project === pathToProjectId(activeKey);
+}
+
+/**
+ * Subscribe the active project's file-change stream to react-query
+ * invalidation. Reconnects the shared SSE bus whenever the active project key
+ * changes, then narrows each accepted event to the affected query groups.
+ *
+ * Invalidation keys here are the bare resource name (e.g. `["runs"]`), which
+ * relies on react-query's default prefix matching: `invalidateQueries` with a
+ * partial key invalidates every query whose key STARTS with it, so `["runs"]`
+ * still reaches the project-scoped `["runs", projectKey]` caches the panels
+ * register. Project isolation is enforced on a second axis: the bus carries one
+ * project's stream at a time and `eventMatchesActiveProject` drops any event
+ * from a stream being torn down, so a project switch never refetches another
+ * project's caches.
+ */
 export function useEventStream() {
   const qc = useQueryClient();
+  const { projectKey } = useActiveProject();
   useEffect(() => {
+    // Reconnect the bus to the active project's stream before subscribing, so
+    // the first events this subscriber sees already come from the right stream.
+    setActiveProjectKey(projectKey);
     const unsubscribe = subscribeSse({
       onChange: (evt: SseChangeEvent) => {
+        if (!eventMatchesActiveProject(evt, projectKey)) return;
         invalidate(qc, keysForPath(evt.path));
       },
     });
     return unsubscribe;
-  }, [qc]);
+  }, [qc, projectKey]);
 }

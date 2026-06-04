@@ -1,23 +1,28 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api, type DecisionRef } from "../lib/api";
+import { api } from "../lib/api";
 import { useSelection } from "../lib/store";
-import { cn } from "../lib/cn";
+import { useActiveProject } from "../lib/active-project";
 import { Markdown } from "./Markdown";
 import { PanelLoading } from "./PanelLoading";
 import { Empty } from "./Empty";
+import {
+  DecisionGroupLabel as GroupLabel,
+  DecisionRow as Row,
+} from "../lib/decision-list-presentation";
 
 export function DecisionsPanel() {
   const slug = useSelection((s) => s.slug);
+  const { projectKey } = useActiveProject();
   const [selected, setSelected] = useState<string | null>(null);
 
   const { data, isPending, isFetching } = useQuery({
-    queryKey: ["decisions", slug],
+    queryKey: ["decisions", projectKey, slug],
     queryFn: () => api.decisions(slug!),
     enabled: !!slug,
   });
   const { data: detail, isFetching: detailFetching } = useQuery({
-    queryKey: ["decision", selected],
+    queryKey: ["decision", projectKey, selected],
     queryFn: () => api.decision(selected!),
     enabled: !!selected,
   });
@@ -77,41 +82,6 @@ export function DecisionsPanel() {
           </>
         )}
       </div>
-    </div>
-  );
-}
-
-function Row({
-  d,
-  onOpen,
-  tone,
-}: {
-  d: DecisionRef;
-  onOpen: () => void;
-  tone?: "amber";
-}) {
-  return (
-    <button
-      onClick={onOpen}
-      className={cn(
-        "w-full text-left px-3 py-2 flex items-start gap-3 border-l-2 border-b border-bg-line/60 hover:bg-bg-panel transition-colors font-mono text-[12px]",
-        tone === "amber" ? "border-l-amber/50" : "border-l-transparent",
-      )}
-    >
-      <div className="min-w-0 flex-1">
-        <div className="text-fg-base truncate">{d.title}</div>
-        <div className="text-[10px] text-fg-dim truncate">{d.id}</div>
-      </div>
-      {d.date && <span className="text-[10px] text-fg-dim tabular-nums shrink-0">{d.date}</span>}
-    </button>
-  );
-}
-
-function GroupLabel({ text, tone }: { text: string; tone?: "amber" }) {
-  return (
-    <div className="px-3 py-1.5 bg-bg-deep/60 border-b border-bg-line flex items-center gap-2">
-      <span className={cn("label", tone === "amber" ? "text-amber" : "label-bright")}>{text}</span>
-      <span className="flex-1 h-px bg-bg-line" />
     </div>
   );
 }

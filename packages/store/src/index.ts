@@ -6,7 +6,28 @@ export {
   type DomainSnapshot,
   type MigrationResult,
 } from './migrate';
+export {
+  type MachineConfig,
+  machineConfigFilePath,
+  readMachineConfig,
+  resolveDefaultContributor,
+  setDefaultContributor,
+} from './machine-config';
 export { type ResolveOptions, resolveDbPath } from './paths';
+export {
+  add,
+  canonicalProjectRoot,
+  hide,
+  list,
+  type ProjectEntry,
+  type ProjectRegistry,
+  prune,
+  read,
+  registryBaseDir,
+  registryFilePath,
+  remove,
+  upsert,
+} from './project-registry';
 export {
   clearRegistry,
   getMigrations,
@@ -15,3 +36,26 @@ export {
   registerSchema,
   type SchemaDef,
 } from './registry';
+export {
+  type GroupVerdict,
+  type GroupVerdictRecord,
+  upsertGroupVerdict,
+  VERDICT_VALUES,
+  type VerdictValue,
+} from './services/acb-writes';
+export {
+  type Acceptance,
+  type AcceptanceCriterion,
+  type AcceptanceCriterionStatus,
+  type AcceptancePolicy,
+  type AcceptanceScope,
+  type AcceptanceVerifiesBy,
+  type GateState,
+  type GateVerdict,
+  type TaskLayer,
+  type TaskStatus,
+  type TransitionTask,
+  updateTaskStatus,
+  type VerificationRecord,
+  type VerificationVerdict,
+} from './services/scrum-writes';

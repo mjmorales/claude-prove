@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { ScrumEvent, ScrumTask } from "@claude-prove/cli/scrum/types";
 import { scrumApi, type BrokenDep } from "../../lib/scrumApi";
+import { useActiveProject } from "../../lib/active-project";
 import { EmptyState, ErrorBox, Loading, TaskCard, relTime } from "./_components";
 
 const STALE_MS = 30_000;
@@ -16,8 +17,10 @@ const STALE_MS = 30_000;
  * payload so an empty category shows its own "all clear" state.
  */
 export function ScrumAlertsView() {
+  const { projectKey } = useActiveProject();
+
   const q = useQuery({
-    queryKey: ["scrum", "alerts"],
+    queryKey: ["scrum", "alerts", projectKey],
     queryFn: () => scrumApi.alerts(),
     staleTime: STALE_MS,
   });

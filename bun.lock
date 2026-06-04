@@ -11,9 +11,9 @@
     },
     "packages/cli": {
       "name": "@claude-prove/cli",
-      "version": "0.0.0",
+      "version": "3.4.0",
       "bin": {
-        "prove": "./bin/run.ts",
+        "claude-prove": "./bin/run.ts",
       },
       "dependencies": {
         "@claude-prove/installer": "workspace:*",
@@ -41,6 +41,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@claude-prove/cli": "workspace:*",
+        "@claude-prove/installer": "workspace:*",
         "@claude-prove/shared": "workspace:*",
         "@claude-prove/store": "workspace:*",
         "@fastify/cors": "^10.0.1",

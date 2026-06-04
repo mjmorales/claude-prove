@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import type { ScrumTask, TaskStatus } from "@claude-prove/cli/scrum/types";
 import { scrumApi } from "../../lib/scrumApi";
+import { useActiveProject } from "../../lib/active-project";
 import { EmptyState, ErrorBox, Loading, TASK_STATUSES, TaskCard, statusMeta } from "./_components";
 
 const STALE_MS = 30_000;
@@ -11,8 +12,10 @@ const STALE_MS = 30_000;
  * mirrors the SQLite store, which only advances via CLI/agent.
  */
 export function ScrumBoardView() {
+  const { projectKey } = useActiveProject();
+
   const q = useQuery({
-    queryKey: ["scrum", "tasks", {}],
+    queryKey: ["scrum", "tasks", {}, projectKey],
     queryFn: () => scrumApi.tasks(),
     staleTime: STALE_MS,
   });
@@ -70,6 +73,8 @@ function Column({ status, tasks }: { status: TaskStatus; tasks: ScrumTask[] }) {
 export function bucketByStatus(tasks: ScrumTask[]): Record<TaskStatus, ScrumTask[]> {
   const out: Record<TaskStatus, ScrumTask[]> = {
     backlog: [],
+    proposed: [],
+    accepted: [],
     ready: [],
     in_progress: [],
     review: [],

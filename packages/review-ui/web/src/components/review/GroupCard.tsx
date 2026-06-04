@@ -3,6 +3,7 @@ import type { GroupVerdict, IntentGroupView } from "../../lib/api";
 import { PALETTE, tokenOf, VERDICTS } from "./verdictTokens";
 import { VerdictStamp } from "./VerdictStamp";
 import { InlineDiff } from "./InlineDiff";
+import { useWriteAffordancesDisabled } from "../BehindSchemaBanner";
 
 export type ReviewGroup = IntentGroupView;
 
@@ -52,6 +53,12 @@ export function GroupCard({
   const cls = group.classification.toLowerCase();
   const risky = SPECULATIVE.has(cls);
   const inferred = INFERRED.has(cls);
+
+  // A store behind schema must not accept writes — a verdict written through a
+  // stale schema risks corrupting records the server can no longer interpret.
+  // OR this seam into the CTA disabled predicate so the verdict strip goes
+  // read-only the moment the active project reports behind-schema.
+  const writesDisabled = useWriteAffordancesDisabled();
 
   const judgmentCalls = group.annotations.filter((a) => a.type === "judgment_call");
   const flags = group.annotations.filter((a) => a.type === "flag");
@@ -167,11 +174,11 @@ export function GroupCard({
                 <button
                   key={k}
                   onClick={() => onVerdict(k)}
-                  disabled={!!working}
+                  disabled={!!working || writesDisabled}
                   className={cn(
                     "btn btn-sm",
                     active ? spec.btnClass : "btn-ghost",
-                    busy && "is-disabled",
+                    (busy || writesDisabled) && "is-disabled",
                   )}
                   title={`${spec.label} (${spec.keycap})`}
                 >

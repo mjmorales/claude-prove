@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api, type BranchRef } from "../lib/api";
 import { useSelection } from "../lib/store";
+import { useActiveProject } from "../lib/active-project";
 import { cn } from "../lib/cn";
 import { PanelLoading } from "./PanelLoading";
 import { Empty } from "./Empty";
@@ -11,20 +12,21 @@ export function BranchTree() {
   const pending = useSelection((s) => s.pendingMode);
   const selectBranch = useSelection((s) => s.selectBranch);
   const togglePending = useSelection((s) => s.togglePending);
+  const { projectKey } = useActiveProject();
 
   const { data: run, isPending: runPending, isFetching: runFetching } = useQuery({
-    queryKey: ["run", slug],
+    queryKey: ["run", projectKey, slug],
     queryFn: () => api.run(slug!),
     enabled: !!slug,
   });
   const { data: branchesData, isPending: branchesPending, isFetching: branchesFetching } =
     useQuery({
-      queryKey: ["branches", slug],
+      queryKey: ["branches", projectKey, slug],
       queryFn: () => api.runBranches(slug!),
       enabled: !!slug,
     });
   const { data: statusData } = useQuery({
-    queryKey: ["status", slug],
+    queryKey: ["status", projectKey, slug],
     queryFn: () => api.runStatus(slug!),
     enabled: !!slug,
     refetchInterval: 4000,

@@ -8,14 +8,16 @@
 
 import { beforeAll, describe, expect, test } from 'bun:test';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { makeProjectResolver } from '../src/projects';
 import { registerDiffRoutes } from '../src/routes/diff';
 
 let app: FastifyInstance;
 
 beforeAll(async () => {
   app = Fastify({ logger: false });
-  // Guards fire before git is invoked, so the repoRoot value is never reached.
-  registerDiffRoutes(app, '/nonexistent-repo-root');
+  // No `?project=` is sent, so the resolver returns this fallback root; the ref/
+  // path guards then fire before git is invoked, so the root is never reached.
+  registerDiffRoutes(app, makeProjectResolver('/nonexistent-repo-root'));
   await app.ready();
 });
 

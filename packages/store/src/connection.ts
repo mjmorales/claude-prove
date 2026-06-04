@@ -6,11 +6,11 @@
 // node:sqlite` import would resolve cleanly under Node yet break every
 // transaction call site — a worse failure than the import throw it replaces.
 // Every shipped consumer runs under Bun: the CLI is a Bun binary and the
-// review-ui server's production entry is `bun run .../server/src/index.ts`
-// (packages/review-ui/Dockerfile CMD; runtime base oven/bun:1-alpine). The
-// `node dist/index.js` / `tsx watch` scripts in server/package.json are stale
-// scaffolding for a tsc `dist/` the Docker image never builds — launch the
-// server under Bun, never bare Node.
+// review-ui server launches in-process under the native daemon — its dev and
+// production entry is `bun run .../server/src/index.ts`. The compiled binary
+// loads the tsc-built `dist/index.js` (also under Bun). Launch the server
+// under Bun, never bare Node — node:sqlite lacks the transaction() API this
+// wrapper depends on.
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
