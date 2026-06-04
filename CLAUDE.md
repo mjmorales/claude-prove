@@ -1,8 +1,8 @@
 <!-- prove:managed:start -->
 # claude-prove
 
-<!-- prove:plugin-version:3.3.0 -->
-**Prove plugin v3.3.0** — if `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" --version` does not match v3.3.0, run `/prove:update` to sync.
+<!-- prove:plugin-version:3.3.1 -->
+**Prove plugin v3.3.1** — if `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" --version` does not match v3.3.1, run `/prove:update` to sync.
 
 JavaScript/TypeScript (npm)
 
