@@ -35,6 +35,10 @@ Run before committing:
 
 @__PLUGIN_DIR__/references/design-principles.md
 
+### Agent Routing Map
+
+@__PLUGIN_DIR__/references/agent-routing.md
+
 ### LLM-Optimized Coding Standards
 
 @references/llm-coding-standards.md

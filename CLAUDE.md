@@ -1,8 +1,8 @@
 <!-- prove:managed:start -->
 # claude-prove
 
-<!-- prove:plugin-version:3.0.0 -->
-**Prove plugin v3.0.0** — if `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts --version` does not match v3.0.0, run `/prove:update` to sync.
+<!-- prove:plugin-version:3.0.2 -->
+**Prove plugin v3.0.2** — if `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts --version` does not match v3.0.2, run `/prove:update` to sync.
 
 JavaScript/TypeScript (npm)
 
@@ -42,6 +42,10 @@ Only fall back to Glob/Grep when the index doesn't cover what you need.
 ### Design Principles
 
 @/Users/manuelmorales/dev/claude-prove/references/design-principles.md
+
+### Agent Routing Map
+
+@/Users/manuelmorales/dev/claude-prove/references/agent-routing.md
 
 ### LLM-Optimized Coding Standards
 

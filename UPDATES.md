@@ -6,6 +6,12 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — Agent Routing Map built-in reference
+
+*(Additive — new bundled reference auto-injected into generated CLAUDE.md, nothing to configure.)* A new `references/agent-routing.md` cheatsheet maps task cues to the correct delegation surface — which subagent, skill, or direct CLI call owns a given flow. Centerpiece: the scrum routing convention (judgment writes → `scrum-master` agent; reads and skill-internal mechanical writes → direct `claude-prove scrum`; reconciliation → hooks only; never raw `sqlite3` against `.prove/prove.db`), plus a do-not-invoke-ad-hoc table for pipeline-internal agents (`validation-agent`, `brief-judge`, `pcd-*`).
+
+**Adoption.** The composer injects the reference as a built-in default (third entry in `PLUGIN_DEFAULT_REFERENCES`, after the CLI reference and Design Principles), so it lands automatically the next time CLAUDE.md is regenerated — `/prove:docs claude-md`, or `/prove:update` Step 8. No `.claude/.prove.json` change is needed; a user entry pointing at the same path is deduped, and `/prove:update` feature discovery excludes it from the `claude_md.references` offer list alongside the other built-ins.
+
 ## Unreleased — report/v2: galley-proof redesign + first-class code rendering
 
 *(Auto-adopted — no config migration. Hand-authored `report render --file <doc.json>` inputs must move to `schema_version: "2"`.)* The report/v1 HTML renderer's visual language is redesigned and the block model learns to distinguish prose from code.

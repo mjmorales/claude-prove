@@ -40,8 +40,8 @@ function fullScan(): ScanResult {
     prove_config: {
       exists: true,
       validators: [
-        { name: 'build', command: 'go build ./...', phase: 'build' },
-        { name: 'test', command: 'go test ./...', phase: 'test' },
+        { name: 'build', command: 'go build ./...', prompt: '', skill: '', phase: 'build' },
+        { name: 'test', command: 'go test ./...', prompt: '', skill: '', phase: 'test' },
       ],
       has_index: true,
       references: [],
@@ -250,6 +250,12 @@ describe('references', () => {
     expect(r).toContain('## References');
     expect(r).toContain('### claude-prove CLI Reference');
     expect(r).toContain('@/opt/prove/references/claude-prove-reference.md');
+  });
+
+  test('built-in agent routing map injected when prove exists', () => {
+    const r = compose(fullScan(), '/opt/prove');
+    expect(r).toContain('### Agent Routing Map');
+    expect(r).toContain('@/opt/prove/references/agent-routing.md');
   });
 
   test('built-in appears before user-configured references', () => {

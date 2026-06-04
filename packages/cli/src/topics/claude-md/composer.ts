@@ -38,6 +38,11 @@ export const PLUGIN_DEFAULT_REFERENCES: ReadonlyArray<ReferenceEntry> = [
     path: '$PLUGIN_DIR/references/design-principles.md',
     label: 'Design Principles',
   },
+  {
+    // Task-cue -> subagent/skill/CLI delegation cheatsheet.
+    path: '$PLUGIN_DIR/references/agent-routing.md',
+    label: 'Agent Routing Map',
+  },
 ];
 
 /**
