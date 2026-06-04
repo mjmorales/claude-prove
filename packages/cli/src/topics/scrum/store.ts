@@ -683,11 +683,11 @@ export class ScrumStore {
    * `status_changed` event emission.
    *
    * Actor resolution stays at this CLI boundary: the `agent` argument is the
-   * already-resolved attribution the caller supplies, forwarded verbatim so the
-   * service stamps it (`agent ?? null`) exactly as this method did before
-   * delegating — attribution behavior is unchanged. The service returns the
-   * narrow transition view; this method re-reads the full decoded `ScrumTask`
-   * for callers that depend on the wider shape.
+   * already-resolved attribution the caller supplies, forwarded verbatim, and
+   * the service stamps it (`agent ?? null`) — one attribution semantic across
+   * both call paths. The service returns the narrow transition view; this
+   * method re-reads the full decoded `ScrumTask` for callers that depend on
+   * the wider shape.
    */
   updateTaskStatus(id: string, next: TaskStatus, agent?: string | null): ScrumTask {
     updateTaskStatusViaService(this.store, id, next, agent);
