@@ -19,9 +19,13 @@
  *                              implicit per project" mechanism. `set` records the
  *                              mapping (requires --id); `show` prints the resolved
  *                              CT-UUID, or `null` when the root is unmapped. This
- *                              verb is store-INDEPENDENT: it reads/writes the
- *                              home-dir config (`~/.config/claude-prove/config.json`,
- *                              XDG-honored) and never opens `.prove/prove.db`. The
+ *                              verb is store-INDEPENDENT: it never opens
+ *                              `.prove/prove.db`. `set` writes to the machine-global
+ *                              `~/.claude-prove/config.json` only; `show` resolves
+ *                              from that location and falls back per-key to the
+ *                              legacy XDG location
+ *                              (`${XDG_CONFIG_HOME:-~/.config}/claude-prove/config.json`)
+ *                              so an un-migrated machine still resolves. The
  *                              CT-UUID is stored verbatim and is NOT validated
  *                              against any single project's registry, since the
  *                              config spans every project on the machine.
@@ -44,11 +48,11 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
+import { resolveDefaultContributor, setDefaultContributor } from '@claude-prove/store';
 import { renderProvenanceFrontmatter } from '../../install/bootstrap-identity';
 import { type ScrumStore, openScrumStore } from '../store';
 import type { Contributor, ContributorStatus } from '../types';
 import { CONTRIBUTOR_STATUSES } from '../types';
-import { resolveDefaultContributor, setDefaultContributor } from '../user-config';
 
 export interface ContributorCmdFlags {
   slug?: string;
@@ -61,9 +65,16 @@ export interface ContributorCmdFlags {
   workspaceRoot?: string;
   // `default <set|show>` project-root → default-contributor mapping.
   projectRoot?: string;
-  // Test seam for `default`: an explicit config base dir so tests never touch
-  // the developer's real `~/.config`. Unset in production.
+  // Test seam for `default`: an explicit machine-config base dir (the
+  // `~/.claude-prove` root) so tests never touch the developer's real home
+  // dotfile. Unset in production. Threaded as the machine-config write/read
+  // root for both `set` and `show`.
   configBase?: string;
+  // Test seam for `default show`: an explicit legacy XDG base dir (the parent
+  // of `claude-prove/`) so a legacy-only fallback can be exercised without
+  // mutating `XDG_CONFIG_HOME`. Unset in production. Threaded only into the
+  // `show` read path's legacy fallback.
+  legacyConfigBase?: string;
 }
 
 export type ContributorAction = 'register' | 'list' | 'resolve' | 'default';
@@ -82,9 +93,9 @@ export function runContributorCmd(
     return 1;
   }
 
-  // `default` is store-INDEPENDENT: it reads/writes the home-dir config and
-  // never opens `.prove/prove.db`, so it is dispatched before the store is
-  // opened. The config spans every project on the machine.
+  // `default` is store-INDEPENDENT: it reads/writes the machine-global home-dir
+  // config and never opens `.prove/prove.db`, so it is dispatched before the
+  // store is opened. The config spans every project on the machine.
   if (action === 'default') {
     return runDefaultCmd(subAction, flags);
   }
@@ -325,9 +336,9 @@ const DEFAULT_SUB_ACTIONS: DefaultSubAction[] = ['set', 'show'];
 
 /**
  * Dispatch `contributor default <set|show>`. Store-independent — the mapping
- * lives in the home-dir config, not `.prove/prove.db`. `--project-root`
- * defaults to the current working directory (the git worktree / repo root the
- * operator is driving from).
+ * lives in the machine-global home-dir config, not `.prove/prove.db`.
+ * `--project-root` defaults to the current working directory (the git worktree
+ * / repo root the operator is driving from).
  */
 function runDefaultCmd(subAction: string | undefined, flags: ContributorCmdFlags): number {
   if (subAction === undefined || !isDefaultSubAction(subAction)) {
@@ -367,6 +378,9 @@ function doDefaultSet(projectRoot: string, flags: ContributorCmdFlags): number {
     return 1;
   }
 
+  // Writes go to the machine-global `~/.claude-prove/config.json` only
+  // (`configBase` is the test seam for that root); the legacy XDG location is a
+  // read-only fallback, so `set` never touches it.
   const key = setDefaultContributor(projectRoot, id, flags.configBase);
   process.stdout.write(`${JSON.stringify({ project_root: key, contributor_id: id })}\n`);
   process.stderr.write(`scrum contributor default set: ${key} -> ${id}\n`);
@@ -374,7 +388,10 @@ function doDefaultSet(projectRoot: string, flags: ContributorCmdFlags): number {
 }
 
 function doDefaultShow(projectRoot: string, flags: ContributorCmdFlags): number {
-  const id = resolveDefaultContributor(projectRoot, flags.configBase);
+  // Resolves the machine-global location first, then falls back per-key to the
+  // legacy XDG location so an un-migrated machine still resolves. `configBase`
+  // / `legacyConfigBase` are the test seams for the two roots.
+  const id = resolveDefaultContributor(projectRoot, flags.configBase, flags.legacyConfigBase);
   process.stdout.write(`${id === null ? 'null' : JSON.stringify(id)}\n`);
   const where = id === null ? '(unmapped)' : id;
   process.stderr.write(`scrum contributor default show: ${projectRoot} -> ${where}\n`);

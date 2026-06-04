@@ -2543,9 +2543,13 @@ describe('runContributorCmd', () => {
     expect(res.stderr).toContain('unknown contributor action');
   });
 
-  // `default <set|show>` is store-independent: it reads/writes the home-dir
-  // config, never `.prove/prove.db`. Every test pins `configBase` to a tmp dir
-  // (the workspace) so the developer's real ~/.config is never touched.
+  // `default <set|show>` is store-independent: it never opens `.prove/prove.db`.
+  // `set` writes to the machine-global `~/.claude-prove/config.json` only;
+  // `show` resolves from there and falls back per-key to the legacy XDG
+  // location. Every test pins `configBase` (the machine-global root, the
+  // workspace here) — and where the legacy fallback is exercised, a separate
+  // `legacyConfigBase` — to tmp dirs so the developer's real home dotfiles are
+  // never touched.
   describe('default <set|show>', () => {
     test('set then show round-trips the mapped CT-UUID', () => {
       const setRes = withCapture(() =>
@@ -2562,6 +2566,88 @@ describe('runContributorCmd', () => {
       );
       expect(showRes.exit).toBe(0);
       expect(JSON.parse(showRes.stdout.trim())).toBe('ct-jane-doe-abc');
+    });
+
+    test('set writes the mapping to the machine-global ~/.claude-prove location', () => {
+      const setRes = withCapture(() =>
+        runContributorCmd(
+          'default',
+          { projectRoot: workspace, id: 'ct-machine-global-1', configBase: workspace },
+          'set',
+        ),
+      );
+      expect(setRes.exit).toBe(0);
+
+      // The machine-global file is `<base>/config.json` (no `claude-prove/`
+      // subdir — that subdir is the LEGACY XDG layout, which `set` never writes).
+      const machinePath = join(workspace, 'config.json');
+      expect(existsSync(machinePath)).toBe(true);
+      const written = JSON.parse(readFileSync(machinePath, 'utf8')) as {
+        default_contributors: Record<string, string>;
+      };
+      expect(written.default_contributors[workspace]).toBe('ct-machine-global-1');
+
+      // The legacy XDG file must NOT have been created by `set`.
+      expect(existsSync(join(workspace, 'claude-prove', 'config.json'))).toBe(false);
+    });
+
+    test('show resolves a legacy-only mapping via the XDG fallback', () => {
+      // Seed ONLY the legacy XDG location (`<legacyBase>/claude-prove/config.json`)
+      // with no machine-global file present, so resolution must fall back.
+      const legacyBase = mkdtempSync(join(tmpdir(), 'scrum-cli-legacy-'));
+      mkdirSync(join(legacyBase, 'claude-prove'), { recursive: true });
+      writeFileSync(
+        join(legacyBase, 'claude-prove', 'config.json'),
+        JSON.stringify({ default_contributors: { [workspace]: 'ct-legacy-only-7' } }),
+        'utf8',
+      );
+
+      try {
+        const res = withCapture(() =>
+          runContributorCmd(
+            'default',
+            { projectRoot: workspace, configBase: workspace, legacyConfigBase: legacyBase },
+            'show',
+          ),
+        );
+        expect(res.exit).toBe(0);
+        expect(JSON.parse(res.stdout.trim())).toBe('ct-legacy-only-7');
+      } finally {
+        rmSync(legacyBase, { recursive: true, force: true });
+      }
+    });
+
+    test('show prefers the machine-global location over a legacy mapping', () => {
+      const legacyBase = mkdtempSync(join(tmpdir(), 'scrum-cli-legacy-'));
+      mkdirSync(join(legacyBase, 'claude-prove'), { recursive: true });
+      writeFileSync(
+        join(legacyBase, 'claude-prove', 'config.json'),
+        JSON.stringify({ default_contributors: { [workspace]: 'ct-legacy-shadowed' } }),
+        'utf8',
+      );
+
+      try {
+        // The machine-global value for the SAME root must shadow the legacy one.
+        withCapture(() =>
+          runContributorCmd(
+            'default',
+            { projectRoot: workspace, id: 'ct-new-wins', configBase: workspace },
+            'set',
+          ),
+        );
+
+        const res = withCapture(() =>
+          runContributorCmd(
+            'default',
+            { projectRoot: workspace, configBase: workspace, legacyConfigBase: legacyBase },
+            'show',
+          ),
+        );
+        expect(res.exit).toBe(0);
+        expect(JSON.parse(res.stdout.trim())).toBe('ct-new-wins');
+      } finally {
+        rmSync(legacyBase, { recursive: true, force: true });
+      }
     });
 
     test('show on an unmapped root prints null, exit 0', () => {
