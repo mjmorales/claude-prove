@@ -105,11 +105,14 @@ function eventMatchesActiveProject(
  * invalidation. Reconnects the shared SSE bus whenever the active project key
  * changes, then narrows each accepted event to the affected query groups.
  *
- * Query keys are not yet project-scoped (callers key off `slug` alone). Until
- * the shell threads the active key into every query key, cross-project
- * invalidation is prevented at this layer: the bus only carries one project's
- * stream at a time and `eventMatchesActiveProject` drops anything else, so the
- * existing flat groups are only invalidated for the active project's events.
+ * Invalidation keys here are the bare resource name (e.g. `["runs"]`), which
+ * relies on react-query's default prefix matching: `invalidateQueries` with a
+ * partial key invalidates every query whose key STARTS with it, so `["runs"]`
+ * still reaches the project-scoped `["runs", projectKey]` caches the panels
+ * register. Project isolation is enforced on a second axis: the bus carries one
+ * project's stream at a time and `eventMatchesActiveProject` drops any event
+ * from a stream being torn down, so a project switch never refetches another
+ * project's caches.
  */
 export function useEventStream() {
   const qc = useQueryClient();

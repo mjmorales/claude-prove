@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useSelection } from "../lib/store";
+import { useActiveProject } from "../lib/active-project";
 import { Markdown } from "./Markdown";
 import { PanelLoading } from "./PanelLoading";
 import { Empty } from "./Empty";
@@ -12,15 +13,16 @@ import {
 
 export function DecisionsPanel() {
   const slug = useSelection((s) => s.slug);
+  const { projectKey } = useActiveProject();
   const [selected, setSelected] = useState<string | null>(null);
 
   const { data, isPending, isFetching } = useQuery({
-    queryKey: ["decisions", slug],
+    queryKey: ["decisions", projectKey, slug],
     queryFn: () => api.decisions(slug!),
     enabled: !!slug,
   });
   const { data: detail, isFetching: detailFetching } = useQuery({
-    queryKey: ["decision", selected],
+    queryKey: ["decision", projectKey, selected],
     queryFn: () => api.decision(selected!),
     enabled: !!selected,
   });

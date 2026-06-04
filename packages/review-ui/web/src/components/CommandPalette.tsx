@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useSelection, type StructureTab, type RightTab } from "../lib/store";
+import { useActiveProject } from "../lib/active-project";
 import { cn } from "../lib/cn";
 
 type Command = {
@@ -32,7 +33,8 @@ export function CommandPalette({
     if (open) setQ(initialQuery);
   }, [open, initialQuery]);
 
-  const { data: runs } = useQuery({ queryKey: ["runs"], queryFn: api.runs });
+  const { projectKey } = useActiveProject();
+  const { data: runs } = useQuery({ queryKey: ["runs", projectKey], queryFn: api.runs });
 
   const s = useSelection();
 

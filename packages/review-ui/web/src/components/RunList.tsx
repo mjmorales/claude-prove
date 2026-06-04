@@ -2,11 +2,13 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useSelection } from "../lib/store";
+import { useActiveProject } from "../lib/active-project";
 import { cn } from "../lib/cn";
 import { FILTER_GROUPS, FilterChip, relTime, statusMeta } from "../lib/run-list-presentation";
 
 export function RunList() {
-  const { data } = useQuery({ queryKey: ["runs"], queryFn: api.runs });
+  const { projectKey } = useActiveProject();
+  const { data } = useQuery({ queryKey: ["runs", projectKey], queryFn: api.runs });
   const selectedSlug = useSelection((s) => s.slug);
   const selectRun = useSelection((s) => s.selectRun);
   const runs = data?.runs ?? [];

@@ -33,26 +33,26 @@ export function StatusHeader({
   onOpenPalette: (query?: string) => void;
 }) {
   const { state } = useConnection();
-  const { project } = useActiveProject();
+  const { project, projectKey } = useActiveProject();
   const slug = useSelection((s) => s.slug);
   const branch = useSelection((s) => s.branch);
   const reviewMode = useSelection((s) => s.reviewMode);
   const setReviewMode = useSelection((s) => s.setReviewMode);
-  const { data: runs } = useQuery({ queryKey: ["runs"], queryFn: api.runs });
+  const { data: runs } = useQuery({ queryKey: ["runs", projectKey], queryFn: api.runs });
   const { data: tasks } = useQuery({
-    queryKey: ["tasks", slug],
+    queryKey: ["tasks", projectKey, slug],
     queryFn: () => api.tasks(slug!),
     enabled: !!slug,
     retry: false,
   });
   const { data: intents } = useQuery({
-    queryKey: ["intents", slug],
+    queryKey: ["intents", projectKey, slug],
     queryFn: () => api.intents(slug!),
     enabled: !!slug,
     retry: false,
   });
   const { data: review } = useQuery({
-    queryKey: ["review", slug],
+    queryKey: ["review", projectKey, slug],
     queryFn: () => api.reviewState(slug!),
     enabled: !!slug,
     retry: false,

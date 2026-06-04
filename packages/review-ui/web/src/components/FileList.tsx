@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type FileChange } from "../lib/api";
 import { useSelection } from "../lib/store";
+import { useActiveProject } from "../lib/active-project";
 import { cn } from "../lib/cn";
 import { parseUnifiedDiff } from "../lib/diff";
 import { PanelLoading } from "./PanelLoading";
@@ -56,9 +57,10 @@ export function FileList() {
   const commitSha = useSelection((s) => s.commitSha);
   const selectFile = useSelection((s) => s.selectFile);
   const selectFileFromGroup = useSelection((s) => s.selectFileFromGroup);
+  const { projectKey } = useActiveProject();
 
   const { data: run } = useQuery({
-    queryKey: ["run", slug],
+    queryKey: ["run", projectKey, slug],
     queryFn: () => api.run(slug!),
     enabled: !!slug,
   });
@@ -69,19 +71,19 @@ export function FileList() {
     !!slug && !commitSha && (!branch || branch === run?.orchestratorBranch);
 
   const manifestQ = useQuery({
-    queryKey: ["manifest", slug],
+    queryKey: ["manifest", projectKey, slug],
     queryFn: () => api.manifest(slug!),
     enabled: showAggregate,
     refetchInterval: 5000,
   });
 
   const committedQuery = useQuery({
-    queryKey: ["diff", slug, base, head],
+    queryKey: ["diff", projectKey, slug, base, head],
     queryFn: () => api.diff(slug!, base!, head!),
     enabled: !showAggregate && !!slug && !!base && !!head && !pending,
   });
   const pendingQuery = useQuery({
-    queryKey: ["pending", slug, branch],
+    queryKey: ["pending", projectKey, slug, branch],
     queryFn: () => api.pending(slug!, undefined, branch ?? undefined),
     enabled: !showAggregate && !!slug && pending,
     refetchInterval: 3000,

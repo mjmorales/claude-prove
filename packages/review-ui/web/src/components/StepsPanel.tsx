@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api, type PlanStep, type PlanTaskView, type StepStatus } from "../lib/api";
 import { useSelection } from "../lib/store";
+import { useActiveProject } from "../lib/active-project";
 import { cn } from "../lib/cn";
 import { PanelLoading } from "./PanelLoading";
 
@@ -9,9 +10,10 @@ export function StepsPanel() {
   const selectedSha = useSelection((s) => s.commitSha);
   const selectCommit = useSelection((s) => s.selectCommit);
   const setRightTab = useSelection((s) => s.setRightTab);
+  const { projectKey } = useActiveProject();
 
   const { data, isPending, isFetching, isError } = useQuery({
-    queryKey: ["tasks", slug],
+    queryKey: ["tasks", projectKey, slug],
     queryFn: () => api.tasks(slug!),
     enabled: !!slug,
     retry: false,

@@ -1,12 +1,14 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useSelection } from "../lib/store";
+import { useActiveProject } from "../lib/active-project";
 import { PanelLoading } from "./PanelLoading";
 
 export function IntentPanel() {
   const sha = useSelection((s) => s.commitSha);
+  const { projectKey } = useActiveProject();
   const { data, isPending, isFetching } = useQuery({
-    queryKey: ["intent", sha],
+    queryKey: ["intent", projectKey, sha],
     queryFn: () => api.intent(sha!),
     enabled: !!sha,
   });

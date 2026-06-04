@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useSelection } from "../lib/store";
+import { useActiveProject } from "../lib/active-project";
 import { parseUnifiedDiff, type DiffLine } from "../lib/diff";
 import { cn } from "../lib/cn";
 import { PanelLoading } from "./PanelLoading";
@@ -12,17 +13,18 @@ export function DiffView() {
   const base = useSelection((s) => s.base);
   const filePath = useSelection((s) => s.filePath);
   const pending = useSelection((s) => s.pendingMode);
+  const { projectKey } = useActiveProject();
 
   const committedEnabled = !pending && !!slug && !!base && !!head && !!filePath;
   const pendingEnabled = pending && !!slug && !!filePath;
 
   const committed = useQuery({
-    queryKey: ["diff-file", slug, base, head, filePath],
+    queryKey: ["diff-file", projectKey, slug, base, head, filePath],
     queryFn: () => api.diffFile(slug!, base!, head!, filePath!),
     enabled: committedEnabled,
   });
   const pendingQ = useQuery({
-    queryKey: ["pending-file", slug, branch, filePath],
+    queryKey: ["pending-file", projectKey, slug, branch, filePath],
     queryFn: () => api.pending(slug!, filePath!, branch ?? undefined),
     enabled: pendingEnabled,
   });

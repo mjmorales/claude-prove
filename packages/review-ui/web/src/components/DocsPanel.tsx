@@ -2,6 +2,7 @@ import { useEffect, useMemo } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useSelection } from "../lib/store";
+import { useActiveProject } from "../lib/active-project";
 import { DOCS, renderDoc } from "../lib/run-doc-render";
 import { cn } from "../lib/cn";
 import { Markdown } from "./Markdown";
@@ -11,10 +12,11 @@ export function DocsPanel() {
   const slug = useSelection((s) => s.slug);
   const view = useSelection((s) => s.docView);
   const setView = useSelection((s) => s.setDocView);
+  const { projectKey } = useActiveProject();
 
   const probes = useQueries({
     queries: DOCS.map((d) => ({
-      queryKey: ["doc", slug, d.file],
+      queryKey: ["doc", projectKey, slug, d.file],
       queryFn: () => api.doc(slug!, d.file),
       enabled: !!slug,
       retry: false,

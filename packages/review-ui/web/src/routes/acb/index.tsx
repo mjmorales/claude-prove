@@ -9,6 +9,7 @@ import { Sidebar, type SidebarSection } from "../../components/Sidebar";
 import { ReviewSession } from "../../components/review/ReviewSession";
 import { useUrlState } from "../../hooks/useUrlState";
 import { useSelection } from "../../lib/store";
+import { useActiveProject } from "../../lib/active-project";
 import { api } from "../../lib/api";
 
 /**
@@ -22,8 +23,9 @@ export function AcbRoute() {
 
   const reviewMode = useSelection((s) => s.reviewMode);
   const slug = useSelection((s) => s.slug);
+  const { projectKey } = useActiveProject();
 
-  const { data: runsData } = useQuery({ queryKey: ["runs"], queryFn: api.runs });
+  const { data: runsData } = useQuery({ queryKey: ["runs", projectKey], queryFn: api.runs });
   const runCount = runsData?.runs.length ?? 0;
 
   // Clear selection if the URL referenced a run that no longer exists — avoids

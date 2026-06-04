@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { useSelection } from "../lib/store";
+import { useActiveProject } from "../lib/active-project";
 import { cn } from "../lib/cn";
 import { PanelLoading } from "./PanelLoading";
 import { Empty } from "./Empty";
@@ -11,9 +12,10 @@ export function CommitsPanel() {
   const selectedSha = useSelection((s) => s.commitSha);
   const selectCommit = useSelection((s) => s.selectCommit);
   const setRightTab = useSelection((s) => s.setRightTab);
+  const { projectKey } = useActiveProject();
 
   const { data: run } = useQuery({
-    queryKey: ["run", slug],
+    queryKey: ["run", projectKey, slug],
     queryFn: () => api.run(slug!),
     enabled: !!slug,
   });
@@ -25,7 +27,7 @@ export function CommitsPanel() {
   const rangeBase = run?.baseline?.split("@")[0].trim() || "main";
 
   const { data, isPending, isFetching } = useQuery({
-    queryKey: ["commits", slug, rangeBase, branch],
+    queryKey: ["commits", projectKey, slug, rangeBase, branch],
     queryFn: () => api.commits(slug!, rangeBase, branch!),
     enabled: !!slug && !!branch,
   });
