@@ -40,7 +40,7 @@ Restart Claude Code after installation for the plugin to take effect.
 | **Orchestrator** | `/prove:orchestrator` | Executes a task plan step-by-step. Runs build/lint/test validators after each step. Auto-scales: 1-3 steps run sequentially; 4+ steps use parallel git worktrees with mandatory principal-architect review before merge. |
 | **Scrum** | `/prove:scrum` | Agentic task management backed by `.prove/prove.db`. Tasks, milestones, tags, dependency graph, a layered containment tree (epic/story/task), and first-class acceptance criteria. SessionStart/SubagentStop/Stop hooks reconcile state at task boundaries; orchestrator runs link via `task_id` in `plan.json`. |
 | **Methodology** | `/prove:decompose` | Top-down decompose ladder (charter/milestone → epic → story → task) with a human gate per layer, AC-gated story close (each acceptance criterion dispatched by kind: bash / assert / gate / agent), risk-forward review briefs synthesized from the run's reasoning log, and milestone-close curation that promotes findings into the durable decision store. Intake forms (`/prove:intake`) and self-contained HTML report surfaces (`claude-prove report`) render the same data for operators. |
-| **ACB** (Agent Change Brief) | `/prove:review-ui` | Every feature-branch commit carries an ACB v0.2 intent manifest written by a PostToolUse hook at commit time. The review UI (React + Fastify, Docker) surfaces intent-grouped diffs for structured review with verdicts: accepted / rejected / needs_discussion / rework. |
+| **ACB** (Agent Change Brief) | `/prove:review-ui` | Every feature-branch commit carries an ACB v0.2 intent manifest written by a PostToolUse hook at commit time. The review UI (React + Fastify, in-process daemon) surfaces intent-grouped diffs for structured review with verdicts: accepted / rejected / needs_discussion / rework. |
 
 ## Command Reference
 
@@ -68,7 +68,7 @@ Restart Claude Code after installation for the plugin to take effect.
 
 | Command | Description |
 |---------|-------------|
-| `/prove:review-ui [--port N] [--stop] [--restart] [--pull]` | Launch the Docker-based review UI (`ghcr.io/mjmorales/claude-prove/review-ui`). Pulls the image if absent, bind-mounts the repo, opens `http://localhost:5174`. |
+| `/prove:review-ui [--port N] [--stop] [--restart]` | Launch the review UI through the in-process daemon (`claude-prove review-ui serve`) — a detached loopback server reading the repo directly from disk. Opens `http://localhost:5174`. |
 | `/prove:steward [--review \| --full \| --auto]` | Code quality audit. `--review` (default) scans current branch changes; `--full` runs a deep line-by-line audit; `--auto` iterates until clean or the pass cap is hit. |
 | `/prove:comprehend [commit SHA or range]` | Socratic quiz on recent diffs to build comprehension of agent-generated code. Defaults to the most recent diff. |
 | `/prove:bug-fix [symptom]` | Structured debugging protocol — sequential hypothesis testing with backtracking. |
@@ -133,7 +133,7 @@ packages/
 ├── shared/     # Cross-package types, logger, and utilities
 ├── store/      # Unified SQLite connection via bun:sqlite — schema registry and domain migrations for .prove/prove.db
 ├── installer/  # Binary distribution helpers and Claude-side wiring (hooks + settings)
-└── review-ui/  # React + Fastify + Tailwind — published as ghcr.io/mjmorales/claude-prove/review-ui
+└── review-ui/  # React + Fastify + Tailwind — runs in-process under the native daemon (claude-prove review-ui serve)
 ```
 
 ## Deep Dives
