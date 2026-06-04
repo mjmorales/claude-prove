@@ -198,7 +198,7 @@ function enc(compositeSlug: string): string {
 }
 
 export const api = {
-  projects: () => getJSON<ProjectInfo[]>("/api/projects"),
+  projects: () => getJSON<{ projects: ProjectInfo[] }>("/api/projects"),
   runs: () => getJSON<{ runs: RunSummary[] }>("/api/runs"),
   run: (slug: string) => getJSON<RunSummary>(`/api/runs/${enc(slug)}`),
   runBranches: (slug: string) =>

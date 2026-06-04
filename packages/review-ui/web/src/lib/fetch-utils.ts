@@ -2,16 +2,25 @@
  * Shared JSON fetch helpers. Extracted from `lib/api.ts` and `lib/scrumApi.ts`
  * so both clients throw identically shaped errors and stay in sync.
  *
- * SINGLE-SOURCE INVARIANT: the active project key (`?project=<id>`) is injected
- * HERE and nowhere else. Every data request both clients issue funnels through
- * `getJSON`/`postJSON`, so threading the key through this one seam guarantees no
- * per-route call site repeats the wiring. `ActiveProjectProvider` is the only
- * writer — it calls `setActiveProjectKeyForRequests` from an effect on key
- * change; the data layer reads the module-level value at request time.
+ * SINGLE-SOURCE INVARIANT: the active project key is injected as the
+ * `?project=` param HERE and nowhere else. Every data request both clients
+ * issue funnels through `getJSON`/`postJSON`, so threading the key through this
+ * one seam guarantees no per-route call site repeats the wiring.
+ * `ActiveProjectProvider` is the only writer — it calls
+ * `setActiveProjectKeyForRequests` from an effect on key change; the data layer
+ * reads the module-level value at request time.
+ *
+ * ENCODING CONTRACT: the broadcast key is the DECODED registry path (e.g.
+ * `/home/me/repo`), matching `ActiveProjectValue.projectKey`. The funnel
+ * appends it raw and `URLSearchParams.toString()` encodes it EXACTLY once, so
+ * the wire param lands as the encoded `?project=%2Fhome%2Fme%2Frepo` form that
+ * matches `ProjectInfo.id`. Passing an already-encoded id here would
+ * double-encode it.
  */
 
-// The active project key the provider broadcasts. `null` means the caller
-// targets the server's startup-root default (no `?project=` appended).
+// The active project key the provider broadcasts: the DECODED registry path.
+// `null` means the caller targets the server's startup-root default (no
+// `?project=` appended).
 let activeProjectKey: string | null = null;
 
 /**
@@ -25,9 +34,11 @@ export function setActiveProjectKeyForRequests(key: string | null): void {
 
 /**
  * Append `project=<activeProjectKey>` to an `/api/*` URL when a key is set.
- * No-ops when the key is null, when the URL already carries a `project` param
- * (an explicit caller-passed value wins), or for non-`/api/` URLs. Preserves
- * any pre-existing query string.
+ * The key is the DECODED registry path; `URLSearchParams` encodes it once, so
+ * the emitted param is the encoded `ProjectInfo.id` form. No-ops when the key
+ * is null, when the URL already carries a `project` param (an explicit
+ * caller-passed value wins), or for non-`/api/` URLs. Preserves any
+ * pre-existing query string.
  */
 function withProject(url: string): string {
   if (activeProjectKey === null) return url;

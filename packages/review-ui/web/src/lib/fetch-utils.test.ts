@@ -17,11 +17,11 @@ import { scrumApi } from "./scrumApi";
 let lastUrl = "";
 const originalFetch = globalThis.fetch;
 
-function stubFetch(): void {
+function stubFetch(body = "{}"): void {
   globalThis.fetch = ((input: string | URL | Request) => {
     lastUrl = typeof input === "string" ? input : input.toString();
     return Promise.resolve(
-      new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+      new Response(body, { status: 200, headers: { "content-type": "application/json" } }),
     );
   }) as typeof fetch;
 }
@@ -76,5 +76,28 @@ describe("project-key injection in the fetch funnel", () => {
     setActiveProjectKeyForRequests(null);
     await api.projects();
     expect(lastUrl).toBe("/api/projects");
+  });
+
+  test("api.projects parses the server envelope into a .projects array", async () => {
+    // The server returns `{ projects: [...] }`, not a bare array — the consumer
+    // must see `.projects`. `getJSON<T>` casts unchecked, so a wrong type here
+    // would only surface at the call site; this asserts the SHAPE the caller gets.
+    setActiveProjectKeyForRequests(null);
+    stubFetch(
+      JSON.stringify({
+        projects: [
+          {
+            id: "%2Fhome%2Fme%2Frepo",
+            path: "/home/me/repo",
+            name: "repo",
+            last_seen: null,
+            store: { schema_version: 12, behind: false },
+          },
+        ],
+      }),
+    );
+    const body = await api.projects();
+    expect(Array.isArray(body.projects)).toBe(true);
+    expect(body.projects[0]?.path).toBe("/home/me/repo");
   });
 });
