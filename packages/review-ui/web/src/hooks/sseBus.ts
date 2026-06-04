@@ -6,6 +6,13 @@
 // connection, subsequent subscribers attach to the same EventSource, and the
 // connection closes when the last subscriber detaches.
 //
+// Per-project routing: the bus connects to exactly one project's stream at a
+// time, selected by `activeProjectKey`. When the active key changes the bus
+// tears the old EventSource down cleanly and reopens against the new stream, so
+// no stale connection survives a project switch. The server stamps every
+// `event: change` payload with the resolved `project` id; subscribers demux off
+// that field. Heartbeats are project-less SSE comments and signal liveness only.
+//
 // Pattern: Observer + reference counting (see useConnection.ts for staleness
 // logic that reads this bus's events).
 
@@ -14,6 +21,11 @@ export type SseStatus = "connecting" | "live" | "down";
 export interface SseChangeEvent {
   kind: string;
   path: string;
+  // The resolved project id the server stamps on every data event: the
+  // URL-encoded registered root. Absent on the unparameterized stream (the
+  // server's startup-root default), which the client connects to when no
+  // project key is active.
+  project?: string;
 }
 
 export interface SseSubscriber {
@@ -24,9 +36,35 @@ export interface SseSubscriber {
   onActivity?: () => void;
 }
 
+// The project key the bus is currently connected against. null = the
+// unparameterized `/api/events` stream (server startup-root default); a
+// non-null value routes to `/api/events?project=<key>`. Mutated only through
+// `setActiveProjectKey`, which reconnects when the value actually changes.
+let activeProjectKey: string | null = null;
+
 let source: EventSource | null = null;
 let status: SseStatus = "connecting";
 const subscribers = new Set<SseSubscriber>();
+
+/**
+ * Canonicalize a project key to the server's `?project=` / `project`-field
+ * encoding: `encodeURIComponent` of the resolved root. The key can arrive
+ * either decoded (the URL-seed path reads `URLSearchParams.get`, which decodes
+ * once) or already-encoded (the selector passes the encoded `id`), so decode
+ * first to collapse both forms, then encode. The operation is idempotent on an
+ * already-canonical key. Used both to build the stream URL and to match the
+ * `project` id the server stamps on every event, so the client is agnostic to
+ * which form the active key holds.
+ */
+export function canonicalProjectId(key: string): string {
+  return encodeURIComponent(decodeURIComponent(key));
+}
+
+/** Build the stream URL for the active key: bare when null, parameterized with
+ * the canonical encoded id otherwise. */
+function streamUrl(key: string | null): string {
+  return key === null ? "/api/events" : `/api/events?project=${canonicalProjectId(key)}`;
+}
 
 function broadcastStatus(next: SseStatus): void {
   status = next;
@@ -46,7 +84,7 @@ function broadcastActivity(): void {
 
 function openSource(): void {
   if (source) return;
-  const es = new EventSource("/api/events");
+  const es = new EventSource(streamUrl(activeProjectKey));
   source = es;
   status = "connecting";
 
@@ -77,6 +115,24 @@ function closeSource(): void {
   source.close();
   source = null;
   status = "connecting";
+}
+
+/**
+ * Point the bus at a different project's stream. A no-op when the key is
+ * unchanged. With live subscribers it reconnects in place: the old EventSource
+ * is closed and a fresh one opened against the new key, so events from the old
+ * project's stream cannot leak past the switch. With no subscribers it only
+ * records the key; the next `subscribeSse` opens against it.
+ */
+export function setActiveProjectKey(key: string | null): void {
+  if (key === activeProjectKey) return;
+  activeProjectKey = key;
+  if (subscribers.size === 0) return;
+  closeSource();
+  openSource();
+  // Seed every subscriber with the reconnecting status so badges reflect the
+  // teardown immediately rather than lingering on the prior project's "live".
+  for (const sub of subscribers) sub.onStatus?.(status);
 }
 
 export function subscribeSse(sub: SseSubscriber): () => void {
