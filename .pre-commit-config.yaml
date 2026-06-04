@@ -3,7 +3,10 @@ repos:
     hooks:
       - id: conventional-commit-scope
         name: Validate conventional commit with .prove.json scopes
-        entry: bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts commit validate-msg
+        # Repo-relative entry: pre-commit always runs from the repo root, and
+        # in this repo the plugin IS the repo — portable across contributor
+        # machines, unlike an absolute checkout path.
+        entry: bun run packages/cli/bin/run.ts commit validate-msg
         language: system
         stages: [commit-msg]
         always_run: true
