@@ -561,8 +561,9 @@ describe('TestV4ToV5', () => {
     // Changes reflect v4->v5 (version bump only, scrum already correct),
     // v5->v6 (version bump + dev_mode add), v6->v7 (version bump only),
     // v7->v8 (version bump + brief/memory/decomposition seeds), v8->v9
-    // (version bump only — triggers absent), and v9->v10 (version bump only —
-    // artifacts absent). No tools.scrum mutation.
+    // (version bump only — triggers absent), v9->v10 (version bump only —
+    // artifacts absent), and v10->v11 (version bump only — no acb.config to
+    // strip). No tools.scrum mutation.
     const paths = changes.map((c) => c.path);
     expect(paths).toEqual([
       'schema_version',
@@ -573,6 +574,7 @@ describe('TestV4ToV5', () => {
       'brief',
       'memory',
       'decomposition',
+      'schema_version',
       'schema_version',
       'schema_version',
     ]);
@@ -760,8 +762,12 @@ describe('TestV8ToV9', () => {
 
     expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     expect('triggers' in target).toBe(false);
-    // This hop and the v9->v10 follow-on emit only version bumps.
-    expect(changes.map((c) => c.path)).toEqual(['schema_version', 'schema_version']);
+    // This hop and the v9->v10, v10->v11 follow-ons emit only version bumps.
+    expect(changes.map((c) => c.path)).toEqual([
+      'schema_version',
+      'schema_version',
+      'schema_version',
+    ]);
   });
 
   test('v8 to v9 preserves an existing triggers table byte-for-byte', () => {
@@ -790,8 +796,8 @@ describe('TestV9ToV10', () => {
 
     expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     expect('artifacts' in target).toBe(false);
-    // The only change this hop emits is the version bump.
-    expect(changes.map((c) => c.path)).toEqual(['schema_version']);
+    // This hop and the v10->v11 follow-on emit only version bumps.
+    expect(changes.map((c) => c.path)).toEqual(['schema_version', 'schema_version']);
   });
 
   test('v9 to v10 preserves an existing artifacts block byte-for-byte', () => {
@@ -816,6 +822,111 @@ describe('TestV9ToV10', () => {
     const config = { schema_version: '10', artifacts: { html_open: 42 } };
     const errors = validateConfig(config, PROVE_SCHEMA);
     expect(errors.some((e) => e.severity === 'error')).toBe(true);
+  });
+});
+
+describe('TestV10ToV11', () => {
+  test('v10 to v11 bumps version and drops review_ui_image/review_ui_tag', () => {
+    const config = {
+      schema_version: '10',
+      tools: {
+        acb: {
+          enabled: true,
+          scope: 'user',
+          config: {
+            base_branch: 'main',
+            review_ui_port: 5174,
+            review_ui_image: 'ghcr.io/mjmorales/claude-prove/review-ui',
+            review_ui_tag: 'latest',
+          },
+        },
+      },
+    };
+    const [target, changes] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    const tools = target.tools as Record<string, Record<string, unknown>>;
+    const acbConfig = tools.acb?.config as Record<string, unknown>;
+    expect('review_ui_image' in acbConfig).toBe(false);
+    expect('review_ui_tag' in acbConfig).toBe(false);
+    // Unrelated acb.config keys survive (review_ui_port is relocated by a
+    // separate operator step, not destroyed here).
+    expect(acbConfig.base_branch).toBe('main');
+    expect(acbConfig.review_ui_port).toBe(5174);
+    expect(
+      changes.some((c) => c.path === 'tools.acb.config.review_ui_image' && c.action === 'remove'),
+    ).toBe(true);
+    expect(
+      changes.some((c) => c.path === 'tools.acb.config.review_ui_tag' && c.action === 'remove'),
+    ).toBe(true);
+  });
+
+  test('v10 to v11 preserves all unrelated acb.config keys byte-for-byte', () => {
+    const config = {
+      schema_version: '10',
+      tools: {
+        acb: {
+          enabled: true,
+          scope: 'user',
+          config: { base_branch: 'develop', review_ui_port: 6000 },
+        },
+        cafi: { enabled: true, config: { concurrency: 4 } },
+      },
+    };
+    const [target] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    const tools = target.tools as Record<string, Record<string, unknown>>;
+    // No review_ui_* keys present -> acb.config preserved byte-for-byte.
+    expect(tools.acb).toEqual({
+      enabled: true,
+      scope: 'user',
+      config: { base_branch: 'develop', review_ui_port: 6000 },
+    });
+    // Unrelated tool entries untouched.
+    expect(tools.cafi).toEqual({ enabled: true, config: { concurrency: 4 } });
+  });
+
+  test('v10 to v11 is a pure version bump when no acb.config keys to strip', () => {
+    const config = { schema_version: '10' };
+    const [target, changes] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect(changes.map((c) => c.path)).toEqual(['schema_version']);
+  });
+
+  test('v10 to v11 drops only the present review_ui_* key', () => {
+    const config = {
+      schema_version: '10',
+      tools: {
+        acb: { enabled: true, config: { base_branch: 'main', review_ui_tag: 'v1' } },
+      },
+    };
+    const [target, changes] = planMigration(config);
+
+    const tools = target.tools as Record<string, Record<string, unknown>>;
+    const acbConfig = tools.acb?.config as Record<string, unknown>;
+    expect('review_ui_tag' in acbConfig).toBe(false);
+    expect(acbConfig.base_branch).toBe('main');
+    expect(
+      changes.some((c) => c.path === 'tools.acb.config.review_ui_tag' && c.action === 'remove'),
+    ).toBe(true);
+    expect(changes.some((c) => c.path === 'tools.acb.config.review_ui_image')).toBe(false);
+  });
+
+  test('v11 config without review_ui_image/tag validates clean', () => {
+    const config = {
+      schema_version: '11',
+      tools: {
+        acb: {
+          enabled: true,
+          scope: 'user',
+          config: { base_branch: 'main', review_ui_port: 5174 },
+        },
+      },
+    };
+    const errors = validateConfig(config, PROVE_SCHEMA);
+    expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
   });
 });
 
@@ -889,6 +1000,41 @@ describe('TestFullChain', () => {
     });
     expect(target.memory).toEqual({ stale_threshold_days: 90 });
     expect(target.decomposition).toEqual({ auto_accept_through: 'none' });
+  });
+
+  test('full chain strips acb.config review_ui_image/tag carried from v0', () => {
+    // Sibling of the all-sections chain test: this unversioned (v0) input
+    // carries the two legacy review_ui_* keys directly under tools.acb.config
+    // alongside base_branch and review_ui_port, proving the v10->v11 hop strips
+    // them end-to-end while preserving base_branch and review_ui_port.
+    const config = {
+      validators: [{ name: 'lint', command: 'ruff', stage: 'lint' }],
+      scopes: { plugin: '.' },
+      tools: {
+        acb: {
+          enabled: true,
+          scope: 'user',
+          config: {
+            base_branch: 'main',
+            review_ui_port: 5174,
+            review_ui_image: 'ghcr.io/mjmorales/claude-prove/review-ui',
+            review_ui_tag: 'latest',
+          },
+        },
+      },
+    };
+    const [target, changes] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    const tools = target.tools as Record<string, Record<string, unknown>>;
+    const acbConfig = tools.acb?.config as Record<string, unknown>;
+    expect('review_ui_image' in acbConfig).toBe(false);
+    expect('review_ui_tag' in acbConfig).toBe(false);
+    expect(acbConfig.base_branch).toBe('main');
+    expect(acbConfig.review_ui_port).toBe(5174);
+    // The v10->v11 strip changes appear in the full-chain change list.
+    expect(changes.some((c) => c.path === 'tools.acb.config.review_ui_image')).toBe(true);
+    expect(changes.some((c) => c.path === 'tools.acb.config.review_ui_tag')).toBe(true);
   });
 });
 

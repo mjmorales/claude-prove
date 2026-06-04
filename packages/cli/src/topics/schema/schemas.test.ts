@@ -24,9 +24,9 @@ function specAt(path: string): FieldSpec {
 }
 
 describe('PROVE_SCHEMA version', () => {
-  test('current version is "10"', () => {
-    expect(CURRENT_SCHEMA_VERSION).toBe('10');
-    expect(PROVE_SCHEMA.version).toBe('10');
+  test('current version is "11"', () => {
+    expect(CURRENT_SCHEMA_VERSION).toBe('11');
+    expect(PROVE_SCHEMA.version).toBe('11');
   });
 });
 

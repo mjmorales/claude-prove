@@ -412,6 +412,60 @@ function migrateV9ToV10(config: ProveConfig): [ProveConfig, MigrationChange[]] {
   return [result, changes];
 }
 
+/**
+ * v10 -> v11: bump schema_version and drop the two acb.config keys that no
+ * longer belong in the project config — `tools.acb.config.review_ui_image`
+ * and `tools.acb.config.review_ui_tag`. The review UI image/tag are pinned by
+ * the tooling rather than the project config. Both keys are removed only when
+ * present; every other `tools.acb.config` key (base_branch, review_ui_port,
+ * ...) is preserved byte-for-byte. `review_ui_port` is NOT destroyed here —
+ * its relocation to a machine-global setting is a separate operator step. All
+ * other top-level keys and `tools.*` entries pass through untouched.
+ *
+ * Hardcodes target version '11'. Do NOT reference CURRENT_SCHEMA_VERSION —
+ * migrations are frozen-in-time; later version bumps must not retroactively
+ * change what this migration does.
+ */
+function migrateV10ToV11(config: ProveConfig): [ProveConfig, MigrationChange[]] {
+  const changes: MigrationChange[] = [];
+  const result: ProveConfig = { ...config };
+
+  result.schema_version = '11';
+  changes.push(new MigrationChange('change', 'schema_version', '"10" -> "11"'));
+
+  const tools = result.tools;
+  if (isPlainObject(tools)) {
+    const acb = tools.acb;
+    if (isPlainObject(acb)) {
+      const acbConfig = acb.config;
+      if (
+        isPlainObject(acbConfig) &&
+        ('review_ui_image' in acbConfig || 'review_ui_tag' in acbConfig)
+      ) {
+        const nextConfig: Record<string, unknown> = { ...acbConfig };
+        for (const key of ['review_ui_image', 'review_ui_tag']) {
+          if (key in nextConfig) {
+            Reflect.deleteProperty(nextConfig, key);
+            changes.push(
+              new MigrationChange(
+                'remove',
+                `tools.acb.config.${key}`,
+                'review UI image/tag are pinned by the tooling, not the project config',
+              ),
+            );
+          }
+        }
+        result.tools = {
+          ...tools,
+          acb: { ...acb, config: nextConfig },
+        };
+      }
+    }
+  }
+
+  return [result, changes];
+}
+
 export const MIGRATIONS: Record<string, MigrationFn> = {
   '0_to_1': migrateV0ToV1,
   '1_to_2': migrateV1ToV2,
@@ -423,6 +477,7 @@ export const MIGRATIONS: Record<string, MigrationFn> = {
   '7_to_8': migrateV7ToV8,
   '8_to_9': migrateV8ToV9,
   '9_to_10': migrateV9ToV10,
+  '10_to_11': migrateV10ToV11,
 };
 
 /**
