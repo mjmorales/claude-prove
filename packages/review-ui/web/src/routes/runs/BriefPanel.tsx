@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import { useActiveProject } from "../../lib/active-project";
 import { useRunsSelection } from "./store";
-import { renderDoc } from "./run-docs";
+import { renderDoc } from "../../lib/run-doc-render";
 import { Markdown } from "../../components/Markdown";
 import { PanelLoading } from "../../components/PanelLoading";
 import { Empty } from "../../components/Empty";

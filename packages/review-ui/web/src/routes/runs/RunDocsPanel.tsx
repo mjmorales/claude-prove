@@ -3,7 +3,7 @@ import { useQueries, useQuery } from "@tanstack/react-query";
 import { api, type PlanStep, type PlanTaskView, type ValidatorPhase } from "../../lib/api";
 import { useActiveProject } from "../../lib/active-project";
 import { useRunsSelection } from "./store";
-import { DOCS, renderDoc } from "./run-docs";
+import { DOCS, renderDoc } from "../../lib/run-doc-render";
 import { cn } from "../../lib/cn";
 import { Markdown } from "../../components/Markdown";
 import { PanelLoading } from "../../components/PanelLoading";

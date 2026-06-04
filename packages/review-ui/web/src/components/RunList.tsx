@@ -1,41 +1,9 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api, type RunStatus } from "../lib/api";
+import { api } from "../lib/api";
 import { useSelection } from "../lib/store";
 import { cn } from "../lib/cn";
-
-function relTime(iso: string): string {
-  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return `${Math.round(s)}s ago`;
-  if (s < 3600) return `${Math.round(s / 60)}m ago`;
-  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
-  return `${Math.round(s / 86400)}d ago`;
-}
-
-type StatusMeta = { label: string; dot: string; text: string };
-
-function statusMeta(s: RunStatus): StatusMeta {
-  switch (s) {
-    case "running":
-      return { label: "Running", dot: "bg-phos", text: "text-phos" };
-    case "pending":
-      return { label: "Pending", dot: "bg-amber", text: "text-amber" };
-    case "completed":
-      return { label: "Done", dot: "bg-ok", text: "text-ok" };
-    case "failed":
-      return { label: "Failed", dot: "bg-anom", text: "text-anom" };
-    case "halted":
-      return { label: "Halted", dot: "bg-anom", text: "text-anom" };
-    default:
-      return { label: "Idle", dot: "bg-fg-faint", text: "text-fg-dim" };
-  }
-}
-
-const FILTER_GROUPS: Array<{ id: string; label: string; statuses: RunStatus[] }> = [
-  { id: "active", label: "Active", statuses: ["running", "pending"] },
-  { id: "done", label: "Done", statuses: ["completed"] },
-  { id: "issues", label: "Issues", statuses: ["failed", "halted"] },
-];
+import { FILTER_GROUPS, FilterChip, relTime, statusMeta } from "../lib/run-list-presentation";
 
 export function RunList() {
   const { data } = useQuery({ queryKey: ["runs"], queryFn: api.runs });
@@ -138,29 +106,5 @@ export function RunList() {
         })}
       </div>
     </div>
-  );
-}
-
-function FilterChip({
-  label,
-  active,
-  onClick,
-}: {
-  label: string;
-  active: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "h-6 px-2 rounded-md border text-[11.5px] transition-colors",
-        active
-          ? "border-phos bg-phos/15 text-phos"
-          : "border-bg-line bg-transparent text-fg-dim hover:text-fg-base hover:border-fg-faint",
-      )}
-    >
-      {label}
-    </button>
   );
 }

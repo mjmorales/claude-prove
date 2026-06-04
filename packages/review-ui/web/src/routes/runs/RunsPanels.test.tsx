@@ -3,12 +3,15 @@
  *
  * IMPORTANT — happy-dom lifecycle. `../../test/setup` MUST be the first import
  * so happy-dom globals exist before testing-library mounts. Bun runs every test
- * file in one shared process and sorts by path; this file sorts AFTER
- * `routes/routes.test.tsx`, whose `afterAll` unregisters happy-dom. So this file
- * RE-registers in `beforeAll` (idempotent via setup) and, being the last DOM
- * file, owns the final `afterAll` teardown. Do not import `screen` — its
- * module-init binds `document.body` too early under Bun's loader; use the
- * `render()` return value instead.
+ * file in one shared process and sorts by path; this file sorts AFTER every
+ * other DOM test file (`routes/routes.test.tsx` included — `rou` < `run`), so it
+ * is the last DOM file and is the SOLE owner of the final `afterAll` that
+ * unregisters happy-dom. No other DOM file unregisters, so the globals survive
+ * for every file ahead of this one. `beforeAll` re-registers defensively
+ * (idempotent via setup) so the mounts here hold even if an earlier file ever
+ * tears the globals down. Do not import `screen` — its module-init binds
+ * `document.body` too early under Bun's loader; use the `render()` return value
+ * instead.
  */
 import "../../test/setup";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
@@ -23,7 +26,7 @@ import { RunDocsPanel } from "./RunDocsPanel";
 import { BriefPanel } from "./BriefPanel";
 import { RunDecisionsPanel } from "./RunDecisionsPanel";
 import { useRunsSelection } from "./store";
-import { renderDoc } from "./run-docs";
+import { renderDoc } from "../../lib/run-doc-render";
 
 const REPO: ProjectInfo = {
   id: "%2Fhome%2Fme%2Frepo",

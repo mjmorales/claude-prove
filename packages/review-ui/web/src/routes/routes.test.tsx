@@ -14,12 +14,18 @@
  * we use the `render()` return value, which constructs queries lazily via
  * `within(container.parentNode)`.
  *
+ * happy-dom lifecycle: we deliberately do NOT unregister happy-dom in afterAll.
+ * Bun runs every test file in one shared process and sorts them by path; this
+ * file sorts before `routes/runs/RunsPanels.test.tsx` (`rou` < `run`), which is
+ * the last DOM file and owns the final unregister teardown. Unregistering here
+ * would tear `window`/`document` out from under that still-pending DOM file.
+ * Setup is idempotent on register.
+ *
  * For scrum tests we swap in a fresh QueryClient per test and stub `fetch`
  * so the read-only API contract is exercised without a real server.
  */
 import "../test/setup";
-import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render } from "@testing-library/react";
 import { MemoryRouter, Navigate, Route, Routes } from "react-router-dom";
@@ -99,15 +105,6 @@ describe("App routes", () => {
   });
   afterEach(() => {
     cleanup();
-  });
-  // Undo happy-dom globals after this file's tests finish. Bun runs all test
-  // files in one process, so leaving `document`/`Blob`/etc. patched would
-  // break downstream non-DOM tests (e.g. those that pass a Node Blob to
-  // Bun.spawn as stdin).
-  afterAll(async () => {
-    if (GlobalRegistrator.isRegistered) {
-      await GlobalRegistrator.unregister();
-    }
   });
 
   test("/ redirects to /acb and renders the ACB surface", () => {

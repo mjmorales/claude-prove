@@ -1,11 +1,18 @@
 /**
  * Pure renderers turning a run's prove JSON artifacts into display markdown.
- * Kept free of React so they unit-test in isolation and the panel stays a thin
- * fetch+render shell. The PRD body is markdown already; plan/state collapse into
- * a readable structured summary rather than dumping raw JSON.
+ * Kept free of React and of any store binding so they unit-test in isolation and
+ * every doc panel stays a thin fetch+render shell. The PRD body is markdown
+ * already; plan/state collapse into a readable structured summary rather than
+ * dumping raw JSON.
+ *
+ * Shared by every surface that renders prove docs (the ACB DocsPanel and the
+ * project-scoped runs DocsPanel) so the render contract has exactly one
+ * definition. The runs and ACB selection stores each declare their own
+ * structurally-identical `DocView` alias; `DocView` here is that same string
+ * union, so either store's alias satisfies it without a cross-store import.
  */
 
-import type { DocView } from "./store";
+export type DocView = "PRD" | "PLAN" | "STATE";
 
 export type DocFile = "plan.json" | "prd.json" | "state.json";
 
