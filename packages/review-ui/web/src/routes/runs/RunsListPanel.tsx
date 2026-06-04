@@ -1,14 +1,26 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "../lib/api";
-import { useSelection } from "../lib/store";
-import { cn } from "../lib/cn";
-import { FILTER_GROUPS, FilterChip, relTime, statusMeta } from "../lib/run-list-presentation";
+import { api } from "../../lib/api";
+import { useActiveProject } from "../../lib/active-project";
+import { useRunsSelection } from "./store";
+import { cn } from "../../lib/cn";
+import { FILTER_GROUPS, FilterChip, relTime, statusMeta } from "../../lib/run-list-presentation";
 
-export function RunList() {
-  const { data } = useQuery({ queryKey: ["runs"], queryFn: api.runs });
-  const selectedSlug = useSelection((s) => s.slug);
-  const selectRun = useSelection((s) => s.selectRun);
+/**
+ * Project-scoped runs browser. Lists every `.prove/runs/<branch>/<slug>/` of the
+ * active project, filterable by text + status group, and selects a composite run
+ * key into the runs selection store. The `["runs", projectKey]` query key carries
+ * the active project so a project switch never serves another project's cached
+ * run list.
+ */
+export function RunsListPanel() {
+  const { projectKey } = useActiveProject();
+  const { data } = useQuery({
+    queryKey: ["runs", projectKey],
+    queryFn: api.runs,
+  });
+  const selectedSlug = useRunsSelection((s) => s.slug);
+  const selectRun = useRunsSelection((s) => s.selectRun);
   const runs = data?.runs ?? [];
 
   const [query, setQuery] = useState("");
@@ -38,6 +50,7 @@ export function RunList() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Filter runs…"
+              aria-label="Filter runs"
               className="w-full h-7 px-2 rounded border border-bg-line bg-bg-void text-[12.5px] text-fg-base placeholder:text-fg-faint focus:outline-none focus:border-phos"
             />
           </div>
@@ -87,9 +100,7 @@ export function RunList() {
               <span className={cn("mt-1.5 w-2 h-2 rounded-full shrink-0", meta.dot)} aria-hidden />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="mono text-[11.5px] text-fg-faint truncate">
-                    {run.branch}/
-                  </span>
+                  <span className="mono text-[11.5px] text-fg-faint truncate">{run.branch}/</span>
                   <span className="mono text-[13.5px] text-fg-bright truncate font-medium">
                     {run.slug}
                   </span>

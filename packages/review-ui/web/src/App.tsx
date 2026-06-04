@@ -9,6 +9,7 @@ import { useHotkeys } from "./hooks/useHotkeys";
 import { useSidebarSize } from "./hooks/useSidebarSize";
 import { AcbRoute } from "./routes/acb";
 import { ScrumRoute } from "./routes/scrum";
+import { RunsRoute } from "./routes/runs";
 import { WorkspaceLayout } from "./routes/workspace-layout";
 import { api } from "./lib/api";
 import {
@@ -73,6 +74,7 @@ function ResolveActiveRecord({
  *   /         -> redirect to /acb
  *   /*        -> WorkspaceLayout (behind-schema banner + Outlet) wrapping:
  *                  /acb/*    -> ACB review experience
+ *                  /runs/*   -> project-scoped runs/briefs/decisions browser
  *                  /scrum/*  -> Scrum operator dashboard
  */
 function Shell() {
@@ -106,6 +108,7 @@ function Shell() {
           <Route path="/" element={<Navigate to="/acb" replace />} />
           <Route element={<WorkspaceLayout />}>
             <Route path="/acb/*" element={<AcbRoute />} />
+            <Route path="/runs/*" element={<RunsRoute />} />
             <Route path="/scrum/*" element={<ScrumRoute />} />
           </Route>
         </Routes>

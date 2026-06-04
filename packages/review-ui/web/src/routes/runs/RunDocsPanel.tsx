@@ -1,30 +1,39 @@
 import { useEffect, useMemo } from "react";
-import { useQueries } from "@tanstack/react-query";
-import { api } from "../lib/api";
-import { useSelection } from "../lib/store";
-import { DOCS, renderDoc } from "../lib/run-doc-render";
-import { cn } from "../lib/cn";
-import { Markdown } from "./Markdown";
-import { PanelLoading } from "./PanelLoading";
+import { useQueries, useQuery } from "@tanstack/react-query";
+import { api, type PlanStep, type PlanTaskView, type ValidatorPhase } from "../../lib/api";
+import { useActiveProject } from "../../lib/active-project";
+import { useRunsSelection } from "./store";
+import { DOCS, renderDoc } from "../../lib/run-doc-render";
+import { cn } from "../../lib/cn";
+import { Markdown } from "../../components/Markdown";
+import { PanelLoading } from "../../components/PanelLoading";
+import { Empty } from "../../components/Empty";
 
-export function DocsPanel() {
-  const slug = useSelection((s) => s.slug);
-  const view = useSelection((s) => s.docView);
-  const setView = useSelection((s) => s.setDocView);
+const VALIDATOR_PHASES: ValidatorPhase[] = ["build", "lint", "test", "custom", "llm"];
+
+/**
+ * Project-scoped run-detail view. Surfaces the run's plan/prd/state docs as
+ * rendered markdown plus a validator-summary rollup across every plan step. Doc
+ * probes and the tasks fetch all key off `[..., projectKey, slug, ...]` so a
+ * project switch invalidates cleanly.
+ */
+export function RunDocsPanel() {
+  const { projectKey } = useActiveProject();
+  const slug = useRunsSelection((s) => s.slug);
+  const view = useRunsSelection((s) => s.docView);
+  const setView = useRunsSelection((s) => s.setDocView);
 
   const probes = useQueries({
     queries: DOCS.map((d) => ({
-      queryKey: ["doc", slug, d.file],
+      queryKey: ["doc", projectKey, slug, d.file],
       queryFn: () => api.doc(slug!, d.file),
       enabled: !!slug,
       retry: false,
       staleTime: 10_000,
     })),
   });
-  // Stable projection of probe statuses so downstream memoization / effects
-  // depend on a single primitive that only flips when an actual status
-  // transition happens — avoids re-running the auto-switch effect on every
-  // render caused by fresh array identity out of `useQueries`.
+  // Collapse probe statuses to one primitive so the auto-switch effect only
+  // re-runs on a real status transition, not on every fresh useQueries array.
   const probeStatusKey = probes.map((p) => p.status).join(",");
   const availability = useMemo(
     () =>
@@ -46,6 +55,13 @@ export function DocsPanel() {
     if (firstAvail) setView(firstAvail.id);
   }, [slug, view, availability, setView]);
 
+  const { data: tasksData } = useQuery({
+    queryKey: ["tasks", projectKey, slug],
+    queryFn: () => api.tasks(slug!),
+    enabled: !!slug,
+    retry: false,
+  });
+
   const doc = DOCS.find((d) => d.id === view)!;
   const currentProbe = probes[DOCS.findIndex((d) => d.id === view)];
   const raw = (currentProbe?.data as { content?: string } | undefined)?.content ?? "";
@@ -57,6 +73,7 @@ export function DocsPanel() {
 
   return (
     <div className="flex flex-col h-full min-h-0">
+      <ValidatorRollup tasks={tasksData?.tasks ?? []} />
       <div className="shrink-0 flex items-stretch border-b border-bg-line bg-bg-deep">
         {DOCS.map((d, i) => {
           const avail = availability[i];
@@ -116,6 +133,42 @@ export function DocsPanel() {
   );
 }
 
-function Empty({ text }: { text: string }) {
-  return <div className="flex h-full items-center justify-center text-fg-dim text-[13px]">{text}</div>;
+/** Aggregate validator verdicts across every step into one per-phase tally so
+ * the run's overall gate health reads at a glance above the doc body. */
+function ValidatorRollup({ tasks }: { tasks: PlanTaskView[] }) {
+  const steps: PlanStep[] = tasks.flatMap((t) => t.steps);
+  if (steps.length === 0) return null;
+  const tally = VALIDATOR_PHASES.map((phase) => {
+    let pass = 0;
+    let fail = 0;
+    for (const step of steps) {
+      const v = step.validatorSummary[phase];
+      if (v === "pass") pass += 1;
+      else if (v === "fail") fail += 1;
+    }
+    return { phase, pass, fail };
+  }).filter((t) => t.pass > 0 || t.fail > 0);
+
+  if (tally.length === 0) return null;
+  return (
+    <div className="shrink-0 px-3 h-8 flex items-center gap-2 bg-bg-deep border-b border-bg-line">
+      <span className="label label-bright">VALIDATORS</span>
+      <div className="flex items-center gap-1 flex-wrap">
+        {tally.map(({ phase, pass, fail }) => (
+          <span
+            key={phase}
+            className={cn(
+              "px-1.5 py-[1px] text-[9.5px] tracking-wide2 font-semibold uppercase border",
+              fail > 0
+                ? "text-anom border-anom/40 bg-anom/10"
+                : "text-phos border-phos/40 bg-phos/10",
+            )}
+            title={`${phase}: ${pass} pass / ${fail} fail`}
+          >
+            {phase.slice(0, 3)} {pass}✓{fail > 0 ? ` ${fail}✕` : ""}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
 }

@@ -11,6 +11,7 @@ import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
 const SURFACES: Array<{ to: string; label: string }> = [
   { to: "/acb", label: "ACB" },
+  { to: "/runs", label: "Runs" },
   { to: "/scrum", label: "Scrum" },
 ];
 

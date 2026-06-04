@@ -1,26 +1,35 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { api } from "../lib/api";
-import { useSelection } from "../lib/store";
-import { Markdown } from "./Markdown";
-import { PanelLoading } from "./PanelLoading";
-import { Empty } from "./Empty";
+import { api } from "../../lib/api";
+import { useActiveProject } from "../../lib/active-project";
+import { useRunsSelection } from "./store";
+import { Markdown } from "../../components/Markdown";
+import { PanelLoading } from "../../components/PanelLoading";
+import { Empty } from "../../components/Empty";
 import {
   DecisionGroupLabel as GroupLabel,
   DecisionRow as Row,
-} from "../lib/decision-list-presentation";
+} from "../../lib/decision-list-presentation";
 
-export function DecisionsPanel() {
-  const slug = useSelection((s) => s.slug);
+/**
+ * Project-scoped decisions panel. Splits the active project's decision ledger
+ * into those referenced by the selected run's docs and the rest of the archive,
+ * and drills into a decision's markdown body on click. Both the list and the
+ * drill-down keys carry `projectKey` so a project switch can't surface another
+ * project's decisions.
+ */
+export function RunDecisionsPanel() {
+  const { projectKey } = useActiveProject();
+  const slug = useRunsSelection((s) => s.slug);
   const [selected, setSelected] = useState<string | null>(null);
 
   const { data, isPending, isFetching } = useQuery({
-    queryKey: ["decisions", slug],
+    queryKey: ["decisions", projectKey, slug],
     queryFn: () => api.decisions(slug!),
     enabled: !!slug,
   });
   const { data: detail, isFetching: detailFetching } = useQuery({
-    queryKey: ["decision", selected],
+    queryKey: ["decision", projectKey, selected],
     queryFn: () => api.decision(selected!),
     enabled: !!selected,
   });
@@ -63,6 +72,11 @@ export function DecisionsPanel() {
         </span>
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-thin">
+        {all.length === 0 && (
+          <div className="px-4 py-10 text-center text-[12.5px] text-fg-dim">
+            No decisions recorded for this project yet.
+          </div>
+        )}
         {referenced.length > 0 && (
           <>
             <GroupLabel text="REFERENCED BY RUN" tone="amber" />
@@ -83,4 +97,3 @@ export function DecisionsPanel() {
     </div>
   );
 }
-

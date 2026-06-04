@@ -14,6 +14,13 @@
  * we use the `render()` return value, which constructs queries lazily via
  * `within(container.parentNode)`.
  *
+ * happy-dom lifecycle: we deliberately do NOT unregister happy-dom in afterAll.
+ * Bun runs every test file in one shared process and sorts them by path; this
+ * file sorts before `routes/runs/RunsPanels.test.tsx` (`rou` < `run`), which is
+ * the last DOM file and owns the final unregister teardown. Unregistering here
+ * would tear `window`/`document` out from under that still-pending DOM file.
+ * Setup is idempotent on register.
+ *
  * For scrum tests we swap in a fresh QueryClient per test and stub `fetch`
  * so the read-only API contract is exercised without a real server.
  */
