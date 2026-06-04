@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../../lib/api";
+import { useActiveProject } from "../../lib/active-project";
 import { parseUnifiedDiff, type DiffLine } from "../../lib/diff";
 import { cn } from "../../lib/cn";
 
@@ -18,8 +19,12 @@ export function InlineDiff({
   height?: number;
 }) {
   const fixedHeight = typeof height === "number" ? { height } : undefined;
+  // The diff fetch is project-scoped on the wire (the funnel injects ?project=),
+  // so the cache key carries the active project too — otherwise the same
+  // slug/base/head/path tuple in two projects collides on one cache entry.
+  const { projectKey } = useActiveProject();
   const { data, isPending, isError } = useQuery({
-    queryKey: ["rv-diff-file", slug, base, head, path],
+    queryKey: ["rv-diff-file", projectKey, slug, base, head, path],
     queryFn: () => api.diffFile(slug, base, head, path),
     enabled: !!path && !!base && !!head,
     retry: false,

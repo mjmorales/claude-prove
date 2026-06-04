@@ -197,6 +197,25 @@ function enc(compositeSlug: string): string {
   return encodeURIComponent(compositeSlug);
 }
 
+/**
+ * The server refuses writes to a project whose `.prove/prove.db` sits behind
+ * the expected store schema with HTTP 409 and the structured body
+ * `{ error: "store schema behind", project, store: { schema_version, behind } }`.
+ * `postJSON` collapses a non-ok response into a thrown Error whose message is
+ * `<status> <statusText>: <url> — <body-text>`, so the only signal that
+ * survives to the caller is that message string. Detect the behind-schema case
+ * by the 409 status prefix plus the structured error marker — not a generic
+ * status check — so callers can surface the read-only notice distinctly from an
+ * ordinary submit failure. The client gate makes this near-impossible to hit,
+ * but the server is the floor and a stale project record could still let a
+ * write reach the wire.
+ */
+export function isBehindSchemaError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  if (!err.message.startsWith("409 ")) return false;
+  return err.message.includes("store schema behind") || err.message.includes('"behind":true');
+}
+
 export const api = {
   projects: () => getJSON<{ projects: ProjectInfo[] }>("/api/projects"),
   runs: () => getJSON<{ runs: RunSummary[] }>("/api/runs"),

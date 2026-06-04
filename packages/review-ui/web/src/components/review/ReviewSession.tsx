@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type GroupVerdict, type GroupVerdictRecord } from "../../lib/api";
+import {
+  api,
+  isBehindSchemaError,
+  type GroupVerdict,
+  type GroupVerdictRecord,
+} from "../../lib/api";
+import { useActiveProject } from "../../lib/active-project";
 import { useSelection } from "../../lib/store";
 import { computeQueue, nextActive, prevActive } from "../../lib/queue";
 import { GroupCard } from "./GroupCard";
@@ -31,6 +37,14 @@ export function ReviewSession() {
   const setAutoAdvance = useSelection((s) => s.setReviewAutoAdvance);
   const qc = useQueryClient();
 
+  // Review reads are project-scoped on the wire (the fetch funnel injects
+  // ?project=), so the cache keys must carry the project too — otherwise two
+  // projects with the same composite slug share one cache entry and a switch
+  // serves the wrong run's intents/verdicts. Thread the active project's key
+  // (the decoded registry path) into every review query key and invalidation,
+  // matching the [resource, projectKey, ...] shape the runs panels adopted.
+  const { projectKey } = useActiveProject();
+
   // A store behind schema must not accept writes — a verdict, discuss note, or
   // rework brief written through a stale schema risks corrupting records the
   // server can no longer interpret. OR this seam into every write entry point
@@ -45,26 +59,32 @@ export function ReviewSession() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [submitting, setSubmitting] = useState<GroupVerdict | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // Set when a write is refused with the server's behind-schema 409. The client
+  // gate (writesDisabled) makes this near-impossible, but the server is the
+  // floor: a stale project record could let a write reach the wire. Surface it
+  // distinctly from a generic submit error, in the BehindSchemaBanner's
+  // read-only language, rather than as a raw status line.
+  const [schemaBlocked, setSchemaBlocked] = useState(false);
   const [celebrate, setCelebrate] = useState(false);
   const [lastFixPrompt, setLastFixPrompt] = useState<string | null>(null);
   const [showReviewed, setShowReviewed] = useState(false);
 
   const intentsQ = useQuery({
-    queryKey: ["intents", slug],
+    queryKey: ["intents", projectKey, slug],
     queryFn: () => api.intents(slug!),
     enabled: !!slug,
     retry: false,
   });
 
   const reviewQ = useQuery({
-    queryKey: ["review", slug],
+    queryKey: ["review", projectKey, slug],
     queryFn: () => api.reviewState(slug!),
     enabled: !!slug,
     retry: false,
   });
 
   const tasksQ = useQuery({
-    queryKey: ["tasks", slug],
+    queryKey: ["tasks", projectKey, slug],
     queryFn: () => api.tasks(slug!),
     enabled: !!slug,
     retry: false,
@@ -129,8 +149,19 @@ export function ReviewSession() {
   const currentNote = current ? verdictMap.get(current.id)?.note ?? null : null;
 
   const invalidateReview = useCallback(() => {
-    qc.invalidateQueries({ queryKey: ["review", slug] });
-  }, [qc, slug]);
+    qc.invalidateQueries({ queryKey: ["review", projectKey, slug] });
+  }, [qc, projectKey, slug]);
+
+  // Route a failed write to the right surface: a behind-schema 409 sets the
+  // distinct read-only notice; anything else falls back to the generic error
+  // line. Centralized so every write path classifies failures identically.
+  const handleWriteError = useCallback((err: unknown) => {
+    if (isBehindSchemaError(err)) {
+      setSchemaBlocked(true);
+      return;
+    }
+    setSubmitError(errMsg(err));
+  }, []);
 
   const jumpTo = useCallback(
     (id: string | null) => {
@@ -170,6 +201,7 @@ export function ReviewSession() {
       if (!current || !slug || writesDisabled) return;
       setSubmitting(v);
       setSubmitError(null);
+      setSchemaBlocked(false);
       try {
         await api.submitVerdict(slug, current.id, v, note);
         invalidateReview();
@@ -178,12 +210,12 @@ export function ReviewSession() {
         // the same item so they can retry, not silently skip it.
         advanceAfterVerdict();
       } catch (err) {
-        setSubmitError(errMsg(err));
+        handleWriteError(err);
       } finally {
         setSubmitting(null);
       }
     },
-    [current, slug, writesDisabled, invalidateReview, advanceAfterVerdict],
+    [current, slug, writesDisabled, invalidateReview, advanceAfterVerdict, handleWriteError],
   );
 
   const submitDiscuss = useCallback(
@@ -191,6 +223,7 @@ export function ReviewSession() {
       if (!current || !slug || writesDisabled) return;
       setSubmitting("needs_discussion");
       setSubmitError(null);
+      setSchemaBlocked(false);
       try {
         await api.submitDiscuss(slug, current.id, note);
         invalidateReview();
@@ -198,12 +231,12 @@ export function ReviewSession() {
         setDiscussOpen(false);
         advanceAfterVerdict();
       } catch (err) {
-        setSubmitError(errMsg(err));
+        handleWriteError(err);
       } finally {
         setSubmitting(null);
       }
     },
-    [current, slug, writesDisabled, invalidateReview, advanceAfterVerdict],
+    [current, slug, writesDisabled, invalidateReview, advanceAfterVerdict, handleWriteError],
   );
 
   const composeFix = useCallback(
@@ -211,6 +244,7 @@ export function ReviewSession() {
       if (!current || !slug || writesDisabled) return;
       setSubmitting("rework");
       setSubmitError(null);
+      setSchemaBlocked(false);
       try {
         const res = await api.submitFix(slug, current.id, {
           note,
@@ -223,12 +257,12 @@ export function ReviewSession() {
         invalidateReview();
         setStampKey((k) => k + 1);
       } catch (err) {
-        setSubmitError(errMsg(err));
+        handleWriteError(err);
       } finally {
         setSubmitting(null);
       }
     },
-    [current, slug, writesDisabled, invalidateReview],
+    [current, slug, writesDisabled, invalidateReview, handleWriteError],
   );
 
   const undoCurrent = useCallback(async () => {
@@ -237,16 +271,17 @@ export function ReviewSession() {
     if (submitting) return; // guard against a second undo racing in-flight
     setSubmitting("pending");
     setSubmitError(null);
+    setSchemaBlocked(false);
     try {
       await api.submitVerdict(slug, current.id, "pending");
       invalidateReview();
       setStampKey((k) => k + 1);
     } catch (err) {
-      setSubmitError(errMsg(err));
+      handleWriteError(err);
     } finally {
       setSubmitting(null);
     }
-  }, [current, slug, currentVerdict, submitting, writesDisabled, invalidateReview]);
+  }, [current, slug, currentVerdict, submitting, writesDisabled, invalidateReview, handleWriteError]);
 
   // On first load: pick head of queue if nothing active.
   const bootRef = useRef(false);
@@ -562,7 +597,18 @@ export function ReviewSession() {
             <span className="kbd">u</span>
           </button>
         </div>
-        {submitError ? (
+        {schemaBlocked ? (
+          <div
+            role="alert"
+            data-testid="schema-blocked-notice"
+            className="text-[12px] text-amber-bright truncate max-w-[60%]"
+            title="Store schema behind — write controls are disabled until it is migrated."
+          >
+            <span className="text-amber mr-1.5">⚠</span>
+            Read-only — this project sits behind the expected store schema; the
+            verdict was refused until it is migrated.
+          </div>
+        ) : submitError ? (
           <div
             role="alert"
             className="text-[12px] text-anom truncate max-w-[60%]"
