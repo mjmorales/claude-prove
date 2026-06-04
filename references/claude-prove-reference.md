@@ -86,7 +86,8 @@ Actions: `migrate` `info` `reset` (requires `--confirm`). Ex: `store info`.
 
 ### install — `.claude/` scaffolding + binary upgrade
 
-Actions: `init` `init-hooks` `init-config` `doctor` `upgrade`. Flags: `--project` `--cwd` `--settings <path>` `--force` `--prefix <dir>` (default `~/.local/bin`). Ex: `install doctor`.
+Actions: `init` `init-hooks` `init-config` `local-env` `doctor` `upgrade`. Flags: `--project` `--cwd` `--settings <path>` `--force` `--plugin-dir <path>` (local-env) `--prefix <dir>` (default `~/.local/bin`). Ex: `install doctor`.
+`local-env` writes `env.CLAUDE_PROVE_PLUGIN_DIR` into the gitignored `.claude/settings.local.json` so the portable `${CLAUDE_PROVE_PLUGIN_DIR:-...}` hook commands and docs resolve on this machine (driven by `/prove:local-env`; `doctor`'s `plugin-dir-env` check verifies it).
 
 ### report — report/v1 HTML renderer
 
