@@ -15,8 +15,8 @@ import type { Store } from '../connection';
  * Canonical verdict vocabulary for `acb_group_verdicts.verdict`.
  *
  * `'rework'` is a review-UI-only state: the group is rejected with a
- * generated fix brief. Legacy values written by earlier builds
- * (`'approved'`, `'discuss'`) are NOT members here — they are coerced to
+ * generated fix brief. Legacy values (`'approved'`, `'discuss'`) may still
+ * exist in stored rows but are NOT members here — they are coerced to
  * canonical at the DB read boundary, never written.
  *
  * The dependency graph runs `@claude-prove/cli` → `@claude-prove/store`, so
