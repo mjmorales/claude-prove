@@ -1,4 +1,4 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply } from "fastify";
 import {
   clearVerdict,
   listVerdicts,
@@ -8,6 +8,7 @@ import {
 } from "../acb.js";
 import { parseRunKey } from "../parsers.js";
 import type { ProjectResolver } from "../projects.js";
+import { storeBehindSchema } from "../schema-guard.js";
 
 // Canonical `VerdictValue` vocabulary (see `@claude-prove/cli/acb/schemas`).
 // Clients are expected to post canonical strings; legacy aliases (`approved`,
@@ -34,6 +35,25 @@ type FixBody = {
   classification?: unknown;
 };
 
+/**
+ * Refuse a write to a project whose store schema is behind the registered
+ * expected versions: reply HTTP 409 with the structured `SchemaGuardError`
+ * body and return true (handler must `return reply`). Returns false when the
+ * write may proceed.
+ *
+ * Every verdict write path (upsert/clear) routes through here first — writing
+ * through an unmigrated db would target the current table shape this binary
+ * assumes, which may not yet exist in the foreign db. Reads are NOT guarded:
+ * `GET .../review` stays available on a behind project so the operator can
+ * still inspect it and see the "needs migration" badge.
+ */
+function refuseIfBehindSchema(repoRoot: string, reply: FastifyReply): boolean {
+  const behind = storeBehindSchema(repoRoot);
+  if (behind === null) return false;
+  reply.code(409).send(behind);
+  return true;
+}
+
 export function registerReviewRoutes(app: FastifyInstance, resolveProject: ProjectResolver) {
   app.get<{ Params: { slug: string } }>(
     "/api/runs/:slug/review",
@@ -52,6 +72,7 @@ export function registerReviewRoutes(app: FastifyInstance, resolveProject: Proje
     async (req, reply) => {
       const repoRoot = resolveProject(req, reply);
       if (repoRoot === null) return reply;
+      if (refuseIfBehindSchema(repoRoot, reply)) return reply;
       const key = parseRunKey(req.params.slug);
       if (!key) return reply.code(400).send({ error: "bad slug" });
       const groupId = req.params.groupId;
@@ -86,6 +107,7 @@ export function registerReviewRoutes(app: FastifyInstance, resolveProject: Proje
     async (req, reply) => {
       const repoRoot = resolveProject(req, reply);
       if (repoRoot === null) return reply;
+      if (refuseIfBehindSchema(repoRoot, reply)) return reply;
       const key = parseRunKey(req.params.slug);
       if (!key) return reply.code(400).send({ error: "bad slug" });
       const groupId = req.params.groupId;
@@ -125,6 +147,7 @@ export function registerReviewRoutes(app: FastifyInstance, resolveProject: Proje
     async (req, reply) => {
       const repoRoot = resolveProject(req, reply);
       if (repoRoot === null) return reply;
+      if (refuseIfBehindSchema(repoRoot, reply)) return reply;
       const key = parseRunKey(req.params.slug);
       if (!key) return reply.code(400).send({ error: "bad slug" });
       const groupId = req.params.groupId;

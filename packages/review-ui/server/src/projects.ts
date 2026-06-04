@@ -13,13 +13,21 @@
  * Project-id scheme: the `id` is the registry's absolute `path`, URL-encoded
  * (`encodeURIComponent`). The registry keys entries by exact `path`, so the
  * encoded path is a lossless, collision-free transport of that primary key:
- * decode → resolve/normalize → exact-match a registry entry. A basename +
- * short-hash scheme was rejected because it is lossy (the server would have to
- * scan and reverse-map every entry to recover the root, and two roots sharing a
- * basename could collide), whereas the encoded path is reversible by decode
- * alone and the registry lookup stays an O(n) exact-equality scan with no
- * ambiguity. The encoding only makes the key URL-safe; it grants no trust —
- * the registry membership check is the sole authority.
+ * resolve/normalize → exact-match a registry entry. A basename + short-hash
+ * scheme was rejected because it is lossy (the server would have to scan and
+ * reverse-map every entry to recover the root, and two roots sharing a basename
+ * could collide), whereas the encoded path round-trips by URL-decode alone and
+ * the registry lookup stays an O(n) exact-equality scan with no ambiguity. The
+ * encoding only makes the key URL-safe; it grants no trust — the registry
+ * membership check is the sole authority.
+ *
+ * Decode discipline: the `?project=` value is decoded EXACTLY ONCE end-to-end.
+ * Fastify URL-decodes the query string on the HTTP path, so by the time a
+ * handler reads `req.query.project` the key is already the raw registry path —
+ * `resolveProjectRoot` therefore expects an already-decoded key and does NOT
+ * decode again. Decoding twice would corrupt any registered root containing a
+ * literal `%` (the byte that survives the first decode would be mis-read as the
+ * start of a second escape), breaking that project fail-closed.
  */
 
 import path from "node:path";
@@ -101,39 +109,33 @@ export function listProjectsReadOnly(baseOverride?: string): ProjectRef[] {
 }
 
 /**
- * Resolve a `?project=` key to a validated absolute root, or null on any
- * rejection, WITHOUT pruning the registry (a pure read). THE security boundary
- * for the per-request data path: the only path ever returned is one that
- * EXACTLY equals a currently-registered visible root.
+ * Resolve an ALREADY-DECODED `?project=` key to a validated absolute root, or
+ * null on any rejection, WITHOUT pruning the registry (a pure read). THE
+ * security boundary for the per-request data path: the only path ever returned
+ * is one that EXACTLY equals a currently-registered visible root.
+ *
+ * Callers pass the key Fastify has already URL-decoded (`req.query.project`),
+ * so this function performs NO decode of its own — see the module header's
+ * single-decode discipline. A non-string/empty key is the only malformed-input
+ * guard needed here; the membership check below rejects everything else.
  *
  * The check is deliberately strict and membership-based rather than
  * prefix-based, so none of the usual escapes get through:
- *   - an unregistered key (decoded or not) → null;
+ *   - an unregistered key → null;
  *   - a relative key carrying `..` → resolves to some path, but unless that
  *     resolved path is itself a registered root it is rejected (no "starts
  *     with a registered root" prefix trick);
  *   - an absolute path that is not a registered root → null (no passthrough);
  *   - a leading-dash key → cannot equal an absolute registry path → null.
- *
- * The key is first decoded (it is normally `encodeURIComponent(path)`); a
- * malformed `%`-escape that throws is treated as a miss, not an exception.
  */
 export function resolveProjectRoot(key: string, baseOverride?: string): string | null {
-  if (key.length === 0) return null;
-
-  let decoded: string;
-  try {
-    decoded = decodeURIComponent(key);
-  } catch {
-    // A malformed percent-escape is an invalid key, not a server fault.
-    return null;
-  }
+  if (typeof key !== "string" || key.length === 0) return null;
 
   // Normalize the candidate to a canonical absolute form for comparison. The
   // registry stores already-resolved absolute roots, so resolve()+the registry
   // entries are compared on the same canonical footing — `..` segments collapse
   // here, leaving an exact-equality membership test as the sole gate.
-  const candidate = path.resolve(decoded);
+  const candidate = path.resolve(key);
 
   // Membership against the (read-only) registry: the resolved candidate must be
   // byte-for-byte one of the registered roots. No prefix/containment check —
