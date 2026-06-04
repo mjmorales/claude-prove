@@ -10,6 +10,8 @@ import { cn } from "../../lib/cn";
 
 const STATUS_META: Record<TaskStatus, { label: string; color: string }> = {
   backlog: { label: "Backlog", color: "#6272a4" },
+  proposed: { label: "Proposed", color: "#f1fa8c" },
+  accepted: { label: "Accepted", color: "#8be9fd" },
   ready: { label: "Ready", color: "#8be9fd" },
   in_progress: { label: "In Progress", color: "#bd93f9" },
   review: { label: "Review", color: "#ffb86c" },
@@ -18,8 +20,12 @@ const STATUS_META: Record<TaskStatus, { label: string; color: string }> = {
   cancelled: { label: "Cancelled", color: "#44475a" },
 };
 
+// Canonical lifecycle order: backlog → proposed → accepted → ready →
+// in_progress → review → done, with blocked/cancelled as off-path terminals.
 export const TASK_STATUSES: TaskStatus[] = [
   "backlog",
+  "proposed",
+  "accepted",
   "ready",
   "in_progress",
   "review",

@@ -70,6 +70,8 @@ function Column({ status, tasks }: { status: TaskStatus; tasks: ScrumTask[] }) {
 export function bucketByStatus(tasks: ScrumTask[]): Record<TaskStatus, ScrumTask[]> {
   const out: Record<TaskStatus, ScrumTask[]> = {
     backlog: [],
+    proposed: [],
+    accepted: [],
     ready: [],
     in_progress: [],
     review: [],
