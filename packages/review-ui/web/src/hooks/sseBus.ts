@@ -16,6 +16,8 @@
 // Pattern: Observer + reference counting (see useConnection.ts for staleness
 // logic that reads this bus's events).
 
+import { pathToProjectId } from "../lib/active-project";
+
 export type SseStatus = "connecting" | "live" | "down";
 
 export interface SseChangeEvent {
@@ -46,24 +48,14 @@ let source: EventSource | null = null;
 let status: SseStatus = "connecting";
 const subscribers = new Set<SseSubscriber>();
 
-/**
- * Canonicalize a project key to the server's `?project=` / `project`-field
- * encoding: `encodeURIComponent` of the resolved root. The key can arrive
- * either decoded (the URL-seed path reads `URLSearchParams.get`, which decodes
- * once) or already-encoded (the selector passes the encoded `id`), so decode
- * first to collapse both forms, then encode. The operation is idempotent on an
- * already-canonical key. Used both to build the stream URL and to match the
- * `project` id the server stamps on every event, so the client is agnostic to
- * which form the active key holds.
- */
-export function canonicalProjectId(key: string): string {
-  return encodeURIComponent(decodeURIComponent(key));
-}
-
-/** Build the stream URL for the active key: bare when null, parameterized with
- * the canonical encoded id otherwise. */
+/** Build the stream URL for the active key: bare when null, parameterized
+ * otherwise. The key is the DECODED registry path; `pathToProjectId` encodes it
+ * exactly once into the server's `?project=` form. A single encode never throws
+ * (unlike a decode-then-encode, which a literal-`%` path like `/repos/100%done`
+ * would crash with `URIError`) and round-trips byte-for-byte with the encoded
+ * `project` field the server stamps on every event. */
 function streamUrl(key: string | null): string {
-  return key === null ? "/api/events" : `/api/events?project=${canonicalProjectId(key)}`;
+  return key === null ? "/api/events" : `/api/events?project=${pathToProjectId(key)}`;
 }
 
 function broadcastStatus(next: SseStatus): void {

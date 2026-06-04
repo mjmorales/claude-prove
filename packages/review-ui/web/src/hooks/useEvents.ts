@@ -1,12 +1,11 @@
 import { useEffect } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
-  canonicalProjectId,
   setActiveProjectKey,
   subscribeSse,
   type SseChangeEvent,
 } from "./sseBus";
-import { useActiveProject } from "../lib/active-project";
+import { pathToProjectId, useActiveProject } from "../lib/active-project";
 
 // Topical groups of react-query keys. The SSE payload's path prefix selects
 // which groups to invalidate -- invalidating all 15 keys on every heartbeat
@@ -87,9 +86,10 @@ function keysForPath(relPath: string): readonly string[] {
  * With a non-null active key, only events whose `project` matches it are
  * accepted; everything else (a late event from a stream being torn down) is
  * dropped without invalidating, so a project switch never refetches the wrong
- * project's caches. The active key and the event's `project` field can be in
- * different encodings (decoded path vs the server's `encodeURIComponent` id),
- * so both are canonicalized before comparison.
+ * project's caches. The two operands live on different axes: `activeKey` is the
+ * DECODED registry path, `evt.project` is the server's encoded id. Compare on
+ * one axis by encoding the key once (`pathToProjectId`) — never decode both,
+ * which a literal-`%` path like `/repos/100%done` would crash with `URIError`.
  */
 function eventMatchesActiveProject(
   evt: SseChangeEvent,
@@ -97,7 +97,7 @@ function eventMatchesActiveProject(
 ): boolean {
   if (activeKey === null) return true;
   if (evt.project === undefined) return false;
-  return canonicalProjectId(evt.project) === canonicalProjectId(activeKey);
+  return evt.project === pathToProjectId(activeKey);
 }
 
 /**

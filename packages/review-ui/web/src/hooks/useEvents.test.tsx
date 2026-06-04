@@ -32,8 +32,10 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import {
   ActiveProjectProvider,
+  pathToProjectId,
   useActiveProject,
 } from "../lib/active-project";
+import { setActiveProjectKey } from "./sseBus";
 import { useEventStream } from "./useEvents";
 
 /**
@@ -84,10 +86,12 @@ function liveSource(): StubEventSource {
 }
 
 /** Seed the active key via the URL the way `seedProjectKey` reads it, so the
- * hook's first effect connects against the intended stream. */
-function seedKey(key: string | null): void {
-  if (key === null) window.history.replaceState(null, "", "/");
-  else window.history.replaceState(null, "", `/?project=${key}`);
+ * hook's first effect connects against the intended stream. The argument is the
+ * DECODED registry path (the form the bus contract expects); it is encoded into
+ * the `?project=` URL so `URLSearchParams.get` decodes it back to that path. */
+function seedKey(path: string | null): void {
+  if (path === null) window.history.replaceState(null, "", "/");
+  else window.history.replaceState(null, "", `/?project=${pathToProjectId(path)}`);
 }
 
 function makeClient(): QueryClient {
@@ -129,21 +133,28 @@ function makeWrapper(qc: QueryClient, captureSetKey?: SetKeyRef) {
 
 type SetKeyRef = { current: (key: string | null) => void };
 
-const PROJECT_A = "%2Fhome%2Fme%2Frepo-a";
-const PROJECT_B = "%2Fhome%2Fme%2Frepo-b";
+// Decoded registry paths — the form the bus and `setProjectKey` contract on.
+// `pathToProjectId` derives the encoded `?project=` / `project`-field form.
+const PROJECT_A = "/home/me/repo-a";
+const PROJECT_B = "/home/me/repo-b";
+const PROJECT_A_ID = pathToProjectId(PROJECT_A);
+const PROJECT_B_ID = pathToProjectId(PROJECT_B);
 
 describe("useEventStream per-project routing", () => {
   beforeEach(() => {
     installEventSourceStub();
     window.history.replaceState(null, "", "/");
     localStorage.clear();
+    // The bus holds the active key at module scope; reset it so a key set by a
+    // prior test cannot bleed into this one's first connect.
+    setActiveProjectKey(null);
   });
   afterEach(cleanup);
 
   test("connects to the active project's parameterized stream", () => {
     seedKey(PROJECT_A);
     renderHook(() => useEventStream(), { wrapper: makeWrapper(makeClient()) });
-    expect(liveSource().url).toBe(`/api/events?project=${PROJECT_A}`);
+    expect(liveSource().url).toBe(`/api/events?project=${PROJECT_A_ID}`);
   });
 
   test("connects to the bare stream when no project key is active", () => {
@@ -159,7 +170,8 @@ describe("useEventStream per-project routing", () => {
     renderHook(() => useEventStream(), { wrapper: makeWrapper(qc) });
     act(() => {
       // `.git/HEAD` selects the git group; `runs`/`branches` are among its keys.
-      liveSource().emitChange({ kind: "change", path: ".git/HEAD", project: PROJECT_A });
+      // The server stamps the encoded id, not the decoded path.
+      liveSource().emitChange({ kind: "change", path: ".git/HEAD", project: PROJECT_A_ID });
     });
     expect(seen).toContain("runs");
     expect(seen).toContain("branches");
@@ -171,7 +183,7 @@ describe("useEventStream per-project routing", () => {
     const seen = spyInvalidations(qc);
     renderHook(() => useEventStream(), { wrapper: makeWrapper(qc) });
     act(() => {
-      liveSource().emitChange({ kind: "change", path: ".git/HEAD", project: PROJECT_B });
+      liveSource().emitChange({ kind: "change", path: ".git/HEAD", project: PROJECT_B_ID });
     });
     expect(seen).toHaveLength(0);
   });
@@ -194,12 +206,45 @@ describe("useEventStream per-project routing", () => {
     const setKey: SetKeyRef = { current: () => {} };
     renderHook(() => useEventStream(), { wrapper: makeWrapper(qc, setKey) });
     const first = liveSource();
-    expect(first.url).toBe(`/api/events?project=${PROJECT_A}`);
+    expect(first.url).toBe(`/api/events?project=${PROJECT_A_ID}`);
 
+    // The selector hands `setProjectKey` the DECODED path, never the encoded id.
     act(() => setKey.current(PROJECT_B));
     const second = liveSource();
     expect(first.closed).toBe(true);
     expect(second).not.toBe(first);
-    expect(second.url).toBe(`/api/events?project=${PROJECT_B}`);
+    expect(second.url).toBe(`/api/events?project=${PROJECT_B_ID}`);
+  });
+
+  test("literal-% decoded path routes without throwing and demuxes on the encoded id", () => {
+    // The bus receives the DECODED registry path; a literal `%` (e.g.
+    // `/repos/100%done`) is the trap that a decode-then-encode would crash on
+    // with `URIError`. The path must encode exactly once into the stream URL and
+    // into the `project` field the demux compares against.
+    const decoded = "/repos/100%done";
+    const encoded = pathToProjectId(decoded); // "%2Frepos%2F100%25done"
+    expect(encoded).toBe("%2Frepos%2F100%25done");
+    // `seedKey` encodes the decoded path into the URL, which `URLSearchParams`
+    // decodes once back to it — so the active key is the decoded path the bus
+    // contract expects.
+    seedKey(decoded);
+    const qc = makeClient();
+    const seen = spyInvalidations(qc);
+    // Building the stream URL must not throw on the literal `%`.
+    renderHook(() => useEventStream(), { wrapper: makeWrapper(qc) });
+    expect(liveSource().url).toBe(`/api/events?project=${encoded}`);
+
+    act(() => {
+      // An event stamped with the encoded form of the active path invalidates.
+      liveSource().emitChange({ kind: "change", path: ".git/HEAD", project: encoded });
+    });
+    expect(seen).toContain("runs");
+
+    seen.length = 0;
+    act(() => {
+      // A different project's event is still dropped.
+      liveSource().emitChange({ kind: "change", path: ".git/HEAD", project: PROJECT_B_ID });
+    });
+    expect(seen).toHaveLength(0);
   });
 });
