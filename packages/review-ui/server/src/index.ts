@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
+import { materializeEmbeddedWebRoot } from "./embedded-assets.js";
 import { resolveRepoRoot } from "./repo.js";
 import { registerRunRoutes } from "./routes/runs.js";
 import { registerBranchRoutes } from "./routes/branches.js";
@@ -19,17 +20,19 @@ const PORT = Number(process.env.PORT ?? 5174);
 const HOST = process.env.HOST ?? "127.0.0.1";
 
 /**
- * Locate web assets baked into the binary. The stub returns null so
- * `resolveWebRoot` falls through to the on-disk tiers; a real embedded-asset
- * accessor replaces this body to return the embedded root when present.
+ * Locate web assets baked into the compiled binary. Returns the on-disk cache
+ * dir the embedded bundle was materialized into (see `embedded-assets.ts`), or
+ * null when not running from a compiled binary — in which case `resolveWebRoot`
+ * falls through to the plugin-dir / WEB_ROOT tiers.
+ *
+ * The default `materializeEmbeddedWebRoot`; the parameter is an injectable seam
+ * so tests can drive the tier ordering without an actual compiled binary.
  */
-function embeddedWebRoot(): string | null {
-  return null;
-}
+export type EmbeddedWebRootAccessor = () => string | null;
 
 /**
  * Locate the prebuilt web bundle in three-tier precedence order:
- *   1. Embedded assets baked into the binary (`embeddedWebRoot`).
+ *   1. Embedded assets baked into the binary (`embeddedAccessor`).
  *   2. The plugin-dir bundle at `<CLAUDE_PROVE_PLUGIN_DIR>/packages/review-ui/web/dist`,
  *      the layout a plugin install ships.
  *   3. `WEB_ROOT` env override for non-standard layouts (e.g. local dev).
@@ -39,9 +42,14 @@ function embeddedWebRoot(): string | null {
  *
  * Intentionally does NOT walk up from the compiled module location: under a
  * binary or npx/Docker deploy that path is a cache, not the asset root.
+ *
+ * `embeddedAccessor` defaults to the real materializer; tests inject a stub to
+ * exercise the embedded tier (which outranks WEB_ROOT) without a compiled binary.
  */
-export function resolveWebRoot(): string | null {
-  const embedded = embeddedWebRoot();
+export function resolveWebRoot(
+  embeddedAccessor: EmbeddedWebRootAccessor = () => materializeEmbeddedWebRoot(),
+): string | null {
+  const embedded = embeddedAccessor();
   if (embedded && fs.existsSync(embedded)) return embedded;
 
   const pluginDir = process.env.CLAUDE_PROVE_PLUGIN_DIR;

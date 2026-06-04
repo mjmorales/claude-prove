@@ -60,6 +60,11 @@ jobs:
         with:
           bun-version: 1.2.22
       - run: bun install --frozen-lockfile
+      # Build packages/review-ui/web (vite) and pack web/dist into the tarball
+      # run.ts embeds via `type: "file"`, so the compile below bakes the web
+      # bundle into the binary. Must run BEFORE the compile step.
+      - name: Build + embed review-ui web bundle
+        run: ./scripts/build-review-ui-embed.sh
       - name: Compile prove binary
         run: |
           mkdir -p dist-bin
