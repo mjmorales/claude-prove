@@ -8,6 +8,20 @@ export {
 } from './migrate';
 export { type ResolveOptions, resolveDbPath } from './paths';
 export {
+  add,
+  canonicalProjectRoot,
+  hide,
+  list,
+  type ProjectEntry,
+  type ProjectRegistry,
+  prune,
+  read,
+  registryBaseDir,
+  registryFilePath,
+  remove,
+  upsert,
+} from './project-registry';
+export {
   clearRegistry,
   getMigrations,
   listDomains,
