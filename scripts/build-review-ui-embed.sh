@@ -22,8 +22,8 @@ dist_dir="$web_dir/dist"
 tar_out="$repo_root/packages/cli/bin/web-dist.tar"
 
 echo "build-review-ui-embed: building web bundle (vite)"
-# Bun crashes vite's bundle step on non-AVX x64 CPUs, so drive vite through Node,
-# matching the Dockerfile. node_modules/.bin/vite is populated by bun install.
+# Bun crashes vite's bundle step on non-AVX x64 CPUs, so drive vite through
+# Node. node_modules/.bin/vite is populated by bun install.
 ( cd "$web_dir" && node "$repo_root/node_modules/.bin/vite" build )
 
 if [ ! -f "$dist_dir/index.html" ]; then

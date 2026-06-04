@@ -3,12 +3,11 @@ name: Release
 on:
   push:
     branches: [main]
-    # Review UI lives in its own release channel (GHCR Docker image published
-    # by .github/workflows/review-ui-image.yml). Pushes that only touch
+    # The review UI ships its server in-process under the native daemon, not
+    # as a separately-versioned plugin artifact. Pushes that only touch
     # review-ui files should not cut a new plugin release.
     paths-ignore:
       - 'packages/review-ui/**'
-      - '.github/workflows/review-ui-image.yml'
 
 permissions:
   contents: write
@@ -53,14 +52,14 @@ jobs:
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
 
           # Analyze commits since last tag, EXCLUDING commits that only touch
-          # the review UI — that path has its own Docker-image release channel.
-          # `:(exclude)` pathspec filters out commits that changed only
-          # packages/review-ui/ or the review-ui workflow file.
+          # the review UI — it ships in-process under the native daemon and is
+          # not a separately-versioned plugin artifact. `:(exclude)` pathspec
+          # filters out commits that changed only packages/review-ui/.
           # CLAUDE.md is excluded too: its managed block pins the plugin
           # version, so each release requires a docs sync commit — counting
           # that commit as release-relevant would cut another release and
           # stale the pin again, forever.
-          EXCLUDES=(':(exclude)packages/review-ui' ':(exclude).github/workflows/review-ui-image.yml' ':(exclude)CLAUDE.md')
+          EXCLUDES=(':(exclude)packages/review-ui' ':(exclude)CLAUDE.md')
           if [ "$LATEST_TAG" = "v0.0.0" ]; then
             COMMITS=$(git log --pretty=format:"%s%n%b" HEAD -- . "${EXCLUDES[@]}")
           else
@@ -115,9 +114,10 @@ jobs:
           fi
 
           # Match the bump step: keep review-ui commits out of the plugin
-          # CHANGELOG (they ship separately via the GHCR image) and CLAUDE.md
-          # version-pin syncs out of release-relevance.
-          EXCLUDES=(':(exclude)packages/review-ui' ':(exclude).github/workflows/review-ui-image.yml' ':(exclude)CLAUDE.md')
+          # CHANGELOG (it ships in-process under the native daemon, not as a
+          # separately-versioned artifact) and CLAUDE.md version-pin syncs
+          # out of release-relevance.
+          EXCLUDES=(':(exclude)packages/review-ui' ':(exclude)CLAUDE.md')
 
           {
             echo "changelog<<CHANGELOG_EOF"
