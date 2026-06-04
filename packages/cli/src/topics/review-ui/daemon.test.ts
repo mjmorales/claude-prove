@@ -187,16 +187,22 @@ describe('review-ui daemon — start', () => {
 
   test('start times out and surfaces when health never passes', async () => {
     // Bind then immediately close so the port is reliably dead: every health
-    // probe fails and the bounded poll exhausts its budget, then rejects. The
-    // test timeout bounds the worst-case wait.
+    // probe fails and the bounded poll exhausts its (injected sub-second)
+    // budget, then rejects.
     const p = await startHealthServer();
     await stopHealthServer();
 
     const spawnFn = () => process.pid;
-    await expect(start(spawnFn, { baseOverride: baseDir, host: HOST, port: p })).rejects.toThrow(
-      /health check did not pass/,
-    );
-  }, 15_000);
+    await expect(
+      start(spawnFn, {
+        baseOverride: baseDir,
+        host: HOST,
+        port: p,
+        pollTimeoutMs: 300,
+        pollIntervalMs: 50,
+      }),
+    ).rejects.toThrow(/health check did not pass within 300ms/);
+  });
 });
 
 describe('review-ui daemon — stop + status + restart', () => {
