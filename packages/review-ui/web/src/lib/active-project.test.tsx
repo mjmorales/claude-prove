@@ -16,9 +16,13 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
 import {
   ActiveProjectProvider,
+  pathToProjectId,
+  projectIdToPath,
   useActiveProject,
   type ProjectInfo,
 } from "./active-project";
+import { api } from "./api";
+import { setActiveProjectKeyForRequests } from "./fetch-utils";
 
 const STORAGE_KEY = "prove-review.active-project.v1";
 
@@ -96,5 +100,53 @@ describe("ActiveProjectProvider", () => {
     expect(() => renderHook(() => useActiveProject())).toThrow(
       /must be used within an ActiveProjectProvider/,
     );
+  });
+});
+
+describe("decoded-path ↔ encoded-id chokepoint", () => {
+  test("pathToProjectId / projectIdToPath round-trip a literal-% path", () => {
+    // A path containing a literal `%` is the canonical encode/decode trap: a
+    // missing or doubled conversion mangles it. The pair must be exact inverses.
+    const path = "/home/me/100%-repo";
+    const id = pathToProjectId(path);
+    expect(id).toBe("%2Fhome%2Fme%2F100%25-repo");
+    expect(projectIdToPath(id)).toBe(path);
+  });
+});
+
+describe("projectKey wire-encoding contract", () => {
+  let lastUrl = "";
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    resetEnv();
+    lastUrl = "";
+    globalThis.fetch = ((input: string | URL | Request) => {
+      lastUrl = typeof input === "string" ? input : input.toString();
+      return Promise.resolve(
+        new Response('{"runs":[]}', { status: 200, headers: { "content-type": "application/json" } }),
+      );
+    }) as typeof fetch;
+    setActiveProjectKeyForRequests(null);
+  });
+
+  afterEach(() => {
+    cleanup();
+    globalThis.fetch = originalFetch;
+    setActiveProjectKeyForRequests(null);
+  });
+
+  test("setProjectKey(decoded path) → wire URL carries the encoded-once form", async () => {
+    // The provider broadcasts the DECODED path it was handed; the fetch funnel
+    // encodes it exactly once. Feeding the decoded path (NOT ProjectInfo.id)
+    // is what keeps the `?project=` param single-encoded.
+    const { result } = renderHook(() => useActiveProject(), {
+      wrapper: ({ children }: { children: ReactNode }) => (
+        <ActiveProjectProvider>{children}</ActiveProjectProvider>
+      ),
+    });
+    act(() => result.current.setProjectKey("/home/me/repo"));
+    await api.runs();
+    expect(lastUrl).toBe("/api/runs?project=%2Fhome%2Fme%2Frepo");
   });
 });
