@@ -36,3 +36,10 @@ export {
   registerSchema,
   type SchemaDef,
 } from './registry';
+export {
+  type GroupVerdict,
+  type GroupVerdictRecord,
+  upsertGroupVerdict,
+  VERDICT_VALUES,
+  type VerdictValue,
+} from './services/acb-writes';
