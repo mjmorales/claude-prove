@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { ScrumLayout } from "./layout";
 import { ScrumNowView } from "./now";
 import { ScrumBoardView } from "./board";
+import { ScrumTreeView } from "./tree";
 import { ScrumMilestonesView } from "./milestones";
 import { ScrumAlertsView } from "./alerts";
 import { ScrumTaskDetailView } from "./task/[id]";
@@ -12,6 +13,7 @@ import { ScrumTaskDetailView } from "./task/[id]";
  *   /scrum            -> redirect to /scrum/now
  *   /scrum/now        -> Now view
  *   /scrum/board      -> Board view
+ *   /scrum/tree       -> Layered task-tree view (epic/story/task containment)
  *   /scrum/task/:id   -> Task detail
  *   /scrum/milestones -> Milestones view
  *   /scrum/alerts     -> Alerts view
@@ -27,6 +29,7 @@ export function ScrumRoute() {
         <Route index element={<Navigate to="/scrum/now" replace />} />
         <Route path="now" element={<ScrumNowView />} />
         <Route path="board" element={<ScrumBoardView />} />
+        <Route path="tree" element={<ScrumTreeView />} />
         <Route path="task/:id" element={<ScrumTaskDetailView />} />
         <Route path="milestones" element={<ScrumMilestonesView />} />
         <Route path="alerts" element={<ScrumAlertsView />} />

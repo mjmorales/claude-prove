@@ -14,6 +14,7 @@ import { cn } from "../../lib/cn";
 const NAV: Array<{ to: string; label: string }> = [
   { to: "/scrum/now", label: "Now" },
   { to: "/scrum/board", label: "Board" },
+  { to: "/scrum/tree", label: "Tree" },
   { to: "/scrum/milestones", label: "Milestones" },
   { to: "/scrum/alerts", label: "Alerts" },
 ];
