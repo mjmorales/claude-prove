@@ -32,7 +32,7 @@ export function runInit(opts: InitOptions): number {
 
   const pluginRoot = resolvePluginRoot();
   const mode = detectMode(pluginRoot);
-  const prefix = resolveBinaryPath(mode, { pluginRoot });
+  const prefix = resolveBinaryPath(mode);
 
   // writeSettingsHooks writes a sibling `.tmp` before renaming, so the
   // parent must exist. bootstrapProveJson creates `.claude/` itself.

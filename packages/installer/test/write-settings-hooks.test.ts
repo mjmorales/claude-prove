@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { DEV_INVOCATION_PREFIX } from '../src/resolve-binary-path';
 import {
   PROVE_HOOK_BLOCKS,
   type SettingsFile,
@@ -17,8 +18,25 @@ import {
   writeSettingsHooks,
 } from '../src/write-settings-hooks';
 
-const PREFIX = 'bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts';
+const PREFIX = DEV_INVOCATION_PREFIX;
 const FIXTURES = resolve(__dirname, '__fixtures__/settings');
+
+/**
+ * Tools disabled in the repo's own `.claude/.prove.json` — the byte-shape
+ * parity test must scaffold with the same toggle set the repo's tracked
+ * settings.json was generated with.
+ */
+function repoDisabledTools(): Set<string> {
+  const configPath = resolve(__dirname, '../../../.claude/.prove.json');
+  const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as {
+    tools?: Record<string, { enabled?: boolean }>;
+  };
+  const disabled = new Set<string>();
+  for (const [name, tool] of Object.entries(parsed.tools ?? {})) {
+    if (tool?.enabled === false) disabled.add(name);
+  }
+  return disabled;
+}
 
 function makeTmpDir(label: string): string {
   return mkdtempSync(join(tmpdir(), `installer-settings-${label}-`));
@@ -37,13 +55,13 @@ describe('writeSettingsHooks', () => {
     const tmp = makeTmpDir('missing');
     try {
       const path = join(tmp, 'settings.json');
-      const wrote = writeSettingsHooks(path, PREFIX);
+      const wrote = writeSettingsHooks(path, PREFIX, { disabledTools: repoDisabledTools() });
       expect(wrote).toBe(true);
 
       const actual = readFileSync(path, 'utf8');
       // Byte-shape parity: emission against an empty file should reproduce
-      // the current repo's `.claude/settings.json` exactly, modulo prefix
-      // (which we already use as the canonical absolute path).
+      // the current repo's `.claude/settings.json` exactly — same portable
+      // interpolated prefix, same tool toggles as the repo's .prove.json.
       const repoSettings = resolve(__dirname, '../../../.claude/settings.json');
       const expected = readFileSync(repoSettings, 'utf8');
       expect(actual).toBe(expected);

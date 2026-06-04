@@ -2,7 +2,7 @@
 # claude-prove
 
 <!-- prove:plugin-version:__PLUGIN_VERSION__ -->
-**Prove plugin v__PLUGIN_VERSION__** — if `bun run __PLUGIN_DIR__/packages/cli/bin/run.ts --version` does not match v__PLUGIN_VERSION__, run `/prove:update` to sync.
+**Prove plugin v__PLUGIN_VERSION__** — if `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" --version` does not match v__PLUGIN_VERSION__, run `/prove:update` to sync.
 
 JavaScript/TypeScript (npm)
 
@@ -29,15 +29,15 @@ Run before committing:
 
 ### claude-prove CLI Reference
 
-@__PLUGIN_DIR__/references/claude-prove-reference.md
+@references/claude-prove-reference.md
 
 ### Design Principles
 
-@__PLUGIN_DIR__/references/design-principles.md
+@references/design-principles.md
 
 ### Agent Routing Map
 
-@__PLUGIN_DIR__/references/agent-routing.md
+@references/agent-routing.md
 
 ### LLM-Optimized Coding Standards
 

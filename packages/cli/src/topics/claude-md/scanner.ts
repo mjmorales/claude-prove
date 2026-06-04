@@ -86,6 +86,7 @@ export interface ScanResult {
   core_commands: CoreCommand[];
   plugin_version: string;
   plugin_dir: string;
+  project_root: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +114,7 @@ export function scanProject(projectRoot: string, pluginDir?: string): ScanResult
     core_commands: scanCoreCommands(resolvedPlugin),
     plugin_version: scanPluginVersion(resolvedPlugin),
     plugin_dir: resolvedPlugin,
+    project_root: resolve(projectRoot),
   };
 }
 

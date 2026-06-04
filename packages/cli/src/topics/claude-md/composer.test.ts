@@ -11,7 +11,7 @@
 
 import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   MANAGED_END,
@@ -55,6 +55,7 @@ function fullScan(): ScanResult {
     ],
     plugin_version: '0.19.0',
     plugin_dir: '/opt/prove',
+    project_root: '/work/my-project',
   };
 }
 
@@ -76,6 +77,7 @@ function minimalScan(): ScanResult {
     core_commands: [],
     plugin_version: 'unknown',
     plugin_dir: '/opt/prove',
+    project_root: '/work/empty-project',
   };
 }
 
@@ -145,13 +147,17 @@ describe('compose', () => {
     expect(r).not.toContain('bun run /opt/prove');
   });
 
-  test('dev mode (dev_mode: true) emits bun-run prefix with pluginDir in discovery + version check', () => {
+  test('dev mode (dev_mode: true) emits the interpolated bun-run prefix in discovery + version check', () => {
     const scan = fullScan();
     scan.prove_config.dev_mode = true;
     const r = compose(scan, '/opt/prove');
-    expect(r).toContain('`bun run /opt/prove/packages/cli/bin/run.ts cafi context`');
-    expect(r).toContain('`bun run /opt/prove/packages/cli/bin/run.ts cafi lookup <keyword>`');
-    expect(r).toContain('`bun run /opt/prove/packages/cli/bin/run.ts --version`');
+    const prefix =
+      'bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts"';
+    expect(r).toContain(`\`${prefix} cafi context\``);
+    expect(r).toContain(`\`${prefix} cafi lookup <keyword>\``);
+    expect(r).toContain(`\`${prefix} --version\``);
+    // The whole point: no machine-absolute checkout path in emitted commands.
+    expect(r).not.toContain('bun run /opt/prove');
   });
 
   test('includes Prove Commands from core_commands', () => {
@@ -240,9 +246,38 @@ describe('references', () => {
         label: 'LLM Coding Standards',
       },
     ];
-    const r = compose(scan, '/home/user/.claude/plugins/prove');
-    expect(r).toContain('@/home/user/.claude/plugins/prove/references/llm-coding-standards.md');
+    // /srv is outside both the project root and any home dir, so the
+    // resolved path stays absolute.
+    const r = compose(scan, '/srv/plugins/prove');
+    expect(r).toContain('@/srv/plugins/prove/references/llm-coding-standards.md');
     expect(r).not.toContain('$PLUGIN_DIR');
+  });
+
+  test('reference inside the project root renders project-relative', () => {
+    const scan = fullScan();
+    scan.prove_config.references = [
+      { path: '/work/my-project/references/standards.md', label: 'Standards' },
+    ];
+    const r = compose(scan, '/opt/prove');
+    expect(r).toContain('@references/standards.md');
+    expect(r).not.toContain('@/work/my-project');
+  });
+
+  test('built-ins render project-relative when the plugin dir is the project root', () => {
+    const scan = fullScan();
+    scan.project_root = '/opt/prove';
+    const r = compose(scan, '/opt/prove');
+    expect(r).toContain('@references/claude-prove-reference.md');
+    expect(r).not.toContain('@/opt/prove/references');
+  });
+
+  test('reference under the home dir renders with ~ prefix', () => {
+    const scan = fullScan();
+    scan.prove_config.references = [
+      { path: join(homedir(), '.claude', 'plugins', 'prove', 'references', 'x.md'), label: 'X' },
+    ];
+    const r = compose(scan);
+    expect(r).toContain('@~/.claude/plugins/prove/references/x.md');
   });
 
   test('built-in CLI reference injected when prove exists and no user refs', () => {
@@ -357,12 +392,16 @@ describe('composeSubagentContext', () => {
     expect(r).not.toContain('bun run');
   });
 
-  test('dev mode emits bun-run prefix', () => {
+  test('dev mode emits the interpolated bun-run prefix', () => {
     const scan = fullScan();
     scan.prove_config.dev_mode = true;
     const r = composeSubagentContext(scan, '/opt/prove');
-    expect(r).toContain('`bun run /opt/prove/packages/cli/bin/run.ts cafi context`');
-    expect(r).toContain('`bun run /opt/prove/packages/cli/bin/run.ts cafi get <path>`');
+    const prefix =
+      'bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts"';
+    expect(r).toContain(`\`${prefix} cafi context\``);
+    expect(r).toContain(`\`${prefix} cafi get <path>\``);
+    // No machine-absolute checkout path may land in emitted commands.
+    expect(r).not.toContain('bun run /opt/prove');
   });
 
   test('includes validation', () => {

@@ -127,14 +127,20 @@ const PLUGIN_VERSION = JSON.parse(
   readFileSync(join(PLUGIN_ROOT, '.claude-plugin', 'plugin.json'), 'utf8'),
 ).version as string;
 
-function readGolden(name: string): string {
-  return readFileSync(join(GOLDEN_DIR, name), 'utf8')
+function readGolden(name: string, projectRoot?: string): string {
+  let golden = readFileSync(join(GOLDEN_DIR, name), 'utf8')
     .replaceAll('__PLUGIN_DIR__', PLUGIN_ROOT)
     .replaceAll('__PLUGIN_VERSION__', PLUGIN_VERSION);
+  // Scan goldens pin `__PROJECT_ROOT__` because fixture roots are per-run
+  // tmp dirs; the caller substitutes the actual root it scanned.
+  if (projectRoot !== undefined) {
+    golden = golden.replaceAll('__PROJECT_ROOT__', projectRoot);
+  }
+  return golden;
 }
 
-function expectGoldenEqual(actual: string, goldenName: string): void {
-  const expected = readGolden(goldenName);
+function expectGoldenEqual(actual: string, goldenName: string, projectRoot?: string): void {
+  const expected = readGolden(goldenName, projectRoot);
   if (actual !== expected) {
     // Surface the first differing line range for a readable failure.
     const diffLine = firstDiff(actual, expected);
@@ -199,7 +205,7 @@ describe('claude-md — golden parity (direct API)', () => {
       const actual = `${JSON.stringify(scan, null, 2)}`;
       // Python's json.dumps(indent=2) writes a trailing-newline-less string;
       // goldens were captured the same way — no trailing newline.
-      expectGoldenEqual(actual, `${fixture.name}-scan.json`);
+      expectGoldenEqual(actual, `${fixture.name}-scan.json`, root);
     });
 
     test(`${fixture.name} — compose matches golden CLAUDE.md`, () => {
@@ -263,7 +269,7 @@ describe('claude-md — CLI dispatch', () => {
       // newline (matches Python `print(json.dumps(...))` which adds one newline
       // too; strip to compare apples to apples).
       const actual = result.stdout.replace(/\n$/, '');
-      expectGoldenEqual(actual, 'go-fixture-scan.json');
+      expectGoldenEqual(actual, 'go-fixture-scan.json', root);
     } finally {
       // Remove the parent too (mkTmpWithName nests the fixture).
       rmSync(dirname(root), { recursive: true, force: true });

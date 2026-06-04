@@ -108,5 +108,6 @@
     }
   ],
   "plugin_version": "__PLUGIN_VERSION__",
-  "plugin_dir": "__PLUGIN_DIR__"
+  "plugin_dir": "__PLUGIN_DIR__",
+  "project_root": "__PROJECT_ROOT__"
 }

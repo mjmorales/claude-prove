@@ -16,13 +16,26 @@ interface RunResult {
   status: number;
 }
 
-function runDoctor(cwd: string): RunResult {
+/** The portable interpolated hook command emitted by the current installer. */
+const PORTABLE_COMMAND =
+  'bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" run-state hook validate';
+
+function runDoctor(cwd: string, envOverrides: Record<string, string> = {}): RunResult {
   // Pin CLAUDE_PLUGIN_ROOT to the repo checkout: the worktree has
   // `.claude-plugin/plugin.json` and `packages/cli/src/`, so the plugin-root
-  // and mode checks both pass under a dev install.
+  // and mode checks both pass under a dev install. CLAUDE_PROVE_PLUGIN_DIR is
+  // pinned too so the plugin-dir-env / hook-paths expansion is hermetic
+  // regardless of this machine's default plugin install; pass '' to simulate
+  // an unset var (the resolver treats empty as unset).
   const result = spawnSync('bun', ['run', BIN, 'install', 'doctor'], {
     encoding: 'utf8',
-    env: { ...process.env, CLAUDE_PLUGIN_ROOT: REPO_ROOT, NODE_ENV: 'test' },
+    env: {
+      ...process.env,
+      CLAUDE_PLUGIN_ROOT: REPO_ROOT,
+      CLAUDE_PROVE_PLUGIN_DIR: REPO_ROOT,
+      NODE_ENV: 'test',
+      ...envOverrides,
+    },
     cwd,
   });
   return {
@@ -34,15 +47,15 @@ function runDoctor(cwd: string): RunResult {
 
 /**
  * Build a minimal healthy project layout under `root`:
- *   .claude/settings.json   — one prove hook block pointing at the repo's
- *                             cli entry (which exists in this worktree)
+ *   .claude/settings.json   — one prove hook block using the portable
+ *                             interpolated command (resolved via the pinned
+ *                             CLAUDE_PROVE_PLUGIN_DIR in runDoctor)
  *   .claude/.prove.json     — schema_version matches CURRENT_SCHEMA_VERSION
  */
 function scaffoldHealthy(root: string): void {
   const claudeDir = join(root, '.claude');
   mkdirSync(claudeDir, { recursive: true });
 
-  const runTs = join(REPO_ROOT, 'packages', 'cli', 'bin', 'run.ts');
   const settings = {
     hooks: {
       PostToolUse: [
@@ -51,7 +64,7 @@ function scaffoldHealthy(root: string): void {
           hooks: [
             {
               type: 'command',
-              command: `bun run ${runTs} run-state hook validate`,
+              command: PORTABLE_COMMAND,
               timeout: 5000,
             },
           ],
@@ -84,9 +97,87 @@ describe('claude-prove install doctor', () => {
       expect(status).toBe(0);
       expect(stdout).toContain('[PASS] plugin-root');
       expect(stdout).toContain('[PASS] mode');
+      expect(stdout).toContain('[PASS] plugin-dir-env');
+      expect(stdout).toContain('(via process-env)');
       expect(stdout).toContain('[PASS] hook-paths[run_state:Write|Edit|MultiEdit]');
       expect(stdout).toContain('[PASS] prove-json-version');
       expect(stdout).toMatch(/\d+ passed, \d+ warnings, 0 failures/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('unset env var falls back to the settings.local.json env block', () => {
+    const root = makeTmpProject('local-settings');
+    try {
+      scaffoldHealthy(root);
+      writeFileSync(
+        join(root, '.claude', 'settings.local.json'),
+        `${JSON.stringify({ env: { CLAUDE_PROVE_PLUGIN_DIR: REPO_ROOT } }, null, 2)}\n`,
+      );
+
+      const { stdout, status } = runDoctor(root, { CLAUDE_PROVE_PLUGIN_DIR: '' });
+
+      expect(status).toBe(0);
+      expect(stdout).toContain('[PASS] plugin-dir-env');
+      expect(stdout).toContain('(via settings.local.json)');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('unresolvable plugin dir fails plugin-dir-env with the local-env fix hint', () => {
+    const root = makeTmpProject('unresolvable');
+    try {
+      scaffoldHealthy(root);
+      const bogus = join(root, 'nowhere');
+
+      const { stdout, stderr, status } = runDoctor(root, { CLAUDE_PROVE_PLUGIN_DIR: bogus });
+      const combined = `${stdout}\n${stderr}`;
+
+      expect(status).toBe(1);
+      expect(combined).toContain('[FAIL] plugin-dir-env');
+      expect(combined).toContain('install local-env');
+      expect(combined).toContain('[FAIL] hook-paths[run_state:Write|Edit|MultiEdit]');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('machine-absolute dev prefix warns with the init-hooks --force fix hint', () => {
+    const root = makeTmpProject('baked');
+    try {
+      scaffoldHealthy(root);
+      const runTs = join(REPO_ROOT, 'packages', 'cli', 'bin', 'run.ts');
+      const settings = {
+        hooks: {
+          PostToolUse: [
+            {
+              matcher: 'Write|Edit|MultiEdit',
+              hooks: [
+                {
+                  type: 'command',
+                  command: `bun run ${runTs} run-state hook validate`,
+                  timeout: 5000,
+                },
+              ],
+              _tool: 'run_state',
+            },
+          ],
+        },
+      };
+      writeFileSync(
+        join(root, '.claude', 'settings.json'),
+        `${JSON.stringify(settings, null, 2)}\n`,
+      );
+
+      const { stdout, status } = runDoctor(root);
+
+      // Warnings never fail the run.
+      expect(status).toBe(0);
+      expect(stdout).toContain('[WARN] hook-paths[run_state:Write|Edit|MultiEdit]');
+      expect(stdout).toContain('machine-absolute dev prefix');
+      expect(stdout).toContain('install init-hooks --force');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -7,12 +7,23 @@ const PLUGIN_MARKER = join('.claude-plugin', 'plugin.json');
 const FALLBACK_REL = join('.claude', 'plugins', 'prove');
 
 /**
+ * Per-machine plugin-dir override. Users set this in the gitignored
+ * `.claude/settings.local.json` `env` block (Claude Code injects `env` into
+ * hook commands and Bash invocations), so git-tracked artifacts never need
+ * a machine-absolute checkout path. `install local-env` writes the entry.
+ */
+export const PLUGIN_DIR_ENV_VAR = 'CLAUDE_PROVE_PLUGIN_DIR';
+
+/**
  * Resolve the active plugin root directory.
  *
  * Discovery order:
- *   1. $CLAUDE_PLUGIN_ROOT if set and non-empty (absolute path honored as-is).
- *   2. Walk upward from `startDir` looking for `.claude-plugin/plugin.json`.
- *   3. Fallback to `$HOME/.claude/plugins/prove` -- this path is returned
+ *   1. $CLAUDE_PROVE_PLUGIN_DIR if set and non-empty -- the prove-specific
+ *      per-machine override; beats the generic var because Claude Code sets
+ *      $CLAUDE_PLUGIN_ROOT itself in plugin-sourced hook contexts.
+ *   2. $CLAUDE_PLUGIN_ROOT if set and non-empty (absolute path honored as-is).
+ *   3. Walk upward from `startDir` looking for `.claude-plugin/plugin.json`.
+ *   4. Fallback to `$HOME/.claude/plugins/prove` -- this path is returned
  *      even when it does not exist so callers can report a meaningful error.
  *
  * `startDir` defaults to the directory containing this module so discovery
@@ -21,6 +32,11 @@ const FALLBACK_REL = join('.claude', 'plugins', 'prove');
  * Never throws. Always returns an absolute path string.
  */
 export function resolvePluginRoot(startDir?: string): string {
+  const fromProveEnv = process.env[PLUGIN_DIR_ENV_VAR];
+  if (fromProveEnv && fromProveEnv.length > 0) {
+    return resolve(fromProveEnv);
+  }
+
   const fromEnv = process.env.CLAUDE_PLUGIN_ROOT;
   if (fromEnv && fromEnv.length > 0) {
     return resolve(fromEnv);

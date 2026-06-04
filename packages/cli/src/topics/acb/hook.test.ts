@@ -21,6 +21,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DEV_INVOCATION_PREFIX } from '@claude-prove/installer';
 import { clearRegistry } from '@claude-prove/store';
 import {
   type ClaudeCodeHookPayload,
@@ -548,23 +549,23 @@ describe('runHookPostCommit — integration with real repo', () => {
 
 describe('generateManifestPrompt — golden fixtures', () => {
   /** Rewrite Python's `PYTHONPATH=X python3 -m tools.acb save-manifest ...`
-   * line to its `bun run X/packages/cli/bin/run.ts acb save-manifest ...`
-   * TS equivalent so the rest of the prompt can be asserted byte-equal. */
+   * line to the dev-mode shell-interpolated `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-...}"
+   * acb save-manifest ...` TS equivalent so the rest of the prompt can be
+   * asserted byte-equal. A replacer function sidesteps `$`-sequence handling
+   * in string replacements — the prefix itself contains `${...}`. */
   function rewriteInvocation(py: string): string {
     return py.replace(
       /^PYTHONPATH=(.+?) python3 -m tools\.acb (save-manifest .+)$/m,
-      'bun run $1/packages/cli/bin/run.ts acb $2',
+      (_m, _dir, rest: string) => `${DEV_INVOCATION_PREFIX} acb ${rest}`,
     );
   }
 
   const params = {
-    pluginDir: '/plugin/root',
     workspaceRoot: '/workspace',
     nowIso: '2026-04-22T12:00:00+00:00',
-    // Golden fixtures were captured when the only invocation shape was
-    // `bun run <pluginDir>/packages/cli/bin/run.ts`. Dev mode preserves
-    // that byte-for-byte; the installed-mode branch (devMode: false) is
-    // exercised by its own test below.
+    // Dev mode emits the machine-independent interpolated prefix; the
+    // installed-mode branch (devMode: false) is exercised by its own test
+    // below.
     devMode: true,
   };
 
@@ -643,7 +644,7 @@ describe('generateManifestPrompt — golden fixtures', () => {
     expect(ts).toContain(
       `claude-prove acb save-manifest --workspace-root /workspace --branch feat/x --sha ${sha}`,
     );
-    expect(ts).not.toContain('bun run /plugin/root/packages/cli/bin/run.ts');
+    expect(ts).not.toContain('bun run');
   });
 });
 

@@ -12,7 +12,9 @@
  */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { join, sep } from 'node:path';
+import { DEV_INVOCATION_PREFIX } from '@claude-prove/installer';
 import type {
   CoreCommand,
   ReferenceEntry,
@@ -55,7 +57,7 @@ export const PLUGIN_DEFAULT_REFERENCES: ReadonlyArray<ReferenceEntry> = [
 export function compose(scan: ScanResult, pluginDir?: string): string {
   const resolvedPluginDir = pluginDir ?? scan.plugin_dir ?? '';
   const prove = scan.prove_config;
-  const prefix = cliPrefix(prove.dev_mode, resolvedPluginDir);
+  const prefix = cliPrefix(prove.dev_mode);
 
   const parts: string[] = [];
 
@@ -99,7 +101,7 @@ export function compose(scan: ScanResult, pluginDir?: string): string {
   // References — plugin built-ins first, then user-configured (deduped by path)
   const mergedRefs = mergeReferences(prove.exists, prove.references);
   if (mergedRefs.length > 0) {
-    parts.push(renderReferences(mergedRefs, resolvedPluginDir));
+    parts.push(renderReferences(mergedRefs, resolvedPluginDir, scan.project_root ?? ''));
   }
 
   // Prove commands (if prove is configured)
@@ -115,14 +117,13 @@ export function compose(scan: ScanResult, pluginDir?: string): string {
  * Compose a compact discovery context block for injection into subagent prompts.
  * Subset of the full CLAUDE.md focused on discovery + validation.
  *
- * `pluginDir` is only consulted when `scan.prove_config.dev_mode` is true —
- * plugin developers running from a git checkout need the full
- * `bun run <pluginDir>/...` invocation prefix. Installed users get bare
+ * `_pluginDir` is accepted for caller compatibility but unused: dev mode
+ * emits the shell-interpolated `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-...}/..."`
+ * prefix that resolves per-machine at run time; installed users get bare
  * `claude-prove`.
  */
-export function composeSubagentContext(scan: ScanResult, pluginDir?: string): string {
-  const resolvedPluginDir = pluginDir ?? scan.plugin_dir ?? '';
-  const prefix = cliPrefix(scan.prove_config.dev_mode, resolvedPluginDir);
+export function composeSubagentContext(scan: ScanResult, _pluginDir?: string): string {
+  const prefix = cliPrefix(scan.prove_config.dev_mode);
 
   const parts: string[] = [];
   parts.push('## Project Context');
@@ -292,23 +293,51 @@ function mergeReferences(proveExists: boolean, userRefs: ReferenceEntry[]): Refe
  *
  * `devMode` is sourced from `.claude/.prove.json`'s top-level `dev_mode`
  * field (scanner lifts it into `scan.prove_config.dev_mode`). Plugin
- * developers running from a git checkout set `dev_mode: true` so all
- * generated commands resolve against the working-tree entry point;
- * installed users get the bare binary on PATH.
+ * developers running from a git checkout set `dev_mode: true` and get the
+ * shell-interpolated `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-...}/..."` form —
+ * the per-machine checkout path expands when the command runs, so the
+ * generated (often git-tracked) file carries no machine-absolute path.
+ * Installed users get the bare binary on PATH.
  */
-function cliPrefix(devMode: boolean, pluginDir: string): string {
-  if (devMode && pluginDir.length > 0) {
-    return `bun run ${pluginDir}/packages/cli/bin/run.ts`;
-  }
-  return 'claude-prove';
+function cliPrefix(devMode: boolean): string {
+  return devMode ? DEV_INVOCATION_PREFIX : 'claude-prove';
 }
 
-function renderReferences(references: ReferenceEntry[], pluginDir: string): string {
+/**
+ * Make a resolved reference path portable across contributor machines.
+ *
+ * CLAUDE.md `@`-includes cannot expand env vars, so the interpolated-prefix
+ * trick used for commands is unavailable here. Instead:
+ *   - paths inside the project emit project-relative (the prove-repo case,
+ *     where the plugin dir IS the project root);
+ *   - paths under the home dir emit the `~/...` form `@`-includes support
+ *     (the installed-plugin case — `~/.claude/plugins/prove/...`);
+ *   - anything else stays absolute (a dev checkout outside both — only that
+ *     machine's CLAUDE.md can address it).
+ */
+function portableRefPath(resolved: string, projectRoot: string): string {
+  if (projectRoot.length > 0 && resolved.startsWith(projectRoot + sep)) {
+    return resolved.slice(projectRoot.length + 1);
+  }
+  const home = homedir();
+  if (resolved.startsWith(home + sep)) {
+    return `~${resolved.slice(home.length)}`;
+  }
+  return resolved;
+}
+
+function renderReferences(
+  references: ReferenceEntry[],
+  pluginDir: string,
+  projectRoot: string,
+): string {
   const lines: string[] = ['## References', ''];
   for (const ref of references) {
     const label = ref.label;
     const path = ref.path;
-    const resolved = path ? path.replaceAll('$PLUGIN_DIR', pluginDir) : '';
+    const resolved = path
+      ? portableRefPath(path.replaceAll('$PLUGIN_DIR', pluginDir), projectRoot)
+      : '';
     if (label) {
       lines.push(`### ${label}`);
       lines.push('');

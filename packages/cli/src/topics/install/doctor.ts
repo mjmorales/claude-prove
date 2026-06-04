@@ -14,18 +14,27 @@
  *                           `.claude-plugin/plugin.json`
  *   2. mode               — detectMode() returns 'dev' or 'compiled'
  *   3. binary-on-path     — (compiled mode only) `which claude-prove` hits
- *   4. hook-paths         — each prove-owned hook block in
- *                           `.claude/settings.json` points at an
- *                           executable command
- *   5. prove-json-version — `.claude/.prove.json` parses and its
+ *   4. plugin-dir-env     — (only when hooks use the interpolated
+ *                           `${CLAUDE_PROVE_PLUGIN_DIR:-...}` form) the value the
+ *                           expansion resolves to — process env, then the
+ *                           `.claude/settings.local.json` env block, then the
+ *                           default plugin install path — contains the dev
+ *                           entry point
+ *   5. hook-paths         — each prove-owned hook block in
+ *                           `.claude/settings.json` points at an executable
+ *                           command (interpolated forms are expanded the way
+ *                           the firing shell would); machine-absolute dev
+ *                           prefixes from the pre-portable format warn
+ *   6. prove-json-version — `.claude/.prove.json` parses and its
  *                           schema_version matches CURRENT_SCHEMA_VERSION
- *   6. claude-cli         — `which claude` (warn on miss, never fail)
+ *   7. claude-cli         — `which claude` (warn on miss, never fail)
  */
 
 import { constants, accessSync, existsSync, readFileSync, statSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { type Mode, detectMode } from '@claude-prove/installer/detect-mode';
-import { resolvePluginRoot } from '@claude-prove/installer/plugin-root';
+import { PLUGIN_DIR_ENV_VAR, resolvePluginRoot } from '@claude-prove/installer/plugin-root';
 import type { HookBlock, SettingsFile } from '@claude-prove/installer/write-settings-hooks';
 import { CURRENT_SCHEMA_VERSION } from '../schema/schemas';
 
@@ -45,6 +54,13 @@ interface DoctorOptions {
 
 const DEFAULT_SETTINGS_REL = join('.claude', 'settings.json');
 const DEFAULT_PROVE_JSON_REL = join('.claude', '.prove.json');
+const DEFAULT_LOCAL_SETTINGS_REL = join('.claude', 'settings.local.json');
+/** Default Claude Code plugin install path — the `${VAR:-default}` fallback. */
+const DEFAULT_PLUGIN_INSTALL = join(homedir(), '.claude', 'plugins', 'prove');
+/** Relative path of the dev-mode CLI entry point inside a plugin dir. */
+const DEV_ENTRY_REL = join('packages', 'cli', 'bin', 'run.ts');
+/** Marker identifying the portable interpolated hook-command form. */
+const INTERPOLATION_MARKER = `\${${PLUGIN_DIR_ENV_VAR}:-`;
 
 /**
  * Handler for the `doctor` action under the `install <action>` command.
@@ -72,11 +88,96 @@ export function runDoctor(opts: DoctorOptions = {}): CheckResult[] {
     results.push(checkBinaryOnPath());
   }
 
-  results.push(...checkSettingsHookPaths(cwd));
+  // Resolve the plugin dir exactly as a fired hook's shell expansion would,
+  // so plugin-dir-env and hook-paths audit what will actually run.
+  const localPluginDir = resolveLocalPluginDir(cwd);
+  if (settingsUseInterpolation(cwd)) {
+    results.push(checkPluginDirEnv(localPluginDir));
+  }
+
+  results.push(...checkSettingsHookPaths(cwd, localPluginDir.dir));
   results.push(checkProveJsonSchemaVersion(cwd));
   results.push(checkClaudeCli());
 
   return results;
+}
+
+// ---------------------------------------------------------------------------
+// Per-machine plugin-dir resolution (mirrors the hooks' shell expansion)
+// ---------------------------------------------------------------------------
+
+interface LocalPluginDir {
+  dir: string;
+  /** Where the value came from, for actionable doctor messages. */
+  source: 'process-env' | 'settings.local.json' | 'default';
+}
+
+/**
+ * Resolve `$CLAUDE_PROVE_PLUGIN_DIR` the way a fired hook sees it.
+ *
+ * Inside a Claude Code session the `env` block of settings.local.json is
+ * injected into the process environment, so checking the process env first
+ * matches the session view; reading the file second keeps doctor accurate
+ * when run from a plain shell where no injection happened.
+ */
+function resolveLocalPluginDir(cwd: string): LocalPluginDir {
+  const fromEnv = process.env[PLUGIN_DIR_ENV_VAR];
+  if (fromEnv && fromEnv.length > 0) {
+    return { dir: fromEnv, source: 'process-env' };
+  }
+  const fromLocal = readLocalSettingsPluginDir(cwd);
+  if (fromLocal) {
+    return { dir: fromLocal, source: 'settings.local.json' };
+  }
+  return { dir: DEFAULT_PLUGIN_INSTALL, source: 'default' };
+}
+
+/** Read `env.CLAUDE_PROVE_PLUGIN_DIR` from `.claude/settings.local.json`, if any. */
+function readLocalSettingsPluginDir(cwd: string): string | undefined {
+  try {
+    const parsed = JSON.parse(
+      readFileSync(join(cwd, DEFAULT_LOCAL_SETTINGS_REL), 'utf8'),
+    ) as Record<string, unknown>;
+    const env = parsed.env;
+    if (env && typeof env === 'object') {
+      const value = (env as Record<string, unknown>)[PLUGIN_DIR_ENV_VAR];
+      if (typeof value === 'string' && value.length > 0) return value;
+    }
+  } catch {
+    // absent or malformed — both mean "no local override"
+  }
+  return undefined;
+}
+
+/** True when any prove-owned hook command uses the interpolated form. */
+function settingsUseInterpolation(cwd: string): boolean {
+  try {
+    return readFileSync(join(cwd, DEFAULT_SETTINGS_REL), 'utf8').includes(INTERPOLATION_MARKER);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Verify the resolved plugin dir can serve the hooks' dev entry point. A miss
+ * means every interpolated hook fails at fire time — the per-machine setup
+ * (`install local-env`) has not been run on this machine.
+ */
+function checkPluginDirEnv(local: LocalPluginDir): CheckResult {
+  const entry = join(local.dir, DEV_ENTRY_REL);
+  if (existsSync(entry)) {
+    return {
+      name: 'plugin-dir-env',
+      status: 'pass',
+      message: `${local.dir} (via ${local.source})`,
+    };
+  }
+  return {
+    name: 'plugin-dir-env',
+    status: 'fail',
+    message: `hooks expand to ${local.dir} (via ${local.source}) but ${DEV_ENTRY_REL} is missing there`,
+    fix: 'run `claude-prove install local-env --plugin-dir <your-checkout>` (writes the env block in .claude/settings.local.json), then restart the Claude Code session',
+  };
 }
 
 /** Verify resolvePluginRoot() finds an existing `.claude-plugin/plugin.json`. */
@@ -88,7 +189,7 @@ function checkPluginRoot(): CheckResult {
       name: 'plugin-root',
       status: 'fail',
       message: `plugin root not found at ${root} (missing ${marker})`,
-      fix: 'set $CLAUDE_PLUGIN_ROOT to your plugin checkout or reinstall the plugin',
+      fix: 'set $CLAUDE_PROVE_PLUGIN_DIR (via `claude-prove install local-env`) or $CLAUDE_PLUGIN_ROOT to your plugin checkout, or reinstall the plugin',
     };
   }
   return { name: 'plugin-root', status: 'pass', message: root };
@@ -137,7 +238,7 @@ function checkBinaryOnPath(): CheckResult {
  * command prefix points at something executable. Returns one result per
  * block (or a single informational pass when the file is absent).
  */
-function checkSettingsHookPaths(cwd: string): CheckResult[] {
+function checkSettingsHookPaths(cwd: string, localPluginDir: string): CheckResult[] {
   const path = join(cwd, DEFAULT_SETTINGS_REL);
   if (!existsSync(path)) {
     return [
@@ -177,7 +278,7 @@ function checkSettingsHookPaths(cwd: string): CheckResult[] {
     ];
   }
 
-  return proveBlocks.map(checkHookBlock);
+  return proveBlocks.map((block) => checkHookBlock(block, localPluginDir));
 }
 
 /**
@@ -210,19 +311,22 @@ function collectProveBlocks(settings: SettingsFile): HookBlock[] {
 /**
  * Validate a single prove-owned hook block.
  *
- * Two command shapes are in use:
- *   1. `bun run <abs-path-to-run.ts> <subcommand>` — dev mode
- *   2. `<abs-path-to-binary> <subcommand>`        — compiled mode
+ * Three command shapes are in use:
+ *   1. `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-...}/.../run.ts" <sub>` — portable dev
+ *   2. `bun run <abs-path-to-run.ts> <subcommand>` — pre-portable dev (drift)
+ *   3. `<path-to-binary> <subcommand>`             — compiled
  *
- * For shape 1 we stat the script file. For shape 2 we require the binary
- * to be executable (X_OK). Either kind failing yields a `fail` with the
- * `--force` fix hint so `claude-prove install init --force` rewrites the block.
+ * Interpolated tokens are expanded the way the firing shell would (using the
+ * resolved per-machine plugin dir) before verification. For script targets we
+ * stat the file; for binaries we require X_OK. A verified block that still
+ * carries a machine-absolute dev prefix (shape 2) warns: it works on the
+ * machine that generated it but breaks for every other contributor.
  *
  * Iterates every entry in `block.hooks` — multi-entry blocks must not be
  * silently passed based solely on entry[0]. First failure wins; a block
  * with zero entries fails with an empty-block message.
  */
-function checkHookBlock(block: HookBlock): CheckResult {
+function checkHookBlock(block: HookBlock, localPluginDir: string): CheckResult {
   const tool = block._tool ?? '<unknown>';
   const name = `hook-paths[${tool}:${block.matcher}]`;
 
@@ -236,6 +340,7 @@ function checkHookBlock(block: HookBlock): CheckResult {
   }
 
   const verifiedPaths: string[] = [];
+  let bakedAbsolutePrefix = false;
   for (const entry of block.hooks) {
     if (!entry || typeof entry.command !== 'string') {
       return {
@@ -247,7 +352,7 @@ function checkHookBlock(block: HookBlock): CheckResult {
     }
 
     const tokens = entry.command.trim().split(/\s+/);
-    const target = extractHookTarget(tokens);
+    const target = extractHookTarget(tokens, localPluginDir);
     if (!target) {
       return {
         name,
@@ -259,14 +364,36 @@ function checkHookBlock(block: HookBlock): CheckResult {
 
     const verdict = verifyHookTarget(target);
     if (verdict.status !== 'pass') {
+      const interpolated = entry.command.includes(INTERPOLATION_MARKER);
       return {
         name,
         status: 'fail',
         message: verdict.message,
-        fix: 'run `claude-prove install init --force`',
+        fix: interpolated
+          ? 'run `claude-prove install local-env --plugin-dir <your-checkout>`, then restart the session'
+          : 'run `claude-prove install init --force`',
       };
     }
     verifiedPaths.push(target.path);
+
+    // A dev-entry script addressed by a literal absolute path is the
+    // pre-portable emission: valid here, broken on every other machine.
+    if (
+      target.kind === 'script' &&
+      !entry.command.includes(INTERPOLATION_MARKER) &&
+      entry.command.includes(DEV_ENTRY_REL)
+    ) {
+      bakedAbsolutePrefix = true;
+    }
+  }
+
+  if (bakedAbsolutePrefix) {
+    return {
+      name,
+      status: 'warn',
+      message: `machine-absolute dev prefix (pre-portable format): ${verifiedPaths.join(', ')}`,
+      fix: 'run `claude-prove install init-hooks --force` to regenerate portable hook commands',
+    };
   }
 
   return { name, status: 'pass', message: verifiedPaths.join(', ') };
@@ -278,7 +405,24 @@ interface HookTarget {
   path: string;
 }
 
-function extractHookTarget(tokens: string[]): HookTarget | undefined {
+/**
+ * Expand a hook-command token the way the firing shell would: strip quotes,
+ * substitute `${CLAUDE_PROVE_PLUGIN_DIR:-default}` with the resolved
+ * per-machine dir, and expand `$HOME`/`${HOME}`. The `${VAR:-default}`
+ * substitution must run before `$HOME` expansion because the default itself
+ * contains `$HOME`.
+ */
+function expandHookToken(token: string, localPluginDir: string): string {
+  let expanded = token.replace(/^"+|"+$/g, '');
+  expanded = expanded.replace(
+    new RegExp(`\\$\\{${PLUGIN_DIR_ENV_VAR}:-[^}]*\\}`, 'g'),
+    localPluginDir,
+  );
+  expanded = expanded.replace(/\$\{HOME\}|\$HOME\b/g, homedir());
+  return expanded;
+}
+
+function extractHookTarget(tokens: string[], localPluginDir: string): HookTarget | undefined {
   const first = tokens[0];
   if (!first) return undefined;
   if (first === 'bun') {
@@ -287,11 +431,13 @@ function extractHookTarget(tokens: string[]): HookTarget | undefined {
     if (runIdx < 0) return undefined;
     for (let i = runIdx + 1; i < tokens.length; i++) {
       const tok = tokens[i];
-      if (tok && !tok.startsWith('-')) return { kind: 'script', path: tok };
+      if (tok && !tok.startsWith('-')) {
+        return { kind: 'script', path: expandHookToken(tok, localPluginDir) };
+      }
     }
     return undefined;
   }
-  return { kind: 'binary', path: first };
+  return { kind: 'binary', path: expandHookToken(first, localPluginDir) };
 }
 
 function verifyHookTarget(target: HookTarget): { status: 'pass' | 'fail'; message: string } {

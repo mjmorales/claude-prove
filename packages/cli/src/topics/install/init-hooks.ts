@@ -28,7 +28,7 @@ export function runInitHooks(opts: InitHooksOptions): number {
 
   const pluginRoot = resolvePluginRoot();
   const mode = detectMode(pluginRoot);
-  const prefix = resolveBinaryPath(mode, { pluginRoot });
+  const prefix = resolveBinaryPath(mode);
 
   // Ensure the settings directory exists before writeSettingsHooks stages
   // its sibling `.tmp`.

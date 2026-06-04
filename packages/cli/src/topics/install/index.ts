@@ -7,6 +7,7 @@
  *   claude-prove install init                [--project <cwd>] [--settings <path>] [--force]
  *   claude-prove install init-hooks          [--settings <path>] [--force]
  *   claude-prove install init-config         [--cwd <path>] [--force]
+ *   claude-prove install local-env           [--plugin-dir <path>] [--settings <path>]
  *   claude-prove install bootstrap-identity  [--cwd <path>] [--with-charter] [--with-team]
  *                                            [--full] [--contributor <id>] [--dry-run]
  *   claude-prove install doctor
@@ -17,6 +18,9 @@
  *   - init               : bootstrap both `.claude/settings.json` and `.claude/.prove.json`.
  *   - init-hooks         : idempotently merge prove-owned hook blocks into settings.json.
  *   - init-config        : write `.claude/.prove.json` with auto-detected validators.
+ *   - local-env          : write `env.CLAUDE_PROVE_PLUGIN_DIR` into the gitignored
+ *                          `.claude/settings.local.json` so the portable
+ *                          `${CLAUDE_PROVE_PLUGIN_DIR:-...}` artifacts resolve on this machine.
  *   - bootstrap-identity : run identity pre-flight checks and scaffold charter/team/
  *                          contributor artifacts (skip-if-exists); the mechanical half
  *                          of the project-identity bootstrap the `/prove:init` command drives.
@@ -27,9 +31,10 @@
  *                          `/prove:update` when picking which plugin dir to operate on.
  *
  * init* resolve the plugin root (env -> walk-up -> fallback), classify the
- * install as dev vs compiled, and build the runtime command prefix
- * (`bun run <pluginRoot>/packages/cli/bin/run.ts` in dev mode) before
- * delegating to the installer lib.
+ * install as dev vs compiled, and build the runtime command prefix — in dev
+ * mode the shell-interpolated
+ * `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts"`,
+ * never a machine-absolute path — before delegating to the installer lib.
  */
 
 import type { CAC } from 'cac';
@@ -39,12 +44,14 @@ import { runInit } from './init';
 import { runInitConfig } from './init-config';
 import { runInitHooks } from './init-hooks';
 import { type LatestFlags, runLatest } from './latest';
+import { runLocalEnv } from './local-env';
 import { type UpgradeFlags, runUpgrade } from './upgrade';
 
 type InstallAction =
   | 'init'
   | 'init-hooks'
   | 'init-config'
+  | 'local-env'
   | 'bootstrap-identity'
   | 'doctor'
   | 'upgrade'
@@ -54,6 +61,7 @@ const INSTALL_ACTIONS: InstallAction[] = [
   'init',
   'init-hooks',
   'init-config',
+  'local-env',
   'bootstrap-identity',
   'doctor',
   'upgrade',
@@ -65,6 +73,7 @@ type InstallFlags = UpgradeFlags &
     project?: string;
     cwd?: string;
     settings?: string;
+    pluginDir?: string;
     force?: boolean;
     withCharter?: boolean;
     withTeam?: boolean;
@@ -87,6 +96,10 @@ export function register(cli: CAC): void {
       'Explicit settings.json path (default: <project>/.claude/settings.json)',
     )
     .option('--force', 'Rewrite existing files even when already in sync')
+    .option(
+      '--plugin-dir <path>',
+      'local-env: plugin checkout directory (default: resolved plugin root)',
+    )
     .option('--with-charter', 'bootstrap-identity: scaffold charter.md')
     .option('--with-team', 'bootstrap-identity: scaffold team.md')
     .option('--full', 'bootstrap-identity: scaffold charter, team, and contributor')
@@ -129,6 +142,11 @@ async function dispatch(action: InstallAction, flags: InstallFlags): Promise<num
         return runInitConfig({
           cwd: flags.cwd,
           force: flags.force ?? false,
+        });
+      case 'local-env':
+        return runLocalEnv({
+          pluginDir: flags.pluginDir,
+          settings: flags.settings,
         });
       case 'bootstrap-identity':
         return runBootstrapIdentity({

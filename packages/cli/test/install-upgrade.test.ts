@@ -39,6 +39,10 @@ function runBin(args: string[], env: RunEnv): RunResult {
     encoding: 'utf8',
     env: {
       ...process.env,
+      // The session may inject CLAUDE_PROVE_PLUGIN_DIR (settings.local.json
+      // env block), which outranks the CLAUDE_PLUGIN_ROOT pins these tests
+      // rely on for mode detection. Empty string = unset for the resolver.
+      CLAUDE_PROVE_PLUGIN_DIR: '',
       NODE_ENV: 'test',
       ...env,
     },

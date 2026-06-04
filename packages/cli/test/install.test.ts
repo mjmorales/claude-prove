@@ -1,14 +1,24 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const BIN = join(__dirname, '..', 'bin', 'run.ts');
-const REPO_ROOT = resolve(__dirname, '..', '..', '..');
-const EXPECTED_DEV_PREFIX = `bun run ${join(REPO_ROOT, 'packages', 'cli', 'bin', 'run.ts')}`;
+// Dev mode emits the shell-interpolated prefix — resolved per-machine at hook
+// fire time — never an absolute checkout path.
+const EXPECTED_DEV_PREFIX =
+  'bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts"';
 
 interface RunResult {
   stdout: string;
@@ -52,10 +62,12 @@ describe('claude-prove install init', () => {
       expect(existsSync(settingsPath)).toBe(true);
       expect(existsSync(configPath)).toBe(true);
 
-      // Dev-mode prefix is derived from the repo root, so the generated
-      // hook command embeds the exact absolute path the spawned CLI used.
-      const settings = readFileSync(settingsPath, 'utf8');
-      expect(settings).toContain(EXPECTED_DEV_PREFIX);
+      // Dev-mode prefix is the machine-independent interpolated form. The
+      // prefix contains quotes, so assert on the parsed command string rather
+      // than the JSON-escaped file text.
+      const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+      const firstCommand = settings.hooks.PostToolUse[0].hooks[0].command as string;
+      expect(firstCommand.startsWith(EXPECTED_DEV_PREFIX)).toBe(true);
 
       const config = JSON.parse(readFileSync(configPath, 'utf8'));
       expect(config.schema_version).toBeDefined();
@@ -111,8 +123,9 @@ describe('claude-prove install init-hooks', () => {
       expect(existsSync(settingsPath)).toBe(true);
       expect(existsSync(join(project, '.claude', '.prove.json'))).toBe(false);
 
-      const settings = readFileSync(settingsPath, 'utf8');
-      expect(settings).toContain(EXPECTED_DEV_PREFIX);
+      const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+      const firstCommand = settings.hooks.PostToolUse[0].hooks[0].command as string;
+      expect(firstCommand.startsWith(EXPECTED_DEV_PREFIX)).toBe(true);
     } finally {
       rmSync(project, { recursive: true, force: true });
     }
@@ -131,6 +144,67 @@ describe('claude-prove install init-config', () => {
 
       expect(existsSync(join(project, '.claude', '.prove.json'))).toBe(true);
       expect(existsSync(join(project, '.claude', 'settings.json'))).toBe(false);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('claude-prove install local-env', () => {
+  const REPO_ROOT = join(__dirname, '..', '..', '..');
+
+  test('writes env.CLAUDE_PROVE_PLUGIN_DIR into settings.local.json', () => {
+    const project = makeNodeFixture('local-env');
+    const settingsPath = join(project, '.claude', 'settings.local.json');
+    try {
+      const { stdout, stderr, status } = runBin(
+        ['install', 'local-env', '--plugin-dir', REPO_ROOT, '--settings', settingsPath],
+        project,
+      );
+
+      expect(status).toBe(0);
+      expect(stderr).toBe('');
+      expect(stdout).toContain('claude-prove install local-env: wrote');
+
+      const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+      // The CLI resolves the path, so compare resolved-to-resolved.
+      expect(settings.env.CLAUDE_PROVE_PLUGIN_DIR).toBe(resolve(REPO_ROOT));
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test('preserves existing local settings keys', () => {
+    const project = makeNodeFixture('local-env-merge');
+    const settingsPath = join(project, '.claude', 'settings.local.json');
+    try {
+      mkdirSync(join(project, '.claude'), { recursive: true });
+      writeFileSync(
+        settingsPath,
+        JSON.stringify({ permissions: { allow: ['Bash(ls)'] }, env: { OTHER: 'kept' } }, null, 2),
+      );
+      const { status } = runBin(
+        ['install', 'local-env', '--plugin-dir', REPO_ROOT, '--settings', settingsPath],
+        project,
+      );
+      expect(status).toBe(0);
+
+      const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+      expect(settings.permissions).toEqual({ allow: ['Bash(ls)'] });
+      expect(settings.env.OTHER).toBe('kept');
+      expect(settings.env.CLAUDE_PROVE_PLUGIN_DIR).toBe(resolve(REPO_ROOT));
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test('rejects a plugin dir without the dev entry point', () => {
+    const project = makeNodeFixture('local-env-bad');
+    try {
+      const { stderr, status } = runBin(['install', 'local-env', '--plugin-dir', project], project);
+      expect(status).toBe(1);
+      expect(stderr).toContain('does not contain');
+      expect(existsSync(join(project, '.claude', 'settings.local.json'))).toBe(false);
     } finally {
       rmSync(project, { recursive: true, force: true });
     }

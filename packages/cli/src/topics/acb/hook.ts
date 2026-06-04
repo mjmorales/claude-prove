@@ -21,7 +21,7 @@
 
 import { readFileSync, statSync } from 'node:fs';
 import { isAbsolute, join, normalize } from 'node:path';
-import { resolvePluginRoot } from '@claude-prove/installer';
+import { DEV_INVOCATION_PREFIX } from '@claude-prove/installer';
 import { currentBranch, headSha, resolveRunSlug } from '@claude-prove/shared';
 import { openAcbStore } from './store';
 
@@ -60,15 +60,15 @@ export interface ManifestPromptParams {
   diffStat: string;
   slugClause: string;
   slugFlag: string;
-  pluginDir: string;
   workspaceRoot: string;
   nowIso: string;
   /**
-   * When true, the emitted save-manifest invocation uses
-   * `bun run ${pluginDir}/packages/cli/bin/run.ts` so plugin developers
-   * running from a git checkout execute the working-tree code. When false
-   * (default for installed users), emits bare `claude-prove` and relies on
-   * the CLI being on PATH. Sourced from `<workspaceRoot>/.claude/.prove.json`'s
+   * When true, the emitted save-manifest invocation uses the shell-
+   * interpolated `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-...}/packages/cli/bin/run.ts"`
+   * prefix so plugin developers execute the working-tree code their machine's
+   * env var points at — no machine-absolute path lands in the prompt. When
+   * false (default for installed users), emits bare `claude-prove` and relies
+   * on the CLI being on PATH. Sourced from `<workspaceRoot>/.claude/.prove.json`'s
    * top-level `dev_mode` field via `readDevMode`.
    */
   devMode: boolean;
@@ -155,7 +155,6 @@ export function runHookPostCommit(opts: {
   if (manifestExists(workspaceRoot, sha, runSlug)) return silent();
 
   const diffStat = headDiffStat(sha, cwd);
-  const pluginDir = resolvePluginRoot();
   const nowIso = isoSeconds();
   const devMode = readDevMode(workspaceRoot);
 
@@ -166,7 +165,6 @@ export function runHookPostCommit(opts: {
     diffStat: diffStat.length > 0 ? diffStat : '(no diff stat available)',
     slugClause: runSlug !== null ? ` (run \`${runSlug}\`)` : '',
     slugFlag: runSlug !== null ? ` --slug ${runSlug}` : '',
-    pluginDir,
     workspaceRoot,
     nowIso,
     devMode,
@@ -242,27 +240,15 @@ export function commitSucceeded(toolResponse: unknown): boolean {
  * on `dev_mode` (bare `claude-prove` vs `bun run …`); see the body comment.
  */
 export function generateManifestPrompt(params: ManifestPromptParams): string {
-  const {
-    branch,
-    sha,
-    shortSha,
-    diffStat,
-    slugClause,
-    slugFlag,
-    pluginDir,
-    workspaceRoot,
-    nowIso,
-    devMode,
-  } = params;
+  const { branch, sha, shortSha, diffStat, slugClause, slugFlag, workspaceRoot, nowIso, devMode } =
+    params;
 
   // The save-manifest invocation prefix branches on the project's
   // `.claude/.prove.json::dev_mode`. Installed users (default) get the bare
-  // `claude-prove` on PATH; plugin developers running from a git checkout
-  // get the full `bun run <pluginDir>/...` form so the template resolves
-  // against the working-tree entry point.
-  const invocation = devMode
-    ? `bun run ${pluginDir}/packages/cli/bin/run.ts acb`
-    : 'claude-prove acb';
+  // `claude-prove` on PATH; plugin developers get the shell-interpolated
+  // working-tree form — `$CLAUDE_PROVE_PLUGIN_DIR` expands when the agent
+  // runs the command, so the prompt carries no machine-absolute path.
+  const invocation = devMode ? `${DEV_INVOCATION_PREFIX} acb` : 'claude-prove acb';
 
   // Template body is byte-frozen: every character outside substitutions —
   // including the em-dashes, the `∈` glyph, and the closing sentence — must
