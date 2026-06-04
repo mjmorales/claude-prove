@@ -6,6 +6,17 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — Portable plugin paths: `CLAUDE_PROVE_PLUGIN_DIR` + `install local-env` + `/prove:local-env`
+
+*(Behavior change for dev-mode installs — one-time per-machine setup via `/prove:local-env`; installed-binary users are unaffected.)* Generated artifacts no longer bake a machine-absolute plugin checkout path. Dev-mode codegen (settings.json hook blocks, CLAUDE.md command examples, ACB runtime prompts, subagent discovery context) emits the shell-interpolated prefix `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts"`, expanded when the command fires. Compiled-mode hook commands emit `"$HOME/.local/bin/claude-prove"` instead of the expanded home path. Git-tracked artifacts are now byte-identical across contributor machines.
+
+- **Per-machine value** — `claude-prove install local-env --plugin-dir <checkout>` writes `env.CLAUDE_PROVE_PLUGIN_DIR` into `.claude/settings.local.json` (Claude Code auto-gitignores the file and injects its `env` block into hooks and Bash). The **`/prove:local-env`** command drives detection, confirmation, the write, and drift repair.
+- **Resolution precedence** — `resolvePluginRoot()` honors `$CLAUDE_PROVE_PLUGIN_DIR` first, then `$CLAUDE_PLUGIN_ROOT`, then the marker walk-up, then `~/.claude/plugins/prove`.
+- **Doctor** — new `plugin-dir-env` check verifies the value the hooks will expand to (process env → `settings.local.json` env block → default path) contains the dev entry point; `hook-paths` expands interpolated commands before verification and WARNs on leftover machine-absolute dev prefixes.
+- **CLAUDE.md `@`-references** — the composer emits project-relative paths when the plugin dir is the project root (the claude-prove repo itself) and `~/...` paths when the plugin dir is under the home dir.
+
+**Migration (dev-mode users / plugin contributors).** Run `/prove:local-env` once per machine (or `claude-prove install local-env --plugin-dir <checkout>`), then `claude-prove install init-hooks --force` and `claude-prove claude-md generate --project-root "$(pwd)"` to regenerate the tracked artifacts, and restart the Claude Code session so the env block is injected. `/prove:update` Step 5 detects the pre-portable format and offers the regeneration. No `.claude/.prove.json` change — the config schema is untouched.
+
 ## Unreleased — Agent Routing Map built-in reference
 
 *(Additive — new bundled reference auto-injected into generated CLAUDE.md, nothing to configure.)* A new `references/agent-routing.md` cheatsheet maps task cues to the correct delegation surface — which subagent, skill, or direct CLI call owns a given flow. Centerpiece: the scrum routing convention (judgment writes → `scrum-master` agent; reads and skill-internal mechanical writes → direct `claude-prove scrum`; reconciliation → hooks only; never raw `sqlite3` against `.prove/prove.db`), plus a do-not-invoke-ad-hoc table for pipeline-internal agents (`validation-agent`, `brief-judge`, `pcd-*`).

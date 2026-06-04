@@ -2,7 +2,7 @@
 # claude-prove
 
 <!-- prove:plugin-version:3.0.2 -->
-**Prove plugin v3.0.2** — if `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts --version` does not match v3.0.2, run `/prove:update` to sync.
+**Prove plugin v3.0.2** — if `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" --version` does not match v3.0.2, run `/prove:update` to sync.
 
 JavaScript/TypeScript (npm)
 
@@ -29,23 +29,23 @@ Run before committing:
 
 Before broad Glob/Grep searches, check the file index first:
 
-- `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts cafi context` — full index with routing hints
-- `bun run /Users/manuelmorales/dev/claude-prove/packages/cli/bin/run.ts cafi lookup <keyword>` — search by keyword
+- `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" cafi context` — full index with routing hints
+- `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" cafi lookup <keyword>` — search by keyword
 
 Only fall back to Glob/Grep when the index doesn't cover what you need.
 ## References
 
 ### claude-prove CLI Reference
 
-@/Users/manuelmorales/dev/claude-prove/references/claude-prove-reference.md
+@references/claude-prove-reference.md
 
 ### Design Principles
 
-@/Users/manuelmorales/dev/claude-prove/references/design-principles.md
+@references/design-principles.md
 
 ### Agent Routing Map
 
-@/Users/manuelmorales/dev/claude-prove/references/agent-routing.md
+@references/agent-routing.md
 
 ### LLM-Optimized Coding Standards
 
@@ -120,8 +120,9 @@ When adding/removing/renaming `PROVE_SCHEMA` fields:
 ## CLI Invocation in User-Facing Output
 
 - **Hand-written markdown** (agent defs, commands, skills, references, docs): always invoke as bare `claude-prove <topic> <args>`. Assume the CLI is on `PATH`. Never emit `bun run` prefixes or absolute paths; instead, emit the bare command.
-- **Codegen output** (composer.ts renderers, ACB hook template, etc.): route the invocation prefix through `.claude/.prove.json::dev_mode`. Installed-binary mode (`dev_mode: false`, the default) emits bare `claude-prove`; plugin-developer mode (`dev_mode: true`) emits `bun run ${pluginDir}/packages/cli/bin/run.ts`. Use a single `cliPrefix`/`devMode` argument threaded through renderers — not ad-hoc `pluginDir` string concatenation.
+- **Codegen output** (composer.ts renderers, settings hook blocks, ACB hook template, etc.): route the invocation prefix through `.claude/.prove.json::dev_mode`. Installed-binary mode (`dev_mode: false`, the default) emits bare `claude-prove`; plugin-developer mode (`dev_mode: true`) emits the shell-interpolated `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts"` (`DEV_INVOCATION_PREFIX` in `@claude-prove/installer`). NEVER emit a machine-absolute checkout path into a generated artifact; instead emit the interpolated prefix — the per-machine value lives in the gitignored `.claude/settings.local.json` `env` block, written by `claude-prove install local-env` (driven by `/prove:local-env`).
 - **Runtime agent prompts** (Claude Code hook `decision: block` payloads): read `dev_mode` at fire time (e.g., `readDevMode(workspaceRoot)` in `acb/hook.ts`) so the emitted command resolves correctly on the user's machine regardless of install shape.
+- **CLAUDE.md `@`-references** cannot expand env vars: the composer emits project-relative paths when the plugin dir IS the project root, `~/...` when under the home dir, absolute otherwise.
 
 ## Self-Contained Artifact Rule
 
