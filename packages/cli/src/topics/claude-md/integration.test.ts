@@ -18,13 +18,13 @@
  *   - python-fixture (minimal Python project)
  */
 
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
+import { execFileSync } from 'node:child_process';
 import {
-  existsSync,
+  copyFileSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
-  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -51,7 +51,7 @@ interface FixtureSpec {
 }
 
 const fixtures: FixtureSpec[] = [
-  { name: 'self', buildRoot: () => PLUGIN_ROOT },
+  { name: 'self', buildRoot: () => buildSelfRoot() },
   { name: 'go-fixture', buildRoot: () => buildGoFixture() },
   { name: 'node-fixture', buildRoot: () => buildNodeFixture() },
   { name: 'python-fixture', buildRoot: () => buildPythonFixture() },
@@ -80,6 +80,44 @@ function write(root: string, rel: string, content = ''): void {
   const dir = full.slice(0, full.lastIndexOf('/'));
   mkdirSync(dir, { recursive: true });
   writeFileSync(full, content);
+}
+
+/**
+ * Build the `self` fixture root: a tmp copy of this repo's git-TRACKED files
+ * (working-tree contents), nested under a `claude-prove` basename so the
+ * scanner's dirname fallback yields the golden-captured project name.
+ *
+ * The live checkout is never scanned directly: the scan is tree-sensitive
+ * (extension-share statistics), so untracked working-tree debris — stray
+ * screenshots, scratch files — would silently shift the stats away from the
+ * golden, which encodes the committed tree CI checks out. Tracked files are
+ * copied with their current working-tree contents, so an uncommitted edit
+ * that changes the scan still fails locally BEFORE it lands in CI, exactly
+ * when the golden must be regenerated alongside it.
+ *
+ * Memoized: the scan/compose/subagent tests share one copy per run.
+ */
+let selfRootCache: string | null = null;
+function buildSelfRoot(): string {
+  if (selfRootCache !== null) return selfRootCache;
+  const root = mkTmpWithName('claude-prove');
+  const tracked = execFileSync('git', ['-C', PLUGIN_ROOT, 'ls-files', '-z'], {
+    maxBuffer: 16 * 1024 * 1024,
+  })
+    .toString('utf8')
+    .split('\0')
+    .filter(Boolean);
+  for (const rel of tracked) {
+    const dest = join(root, rel);
+    mkdirSync(dirname(dest), { recursive: true });
+    try {
+      copyFileSync(join(PLUGIN_ROOT, rel), dest);
+    } catch {
+      // Tracked but deleted from the working tree — scan what exists.
+    }
+  }
+  selfRootCache = root;
+  return root;
 }
 
 function buildGoFixture(): string {
@@ -176,26 +214,11 @@ describe('claude-md — golden parity (direct API)', () => {
     for (const d of toClean.splice(0)) rmSync(d, { recursive: true, force: true });
   };
 
-  // The `self` fixture scans the live repo. A developer's local CAFI index
-  // (.prove/file-index.json — gitignored, regenerable) would flip
-  // cafi.available to true and make the composer emit the Discovery block,
-  // diverging from the committed clean-checkout goldens (which encode
-  // available:false). Hide it for the duration of this suite so the scan is
-  // hermetic regardless of local state. No other test reads the real cache.
-  const liveCafiCache = join(PLUGIN_ROOT, '.prove', 'file-index.json');
-  const hiddenCafiCache = `${liveCafiCache}.golden-test-bak`;
-  let cafiCacheHidden = false;
-  beforeAll(() => {
-    if (existsSync(liveCafiCache)) {
-      renameSync(liveCafiCache, hiddenCafiCache);
-      cafiCacheHidden = true;
-    }
-  });
-  afterAll(() => {
-    if (cafiCacheHidden && existsSync(hiddenCafiCache)) {
-      renameSync(hiddenCafiCache, liveCafiCache);
-    }
-  });
+  // The `self` fixture is a tmp copy of the repo's git-TRACKED files, so the
+  // gitignored CAFI index (.prove/file-index.json) — which would flip
+  // cafi.available to true and make the composer emit the Discovery block —
+  // can never appear in it. The scan is hermetic without touching the
+  // developer's live .prove/ state.
 
   for (const fixture of fixtures) {
     test(`${fixture.name} — scan matches golden`, () => {
