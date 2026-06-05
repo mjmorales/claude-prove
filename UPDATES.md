@@ -6,6 +6,18 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — Per-action `--help` usage lines + full-usage argument errors (fixes #36)
+
+*(No `.claude/.prove.json` change, no store migration — help/error text and one resolution path only.)* Required positionals and per-action flags are now discoverable without failing repeatedly, and a topic's `--help` is no longer a flat dump spanning every action.
+
+**Action-scoped `--help`.** `claude-prove <topic> <action> --help` (e.g. `scrum link-run --help`, `scrum task create --help`, `run-state validate --help`) prints a single usage line — `Usage: claude-prove <topic> <action> <positional1> <positional2> [flags]` — followed by only that action's flags with their descriptions, instead of the whole topic's flag set. A bare `claude-prove <topic> --help` (no action) keeps the existing full topic help.
+
+**Full-usage argument errors.** When a required positional is missing, the error now prints the same usage line naming every positional at once, plus the specific missing-arg message — so `scrum link-run` with no arguments tells you both `<task-id>` and `<run-path>` are required in one shot, rather than one failed run per positional.
+
+**`run-state validate` run resolution.** `run-state validate` now resolves its target artifact from `--branch`/`--slug` (`--runs-root`) plus `--kind` (`state` | `plan` | `prd`; default `state`) when no positional file is given, matching its sibling read actions. The positional-file form (`run-state validate <file>`) works unchanged. `--kind report` still requires a positional file (one report per step).
+
+**Coverage.** The per-action registry covers the `scrum` and `run-state` topics — the worst offenders — end to end; unregistered topics fall through to cac's stock help, so every existing invocation behaves as before. No action required on update.
+
 ## v3.8.1 — `scrum contributor register` is idempotent on slug (fixes #30)
 
 *(No `.claude/.prove.json` change, no store migration — behavior change only.)* Re-running `contributor register` against an existing slug no longer fails with a UNIQUE-constraint error. It now reconciles the row — provided flags override the stored fields, unset flags preserve them — and re-emits/merges the `contributors/<slug>.md` identity artifact, so a bare re-register repairs a registry row whose identity file was never emitted or was lost. The CT-UUID and created-* provenance never change: a provided `--id` that conflicts with the registered CT-UUID errors (exit 1), preserving attribution history.

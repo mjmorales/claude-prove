@@ -39,13 +39,16 @@
  * Python-compatible code. See `./run-state/hooks/dispatch.ts`.
  */
 
+import { existsSync } from 'node:fs';
 import type { CAC } from 'cac';
+import { usageError } from '../core/cli/usage';
 import { runDispatch } from './run-state/cli/dispatch-cmd';
 import { runInit } from './run-state/cli/init-cmd';
 import { runLs } from './run-state/cli/ls-cmd';
 import { runMigrate } from './run-state/cli/migrate-cmd';
 import { runMigrateRuns } from './run-state/cli/migrate-runs-cmd';
 import { runReportWrite } from './run-state/cli/report-cmd';
+import { ResolveError, type ResolvedRun, resolvePaths } from './run-state/cli/resolve';
 import { runCurrent, runShow, runShowReport, runSummary } from './run-state/cli/show-cmd';
 import { type StepAction, runStep } from './run-state/cli/step-cmd';
 import { runStepInfo } from './run-state/cli/step-info-cmd';
@@ -249,10 +252,65 @@ function dispatch(
   }
 }
 
-// run-state validate <file>
+// run-state validate <file>  — or resolve the target file from
+// --branch/--slug/--kind (like sibling read actions) when no positional given.
 function dispatchValidate({ arg1: file }: Positionals, flags: RunStateFlags): number {
-  if (!file) return usage('the following arguments are required: file');
+  if (!file) {
+    const resolvedFile = resolveValidateTarget(flags);
+    if (typeof resolvedFile !== 'string') return resolvedFile;
+    return runValidate(resolvedFile, { kind: flags.kind, strict: flags.strict });
+  }
   return runValidate(file, { kind: flags.kind, strict: flags.strict });
+}
+
+/**
+ * Resolve the artifact `run-state validate` should check when no positional
+ * file is given: pick the run via --branch/--slug/--runs-root (the same
+ * resolver sibling read actions use) and select the artifact by --kind
+ * (state | plan | prd | report; default state). Returns the absolute file path
+ * on success, or an exit code when resolution fails so the caller can return it.
+ */
+function resolveValidateTarget(flags: RunStateFlags): string | number {
+  let resolved: ResolvedRun;
+  try {
+    resolved = resolvePaths({
+      runsRoot: flags.runsRoot,
+      branch: flags.branch,
+      slug: flags.slug,
+    });
+  } catch (err) {
+    if (err instanceof ResolveError) {
+      console.error(`error: ${err.message}`);
+      return err.exitCode;
+    }
+    throw err;
+  }
+  const kind = narrowShowKind(flags.kind);
+  if (kind === 'report') {
+    // A report has no single canonical file (one per step); the operator must
+    // name the file positionally rather than resolve by --branch/--slug.
+    console.error(
+      'error: --kind report needs a positional report file (one report per step); pass the path directly',
+    );
+    return 1;
+  }
+  const target = validateTargetForKind(resolved, kind);
+  if (!existsSync(target)) {
+    console.error(`error: ${kind} artifact not found: ${target}`);
+    return 1;
+  }
+  return target;
+}
+
+function validateTargetForKind(resolved: ResolvedRun, kind: 'state' | 'plan' | 'prd'): string {
+  switch (kind) {
+    case 'plan':
+      return resolved.paths.plan;
+    case 'prd':
+      return resolved.paths.prd;
+    default:
+      return resolved.paths.state;
+  }
 }
 
 // run-state init  (all inputs via flags)
@@ -279,7 +337,9 @@ function dispatchShow(flags: RunStateFlags): number {
 
 // run-state show-report <step_id>
 function dispatchShowReport({ arg1: stepId }: Positionals, flags: RunStateFlags): number {
-  if (!stepId) return usage('the following arguments are required: step_id');
+  if (!stepId) {
+    return usageError('run-state', 'show-report', 'the following arguments are required: step_id');
+  }
   return runShowReport(stepId, {
     runsRoot: flags.runsRoot,
     branch: flags.branch,
@@ -302,14 +362,16 @@ function dispatchStep(
   { arg1: stepAction, arg2: stepId }: Positionals,
   flags: RunStateFlags,
 ): number {
-  if (!stepAction) return usage('the following arguments are required: action');
+  if (!stepAction)
+    return usageError('run-state', 'step', 'the following arguments are required: action');
   if (!STEP_ACTIONS.has(stepAction as StepAction)) {
     console.error(
       `error: unknown step action '${stepAction}' (expected: start | complete | fail | halt)`,
     );
     return 1;
   }
-  if (!stepId) return usage('the following arguments are required: step_id');
+  if (!stepId)
+    return usageError('run-state', 'step', 'the following arguments are required: step_id');
   return runStep(stepAction as StepAction, stepId, {
     runsRoot: flags.runsRoot,
     branch: flags.branch,
@@ -322,7 +384,9 @@ function dispatchStep(
 
 // run-state step-info <step_id>
 function dispatchStepInfo({ arg1: stepId }: Positionals, flags: RunStateFlags): number {
-  if (!stepId) return usage('the following arguments are required: step_id');
+  if (!stepId) {
+    return usageError('run-state', 'step-info', 'the following arguments are required: step_id');
+  }
   return runStepInfo(stepId, {
     runsRoot: flags.runsRoot,
     branch: flags.branch,
@@ -340,7 +404,11 @@ function dispatchValidator(
     return 1;
   }
   if (!stepId || !phase || !status) {
-    return usage('the following arguments are required: step_id, phase, status');
+    return usageError(
+      'run-state',
+      'validator',
+      'the following arguments are required: step_id, phase, status',
+    );
   }
   return runValidatorSet(stepId, phase, status, {
     runsRoot: flags.runsRoot,
@@ -359,7 +427,9 @@ function dispatchTask(
     console.error(`error: unknown task action '${subAction ?? ''}' (expected: review)`);
     return 1;
   }
-  if (!taskId) return usage('the following arguments are required: task_id');
+  if (!taskId) {
+    return usageError('run-state', 'task', 'the following arguments are required: task_id');
+  }
   return runTaskReview(taskId, {
     runsRoot: flags.runsRoot,
     branch: flags.branch,
@@ -380,7 +450,7 @@ function dispatchDispatch(
     console.error(`error: unknown dispatch action '${subAction ?? ''}' (expected: record | has)`);
     return 1;
   }
-  if (!key) return usage('the following arguments are required: key');
+  if (!key) return usageError('run-state', 'dispatch', 'the following arguments are required: key');
   return runDispatch(subAction, key, event, {
     runsRoot: flags.runsRoot,
     branch: flags.branch,
@@ -399,7 +469,9 @@ function dispatchReport(
     );
     return 1;
   }
-  if (!stepId) return usage('the following arguments are required: step_id');
+  if (!stepId) {
+    return usageError('run-state', 'report', 'the following arguments are required: step_id');
+  }
   return runReportWrite(stepId, {
     runsRoot: flags.runsRoot,
     branch: flags.branch,
@@ -415,7 +487,9 @@ function dispatchReport(
 // dispatches to the TS hook module, writes stdout/stderr, returns exit.
 function dispatchHook({ arg1: event }: Positionals): number {
   if (!event) {
-    return usage(
+    return usageError(
+      'run-state',
+      'hook',
       `the following arguments are required: hook event (one of: ${HOOK_EVENTS.join(', ')})`,
     );
   }
@@ -424,11 +498,6 @@ function dispatchHook({ arg1: event }: Positionals): number {
     return 1;
   }
   return runHookFromStdin(event);
-}
-
-function usage(msg: string): number {
-  console.error(`error: ${msg}`);
-  return 1;
 }
 
 // Format narrowers keep the existing default-on-miss return shape so the

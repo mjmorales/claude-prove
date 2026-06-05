@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -134,6 +134,160 @@ describe('claude-prove store subcommands', () => {
       const { stderr, status } = runBin(['store', 'bogus'], repo);
       expect(status).not.toBe(0);
       expect(stderr).toContain("unknown action 'bogus'");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('action-scoped --help', () => {
+  test('scrum link-run --help names both positionals and omits unrelated flags', () => {
+    const { stdout, status } = runBin(['scrum', 'link-run', '--help']);
+    expect(status).toBe(0);
+    expect(stdout).toContain('Usage: claude-prove scrum link-run <task-id> <run-path> [flags]');
+    expect(stdout).toContain('--branch');
+    expect(stdout).toContain('--slug');
+    // The flat topic dump would include these sibling-action flags; the scoped
+    // help must not.
+    expect(stdout).not.toContain('--title');
+    expect(stdout).not.toContain('--verifies-by');
+  });
+
+  test('scrum task create --help shows only create flags', () => {
+    const { stdout, status } = runBin(['scrum', 'task', 'create', '--help']);
+    expect(status).toBe(0);
+    expect(stdout).toContain('Usage: claude-prove scrum task create [flags]');
+    expect(stdout).toContain('--title');
+    expect(stdout).not.toContain('--summary');
+    expect(stdout).not.toContain('--schema-ref');
+  });
+
+  test('run-state validate --help advertises the run-resolution flags', () => {
+    const { stdout, status } = runBin(['run-state', 'validate', '--help']);
+    expect(status).toBe(0);
+    expect(stdout).toContain('Usage: claude-prove run-state validate <file> [flags]');
+    expect(stdout).toContain('--branch');
+    expect(stdout).toContain('--slug');
+    expect(stdout).toContain('--kind');
+  });
+
+  test('bare topic --help still prints cac flat help (back-compat)', () => {
+    const { stdout, status } = runBin(['scrum', '--help']);
+    expect(status).toBe(0);
+    // cac usage banner for the topic command, NOT the action-scoped form.
+    expect(stdout).toContain('scrum <action>');
+  });
+});
+
+describe('full-usage argument errors', () => {
+  test('scrum link-run with no positionals names every positional at once', () => {
+    const repo = makeTmpGitRepo();
+    try {
+      const { stderr, status } = runBin(['scrum', 'link-run', '--workspace-root', repo], repo);
+      expect(status).toBe(1);
+      expect(stderr).toContain('Usage: claude-prove scrum link-run <task-id> <run-path> [flags]');
+      expect(stderr).toContain('error: the following arguments are required: task-id, run-path');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test('run-state report write without step_id prints the report usage line', () => {
+    const repo = makeTmpGitRepo();
+    try {
+      const { stderr, status } = runBin(
+        ['run-state', 'report', 'write', '--runs-root', join(repo, '.prove', 'runs')],
+        repo,
+      );
+      expect(status).toBe(1);
+      expect(stderr).toContain('Usage: claude-prove run-state report');
+      expect(stderr).toContain('error: the following arguments are required: step_id');
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('run-state validate resolves the run from --branch/--slug', () => {
+  function seedState(runsRoot: string, branch: string, slug: string): string {
+    const runDir = join(runsRoot, branch, slug);
+    mkdirSync(runDir, { recursive: true });
+    const statePath = join(runDir, 'state.json');
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        schema_version: '1',
+        kind: 'state',
+        run_status: 'pending',
+        slug,
+        updated_at: 't',
+        tasks: [],
+      }),
+    );
+    return statePath;
+  }
+
+  test('no positional + --branch/--slug validates the resolved state.json', () => {
+    const repo = makeTmpGitRepo();
+    const runsRoot = join(repo, '.prove', 'runs');
+    try {
+      const statePath = seedState(runsRoot, 'main', 'demo');
+      const { stdout, status } = runBin(
+        ['run-state', 'validate', '--branch', 'main', '--slug', 'demo', '--runs-root', runsRoot],
+        repo,
+      );
+      expect(status).toBe(0);
+      expect(stdout).toContain(`ok: ${statePath}`);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test('the positional-file form still works unchanged', () => {
+    const repo = makeTmpGitRepo();
+    const runsRoot = join(repo, '.prove', 'runs');
+    try {
+      const statePath = seedState(runsRoot, 'main', 'demo');
+      const { stdout, status } = runBin(['run-state', 'validate', statePath], repo);
+      expect(status).toBe(0);
+      expect(stdout).toContain(`ok: ${statePath}`);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  test('--branch/--slug + --kind plan resolves plan.json', () => {
+    const repo = makeTmpGitRepo();
+    const runsRoot = join(repo, '.prove', 'runs');
+    try {
+      const runDir = join(runsRoot, 'main', 'demo');
+      mkdirSync(runDir, { recursive: true });
+      const planPath = join(runDir, 'plan.json');
+      writeFileSync(
+        planPath,
+        JSON.stringify({
+          schema_version: '4',
+          kind: 'plan',
+          tasks: [{ id: '1.1', title: 't', wave: 1, steps: [] }],
+        }),
+      );
+      const { stdout, status } = runBin(
+        [
+          'run-state',
+          'validate',
+          '--branch',
+          'main',
+          '--slug',
+          'demo',
+          '--kind',
+          'plan',
+          '--runs-root',
+          runsRoot,
+        ],
+        repo,
+      );
+      expect(status).toBe(0);
+      expect(stdout).toContain(`ok: ${planPath}`);
     } finally {
       rmSync(repo, { recursive: true, force: true });
     }

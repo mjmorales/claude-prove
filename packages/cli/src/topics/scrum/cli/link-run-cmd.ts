@@ -14,6 +14,7 @@
  */
 
 import { mainWorktreeRoot } from '@claude-prove/shared';
+import { usageError } from '../../../core/cli/usage';
 import { openCliStore } from './cli-store';
 
 export interface LinkRunCmdFlags {
@@ -27,13 +28,20 @@ export function runLinkRunCmd(
   runPath: string | undefined,
   flags: LinkRunCmdFlags,
 ): number {
-  if (taskId === undefined || taskId.length === 0) {
-    process.stderr.write('scrum link-run: <task-id> positional argument required\n');
-    return 1;
-  }
-  if (runPath === undefined || runPath.length === 0) {
-    process.stderr.write('scrum link-run: <run-path> positional argument required\n');
-    return 1;
+  // Both positionals are reported together via the full usage line, so the
+  // operator sees <task-id> and <run-path> at once rather than discovering the
+  // second only after supplying the first.
+  if (
+    taskId === undefined ||
+    taskId.length === 0 ||
+    runPath === undefined ||
+    runPath.length === 0
+  ) {
+    return usageError(
+      'scrum',
+      'link-run',
+      'the following arguments are required: task-id, run-path',
+    );
   }
 
   const workspaceRoot =

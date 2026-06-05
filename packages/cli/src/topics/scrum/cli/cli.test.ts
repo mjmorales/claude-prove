@@ -1485,16 +1485,16 @@ describe('runLinkRunCmd', () => {
     expect(payload.branch).toBe('main');
   });
 
-  test('missing task-id: exit 1', () => {
+  test('missing task-id: exit 1, names both positionals at once', () => {
     const res = withCapture(() => runLinkRunCmd(undefined, '.prove/runs/x/', {}));
     expect(res.exit).toBe(1);
-    expect(res.stderr).toContain('<task-id> positional argument required');
+    expect(res.stderr).toContain('the following arguments are required: task-id, run-path');
   });
 
-  test('missing run-path: exit 1', () => {
+  test('missing run-path: exit 1, names both positionals at once', () => {
     const res = withCapture(() => runLinkRunCmd('l', undefined, {}));
     expect(res.exit).toBe(1);
-    expect(res.stderr).toContain('<run-path> positional argument required');
+    expect(res.stderr).toContain('the following arguments are required: task-id, run-path');
   });
 });
 
