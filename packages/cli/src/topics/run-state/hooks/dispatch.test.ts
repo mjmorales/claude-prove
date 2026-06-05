@@ -29,7 +29,13 @@ function runHookCli(
   Reflect.deleteProperty(env, 'RUN_STATE_ALLOW_DIRECT');
   const proc = Bun.spawnSync({
     cmd: ['bun', 'run', CLI_PATH, 'run-state', 'hook', event],
-    stdin: new Blob([stdin]),
+    // Buffer, NOT `new Blob(...)`: the web suites register happy-dom globals,
+    // and any test-file order that runs a DOM suite before this one leaves a
+    // shadowed globalThis.Blob whose instances Bun.spawnSync rejects with
+    // "stdio must be an array of 'inherit', 'ignore', or null" (file order is
+    // filesystem-dependent — it bites on Linux CI but not macOS). Buffer is
+    // immune to DOM global shadowing.
+    stdin: Buffer.from(stdin),
     stdout: 'pipe',
     stderr: 'pipe',
     env,
@@ -51,7 +57,7 @@ describe('run-state hook <event> CLI', () => {
   test('missing event exits 1 with list of valid events', () => {
     const proc = Bun.spawnSync({
       cmd: ['bun', 'run', CLI_PATH, 'run-state', 'hook'],
-      stdin: new Blob(['']),
+      stdin: Buffer.from(''),
       stdout: 'pipe',
       stderr: 'pipe',
     });
