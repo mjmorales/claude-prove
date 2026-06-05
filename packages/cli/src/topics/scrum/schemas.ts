@@ -1074,6 +1074,30 @@ export const SCRUM_MIGRATION_V26_SQL = `
 ALTER TABLE scrum_escalations ADD COLUMN attributes TEXT;
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v27 — team binding on scrum_tasks
+// ---------------------------------------------------------------------------
+
+/**
+ * v27: add an OPTIONAL `team_slug` to `scrum_tasks` — the team a task is bound
+ * to. One nullable TEXT column, no new table:
+ *
+ *   team_slug — the `scrum_teams.slug` that owns this task, or NULL for an
+ *               unbound (team-less) task. A SOFT reference (no foreign key),
+ *               held exactly as the escalation roster and operator history hold
+ *               their referents — the binding is forward-compatible with a team
+ *               registered later, and registry membership is validated at the
+ *               CLI boundary on `--team`, not by a SQL constraint.
+ *
+ * This is the foundation column every downstream role-bound flag and the
+ * decompose stamping write to. `ADD COLUMN` with a NULL default is safe on a
+ * populated table (no existing row needs a team). No CHECK — the column stays
+ * forward-compatible TEXT, matching the v2–v26 convention.
+ */
+export const SCRUM_MIGRATION_V27_SQL = `
+ALTER TABLE scrum_tasks ADD COLUMN team_slug TEXT;
+`;
+
 /**
  * Current scrum-domain store version — the highest migration version this
  * module registers. Stamped as the per-artifact `schema_version` on the
@@ -1081,7 +1105,7 @@ ALTER TABLE scrum_escalations ADD COLUMN attributes TEXT;
  * scrum row reports the schema it was read under. Bump in lockstep with the
  * top migration version on every additive hop.
  */
-export const SCRUM_SCHEMA_VERSION = 26;
+export const SCRUM_SCHEMA_VERSION = 27;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
@@ -1299,6 +1323,13 @@ export function ensureScrumSchemaRegistered(): void {
           'add scrum_escalations.attributes (nullable JSON) carrying the staleness auto-bubble marker { auto_bubbled, linked_escalation }',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V26_SQL);
+        },
+      },
+      {
+        version: 27,
+        description: 'add scrum_tasks.team_slug (nullable soft reference) for the team binding',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V27_SQL);
         },
       },
     ],

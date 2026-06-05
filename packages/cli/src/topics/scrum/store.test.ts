@@ -95,6 +95,21 @@ describe('ScrumStore — tasks', () => {
     expect(store.getTask('t1')?.layer).toBeNull();
   });
 
+  test('createTask defaults team_slug to null (unbound task)', () => {
+    const task = seedTask('t1');
+    expect(task.team_slug).toBeNull();
+    // Round-trips through SELECT, not just the in-memory return value.
+    expect(store.getTask('t1')?.team_slug).toBeNull();
+  });
+
+  test('createTask persists an explicit team_slug verbatim (no registry validation here)', () => {
+    // The store layer never checks the team registry — an arbitrary slug
+    // persists; membership is validated at the CLI boundary on `--team`.
+    const task = seedTask('t1', { teamSlug: 'payments' });
+    expect(task.team_slug).toBe('payments');
+    expect(store.getTask('t1')?.team_slug).toBe('payments');
+  });
+
   test('createTask with parentId persists the edge and validates parent existence', () => {
     expect(() => seedTask('child', { parentId: 'missing' })).toThrow(/unknown parent_id/);
     seedTask('epic', { layer: 'epic' });
@@ -2429,7 +2444,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 26,
+      schema_version: 27,
     });
   });
 
@@ -2442,7 +2457,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(26);
+    expect(updated.provenance.schema_version).toBe(27);
   });
 });
 

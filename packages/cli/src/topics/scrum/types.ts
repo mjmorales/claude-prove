@@ -653,6 +653,12 @@ export interface ScrumTask {
   description: string | null;
   status: TaskStatus;
   milestone_id: string | null;
+  /**
+   * Team binding (v27): the `scrum_teams.slug` that owns this task, or NULL for
+   * an unbound (team-less) task. A soft reference — registry membership is
+   * validated at the CLI boundary on `--team`, not by a SQL constraint.
+   */
+  team_slug: string | null;
   /** Self-FK to the containing task (the epic→story→task tree). NULL = flat. */
   parent_id: string | null;
   /** Containment tier. NULL = untiered/flat task. */

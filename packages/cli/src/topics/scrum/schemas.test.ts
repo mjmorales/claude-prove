@@ -42,6 +42,7 @@ import {
   SCRUM_MIGRATION_V24_SQL,
   SCRUM_MIGRATION_V25_SQL,
   SCRUM_MIGRATION_V26_SQL,
+  SCRUM_MIGRATION_V27_SQL,
   SCRUM_SCHEMA_VERSION,
   ensureScrumSchemaRegistered,
 } from './schemas';
@@ -197,6 +198,8 @@ describe('scrum domain registration', () => {
         // v11 executing-worker/run attribution appends after v9, NULL default.
         'worker_id:TEXT:0',
         'run_id:TEXT:0',
+        // v27 team binding appends after v11, NULL default.
+        'team_slug:TEXT:0',
       ]);
     } finally {
       raw.close();
@@ -450,6 +453,8 @@ describe('scrum domain registration', () => {
         // v11 appends executing-worker/run attribution, NULL default.
         'worker_id:TEXT:0',
         'run_id:TEXT:0',
+        // v27 appends the team binding, NULL default.
+        'team_slug:TEXT:0',
       ]);
     } finally {
       raw.close();
@@ -559,13 +564,13 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('full migration chain from v0 applies v1..v26 in order', () => {
+  test('full migration chain from v0 applies v1..v27 in order', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       const result = runMigrations(raw);
       expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-        26,
+        26, 27,
       ]);
     } finally {
       raw.close();
@@ -578,7 +583,7 @@ describe('scrum domain registration', () => {
       const first = runMigrations(raw);
       expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-        26,
+        26, 27,
       ]);
 
       const second = runMigrations(raw);
@@ -615,6 +620,7 @@ describe('scrum domain registration', () => {
         { version: 24 },
         { version: 25 },
         { version: 26 },
+        { version: 27 },
       ]);
     } finally {
       raw.close();
@@ -645,7 +651,7 @@ describe('scrum domain registration', () => {
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(log).toHaveLength(26);
+      expect(log).toHaveLength(27);
       const [
         v1,
         v2,
@@ -673,6 +679,7 @@ describe('scrum domain registration', () => {
         v24,
         v25,
         v26,
+        v27,
       ] = log;
       if (
         !v1 ||
@@ -700,9 +707,10 @@ describe('scrum domain registration', () => {
         !v23 ||
         !v24 ||
         !v25 ||
-        !v26
+        !v26 ||
+        !v27
       )
-        throw new Error('expected twenty-six log entries');
+        throw new Error('expected twenty-seven log entries');
       expect(v1.domain).toBe('scrum');
       expect(v1.version).toBe(1);
       expect(v1.description).toContain('scrum_tasks');
@@ -783,6 +791,9 @@ describe('scrum domain registration', () => {
       expect(v26.domain).toBe('scrum');
       expect(v26.version).toBe(26);
       expect(v26.description).toContain('attributes');
+      expect(v27.domain).toBe('scrum');
+      expect(v27.version).toBe(27);
+      expect(v27.description).toContain('team_slug');
     } finally {
       raw.close();
     }
@@ -814,8 +825,29 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V11_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN run_id');
   });
 
-  test('SCRUM_SCHEMA_VERSION tracks the top migration version (26)', () => {
-    expect(SCRUM_SCHEMA_VERSION).toBe(26);
+  test('SCRUM_MIGRATION_V27_SQL adds scrum_tasks.team_slug', () => {
+    expect(SCRUM_MIGRATION_V27_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN team_slug');
+  });
+
+  test('v27 ADD COLUMN defaults team_slug to NULL on existing rows', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      raw.exec(
+        "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ team_slug: string | null }>(
+        'SELECT team_slug FROM scrum_tasks WHERE id = ?',
+        ['t1'],
+      );
+      expect(row).toEqual([{ team_slug: null }]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('SCRUM_SCHEMA_VERSION tracks the top migration version (27)', () => {
+    expect(SCRUM_SCHEMA_VERSION).toBe(27);
   });
 
   test('v11 ADD COLUMN defaults worker_id/run_id to NULL on existing rows', () => {
@@ -948,7 +980,7 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V14_SQL).toContain('idx_scrum_teams_type');
   });
 
-  test('a fresh store ends at version 26 with scrum_teams present', () => {
+  test('a fresh store ends at version 27 with scrum_teams present', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -957,7 +989,7 @@ describe('scrum domain registration', () => {
         'SELECT MAX(version) AS version FROM _migrations_log WHERE domain = ?',
         ['scrum'],
       );
-      expect(top).toEqual([{ version: 26 }]);
+      expect(top).toEqual([{ version: 27 }]);
 
       const tables = raw.all<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_teams'",

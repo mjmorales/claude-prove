@@ -147,6 +147,12 @@ export interface CreateTaskInput {
   description?: string | null;
   status?: TaskStatus;
   milestoneId?: string | null;
+  /**
+   * Team binding (v27): the owning team's slug, or NULL/omitted for an unbound
+   * task. Persisted verbatim — registry membership is validated at the CLI
+   * boundary on `--team`, not here.
+   */
+  teamSlug?: string | null;
   /** Containing task id (the tree). Validated to exist, like `milestoneId`. */
   parentId?: string | null;
   /** Containment tier; NULL = flat. */
@@ -294,7 +300,7 @@ export interface ResolveContributorKey {
  * at the public boundary.
  */
 const TASK_COLUMNS =
-  'id, title, description, status, milestone_id, parent_id, layer, acceptance_json, bounds_json, terminal_reason, terminal_detail, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, deleted_at';
+  'id, title, description, status, milestone_id, team_slug, parent_id, layer, acceptance_json, bounds_json, terminal_reason, terminal_detail, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, deleted_at';
 
 /** Canonical `scrum_milestones` SELECT column list; includes the v10 `initiative` grouping. */
 const MILESTONE_COLUMNS =
@@ -567,6 +573,7 @@ export class ScrumStore {
       description: input.description ?? null,
       status,
       milestone_id: milestoneId,
+      team_slug: input.teamSlug ?? null,
       parent_id: parentId,
       layer: input.layer ?? null,
       acceptance,
@@ -596,13 +603,14 @@ export class ScrumStore {
 
     const tx = this.db.transaction(() => {
       this.prep(
-        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, parent_id, layer, acceptance_json, bounds_json, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
+        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, team_slug, parent_id, layer, acceptance_json, bounds_json, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
       ).run(
         row.id,
         row.title,
         row.description,
         row.status,
         row.milestone_id,
+        row.team_slug,
         row.parent_id,
         row.layer,
         acceptance === null ? null : JSON.stringify(acceptance),
@@ -1612,7 +1620,7 @@ export class ScrumStore {
   listTasksForTag(tag: string): ScrumTask[] {
     return (
       this.prep(
-        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.parent_id, t.layer, t.acceptance_json, t.bounds_json, t.terminal_reason, t.terminal_detail, t.created_by_agent, t.created_at, t.last_event_at, t.last_modified_by, t.last_modified_at, t.worker_id, t.run_id, t.deleted_at
+        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.team_slug, t.parent_id, t.layer, t.acceptance_json, t.bounds_json, t.terminal_reason, t.terminal_detail, t.created_by_agent, t.created_at, t.last_event_at, t.last_modified_by, t.last_modified_at, t.worker_id, t.run_id, t.deleted_at
        FROM scrum_tasks t
        INNER JOIN scrum_tags g ON g.task_id = t.id
        WHERE g.tag = ? AND t.deleted_at IS NULL
