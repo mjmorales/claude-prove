@@ -93,9 +93,9 @@ describe('runMigrateRuns', () => {
     const plan = JSON.parse(stdout);
     expect(plan.artifactsBehind).toBe(1);
     // Empty shipped registry => no content reshaping; the summary points the
-    // operator at the deterministic `schema migrate` for the structural part.
+    // operator at the deterministic `run-state migrate` for the structural part.
     expect(plan.artifactsNeedingContent).toBe(0);
-    expect(stderr).toContain('schema migrate');
+    expect(stderr).toContain('run-state migrate');
     expect(plan.runs[0].artifacts[0].kind).toBe('plan');
     expect(plan.runs[0].artifacts[0].fromVersion).toBe('1');
   });

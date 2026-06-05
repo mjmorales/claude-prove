@@ -112,6 +112,6 @@ function summarize(plan: MigrationPlan): string {
   }
   return (
     `${plan.runs.length} run(s) behind v${plan.currentVersion}: ${plan.artifactsBehind} artifact(s) behind, ` +
-    `${plan.artifactsNeedingContent} need model-driven content reshaping (the rest are structural — run \`schema migrate\`).\n`
+    `${plan.artifactsNeedingContent} need model-driven content reshaping (the rest are structural — run \`run-state migrate\`).\n`
   );
 }

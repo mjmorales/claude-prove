@@ -30,6 +30,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { canAdvanceStructurally } from './schema-migrate';
 import { CURRENT_SCHEMA_VERSION } from './schemas';
 
 /** Run-artifact kinds a content hop may touch. Closed set. */
@@ -148,12 +149,19 @@ export function planRunContentMigration(runDir: string): RunMigrationPlan {
   for (const [kind, file] of jsonArtifacts) {
     const version = readArtifactVersion(file);
     if (version === null || version === CURRENT_SCHEMA_VERSION) continue;
+    const hops = contentHopsFor(version, CURRENT_SCHEMA_VERSION, kind);
+    // Only report an artifact as behind when SOME migration would actually
+    // run: a content hop here, or a structural hop the deterministic `migrate`
+    // chain can run from this version. A lag with neither (a genuine registry
+    // gap at this version) is not migratable, so listing it would disagree
+    // with `migrate`, which processes zero such artifacts.
+    if (hops.length === 0 && !canAdvanceStructurally(version)) continue;
     artifacts.push({
       file,
       kind,
       fromVersion: version,
       toVersion: CURRENT_SCHEMA_VERSION,
-      hops: contentHopsFor(version, CURRENT_SCHEMA_VERSION, kind),
+      hops,
     });
   }
 
