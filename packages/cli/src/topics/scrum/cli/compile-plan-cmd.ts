@@ -10,13 +10,25 @@
  *
  * Compilation rules:
  *   - Actionable tasks = milestone tasks whose status is not `done`/`cancelled`.
+ *   - Containment parents are excluded from the executable task set: a task is a
+ *     container (not a work unit) iff at least one of its `parent_id` children is
+ *     itself in the actionable set. Such a container would otherwise emit as a
+ *     wave-1 plan task duplicating the work its children already cover — running
+ *     it would re-implement the children monolithically. A task whose children
+ *     are ALL done/cancelled/out-of-milestone (none in the actionable set), and a
+ *     task with no children at all, are leaf-equivalent work units and STAY in —
+ *     so residual parent-level work never silently vanishes from the plan. The
+ *     filter is by this child-presence predicate, never by `layer` alone.
  *   - Edges: a task's `deps[]` are its `blocked_by` predecessors that are
- *     themselves actionable (deps on done/out-of-scope tasks are dropped as
- *     already satisfied).
+ *     themselves IN-PLAN (actionable and not an excluded container). A dep on a
+ *     done/out-of-scope task is dropped as already satisfied. A dep pointing AT an
+ *     excluded container is re-targeted to that container's in-plan children
+ *     (the work the container stood for), so waves stay correct; a re-target that
+ *     would create a self-edge is dropped.
  *   - `wave` = longest-path depth + 1 (sources land in wave 1). Cycles error.
  *   - Plan task id = `<wave>.<seq-within-wave>`; the single step is `<id>.1`.
- *   - `mode` = `full` when >= 4 tasks, else `simple` (mirrors orchestrator
- *     auto-scale on step count, one step per task here).
+ *   - `mode` = `full` when >= 4 emitted (leaf) tasks, else `simple` (mirrors
+ *     orchestrator auto-scale on step count, one step per task here).
  *
  * Stdout (JSON): `{ plan, scrum_map, plan_path?, map_path? }`.
  * Stderr: one-line human summary.
@@ -146,6 +158,18 @@ export function runCompilePlanCmd(flags: CompilePlanCmdFlags): number {
     }
 
     const { plan, scrumMap, teamMap } = compile(store, actionable);
+    // The leaf-filter inside compile() preserves the deepest work units of any
+    // containment tree (a node with no in-plan child always survives), so a
+    // non-empty actionable set normally yields a non-empty plan. An empty plan
+    // here means every actionable task excluded the next via a malformed
+    // `parent_id` cycle (A parents B, B parents A) — surface it rather than
+    // emitting a zero-task plan run-state would reject.
+    if (plan.tasks.length === 0) {
+      process.stderr.write(
+        `scrum compile-plan: milestone '${milestoneId}' has actionable tasks but no executable leaves (every task is a containment parent — check for a parent_id cycle)\n`,
+      );
+      return 1;
+    }
     const payload: Record<string, unknown> = { plan, scrum_map: scrumMap, team_map: teamMap };
 
     if (flags.out !== undefined && flags.out.length > 0) {
@@ -179,24 +203,92 @@ export function runCompilePlanCmd(flags: CompilePlanCmdFlags): number {
 }
 
 /**
- * Build the plan + sidecar map from the actionable task set. `tasks` arrives
- * in `created_at ASC` order (listTasks default), which yields a stable
+ * Build the plan + sidecar map from the actionable task set. `actionable`
+ * arrives in `created_at ASC` order (listTasks default), which yields a stable
  * seq-within-wave assignment.
+ *
+ * Containment parents are dropped before compilation: a task with at least one
+ * in-plan child is a container, not a work unit (see `containerIds`). The
+ * remaining `tasks` are the executable LEAF set — the plan, scrum-map, team-map,
+ * and wave arithmetic all run over leaves only.
  */
 function compile(
   store: ScrumStore,
-  tasks: ScrumTask[],
+  actionable: ScrumTask[],
 ): { plan: Plan; scrumMap: Record<string, string>; teamMap: Record<string, string> } {
+  const actionableIds = new Set(actionable.map((t) => t.id));
+
+  // A parent_id referenced by some actionable task = a container WITH an in-plan
+  // child. Exactly those ids are excluded as containers. A parent whose children
+  // are all done/cancelled/out-of-milestone contributes no entry here (none of
+  // its children are actionable), so it survives as a leaf-equivalent work unit.
+  const containerIds = new Set<string>();
+  for (const task of actionable) {
+    if (task.parent_id !== null && actionableIds.has(task.parent_id)) {
+      containerIds.add(task.parent_id);
+    }
+  }
+
+  // The executable leaf set: actionable tasks that are not excluded containers.
+  // Plan ids, scrum-map, and waves are computed over THIS set.
+  const tasks = actionable.filter((t) => !containerIds.has(t.id));
   const inScope = new Set(tasks.map((t) => t.id));
 
-  // deps[scrumId] = actionable predecessors (blocked_by edges, intersected with scope).
+  // direct children (any layer) of each actionable task, for the transitive
+  // descendant walk that re-targets an edge pointing AT an excluded container.
+  const directChildren = new Map<string, ScrumTask[]>();
+  for (const task of actionable) {
+    if (task.parent_id !== null && actionableIds.has(task.parent_id)) {
+      const siblings = directChildren.get(task.parent_id) ?? [];
+      siblings.push(task);
+      directChildren.set(task.parent_id, siblings);
+    }
+  }
+
+  // The in-plan (leaf) descendants of an excluded container — the work the
+  // container stood for. A nested epic→story→task tree excludes BOTH the epic
+  // and the story, so an edge pointing at the epic must re-target to the
+  // task-layer leaves several levels down, not just its direct children.
+  // Memoized; a `visited` set guards a malformed `parent_id` cycle.
+  const leafDescendantsMemo = new Map<string, string[]>();
+  const leafDescendantsOf = (containerId: string): string[] => {
+    const cached = leafDescendantsMemo.get(containerId);
+    if (cached !== undefined) return cached;
+    const out = new Set<string>();
+    const visited = new Set<string>();
+    const walk = (id: string): void => {
+      if (visited.has(id)) return;
+      visited.add(id);
+      for (const child of directChildren.get(id) ?? []) {
+        if (containerIds.has(child.id)) walk(child.id);
+        else if (inScope.has(child.id)) out.add(child.id);
+      }
+    };
+    walk(containerId);
+    const list = [...out];
+    leafDescendantsMemo.set(containerId, list);
+    return list;
+  };
+
+  // deps[scrumId] = in-plan predecessors (blocked_by edges). A predecessor that
+  // is an excluded container is replaced by its in-plan leaf descendants; a
+  // predecessor outside scope (done/out-of-milestone) is dropped as satisfied. A
+  // re-target that lands back on the task itself (a child blocked_by its own
+  // ancestor) is dropped to avoid a self-edge.
   const deps = new Map<string, string[]>();
   for (const task of tasks) {
-    const predecessors = store
-      .getBlockedBy(task.id)
-      .map((d) => d.from_task_id)
-      .filter((id) => inScope.has(id));
-    deps.set(task.id, predecessors);
+    const resolved = new Set<string>();
+    for (const dep of store.getBlockedBy(task.id)) {
+      const from = dep.from_task_id;
+      if (inScope.has(from)) {
+        resolved.add(from);
+      } else if (containerIds.has(from)) {
+        for (const leaf of leafDescendantsOf(from)) {
+          if (leaf !== task.id) resolved.add(leaf);
+        }
+      }
+    }
+    deps.set(task.id, [...resolved]);
   }
 
   const level = computeLevels(tasks, deps);
