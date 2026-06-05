@@ -6,6 +6,14 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.8.1 — `scrum contributor register` is idempotent on slug (fixes #30)
+
+*(No `.claude/.prove.json` change, no store migration — behavior change only.)* Re-running `contributor register` against an existing slug no longer fails with a UNIQUE-constraint error. It now reconciles the row — provided flags override the stored fields, unset flags preserve them — and re-emits/merges the `contributors/<slug>.md` identity artifact, so a bare re-register repairs a registry row whose identity file was never emitted or was lost. The CT-UUID and created-* provenance never change: a provided `--id` that conflicts with the registered CT-UUID errors (exit 1), preserving attribution history.
+
+**Repair recipe** for registries with missing identity artifacts: for each row in `claude-prove scrum contributor list` without a matching `contributors/<slug>.md`, run `claude-prove scrum contributor register --slug <slug>` — the artifact is re-emitted from the stored row, no flags needed.
+
+No action required on update; existing workflows that relied on the duplicate-slug failure as a "does this contributor exist" probe should use `contributor list` instead.
+
 ## v3.7.0 — Role-bound team agents: generated per-(team,role) agent files + task→team assignment
 
 *(No `.claude/.prove.json` change — the scrum store migrates itself to v27 on first write. For teams registered before this version, run `claude-prove scrum team sync-agents` once to backfill the agent files.)* Roster role slots now bind to execution: each registered team gets three committed, natively-discoverable agent definitions, tasks can carry an owning team, and the dispatch surfaces name the team's agents for spawning.

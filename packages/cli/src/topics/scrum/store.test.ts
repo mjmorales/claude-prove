@@ -2670,6 +2670,60 @@ describe('ScrumStore — contributor registry (v12)', () => {
     expect(() => store.registerContributor({ slug: 'jane', id: 'ct-other' })).toThrow();
   });
 
+  test('getContributorBySlug round-trips a row and misses to null', () => {
+    const row = store.registerContributor({ slug: 'jane', github: 'janedoe' });
+    expect(store.getContributorBySlug('jane')).toEqual(row);
+    expect(store.getContributorBySlug('nobody')).toBeNull();
+  });
+
+  test('reconcileContributor overrides provided fields and preserves unset ones', () => {
+    store.registerContributor({
+      slug: 'jane',
+      displayName: 'Jane Doe',
+      github: 'janedoe',
+      email: 'jane@example.com',
+    });
+
+    const row = store.reconcileContributor({ slug: 'jane', github: 'jane-new' });
+    expect(row.github).toBe('jane-new');
+    // Unset fields preserve the stored values.
+    expect(row.display_name).toBe('Jane Doe');
+    expect(row.email).toBe('jane@example.com');
+    expect(row.status).toBe('active');
+    expect(store.getContributorBySlug('jane')).toEqual(row);
+  });
+
+  test('reconcileContributor keeps id and created-* provenance, bumps the last-touch pair', () => {
+    const registered = store.registerContributor({
+      slug: 'jane',
+      createdBy: 'alice',
+      createdAt: '2026-01-01T00:00:00Z',
+    });
+
+    const row = store.reconcileContributor({
+      slug: 'jane',
+      modifiedBy: 'bob',
+      modifiedAt: '2026-02-01T00:00:00Z',
+    });
+    expect(row.id).toBe(registered.id);
+    expect(row.created_by).toBe('alice');
+    expect(row.created_at).toBe('2026-01-01T00:00:00Z');
+    expect(row.last_modified_by).toBe('bob');
+    expect(row.last_modified_at).toBe('2026-02-01T00:00:00Z');
+  });
+
+  test('reconcileContributor guards the identity: a matching id passes, a mismatch throws', () => {
+    store.registerContributor({ slug: 'jane', id: 'ct-fixed' });
+    expect(store.reconcileContributor({ slug: 'jane', id: 'ct-fixed' }).id).toBe('ct-fixed');
+    expect(() => store.reconcileContributor({ slug: 'jane', id: 'ct-other' })).toThrow(
+      /minted once and never changed/,
+    );
+  });
+
+  test('reconcileContributor throws on an unknown slug', () => {
+    expect(() => store.reconcileContributor({ slug: 'nobody' })).toThrow(/unknown contributor/);
+  });
+
   test('listContributors orders by slug and filters by status', () => {
     store.registerContributor({ slug: 'zed' });
     store.registerContributor({ slug: 'amy' });

@@ -283,6 +283,28 @@ export interface RegisterContributorInput {
 }
 
 /**
+ * Input to `reconcileContributor` — the merge half of an idempotent
+ * re-register. `slug` keys the existing row. Field semantics differ from
+ * registration: `undefined` means "preserve the stored value", a present value
+ * overrides it. `id` never merges — when present it is an identity GUARD that
+ * must match the stored CT-UUID (a mismatch throws), since the id is minted
+ * once and never changed.
+ */
+export interface ReconcileContributorInput {
+  slug: string;
+  /** Identity guard — must equal the stored CT-UUID when present. */
+  id?: string;
+  status?: ContributorStatus;
+  displayName?: string;
+  github?: string;
+  email?: string;
+  /** Agent performing the reconcile; defaults to `PROVE_AGENT` else NULL. */
+  modifiedBy?: string | null;
+  /** ISO-8601 timestamp; defaults to now(). */
+  modifiedAt?: string;
+}
+
+/**
  * Lookup key for `resolveContributor` (v12) — the executing worker / event
  * author to map onto a contributor. Resolution tries `github` first, then falls
  * back to `email`. At least one must be present; both absent resolves to null.
@@ -2337,8 +2359,8 @@ export class ScrumStore {
    * from `slug` when omitted (see `mintContributorId`); minted once and never
    * changed, so attribution survives a renamed handle or email. `slug` is
    * UNIQUE — re-registering the same slug throws a UNIQUE-constraint error
-   * rather than silently overwriting (a contributor's keys are edited
-   * deliberately, not clobbered by a re-register).
+   * rather than silently overwriting; callers that mean to repair or merge an
+   * existing row route through `reconcileContributor` instead.
    *
    * `created_by`/`last_modified_by` are seeded to the same agent and
    * `created_at`/`last_modified_at` to the same instant, mirroring how the
@@ -2382,6 +2404,61 @@ export class ScrumStore {
       id,
     ) as Contributor | null;
     return row ?? null;
+  }
+
+  /** Fetch one contributor by slug (the UNIQUE registry key), or null if missing. */
+  getContributorBySlug(slug: string): Contributor | null {
+    const row = this.prep(
+      `SELECT ${CONTRIBUTOR_COLUMNS} FROM scrum_contributors WHERE slug = ?`,
+    ).get(slug) as Contributor | null;
+    return row ?? null;
+  }
+
+  /**
+   * Reconcile an EXISTING contributor row — the merge half of an idempotent
+   * re-register (`registerContributor` throws on a duplicate slug, so repair
+   * routes here). Present input fields override the stored values; absent
+   * (`undefined`) fields are preserved, so a bare reconcile only bumps the
+   * last-touch provenance pair — which makes it the re-emit path for a lost
+   * `contributors/<slug>.md` identity artifact. The CT-UUID and the created-*
+   * provenance pair never change: a present `id` acts as an identity guard and
+   * a mismatch throws, since silently re-keying would orphan all attribution
+   * history stamped under the original id.
+   */
+  reconcileContributor(input: ReconcileContributorInput): Contributor {
+    const existing = this.getContributorBySlug(input.slug);
+    if (existing === null) {
+      throw new Error(`unknown contributor slug '${input.slug}' — register it first`);
+    }
+    if (input.id !== undefined && input.id.length > 0 && input.id !== existing.id) {
+      throw new Error(
+        `slug '${input.slug}' is registered as ${existing.id}; --id ${input.id} conflicts (the CT-UUID is minted once and never changed)`,
+      );
+    }
+    const row: Contributor = {
+      ...existing,
+      status: input.status ?? existing.status,
+      display_name: input.displayName ?? existing.display_name,
+      github: input.github ?? existing.github,
+      email: input.email ?? existing.email,
+      last_modified_by: this.actor(input.modifiedBy),
+      last_modified_at: input.modifiedAt ?? isoNow(),
+    };
+    this.prep(
+      `UPDATE scrum_contributors
+         SET status = ?, display_name = ?, github = ?, email = ?,
+             last_modified_by = ?, last_modified_at = ?
+       WHERE slug = ?`,
+    ).run(
+      row.status,
+      row.display_name,
+      row.github,
+      row.email,
+      row.last_modified_by,
+      row.last_modified_at,
+      row.slug,
+    );
+    return row;
   }
 
   /**

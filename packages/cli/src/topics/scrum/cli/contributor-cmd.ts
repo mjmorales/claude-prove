@@ -9,6 +9,13 @@
  *                              missing file gets the full skeleton; an existing
  *                              file gets the registry frontmatter MERGED in with
  *                              its authored body preserved. Prints the JSON row.
+ *                              IDEMPOTENT on slug: re-running against an existing
+ *                              slug reconciles the row (provided flags override
+ *                              the stored fields, unset flags preserve them) and
+ *                              re-emits/merges the artifact, so a bare re-register
+ *                              repairs a missing identity file. A provided --id
+ *                              must match the registered CT-UUID — a mismatch
+ *                              errors, the id is minted once and never changed.
  *   list                       [--status active|inactive] [--human]
  *                              List the registry, ordered by slug.
  *   resolve [--github G] [--email E]
@@ -37,7 +44,8 @@
  *
  * Exit codes:
  *   0  success
- *   1  usage error, unknown action, duplicate slug, or a resolve miss
+ *   1  usage error, unknown action, an --id conflicting with the registered
+ *      CT-UUID, or a resolve miss
  *
  * On-disk reconciliation: `register` extends the SAME `contributor` identity
  * artifact that `install bootstrap-identity` scaffolds — a markdown file under
@@ -142,18 +150,37 @@ function doRegister(store: ScrumStore, workspaceRoot: string, flags: Contributor
   const status = normalizeStatus(flags.status);
   if (status === INVALID_STATUS) return 1;
 
-  const row = store.registerContributor({
-    slug: flags.slug,
-    id: flags.id,
-    status,
-    displayName: emptyToNull(flags.displayName),
-    github: emptyToNull(flags.github),
-    email: emptyToNull(flags.email),
-  });
+  // Idempotent on slug: a fresh slug inserts, an existing one reconciles —
+  // provided flags override the stored fields, unset flags preserve them, and
+  // the artifact write below re-emits/merges either way. This is the repair
+  // path for a registry row whose identity artifact was never emitted or was
+  // lost; an --id conflicting with the registered CT-UUID throws in the store.
+  const existing = store.getContributorBySlug(flags.slug);
+  const row =
+    existing === null
+      ? store.registerContributor({
+          slug: flags.slug,
+          id: flags.id,
+          status,
+          displayName: emptyToNull(flags.displayName),
+          github: emptyToNull(flags.github),
+          email: emptyToNull(flags.email),
+        })
+      : store.reconcileContributor({
+          slug: flags.slug,
+          id: emptyToUndefined(flags.id),
+          status,
+          displayName: emptyToUndefined(flags.displayName),
+          github: emptyToUndefined(flags.github),
+          email: emptyToUndefined(flags.email),
+        });
 
   const artifactPath = writeContributorArtifact(workspaceRoot, row);
   process.stdout.write(`${JSON.stringify(row)}\n`);
-  process.stderr.write(`scrum contributor register: ${row.id} (${row.slug}) -> ${artifactPath}\n`);
+  const mode = existing === null ? '' : ' (reconciled)';
+  process.stderr.write(
+    `scrum contributor register: ${row.id} (${row.slug}) -> ${artifactPath}${mode}\n`,
+  );
   return 0;
 }
 
@@ -183,6 +210,14 @@ function normalizeStatus(
 /** Coerce an empty-string flag to null so blank flags read as "unset". */
 function emptyToNull(raw: string | undefined): string | null {
   return raw !== undefined && raw.length > 0 ? raw : null;
+}
+
+/**
+ * Coerce an empty/unset flag to undefined for the reconcile path, where
+ * `undefined` means "preserve the stored value" rather than "set to null".
+ */
+function emptyToUndefined(raw: string | undefined): string | undefined {
+  return raw !== undefined && raw.length > 0 ? raw : undefined;
 }
 
 /**

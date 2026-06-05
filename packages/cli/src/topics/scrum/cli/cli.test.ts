@@ -2669,7 +2669,57 @@ describe('runContributorCmd', () => {
     expect(content).toContain('Owns the data pipeline.');
   });
 
-  test('register rejecting a duplicate slug leaves the existing artifact untouched', () => {
+  test('register re-run reconciles an existing slug: overrides provided fields, preserves the rest', () => {
+    const first = withCapture(() =>
+      runContributorCmd('register', {
+        slug: 'zoe',
+        displayName: 'Zoe',
+        github: 'zoe-gh',
+        workspaceRoot: workspace,
+      }),
+    );
+    const minted = (JSON.parse(first.stdout.trim()) as ContributorRow).id;
+
+    const res = withCapture(() =>
+      runContributorCmd('register', { slug: 'zoe', github: 'zoe-new', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+    expect(res.stderr).toContain('(reconciled)');
+    const row = JSON.parse(res.stdout.trim()) as ContributorRow;
+    // Identity survives the re-register; provided flags override, unset preserve.
+    expect(row.id).toBe(minted);
+    expect(row.github).toBe('zoe-new');
+    expect(row.display_name).toBe('Zoe');
+
+    const content = readFileSync(join(workspace, 'contributors', 'zoe.md'), 'utf8');
+    // The frontmatter mirror re-asserts the reconciled row; the authored body
+    // (here the first registration's skeleton) is preserved verbatim.
+    expect(content).toContain('  github: zoe-new');
+    expect(content).not.toContain('  github: zoe-gh');
+    expect(content).toContain('- GitHub: zoe-gh');
+  });
+
+  test('register re-run re-emits a missing identity artifact for an existing row', () => {
+    // The repair path: a registry row whose contributors/<slug>.md was never
+    // emitted (or was lost) gets its artifact back via a bare re-register.
+    const first = withCapture(() =>
+      runContributorCmd('register', { slug: 'zoe', github: 'zoe-gh', workspaceRoot: workspace }),
+    );
+    const minted = (JSON.parse(first.stdout.trim()) as ContributorRow).id;
+    const path = join(workspace, 'contributors', 'zoe.md');
+    rmSync(path);
+
+    const res = withCapture(() =>
+      runContributorCmd('register', { slug: 'zoe', id: minted, workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+    expect(existsSync(path)).toBe(true);
+    const content = readFileSync(path, 'utf8');
+    expect(content).toContain(`id: ${minted}`);
+    expect(content).toContain('github: zoe-gh');
+  });
+
+  test('register re-run with a conflicting --id exits 1 and leaves row and artifact untouched', () => {
     withCapture(() =>
       runContributorCmd('register', { slug: 'zoe', github: 'zoe-gh', workspaceRoot: workspace }),
     );
@@ -2677,10 +2727,20 @@ describe('runContributorCmd', () => {
     const before = readFileSync(path, 'utf8');
 
     const res = withCapture(() =>
-      runContributorCmd('register', { slug: 'zoe', github: 'zoe-new', workspaceRoot: workspace }),
+      runContributorCmd('register', {
+        slug: 'zoe',
+        id: 'ct-other',
+        github: 'zoe-new',
+        workspaceRoot: workspace,
+      }),
     );
     expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('minted once and never changed');
     expect(readFileSync(path, 'utf8')).toBe(before);
+
+    const list = withCapture(() => runContributorCmd('list', { workspaceRoot: workspace }));
+    const rows = JSON.parse(list.stdout.trim()) as ContributorRow[];
+    expect(rows.find((r) => r.slug === 'zoe')?.github).toBe('zoe-gh');
   });
 
   test('register prepends frontmatter onto a bare-markdown artifact, keeping its content', () => {
