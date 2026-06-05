@@ -79,7 +79,7 @@ claude-prove cafi status 2>&1
 ```
 
 - Pass: reports indexed files
-- Fail: errors or index missing — fix: `claude-prove cafi index`
+- Fail: errors or index missing — fix: run `/prove:index`
 
 #### 2.2: Docker
 
@@ -120,7 +120,7 @@ claude-prove cafi status 2>&1
 ```
 
 - Pass: up to date
-- Warn: N files changed — fix: `claude-prove cafi index`
+- Warn: N files changed — fix: run `/prove:index`
 
 #### 3.2: Orphaned Worktrees
 

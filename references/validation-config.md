@@ -67,7 +67,7 @@ A fully-featured `.claude/.prove.json` exercising every top-level key the schema
     "cafi": {
       "enabled": true,
       "scope": "user",
-      "config": { "excludes": ["vendor/", "generated/"], "max_file_size": 102400, "concurrency": 3 }
+      "config": { "excludes": ["vendor/", "generated/"], "max_file_size": 102400, "batch_size": 25 }
     },
     "acb": {
       "enabled": true,

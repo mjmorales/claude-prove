@@ -35,8 +35,9 @@ Examples below omit the prefix.
 
 ### cafi — content-addressable file index + routing hints
 
-Actions: `index [--force]` `status` `get <sha|path>` `lookup <keyword>` `context` `gate` `clear`. Flag: `--project-root`.
+Actions: `plan [--force] [--batch-size N]` `save [--file <p>|stdin]` `status` `get <path>` `lookup <keyword>` `context` `gate` `clear`. Flag: `--project-root`.
 Ex: `cafi lookup scrum`. Run `cafi context`/`cafi lookup` before Glob/Grep.
+`plan` emits the batched new/stale delta (mechanical: walk + triage + hash + diff; no model); the driver session describes those files and lands them through `save`, which validates per-file (recomputed disk hash must equal the payload hash; non-empty <=600-char description) and merges under a cache lock — rejections come back as `{ path, reason }` for re-planning. The describe loop is driven by `/prove:index`; there is no `index` action.
 
 ### run-state — orchestrator run CRUD on `.prove/runs/<branch>/<slug>/`
 

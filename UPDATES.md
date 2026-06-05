@@ -8,6 +8,19 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — CAFI: the describe loop moves into the driver session (`cafi index` removed)
+
+*(No `.claude/.prove.json` migration, no store migration — CLI verb surface + skill behavior.)* `cafi index` used to shell out to an external `claude -p - --model haiku` process to generate routing-hint descriptions — the one place the CLI spawned a model, with the failure modes to match (silently empty descriptions when the `claude` binary was unavailable, fragile JSON parsing, hard 8KB content truncation). The describe loop is now driven by the Claude session itself, split along the engine boundary:
+
+- **`cafi plan [--force] [--batch-size N]`** (new) — the mechanical delta: walk + triage + hash + diff, emitted as batched JSON (`{ total, new, stale, deleted, unchanged, batches }`). Read-only except stat backfill; never prunes, never calls a model.
+- **`cafi save [--file <p>|stdin]`** (new) — the validated merge: per-file floor (recomputed disk hash must equal the payload hash, non-empty ≤600-char description), deletion pruning, and a cache lockfile so parallel batch agents can save concurrently. Rejections return as `{ path, reason }` (`hash-drift` | `deleted` | `invalid-description` | `invalid-path`) for re-planning.
+- **`/prove:index`** is the driver: it routes the delta by size — ≤10 files described inline, 11–50 via Agent-tool fan-out (one subagent per batch, each self-saving), >50 via a Workflow pipeline gated by an explicit confirmation. A stale entry keeps its old description and hash until `save` lands the replacement, so `status`, `lookup`, and the Glob/Grep gate stay truthful mid-build.
+- **`cafi index` exits 1** with a pointer to `/prove:index`. The read path — `status`, `get`, `lookup`, `context`, `clear`, the `gate` hook — and the `.prove/file-index.json` format are unchanged; existing indexes keep working with no rebuild.
+
+Migration: replace any scripted `claude-prove cafi index` invocation with running `/prove:index` in a Claude Code session — there is no headless equivalent by design ("prove never spawns Claude — you do"). A `tools.cafi.config.concurrency` key is now ignored (describe parallelism belongs to the driver's fan-out); it is harmless to leave in place and there is nothing to migrate. `batch_size`, `excludes`, `max_file_size`, and `triage` keep their meaning.
+
+Auto-adoption: full — the new verbs land in the compiled binary and the rewritten skill ships with the plugin; no action required on update beyond installing the new release.
+
 ## v3.10.2 — Slashed branch names get a flat, percent-encoded run directory
 
 *(No `.claude/.prove.json` change, no store migration — on-disk run layout for slashed branch names only.)* A run initialized with a branch name containing `/` (git-flow style: `feat/login`, `orchestrator/<slug>`) used to nest its directory deeper than the canonical two-level `.prove/runs/<branch>/<slug>/` layout — `runs/feat/login/<slug>/` — which silently hid the run from every two-level enumerator: the Stop/SubagentStop/SessionStart hooks, `run-state ls`/`show --summary`, branch autodetection, and the scrum reconciler's run sweep.
