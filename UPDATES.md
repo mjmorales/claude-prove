@@ -8,7 +8,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Unreleased — CAFI: the describe loop moves into the driver session (`cafi index` removed)
+## v3.11.0 — CAFI: the describe loop moves into the driver session (`cafi index` removed)
 
 *(No `.claude/.prove.json` migration, no store migration — CLI verb surface + skill behavior.)* `cafi index` used to shell out to an external `claude -p - --model haiku` process to generate routing-hint descriptions — the one place the CLI spawned a model, with the failure modes to match (silently empty descriptions when the `claude` binary was unavailable, fragile JSON parsing, hard 8KB content truncation). The describe loop is now driven by the Claude session itself, split along the engine boundary:
 
