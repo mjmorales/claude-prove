@@ -8,7 +8,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Unreleased — Lore supersession + `scrum lore promote`/`supersede` (store v28)
+## v3.13.0 — Lore supersession + `scrum lore promote`/`supersede` (store v28)
 
 *(Store migration v28 — auto-applies on the next `claude-prove scrum` open; no `.claude/.prove.json` migration.)* `scrum_lores` gains the compaction lifecycle: `superseded_by` (a typed soft reference — `lore:<id>` for a consolidation, `decision:<id>` for a promotion) plus `reason`. Rows are never edited or deleted — a retired entry keeps its body, author, and timestamp; only the pointer lands, and a supersession is resolved once. New CLI surface:
 
