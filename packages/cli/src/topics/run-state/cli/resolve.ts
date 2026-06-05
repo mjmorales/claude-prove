@@ -1,7 +1,7 @@
 /**
  * Slug + branch + runs-root resolution for every `run-state` CLI action.
  *
- * Matches `tools/run_state/__main__.py::_resolve_paths` behavior exactly:
+ * Resolution order:
  *  1. runs_root  = --runs-root || $CLAUDE_PROJECT_DIR/.prove/runs || cwd/.prove/runs
  *  2. slug       = --slug || $PROVE_RUN_SLUG || _autodetectSlug()
  *  3. branch     = --branch || $PROVE_RUN_BRANCH || _autodetectBranch(runsRoot, slug)
@@ -17,7 +17,7 @@
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { RunPaths } from '../paths';
+import { RunPaths, decodeBranchDir } from '../paths';
 
 export interface RunSelection {
   runsRoot?: string;
@@ -145,5 +145,8 @@ function autodetectBranch(runsRoot: string, slug: string): string | undefined {
     if (firstHit['state.json'] !== undefined) break; // highest-priority hit; done.
   }
 
-  return firstHit['state.json'] ?? firstHit['plan.json'] ?? firstHit['prd.json'];
+  const dirName = firstHit['state.json'] ?? firstHit['plan.json'] ?? firstHit['prd.json'];
+  // Dir names are percent-encoded (`encodeBranchDir`); resolution returns the
+  // logical branch so downstream `RunPaths.forRun` re-encodes to the same dir.
+  return dirName === undefined ? undefined : decodeBranchDir(dirName);
 }

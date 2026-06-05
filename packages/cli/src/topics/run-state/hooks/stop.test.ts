@@ -111,6 +111,59 @@ describe('runStop', () => {
     }
   });
 
+  test('reconciles a run whose branch name contains slashes (percent-encoded dir)', () => {
+    const root = mkProject();
+    try {
+      // initRun writes the dir as `feat%2Flogin`; the hook must enumerate it
+      // and report the logical branch name in the summary.
+      writeState(root, 'feat%2Flogin', 'demo', {
+        schema_version: '1',
+        kind: 'state',
+        run_status: 'running',
+        slug: 'demo',
+        branch: 'feat/login',
+        updated_at: 't',
+        tasks: [
+          {
+            id: '1.1',
+            status: 'in_progress',
+            started_at: 't',
+            ended_at: '',
+            review: { verdict: 'pending', notes: '', reviewer: '', reviewed_at: '' },
+            steps: [
+              {
+                id: '1.1.1',
+                status: 'in_progress',
+                started_at: 't',
+                ended_at: '',
+                commit_sha: '',
+                validator_summary: {
+                  build: 'pending',
+                  lint: 'pending',
+                  test: 'pending',
+                  custom: 'pending',
+                  llm: 'pending',
+                },
+                halt_reason: '',
+              },
+            ],
+          },
+        ],
+        dispatch: { dispatched: [] },
+      });
+
+      const result = runStop({ cwd: root });
+      expect(result.stdout).toContain('feat/login/demo 1.1.1');
+
+      const after = JSON.parse(
+        readFileSync(join(root, '.prove', 'runs', 'feat%2Flogin', 'demo', 'state.json'), 'utf8'),
+      );
+      expect(after.tasks[0].steps[0].status).toBe('halted');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('skips a run with live task worktrees — background agents in flight', () => {
     const root = mkProject();
     try {

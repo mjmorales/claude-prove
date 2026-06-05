@@ -9,6 +9,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { decodeBranchDir } from '../paths';
 import { sortedChildren, statSafe } from './fs-helpers';
 import { defaultRunsRoot } from './resolve';
 
@@ -30,8 +31,10 @@ export function runLs(flags: LsFlags): number {
       const runDir = join(branchDir, slug);
       if (!statSafe(runDir)?.isDirectory()) continue;
       const stateFile = join(runDir, 'state.json');
+      // Dir names are percent-encoded; rows show the logical branch.
+      const logicalBranch = decodeBranchDir(branch);
       if (!existsSync(stateFile)) {
-        rows.push({ key: `${branch}/${slug}`, status: '(no state)', current: '' });
+        rows.push({ key: `${logicalBranch}/${slug}`, status: '(no state)', current: '' });
         continue;
       }
       try {
@@ -40,12 +43,12 @@ export function runLs(flags: LsFlags): number {
           current_step?: string;
         };
         rows.push({
-          key: `${branch}/${slug}`,
+          key: `${logicalBranch}/${slug}`,
           status: state.run_status ?? 'unknown',
           current: state.current_step ?? '',
         });
       } catch {
-        rows.push({ key: `${branch}/${slug}`, status: '(invalid json)', current: '' });
+        rows.push({ key: `${logicalBranch}/${slug}`, status: '(invalid json)', current: '' });
       }
     }
   }

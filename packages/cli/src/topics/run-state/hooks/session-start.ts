@@ -6,12 +6,11 @@
  * `hookSpecificOutput.additionalContext`, so Claude inherits awareness of
  * in-flight work at resume|compact time. Silent exit 0 when no active run
  * exists.
- *
- * Port of `tools/run_state/hook_session_start.py`.
  */
 
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { decodeBranchDir } from '../paths';
 import { isDir, readStateJson } from './fs-utils';
 import { pyJsonDump } from './json-compat';
 import { EMPTY_HOOK_RESULT, type HookResult, readCwd } from './types';
@@ -55,7 +54,10 @@ function collectActiveRuns(runsRoot: string): ActiveRunSummary[] {
       if (data.run_status === 'completed') continue;
 
       out.push({
-        branch: typeof data.branch === 'string' && data.branch ? data.branch : branch,
+        // Prefer the state's logical branch; the dir-name fallback decodes
+        // the percent-encoded on-disk form back to the logical name.
+        branch:
+          typeof data.branch === 'string' && data.branch ? data.branch : decodeBranchDir(branch),
         slug: typeof data.slug === 'string' && data.slug ? data.slug : slug,
         run_status: typeof data.run_status === 'string' ? data.run_status : '?',
         current_step: typeof data.current_step === 'string' ? data.current_step : '',

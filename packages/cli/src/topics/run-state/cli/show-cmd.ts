@@ -6,7 +6,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { RunPaths } from '../paths';
+import { RunPaths, decodeBranchDir, encodeBranchDir } from '../paths';
 import { renderPlan, renderPrd, renderReport, renderState, renderSummary } from '../render';
 import { loadState } from '../state';
 import type { PlanData, PrdData, ReportData, StateData } from '../state';
@@ -268,10 +268,14 @@ function runSummarySweep(
     console.error(`error: no runs root at ${runsRoot}`);
     return 1;
   }
-  const branches = branchFilter ? [branchFilter] : sortedChildren(runsRoot);
+  // Enumerated entries are on-disk (percent-encoded) dir names; an explicit
+  // filter is a logical branch name. Normalize to logical, encode at joins.
+  const branches = branchFilter
+    ? [branchFilter]
+    : sortedChildren(runsRoot).map((name) => decodeBranchDir(name));
   let emitted = 0;
   for (const branch of branches) {
-    const branchDir = join(runsRoot, branch);
+    const branchDir = join(runsRoot, encodeBranchDir(branch));
     for (const slug of sortedChildren(branchDir)) {
       // Route reads through RunPaths + loadState so the lock-file sidecar is
       // touched consistently with every other state.json reader in this module.

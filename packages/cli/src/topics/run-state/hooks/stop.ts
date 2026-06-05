@@ -19,7 +19,7 @@
 
 import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { RunPaths } from '../paths';
+import { RunPaths, decodeBranchDir } from '../paths';
 import { type ReconcileChange, reconcile } from '../state';
 import { isDir, readStateJson } from './fs-utils';
 import { pyJsonDump } from './json-compat';
@@ -72,10 +72,13 @@ function iterActiveRuns(runsRoot: string): RunLocator[] {
       if (data.kind !== 'state') continue;
       if (data.run_status === 'completed') continue;
 
+      // `branch` here is the on-disk dir name; the locator carries the
+      // logical branch so display and forRun (which re-encodes) agree.
+      const logicalBranch = decodeBranchDir(branch);
       out.push({
-        branch,
+        branch: logicalBranch,
         slug,
-        paths: RunPaths.forRun(runsRoot, branch, slug),
+        paths: RunPaths.forRun(runsRoot, logicalBranch, slug),
       });
     }
   }

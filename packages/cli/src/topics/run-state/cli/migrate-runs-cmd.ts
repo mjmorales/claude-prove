@@ -31,6 +31,7 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { type MigrationPlan, planContentMigration } from '../content-migrate';
+import { encodeBranchDir } from '../paths';
 import { defaultRunsRoot } from './resolve';
 
 export interface MigrateRunsFlags {
@@ -70,12 +71,14 @@ function discoverRunDirs(runsRoot: string, branch?: string, slug?: string): stri
   if (!existsSync(runsRoot)) return [];
 
   if (branch && slug) {
-    const dir = join(runsRoot, branch, slug);
+    const dir = join(runsRoot, encodeBranchDir(branch), slug);
     return isRunDir(dir) ? [dir] : [];
   }
 
   const out: string[] = [];
-  const branches = branch ? [branch] : listDirs(runsRoot);
+  // Enumerated entries are already on-disk dir names; an explicit --branch
+  // is a logical name and must be encoded to its dir form.
+  const branches = branch ? [encodeBranchDir(branch)] : listDirs(runsRoot);
   for (const b of branches) {
     const branchDir = join(runsRoot, b);
     for (const s of listDirs(branchDir)) {

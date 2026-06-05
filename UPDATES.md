@@ -8,6 +8,16 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — Slashed branch names get a flat, percent-encoded run directory
+
+*(No `.claude/.prove.json` change, no store migration — on-disk run layout for slashed branch names only.)* A run initialized with a branch name containing `/` (git-flow style: `feat/login`, `orchestrator/<slug>`) used to nest its directory deeper than the canonical two-level `.prove/runs/<branch>/<slug>/` layout — `runs/feat/login/<slug>/` — which silently hid the run from every two-level enumerator: the Stop/SubagentStop/SessionStart hooks, `run-state ls`/`show --summary`, branch autodetection, and the scrum reconciler's run sweep.
+
+The branch path component is now percent-encoded (`%` → `%25`, then `/` → `%2F`): branch `feat/login` lands at `runs/feat%2Flogin/<slug>/` and every enumerator finds it; display and autodetection round-trip back to the logical branch name. Branch names without `/` or `%` encode to themselves, so **existing flat layouts are byte-identical — no migration needed**.
+
+Corner case: a run that was previously initialized with a slashed branch sits in a nested directory the CLI no longer addresses. Rename it to the encoded form, e.g. `mv .prove/runs/feat/login/<slug> ".prove/runs/feat%2Flogin/<slug>"` (and remove the emptied nesting dirs). Such runs were already invisible to hooks and listings, so most projects have none.
+
+Auto-adoption: full — the fix lands in the compiled binary; no action required on update beyond installing the new release.
+
 ## Unreleased — Stop hook no longer halts runs with background agents in flight
 
 *(No `.claude/.prove.json` change, no store migration — hook behavior only.)* The session Stop hook reconciler halts any step still `in_progress` with no completion recorded — but Stop fires at the end of every driver turn, not only at true session termination. Under orchestrator full-mode, the driver dispatches background implementation agents into sub-task worktrees and yields its turn, so every started step was spuriously halted (`halt_reason: "session ended with step still in_progress — no completion recorded"`) seconds after dispatch, forcing manual re-start/complete.

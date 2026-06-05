@@ -9,14 +9,12 @@
  * Scope is narrow on purpose: only the run tied to the subagent's CWD
  * (resolved via `.prove-wt-slug.txt`) is touched. Runs not tied to this
  * worktree are left alone so the hook never interferes with unrelated work.
- *
- * Port of `tools/run_state/hook_subagent_stop.py`.
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { headSha, mainWorktreeRoot } from '@claude-prove/shared';
-import { RunPaths } from '../paths';
+import { RunPaths, decodeBranchDir } from '../paths';
 import {
   type ReconcileChange,
   type StateData,
@@ -104,8 +102,8 @@ function newCommitsSince(cwd: string, isoTs: string): boolean {
   return headUnix >= startedUnix;
 }
 
-/** Mirror Python's single-level glob `<runs_root>/<any>/<slug>/state.json` —
- *  enumerate immediate branch dirs, probe for the slug. Returns first match. */
+/** Single-level scan `<runs_root>/<any>/<slug>/state.json` — enumerate
+ *  immediate branch dirs, probe for the slug. Returns first match. */
 function findPaths(mainRoot: string, slug: string): { branch: string; paths: RunPaths } | null {
   const runsRoot = join(mainRoot, '.prove', 'runs');
   if (!existsSync(runsRoot)) return null;
@@ -120,7 +118,10 @@ function findPaths(mainRoot: string, slug: string): { branch: string; paths: Run
   for (const branch of branches) {
     const statePath = join(runsRoot, branch, slug, 'state.json');
     if (!existsSync(statePath)) continue;
-    return { branch, paths: RunPaths.forRun(runsRoot, branch, slug) };
+    // `branch` is the on-disk dir name; decode so forRun (which re-encodes)
+    // resolves the same dir and callers see the logical branch.
+    const logicalBranch = decodeBranchDir(branch);
+    return { branch: logicalBranch, paths: RunPaths.forRun(runsRoot, logicalBranch, slug) };
   }
   return null;
 }

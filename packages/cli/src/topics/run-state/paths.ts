@@ -1,13 +1,30 @@
 /**
  * Filesystem layout resolver for a single `.prove/runs/<branch>/<slug>/` run.
  *
- * Ported 1:1 from the `RunPaths` dataclass in `tools/run_state/state.py`.
- * On-disk field names (root, prd, plan, state, state_lock, reports_dir) match
- * the Python dataclass attribute names — downstream hooks and sibling Python
- * code in `tools/run_state/` read these paths by their canonical shape, so
- * any drift here silently breaks them during the cross-language cutover.
+ * The on-disk names (root, prd, plan, state, state_lock, reports_dir) are
+ * canonical: downstream hooks and stored run artifacts address these paths
+ * by shape, so any drift here silently breaks them.
  */
 import { join } from 'node:path';
+
+/**
+ * Branch names may contain `/` (git-flow style: `feat/login`), which would
+ * nest the run directory deeper than the canonical two-level
+ * `<runs_root>/<branch>/<slug>/` layout and hide the run from every
+ * enumerator (hooks, ls, autodetect). The branch path component is
+ * therefore percent-encoded (`%` → `%25` first, then `/` → `%2F`). Names
+ * without those characters encode to themselves, so existing flat layouts
+ * are untouched.
+ */
+export function encodeBranchDir(branch: string): string {
+  return branch.replaceAll('%', '%25').replaceAll('/', '%2F');
+}
+
+/** Inverse of `encodeBranchDir` — maps an on-disk branch dir name back to
+ *  the logical branch name. */
+export function decodeBranchDir(dirName: string): string {
+  return dirName.replaceAll('%2F', '/').replaceAll('%25', '%');
+}
 
 export interface RunPathsData {
   /** Absolute path to `<runs_root>/<branch>/<slug>/`. */
@@ -61,10 +78,12 @@ export class RunPaths implements RunPathsData {
   /**
    * Resolve layout for `<runs_root>/<branch>/<slug>/`. Does not touch the
    * filesystem — pure path computation. `initRun` creates the directory
-   * structure.
+   * structure. `branch` is the logical branch name; the dir component is
+   * percent-encoded via `encodeBranchDir`, so callers holding an on-disk
+   * dir name must `decodeBranchDir` it first or the `%` re-encodes.
    */
   static forRun(runsRoot: string, branch: string, slug: string): RunPaths {
-    const root = join(runsRoot, branch, slug);
+    const root = join(runsRoot, encodeBranchDir(branch), slug);
     return new RunPaths({
       root,
       prd: join(root, 'prd.json'),
