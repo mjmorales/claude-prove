@@ -102,12 +102,21 @@ describe('ScrumStore — tasks', () => {
     expect(store.getTask('t1')?.team_slug).toBeNull();
   });
 
-  test('createTask persists an explicit team_slug verbatim (no registry validation here)', () => {
-    // The store layer never checks the team registry — an arbitrary slug
-    // persists; membership is validated at the CLI boundary on `--team`.
+  test('createTask persists a registered team_slug', () => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
     const task = seedTask('t1', { teamSlug: 'payments' });
     expect(task.team_slug).toBe('payments');
     expect(store.getTask('t1')?.team_slug).toBe('payments');
+  });
+
+  test('createTask rejects an unknown team_slug at the store boundary', () => {
+    expect(() => seedTask('t1', { teamSlug: 'ghost' })).toThrow(/unknown team_slug 'ghost'/);
+  });
+
+  test('createTask rejects a disbanded (inactive) team_slug', () => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.teamTerminate('payments', 'wound down');
+    expect(() => seedTask('t1', { teamSlug: 'payments' })).toThrow(/team 'payments' is inactive/);
   });
 
   test('createTask with parentId persists the edge and validates parent existence', () => {
@@ -499,6 +508,90 @@ describe('ScrumStore — updateTaskMilestone', () => {
 
     const updated = store.updateTaskMilestone('t1', 'm1');
     expect(updated.milestone_id).toBe('m1');
+    expect(store.listEventsForTask('t1')).toHaveLength(eventsBefore);
+  });
+});
+
+// ===========================================================================
+// updateTaskTeam
+// ===========================================================================
+
+describe('ScrumStore — updateTaskTeam', () => {
+  test('reassigns team and appends team_changed event with from/to payload', () => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.createTeam({ slug: 'identity', teamType: 'platform' });
+    seedTask('t1', { teamSlug: 'payments' });
+
+    const before = store.listEventsForTask('t1');
+    const updated = store.updateTaskTeam('t1', 'identity');
+
+    expect(updated.team_slug).toBe('identity');
+
+    const events = store.listEventsForTask('t1');
+    expect(events).toHaveLength(before.length + 1);
+    const [latest] = events;
+    if (!latest) throw new Error('expected an event');
+    expect(latest.kind).toBe('team_changed');
+    expect(latest.payload).toEqual({ from: 'payments', to: 'identity' });
+  });
+
+  test('unbinds the team when passed null and records to: null in payload', () => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    seedTask('t1', { teamSlug: 'payments' });
+
+    const updated = store.updateTaskTeam('t1', null);
+    expect(updated.team_slug).toBeNull();
+
+    const [latest] = store.listEventsForTask('t1');
+    if (!latest) throw new Error('expected an event');
+    expect(latest.kind).toBe('team_changed');
+    expect(latest.payload).toEqual({ from: 'payments', to: null });
+  });
+
+  test('records from: null when binding a task with no prior team', () => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    seedTask('t1');
+
+    const updated = store.updateTaskTeam('t1', 'payments');
+    expect(updated.team_slug).toBe('payments');
+
+    const [latest] = store.listEventsForTask('t1');
+    if (!latest) throw new Error('expected an event');
+    expect(latest.payload).toEqual({ from: null, to: 'payments' });
+  });
+
+  test('rejects an unknown target team and leaves task + events untouched', () => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    seedTask('t1', { teamSlug: 'payments' });
+    const eventsBefore = store.listEventsForTask('t1').length;
+
+    expect(() => store.updateTaskTeam('t1', 'ghost')).toThrow(/unknown team_slug 'ghost'/);
+
+    expect(store.getTask('t1')?.team_slug).toBe('payments');
+    expect(store.listEventsForTask('t1')).toHaveLength(eventsBefore);
+  });
+
+  test('rejects a disbanded (inactive) target team', () => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.createTeam({ slug: 'identity', teamType: 'platform' });
+    store.teamTerminate('identity', 'wound down');
+    seedTask('t1', { teamSlug: 'payments' });
+
+    expect(() => store.updateTaskTeam('t1', 'identity')).toThrow(/team 'identity' is inactive/);
+    expect(store.getTask('t1')?.team_slug).toBe('payments');
+  });
+
+  test('rejects an unknown task id', () => {
+    expect(() => store.updateTaskTeam('missing', null)).toThrow(/unknown task/);
+  });
+
+  test('no-op when target equals current team (no duplicate event)', () => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    seedTask('t1', { teamSlug: 'payments' });
+    const eventsBefore = store.listEventsForTask('t1').length;
+
+    const updated = store.updateTaskTeam('t1', 'payments');
+    expect(updated.team_slug).toBe('payments');
     expect(store.listEventsForTask('t1')).toHaveLength(eventsBefore);
   });
 });

@@ -162,6 +162,9 @@ interface ScrumFlags {
   human?: boolean;
   limit?: number | string;
   milestone?: string;
+  // `task create` / `task move` team binding (--team <slug>); validated against
+  // the registry at the store boundary.
+  team?: string;
   title?: string;
   description?: string;
   id?: string;
@@ -276,6 +279,10 @@ export function register(cli: CAC): void {
     .option('--human', 'Emit a human-readable table instead of JSON')
     .option('--limit <n>', 'Max rows for next-ready (default: 10)')
     .option('--milestone <id>', 'Milestone filter or foreign key')
+    .option(
+      '--team <slug>',
+      "task create / task move: bind the task to a registered team (validated against the registry); on move, --team='' unbinds",
+    )
     .option('--title <t>', 'Task or milestone title (create actions)')
     .option('--description <d>', 'Task or milestone description')
     .option('--id <id>', 'Explicit id (create actions; default: generated from title)')
@@ -485,6 +492,7 @@ function dispatch(
         title: flags.title,
         description: flags.description,
         milestone: flags.milestone,
+        team: flags.team,
         id: flags.id,
         parent: flags.parent,
         layer: flags.layer,

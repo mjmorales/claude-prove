@@ -149,8 +149,10 @@ export interface CreateTaskInput {
   milestoneId?: string | null;
   /**
    * Team binding (v27): the owning team's slug, or NULL/omitted for an unbound
-   * task. Persisted verbatim — registry membership is validated at the CLI
-   * boundary on `--team`, not here.
+   * task. When non-null, validated against the team registry — an unknown or
+   * already-disbanded (`inactive`) team is rejected, mirroring the
+   * `unknown milestone_id` guard so every caller (CLI or programmatic) gets the
+   * same rejection at the store boundary.
    */
   teamSlug?: string | null;
   /** Containing task id (the tree). Validated to exist, like `milestoneId`. */
@@ -524,6 +526,7 @@ export class ScrumStore {
     const status: TaskStatus = input.status ?? 'backlog';
     const milestoneId = input.milestoneId ?? null;
     const parentId = input.parentId ?? null;
+    const teamSlug = input.teamSlug ?? null;
 
     if (milestoneId !== null) {
       const exists = this.getMilestone(milestoneId);
@@ -538,6 +541,8 @@ export class ScrumStore {
         throw new Error(`createTask: unknown parent_id '${parentId}'`);
       }
     }
+
+    if (teamSlug !== null) this.assertBindableTeam('createTask', teamSlug);
 
     // Resolve acceptance: explicit input wins; otherwise inherit the parent's
     // shared_acceptance criteria (independent copies tagged `inherited_from`).
@@ -573,7 +578,7 @@ export class ScrumStore {
       description: input.description ?? null,
       status,
       milestone_id: milestoneId,
-      team_slug: input.teamSlug ?? null,
+      team_slug: teamSlug,
       parent_id: parentId,
       layer: input.layer ?? null,
       acceptance,
@@ -780,6 +785,57 @@ export class ScrumStore {
 
     const updated = this.getTask(id);
     if (!updated) throw new Error(`updateTaskMilestone: task '${id}' vanished mid-update`);
+    return updated;
+  }
+
+  /**
+   * Reject binding a task to a team that cannot own work: an unknown slug or an
+   * already-disbanded (`inactive`) team. Shared by `createTask` and
+   * `updateTaskTeam` so the two write paths reject identically. `context` names
+   * the caller for the thrown message.
+   */
+  private assertBindableTeam(context: string, slug: string): void {
+    const team = this.getTeam(slug);
+    if (team === null) {
+      throw new Error(`${context}: unknown team_slug '${slug}'`);
+    }
+    if (team.status === 'inactive') {
+      throw new Error(`${context}: team '${slug}' is inactive (disbanded)`);
+    }
+  }
+
+  /**
+   * Reassign a task's owning team. Pass `null` to unbind. Validates the target
+   * team is bindable when non-null (`assertBindableTeam` — same registry guard
+   * `createTask` runs), so the move path and create path reject an unknown or
+   * disbanded team identically. Appends a `team_changed` event with payload
+   * `{ from, to }` inside the same transaction and bumps `last_event_at`.
+   */
+  updateTaskTeam(id: string, nextTeamSlug: string | null, agent?: string | null): ScrumTask {
+    const task = this.getTask(id);
+    if (!task) throw new Error(`updateTaskTeam: unknown task '${id}'`);
+
+    if (nextTeamSlug !== null) this.assertBindableTeam('updateTaskTeam', nextTeamSlug);
+
+    if (task.team_slug === nextTeamSlug) {
+      return task;
+    }
+
+    const ts = isoNow();
+    const { workerId, runId } = resolveRunContext();
+    const by = this.actor(agent);
+    const tx = this.db.transaction(() => {
+      this.prep(
+        'UPDATE scrum_tasks SET team_slug = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+      ).run(nextTeamSlug, ts, by, ts, workerId, runId, id);
+      this.prep(
+        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
+      ).run(id, ts, 'team_changed', by, JSON.stringify({ from: task.team_slug, to: nextTeamSlug }));
+    });
+    tx();
+
+    const updated = this.getTask(id);
+    if (!updated) throw new Error(`updateTaskTeam: task '${id}' vanished mid-update`);
     return updated;
   }
 

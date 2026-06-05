@@ -56,6 +56,7 @@ export type EventKind =
   | 'status_changed'
   | 'task_deleted'
   | 'milestone_changed'
+  | 'team_changed'
   | 'run_started'
   | 'run_completed'
   | 'steward_verdict'

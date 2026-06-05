@@ -2,14 +2,14 @@
  * `claude-prove scrum task <action> [args] [flags]`
  *
  * Action dispatch:
- *   create         --title X [--description Y] [--milestone M] [--id I] [--bounds JSON]
+ *   create         --title X [--description Y] [--milestone M] [--team SLUG] [--id I] [--bounds JSON]
  *   show <id>
  *   list           [--status S] [--milestone M] [--tag T]
  *   tag <id> <tag>
  *   link-decision <id> <decision-path>
  *   status <id> <new-status>
  *   cancel <id>    [--cascade] [--reason R] [--detail D]
- *   move <id>      (--milestone M | --unassign | --milestone="")
+ *   move <id>      (--milestone M | --unassign | --milestone="") [--team SLUG | --team=""]
  *   delete <id>
  *   add-dep <from> <to>     [--kind blocks|blocked_by]   (default: blocks)
  *   remove-dep <from> <to>  [--kind blocks|blocked_by]   (default: blocks)
@@ -53,6 +53,9 @@ export interface TaskCmdFlags {
   title?: string;
   description?: string;
   milestone?: string;
+  // Team binding (--team SLUG); validated against the registry at the store
+  // boundary. On `move`, --team="" unbinds.
+  team?: string;
   id?: string;
   parent?: string;
   layer?: string;
@@ -202,6 +205,7 @@ function doCreate(store: ScrumStore, flags: TaskCmdFlags): number {
     flags.id !== undefined && flags.id.length > 0 ? flags.id : generateId(flags.title, 'task');
   const milestoneId =
     flags.milestone !== undefined && flags.milestone.length > 0 ? flags.milestone : null;
+  const teamSlug = flags.team !== undefined && flags.team.length > 0 ? flags.team : null;
   const parentId = flags.parent !== undefined && flags.parent.length > 0 ? flags.parent : null;
 
   // --layer tags the containment tier (epic|story|task) for the decompose
@@ -233,6 +237,7 @@ function doCreate(store: ScrumStore, flags: TaskCmdFlags): number {
     title: flags.title,
     description: flags.description ?? null,
     milestoneId,
+    teamSlug,
     parentId,
     layer,
     bounds,
@@ -379,11 +384,19 @@ function doDelete(store: ScrumStore, id: string | undefined): number {
 }
 
 /**
- * Reassign a task's milestone. Target resolution:
+ * Reassign a task's milestone and/or owning team. At least one of --milestone,
+ * --unassign, or --team is required.
+ *
+ * Milestone target resolution:
  *   --unassign                → null (wins when combined with any --milestone)
  *   --milestone=""            → null
  *   --milestone <id>          → <id>
- *   (neither flag)            → usage error, exit 1
+ *   (milestone flags absent)  → milestone left untouched
+ *
+ * Team target resolution (only when --team is provided):
+ *   --team=""                 → null (unbind)
+ *   --team <slug>             → <slug>, validated against the registry at the
+ *                               store boundary (unknown/disbanded → exit 1)
  *
  * Closed-milestone warning is surfaced on stderr with exit 0 preserved, so
  * operators can intentionally move tasks into a closed milestone when
@@ -397,32 +410,47 @@ function doMove(store: ScrumStore, id: string | undefined, flags: TaskCmdFlags):
 
   const unassignRequested = flags.unassign === true;
   const milestoneFlagProvided = flags.milestone !== undefined;
+  const teamFlagProvided = flags.team !== undefined;
 
-  if (!unassignRequested && !milestoneFlagProvided) {
-    process.stderr.write('scrum task move: --milestone <id> or --unassign is required\n');
+  if (!unassignRequested && !milestoneFlagProvided && !teamFlagProvided) {
+    process.stderr.write(
+      'scrum task move: --milestone <id>, --unassign, or --team <slug> is required\n',
+    );
     return 1;
   }
 
-  let target: string | null;
-  if (unassignRequested) {
-    target = null;
-  } else if (flags.milestone === undefined || flags.milestone.length === 0) {
-    target = null;
-  } else {
-    target = flags.milestone;
-  }
+  let task: ReturnType<ScrumStore['updateTaskMilestone']> | undefined;
 
-  const task = store.updateTaskMilestone(id, target);
-
-  if (target !== null) {
-    const milestone = store.getMilestone(target);
-    if (milestone?.status === 'closed') {
-      process.stderr.write(`scrum task move: warning — target milestone '${target}' is closed\n`);
+  if (unassignRequested || milestoneFlagProvided) {
+    let target: string | null;
+    if (unassignRequested) {
+      target = null;
+    } else if (flags.milestone === undefined || flags.milestone.length === 0) {
+      target = null;
+    } else {
+      target = flags.milestone;
     }
+
+    task = store.updateTaskMilestone(id, target);
+
+    if (target !== null) {
+      const milestone = store.getMilestone(target);
+      if (milestone?.status === 'closed') {
+        process.stderr.write(`scrum task move: warning — target milestone '${target}' is closed\n`);
+      }
+    }
+    process.stderr.write(`scrum task move: ${id} -> ${target ?? 'unassigned'}\n`);
   }
 
+  if (teamFlagProvided) {
+    const teamTarget = flags.team !== undefined && flags.team.length > 0 ? flags.team : null;
+    task = store.updateTaskTeam(id, teamTarget);
+    process.stderr.write(`scrum task move: ${id} team -> ${teamTarget ?? 'unbound'}\n`);
+  }
+
+  // `task` is always assigned: the early guard above guarantees at least one of
+  // the milestone or team reassignment branches ran.
   process.stdout.write(`${JSON.stringify(task)}\n`);
-  process.stderr.write(`scrum task move: ${id} -> ${target ?? 'unassigned'}\n`);
   return 0;
 }
 

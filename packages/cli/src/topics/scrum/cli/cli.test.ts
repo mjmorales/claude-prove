@@ -717,7 +717,7 @@ describe('runTaskCmd', () => {
 
     const res = withCapture(() => runTaskCmd('move', ['mv-4', undefined], {}));
     expect(res.exit).toBe(1);
-    expect(res.stderr).toContain('--milestone <id> or --unassign is required');
+    expect(res.stderr).toContain('--milestone <id>, --unassign, or --team <slug> is required');
   });
 
   test('move: missing <id> exits 1 with a usage hint', () => {
@@ -767,6 +767,113 @@ describe('runTaskCmd', () => {
     expect(res.exit).toBe(0);
     const task = JSON.parse(res.stdout.trim()) as { milestone_id: string | null };
     expect(task.milestone_id).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // --team binding (create + move)
+  // -------------------------------------------------------------------------
+
+  function seedTeam(slug: string, teamType = 'stream_aligned'): void {
+    withCapture(() =>
+      runTeamCmd('create', [undefined], { slug, teamType, workspaceRoot: workspace }),
+    );
+  }
+
+  test('create --team: validates against the registry and persists team_slug', () => {
+    seedTeam('payments');
+    const res = withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'Pay', id: 'pay-1', team: 'payments' }),
+    );
+    expect(res.exit).toBe(0);
+    const task = JSON.parse(res.stdout.trim()) as { id: string; team_slug: string };
+    expect(task.team_slug).toBe('payments');
+    expect(task.id).toBe('pay-1');
+  });
+
+  test('create --team: unknown team → exit 1, store error bubbles through', () => {
+    const res = withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'Bad', id: 'bad-1', team: 'ghost' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown team_slug 'ghost'");
+  });
+
+  test('create --team: inactive (disbanded) team → exit 1', () => {
+    seedTeam('payments');
+    withCapture(() => runTeamCmd('terminate', ['payments'], { workspaceRoot: workspace }));
+    const res = withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'Bad', id: 'bad-2', team: 'payments' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("team 'payments' is inactive");
+  });
+
+  test('move --team: reassigns team_slug and returns updated task JSON', () => {
+    seedTeam('payments');
+    seedTeam('identity', 'platform');
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'mvt-1', team: 'payments' }),
+    );
+
+    const res = withCapture(() => runTaskCmd('move', ['mvt-1', undefined], { team: 'identity' }));
+    expect(res.exit).toBe(0);
+    const task = JSON.parse(res.stdout.trim()) as { id: string; team_slug: string };
+    expect(task.team_slug).toBe('identity');
+    expect(res.stderr).toContain('mvt-1 team -> identity');
+  });
+
+  test("move --team='': unbinds team_slug", () => {
+    seedTeam('payments');
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'mvt-2', team: 'payments' }),
+    );
+
+    const res = withCapture(() => runTaskCmd('move', ['mvt-2', undefined], { team: '' }));
+    expect(res.exit).toBe(0);
+    const task = JSON.parse(res.stdout.trim()) as { team_slug: string | null };
+    expect(task.team_slug).toBeNull();
+    expect(res.stderr).toContain('mvt-2 team -> unbound');
+  });
+
+  test('move --team: unknown team → exit 1, store error bubbles through', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'mvt-3' }));
+
+    const res = withCapture(() => runTaskCmd('move', ['mvt-3', undefined], { team: 'ghost' }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown team_slug 'ghost'");
+  });
+
+  test('move --team: inactive (terminated) team → exit 1', () => {
+    seedTeam('payments');
+    withCapture(() => runTeamCmd('terminate', ['payments'], { workspaceRoot: workspace }));
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'mvt-4' }));
+
+    const res = withCapture(() => runTaskCmd('move', ['mvt-4', undefined], { team: 'payments' }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("team 'payments' is inactive");
+  });
+
+  test('move: neither --milestone, --unassign, nor --team → exit 1 with usage hint', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'mvt-5' }));
+    const res = withCapture(() => runTaskCmd('move', ['mvt-5', undefined], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--milestone <id>, --unassign, or --team <slug> is required');
+  });
+
+  test('move: --milestone and --team together reassign both in one call', () => {
+    seedMove('mvt-6', 'm-both');
+    seedTeam('payments');
+
+    const res = withCapture(() =>
+      runTaskCmd('move', ['mvt-6', undefined], { milestone: 'm-both', team: 'payments' }),
+    );
+    expect(res.exit).toBe(0);
+    const task = JSON.parse(res.stdout.trim()) as {
+      milestone_id: string;
+      team_slug: string;
+    };
+    expect(task.milestone_id).toBe('m-both');
+    expect(task.team_slug).toBe('payments');
   });
 
   // -------------------------------------------------------------------------
