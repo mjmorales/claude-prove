@@ -195,6 +195,12 @@ describe('orchestrator task-prompt', () => {
     expect(stdoutBuf).toContain('- `team-payments-tech_lead`');
     expect(stdoutBuf).toContain('- `team-payments-engineer`');
     expect(stdoutBuf).toContain('- `team-payments-implementer`');
+    // Names render in canonical TEAM_ROLES order: tech_lead -> engineer -> implementer.
+    const techLeadAt = stdoutBuf.indexOf('team-payments-tech_lead');
+    const engineerAt = stdoutBuf.indexOf('team-payments-engineer');
+    const implementerAt = stdoutBuf.indexOf('team-payments-implementer');
+    expect(techLeadAt).toBeLessThan(engineerAt);
+    expect(engineerAt).toBeLessThan(implementerAt);
   });
 
   test('team-less task → omits the Team Agents section', () => {
