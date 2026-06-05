@@ -236,6 +236,13 @@ const TASK_PLAN_SPEC: FieldSpec = {
       required: true,
       description: 'Short task title',
     },
+    task_id: {
+      type: 'str',
+      required: false,
+      minLength: 1,
+      description:
+        'Optional scrum task id linking this plan task to a scrum backlog entry. The canonical link is top-level plan.task_id; this nested form is accepted so a plan that carries the scrum id here passes strict validation and is visible to the scrum reconciler.',
+    },
     wave: {
       type: 'int',
       required: true,

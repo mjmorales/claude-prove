@@ -66,6 +66,8 @@ interface RunFixtureOptions {
   branch?: string;
   slug?: string;
   taskId?: string | null;
+  /** When set, writes the scrum id nested at tasks[0].task_id instead of top-level. */
+  nestedTaskId?: string;
   runStatus?: string;
   stewardVerdict?: string;
   commitShas?: string[];
@@ -77,11 +79,13 @@ function writeRun(opts: RunFixtureOptions = {}): string {
   const runDir = join(project, '.prove', 'runs', branch, slug);
   mkdirSync(runDir, { recursive: true });
 
+  const planTask: Record<string, unknown> = { id: '1', title: 'step', steps: [] };
+  if (opts.nestedTaskId !== undefined) planTask.task_id = opts.nestedTaskId;
   const plan: Record<string, unknown> = {
     schema_version: '5',
     kind: 'plan',
     mode: 'full',
-    tasks: [{ id: '1', title: 'step', steps: [] }],
+    tasks: [planTask],
   };
   if (opts.taskId !== null && opts.taskId !== undefined) {
     plan.task_id = opts.taskId;
@@ -262,6 +266,79 @@ describe('reconcileRunCompleted — orphan run', () => {
     expect(
       store.listEventsForTask(ORPHAN_TASK_ID).some((e) => e.kind === 'unlinked_run_detected'),
     ).toBe(true);
+  });
+});
+
+// ===========================================================================
+// reconcileRunCompleted — link resolution layers (gh#32 orphan split-brain)
+// ===========================================================================
+
+describe('reconcileRunCompleted — link resolution beyond top-level plan.task_id', () => {
+  test('store run-link is authoritative when plan.json carries no task_id', () => {
+    // The split-brain case: a run linked in the store (e.g. via `scrum
+    // link-run`) whose plan.json was never updated must reconcile instead of
+    // re-emitting unlinked_run_detected on every sweep.
+    store.createTask({ id: 'scrum-40', title: 'Store-linked' });
+    const statePath = writeRun({ branch: 'feat', slug: 'linked', taskId: null });
+    store.linkRun({ taskId: 'scrum-40', runPath: join('.prove', 'runs', 'feat', 'linked') });
+
+    const result = reconcileRunCompleted(statePath, store);
+    expect(result.kind).toBe('reconciled');
+    expect(result.taskId).toBe('scrum-40');
+
+    // No orphan event was emitted under the sentinel.
+    const sentinel = store.getTask(ORPHAN_TASK_ID);
+    if (sentinel) {
+      expect(
+        store.listEventsForTask(ORPHAN_TASK_ID).some((e) => e.kind === 'unlinked_run_detected'),
+      ).toBe(false);
+    }
+    expect(store.listEventsForTask('scrum-40').some((e) => e.kind === 'run_completed')).toBe(true);
+  });
+
+  test('a store-linked run sweeps clean — no unlinked_run_detected on repeated sweeps', () => {
+    store.createTask({ id: 'scrum-41', title: 'Swept' });
+    writeRun({ branch: 'feat', slug: 'swept', taskId: null });
+    store.linkRun({ taskId: 'scrum-41', runPath: join('.prove', 'runs', 'feat', 'swept') });
+
+    const r1 = sweepUnreconciled(store, 0);
+    expect(r1.reconciled).toBe(1);
+    expect(r1.errors).toHaveLength(0);
+
+    const orphanEvents = store
+      .listEventsForTask(ORPHAN_TASK_ID)
+      .filter((e) => e.kind === 'unlinked_run_detected');
+    expect(orphanEvents).toHaveLength(0);
+  });
+
+  test('nested tasks[n].task_id is recognized as the link', () => {
+    store.createTask({ id: 'scrum-42', title: 'Nested' });
+    const statePath = writeRun({
+      branch: 'feat',
+      slug: 'nested',
+      taskId: null,
+      nestedTaskId: 'scrum-42',
+    });
+
+    const result = reconcileRunCompleted(statePath, store);
+    expect(result.kind).toBe('reconciled');
+    expect(result.taskId).toBe('scrum-42');
+  });
+
+  test('top-level plan.task_id wins over a store link to a different task', () => {
+    store.createTask({ id: 'scrum-43', title: 'Plan-side' });
+    store.createTask({ id: 'scrum-44', title: 'Store-side' });
+    const statePath = writeRun({ branch: 'feat', slug: 'precedence', taskId: 'scrum-43' });
+    store.linkRun({ taskId: 'scrum-44', runPath: join('.prove', 'runs', 'feat', 'precedence') });
+
+    const result = reconcileRunCompleted(statePath, store);
+    expect(result.taskId).toBe('scrum-43');
+  });
+
+  test('still orphans when no layer knows the link', () => {
+    const statePath = writeRun({ branch: 'feat', slug: 'truly-orphan', taskId: null });
+    const result = reconcileRunCompleted(statePath, store);
+    expect(result.kind).toBe('orphan');
   });
 });
 

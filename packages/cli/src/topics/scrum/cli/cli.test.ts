@@ -323,6 +323,69 @@ describe('runMilestoneCmd close → curation trigger', () => {
 });
 
 // ---------------------------------------------------------------------------
+// link-run-cmd — dual-writes the store row AND plan-level task_id (gh#32)
+// ---------------------------------------------------------------------------
+
+describe('runLinkRunCmd plan.task_id dual-write', () => {
+  /** Write a minimal valid plan.json (no task_id) under the run-dir. */
+  function seedRunPlan(runRel: string): void {
+    const runDir = join(workspace, runRel);
+    mkdirSync(runDir, { recursive: true });
+    const plan = {
+      schema_version: '4',
+      kind: 'plan',
+      mode: 'full',
+      tasks: [{ id: '1', title: 'step', wave: 1 }],
+    };
+    writeFileSync(join(runDir, 'plan.json'), `${JSON.stringify(plan, null, 2)}\n`);
+  }
+
+  test('writes top-level plan.task_id and reports plan_updated', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'lr-1' }));
+    const runRel = join('.prove', 'runs', 'feat', 'lr-1');
+    seedRunPlan(runRel);
+
+    const res = withCapture(() => runLinkRunCmd('lr-1', runRel, { workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const payload = JSON.parse(res.stdout.trim()) as { plan_updated: boolean };
+    expect(payload.plan_updated).toBe(true);
+
+    const written = JSON.parse(readFileSync(join(workspace, runRel, 'plan.json'), 'utf8')) as {
+      task_id?: string;
+      tasks: unknown[];
+    };
+    expect(written.task_id).toBe('lr-1');
+    // Existing plan shape is preserved, not clobbered.
+    expect(written.tasks).toHaveLength(1);
+  });
+
+  test('store link still succeeds when plan.json is absent (best-effort plan write)', () => {
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'lr-2' }));
+    const runRel = join('.prove', 'runs', 'feat', 'lr-2');
+    // Note: no plan.json seeded — the run-dir does not exist.
+
+    const res = withCapture(() => runLinkRunCmd('lr-2', runRel, { workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const payload = JSON.parse(res.stdout.trim()) as { linked: boolean; plan_updated: boolean };
+    expect(payload.linked).toBe(true);
+    expect(payload.plan_updated).toBe(false);
+    expect(res.stderr).toContain('plan.task_id not written');
+  });
+
+  test('unknown task fails the store link before touching plan.json', () => {
+    const runRel = join('.prove', 'runs', 'feat', 'lr-3');
+    seedRunPlan(runRel);
+
+    const res = withCapture(() => runLinkRunCmd('nope', runRel, { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    const written = JSON.parse(readFileSync(join(workspace, runRel, 'plan.json'), 'utf8')) as {
+      task_id?: string;
+    };
+    expect(written.task_id).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // milestone-cmd — initiative grouping (the tier above milestone)
 // ---------------------------------------------------------------------------
 

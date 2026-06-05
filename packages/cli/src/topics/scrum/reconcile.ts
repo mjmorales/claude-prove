@@ -352,7 +352,7 @@ interface StateJsonLite {
 interface PlanJsonLite {
   kind?: string;
   task_id?: string;
-  tasks?: Array<unknown>;
+  tasks?: Array<{ task_id?: string }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -389,7 +389,7 @@ export function reconcileRunCompleted(
   }
 
   const plan = readJsonOrNull<PlanJsonLite>(planPath);
-  const taskId = plan && typeof plan.task_id === 'string' ? plan.task_id : null;
+  const taskId = resolveLinkedTaskId(plan, store, runDir);
 
   if (taskId === null) {
     emitOrphanEvent(store, runDir, state);
@@ -908,6 +908,40 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // ---------------------------------------------------------------------------
 // Internals — tracked-run helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Resolve the scrum task a run belongs to, tolerating either layer carrying
+ * the link so the two can never permanently diverge into orphan split-brain:
+ *
+ *   1. top-level `plan.task_id`         — the canonical self-describing form
+ *      written by `scrum link-run` and orchestrator run init.
+ *   2. nested `plan.tasks[n].task_id`   — a stray placement some compile paths
+ *      emit; recognized so such a run is tracked rather than orphaned forever.
+ *   3. store run-link reverse lookup    — authoritative fallback. A run linked
+ *      in the store but whose plan.json was never updated (e.g. an older link)
+ *      still reconciles instead of re-emitting unlinked_run_detected on every
+ *      sweep.
+ *
+ * Returns null only when no layer knows the link — a genuine orphan.
+ */
+function resolveLinkedTaskId(
+  plan: PlanJsonLite | null,
+  store: ScrumStore,
+  runDir: string,
+): string | null {
+  if (plan && typeof plan.task_id === 'string' && plan.task_id.length > 0) {
+    return plan.task_id;
+  }
+  if (plan && Array.isArray(plan.tasks)) {
+    for (const task of plan.tasks) {
+      if (task && typeof task.task_id === 'string' && task.task_id.length > 0) {
+        return task.task_id;
+      }
+    }
+  }
+  const linked = store.getTaskForRun(toRunPath(runDir));
+  return linked?.id ?? null;
+}
 
 function linkRunForTask(
   store: ScrumStore,
