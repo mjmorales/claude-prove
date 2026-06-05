@@ -225,4 +225,37 @@ describe('runTeamCmd sync-agents', () => {
     expect(res.exit).toBe(0);
     expect(JSON.parse(res.stdout)).toEqual(['live']);
   });
+
+  test('preserves an authored body across a backfill', () => {
+    createTeam('keep');
+    const leadPath = agentPath('keep', 'tech_lead');
+    const authored = `${readFileSync(leadPath, 'utf8')}\n## AUTHORED_SENTINEL\nkeep me\n`;
+    writeFileSync(leadPath, authored, 'utf8');
+
+    const res = withCapture(() =>
+      runTeamCmd('sync-agents', ['keep'], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+
+    const after = readFileSync(leadPath, 'utf8');
+    expect(after).toContain('AUTHORED_SENTINEL');
+    expect(after).toContain('keep me');
+    expect(after).toContain(BEGIN_MARKER);
+    expect(after).toContain(END_MARKER);
+  });
+
+  test('is byte-stable on a second run', () => {
+    createTeam('stable');
+    withCapture(() => runTeamCmd('sync-agents', [undefined], { workspaceRoot: workspace }));
+    const firstPass = TEAM_ROLES.map((role) => readFileSync(agentPath('stable', role), 'utf8'));
+
+    const res = withCapture(() =>
+      runTeamCmd('sync-agents', [undefined], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+
+    TEAM_ROLES.forEach((role, i) => {
+      expect(readFileSync(agentPath('stable', role), 'utf8')).toBe(firstPass[i]);
+    });
+  });
 });
