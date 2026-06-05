@@ -165,11 +165,10 @@ describe('loadToolConfig', () => {
     }
   });
 
-  test('DEFAULT_CONFIG shape matches the Python port', () => {
+  test('DEFAULT_CONFIG shape has no concurrency key — fan-out is driver-owned', () => {
     expect(DEFAULT_CONFIG).toEqual({
       excludes: [],
       max_file_size: 102400,
-      concurrency: 3,
       batch_size: 25,
       triage: true,
     });

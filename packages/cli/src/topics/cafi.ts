@@ -4,7 +4,8 @@
  * Follows the `schema.ts` pattern: cac dispatches on the first positional
  * arg, so every sub-action lives under a single `cafi <action>` command
  * with an action enum. Users invoke the natural form:
- *   claude-prove cafi index   [--force] [--project-root <path>]
+ *   claude-prove cafi plan    [--force] [--batch-size <n>] [--project-root <path>]
+ *   claude-prove cafi save    [--file <path>] [--project-root <path>]
  *   claude-prove cafi status  [--project-root <path>]
  *   claude-prove cafi get     <path>    [--project-root <path>]
  *   claude-prove cafi lookup  <keyword> [--project-root <path>]
@@ -12,10 +13,18 @@
  *   claude-prove cafi context [--project-root <path>]
  *   claude-prove cafi gate
  *
+ * The engine boundary splits an index build in two: `plan` + `save` are the
+ * mechanical halves (walk/hash/diff/batch, then validate/merge under lock);
+ * the describe phase between them is driven by the Claude session via the
+ * `/prove:index` skill — this CLI never spawns a model.
+ *
  * Sub-action semantics:
- *   - index: run full/incremental index; stdout prints JSON summary; on
- *     `summary.errors > 0`, stderr gets the "Claude CLI may be
- *     unavailable" warning. Exit 0.
+ *   - plan: walk + triage + hash + diff; stdout prints the batched
+ *     describe-plan JSON. Read-only except stat backfill. Exit 0.
+ *   - save: reads a descriptions payload from --file or stdin, validates
+ *     per-file (hash must match disk), merges under the cache lock;
+ *     stdout prints `{ saved, pruned, rejected }`. Exit 1 only on a
+ *     malformed payload — per-file rejections exit 0.
  *   - status: stdout prints JSON status. Exit 0.
  *   - get <path>: stdout prints the description; exit 1 with stderr
  *     message when the path isn't indexed.
@@ -26,37 +35,62 @@
  *     message when the cache is empty.
  *   - gate: reads a PreToolUse hook payload from stdin, writes the
  *     injected context (if any) to stdout, exits 0.
+ *   - index: removed — exits 1 pointing at /prove:index.
  */
 
 import { readFileSync } from 'node:fs';
 import type { CAC } from 'cac';
 import { runGate } from './cafi/gate';
 import {
-  buildIndex,
   clearCache,
   formatIndexForContext,
   getDescription,
   getStatus,
   lookup,
 } from './cafi/indexer';
+import { buildPlan } from './cafi/plan';
+import { SavePayloadError, parseSavePayload, saveDescriptions } from './cafi/save';
 
-type CafiAction = 'index' | 'status' | 'get' | 'lookup' | 'clear' | 'context' | 'gate';
+type CafiAction =
+  | 'plan'
+  | 'save'
+  | 'status'
+  | 'get'
+  | 'lookup'
+  | 'clear'
+  | 'context'
+  | 'gate'
+  | 'index';
 
-const CAFI_ACTIONS: CafiAction[] = ['index', 'status', 'get', 'lookup', 'clear', 'context', 'gate'];
+const CAFI_ACTIONS: CafiAction[] = [
+  'plan',
+  'save',
+  'status',
+  'get',
+  'lookup',
+  'clear',
+  'context',
+  'gate',
+  'index',
+];
 
 interface CafiFlags {
   projectRoot?: string;
   force?: boolean;
+  batchSize?: number;
+  file?: string;
 }
 
 export function register(cli: CAC): void {
   cli
     .command(
       'cafi <action> [arg]',
-      'Content-addressable file index (action: index | status | get | lookup | clear | context | gate)',
+      'Content-addressable file index (action: plan | save | status | get | lookup | clear | context | gate)',
     )
     .option('--project-root <path>', 'Project root directory (default: cwd)')
-    .option('--force', 'Re-describe all files (index only)')
+    .option('--force', 'Plan every walked file, not just the delta (plan only)')
+    .option('--batch-size <n>', 'Files per describe batch (plan only)')
+    .option('--file <path>', 'Read the save payload from a file instead of stdin (save only)')
     .action(async (action: string, arg: string | undefined, flags: CafiFlags) => {
       if (!isCafiAction(action)) {
         console.error(`Unknown cafi action: ${action}. Known: ${CAFI_ACTIONS.join(', ')}`);
@@ -78,8 +112,10 @@ async function dispatch(
 ): Promise<number> {
   const root = flags.projectRoot ?? process.cwd();
   switch (action) {
-    case 'index':
-      return cmdIndex(root, flags.force ?? false);
+    case 'plan':
+      return cmdPlan(root, flags);
+    case 'save':
+      return cmdSave(root, flags);
     case 'status':
       return cmdStatus(root);
     case 'get':
@@ -92,15 +128,49 @@ async function dispatch(
       return cmdContext(root);
     case 'gate':
       return cmdGate(root);
+    case 'index':
+      return cmdIndex();
   }
 }
 
-async function cmdIndex(root: string, force: boolean): Promise<number> {
-  const summary = await buildIndex(root, { force });
-  console.log(JSON.stringify(summary, null, 2));
-  if (summary.errors > 0) {
+function cmdPlan(root: string, flags: CafiFlags): number {
+  const batchSize =
+    flags.batchSize !== undefined ? Number.parseInt(String(flags.batchSize), 10) : undefined;
+  if (batchSize !== undefined && (!Number.isInteger(batchSize) || batchSize < 1)) {
+    console.error('cafi plan: --batch-size must be a positive integer');
+    return 1;
+  }
+  const plan = buildPlan(root, { force: flags.force ?? false, batchSize });
+  console.log(JSON.stringify(plan, null, 2));
+  return 0;
+}
+
+async function cmdSave(root: string, flags: CafiFlags): Promise<number> {
+  let raw: string;
+  try {
+    // FD 0 fallback keeps the stdin path Bun-independent and testable.
+    raw = flags.file !== undefined ? readFileSync(flags.file, 'utf8') : readFileSync(0, 'utf8');
+  } catch (err) {
+    console.error(`cafi save: could not read payload: ${stringifyError(err)}`);
+    return 1;
+  }
+
+  let result: Awaited<ReturnType<typeof saveDescriptions>>;
+  try {
+    const payload = parseSavePayload(raw);
+    result = await saveDescriptions(root, payload);
+  } catch (err) {
+    if (err instanceof SavePayloadError) {
+      console.error(`cafi save: ${err.message}`);
+      return 1;
+    }
+    throw err;
+  }
+
+  console.log(JSON.stringify(result, null, 2));
+  if (result.rejected.length > 0) {
     console.error(
-      `Warning: ${summary.errors} files received empty descriptions (Claude CLI may be unavailable)`,
+      `Warning: ${result.rejected.length} file(s) rejected — re-run "cafi plan" and re-describe them`,
     );
   }
   return 0;
@@ -175,4 +245,17 @@ function cmdGate(root: string): number {
     process.stdout.write(result.stdout);
   }
   return 0;
+}
+
+function cmdIndex(): number {
+  console.error(
+    'cafi index was removed: the describe loop is driven by the Claude session.\n' +
+      'Run /prove:index in Claude Code (mechanical halves: "cafi plan" -> describe -> "cafi save").',
+  );
+  return 1;
+}
+
+function stringifyError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
 }

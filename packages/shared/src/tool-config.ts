@@ -10,13 +10,13 @@ import { readFileSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 /**
- * Default config values. Matches the Python version one-for-one so existing
- * tools keep the same fallbacks until they opt in to stricter validation.
+ * Default config values shared by the indexing tools. A `concurrency` key in
+ * user config is tolerated but ignored — describe parallelism is owned by
+ * the driver session's fan-out (Agent/Workflow), not the CLI.
  */
 export const DEFAULT_CONFIG: Readonly<Record<string, unknown>> = Object.freeze({
   excludes: [],
   max_file_size: 102400,
-  concurrency: 3,
   batch_size: 25,
   triage: true,
 });

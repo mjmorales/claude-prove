@@ -2,10 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { setClaudeRunner } from './describer';
 import {
   CACHE_FILENAME,
-  buildIndex,
   cachePath,
   clearCache,
   formatIndexForContext,
@@ -13,6 +11,8 @@ import {
   getStatus,
   lookup,
 } from './indexer';
+import { buildPlan } from './plan';
+import { saveDescriptions } from './save';
 
 const FIXTURES_DIR = join(import.meta.dir, '__fixtures__');
 
@@ -25,13 +25,7 @@ function makeProject(prefix: string): string {
       schema_version: '4',
       tools: {
         cafi: {
-          config: {
-            excludes: [],
-            max_file_size: 102400,
-            concurrency: 1,
-            batch_size: 5,
-            triage: true,
-          },
+          config: { excludes: [], max_file_size: 102400, batch_size: 5, triage: true },
         },
       },
     }),
@@ -45,124 +39,20 @@ function writeProjectFile(root: string, relPath: string, content: string): void 
   writeFileSync(abs, content);
 }
 
-/** Stub runner: returns `stub description for <path>` for every file. */
-function stubRunner(): void {
-  setClaudeRunner(async (prompt: string) => {
-    if (prompt.includes('--- FILE:')) {
-      const paths = [...prompt.matchAll(/--- FILE: ([^\s]+) ---/g)].map((m) => m[1] as string);
-      const map: Record<string, string> = {};
-      for (const p of paths) map[p] = `stub description for ${p}`;
-      return JSON.stringify(map);
+/**
+ * Drive the full plan -> describe -> save loop with stub descriptions —
+ * the in-process equivalent of what the /prove:index driver session does.
+ */
+async function indexAll(root: string): Promise<void> {
+  const plan = buildPlan(root);
+  const files: Record<string, { hash: string; description: string }> = {};
+  for (const batch of plan.batches) {
+    for (const entry of batch.files) {
+      files[entry.path] = { hash: entry.hash, description: `stub description for ${entry.path}` };
     }
-    const match = prompt.match(/^File path: (.+)$/m);
-    const path = match?.[1] ?? 'unknown';
-    return `stub description for ${path}`;
-  });
+  }
+  await saveDescriptions(root, { files, deleted: plan.deleted });
 }
-
-afterEach(() => {
-  setClaudeRunner(null);
-});
-
-describe('buildIndex', () => {
-  let root: string;
-  beforeEach(() => {
-    root = makeProject('build');
-    writeProjectFile(root, 'README.md', '# readme\n');
-    writeProjectFile(root, 'src/main.ts', 'export const main = 1;\n');
-    writeProjectFile(root, 'src/util.ts', 'export const util = 2;\n');
-    stubRunner();
-  });
-  afterEach(() => {
-    rmSync(root, { recursive: true, force: true });
-  });
-
-  test('first run: all files become new and land in the cache', async () => {
-    const summary = await buildIndex(root);
-    expect(summary.new).toBe(3);
-    expect(summary.stale).toBe(0);
-    expect(summary.deleted).toBe(0);
-    expect(summary.unchanged).toBe(0);
-    expect(summary.total).toBe(3);
-    expect(summary.errors).toBe(0);
-
-    const cache = JSON.parse(readFileSync(cachePath(root), 'utf8'));
-    expect(cache.version).toBe(1);
-    expect(Object.keys(cache.files).sort()).toEqual(['README.md', 'src/main.ts', 'src/util.ts']);
-    expect(cache.files['src/main.ts'].description).toBe('stub description for src/main.ts');
-    expect(cache.files['src/main.ts'].hash).toMatch(/^[0-9a-f]{64}$/);
-  });
-
-  test('second run with no changes: everything unchanged, no re-description', async () => {
-    await buildIndex(root);
-    let cliCalls = 0;
-    setClaudeRunner(async () => {
-      cliCalls++;
-      return '{}';
-    });
-    const summary = await buildIndex(root);
-    expect(summary.new).toBe(0);
-    expect(summary.stale).toBe(0);
-    expect(summary.unchanged).toBe(3);
-    expect(cliCalls).toBe(0);
-  });
-
-  test('after editing a file, it shows up as stale and is re-described', async () => {
-    await buildIndex(root);
-    writeProjectFile(root, 'src/main.ts', 'export const main = 99;\n');
-    stubRunner();
-    const summary = await buildIndex(root);
-    expect(summary.new).toBe(0);
-    expect(summary.stale).toBe(1);
-    expect(summary.unchanged).toBe(2);
-  });
-
-  test('re-describing a stale file advances its last_indexed; unchanged stays fixed', async () => {
-    await buildIndex(root);
-    const before = JSON.parse(readFileSync(cachePath(root), 'utf8'));
-    const mainBefore = before.files['src/main.ts'].last_indexed as string;
-    const utilBefore = before.files['src/util.ts'].last_indexed as string;
-
-    // Ensure the wall clock advances so a refreshed timestamp differs.
-    await Bun.sleep(5);
-    writeProjectFile(root, 'src/main.ts', 'export const main = 99;\n');
-    stubRunner();
-    await buildIndex(root);
-
-    const after = JSON.parse(readFileSync(cachePath(root), 'utf8'));
-    // Re-described (stale) file: timestamp refreshed to the describe time.
-    expect(after.files['src/main.ts'].last_indexed).not.toBe(mainBefore);
-    expect(after.files['src/main.ts'].last_indexed >= mainBefore).toBe(true);
-    // Untouched file: timestamp preserved.
-    expect(after.files['src/util.ts'].last_indexed).toBe(utilBefore);
-  });
-
-  test('force: every file is re-described even when hashes match', async () => {
-    await buildIndex(root);
-    let cliCalls = 0;
-    setClaudeRunner(async (prompt) => {
-      cliCalls++;
-      const paths = [...prompt.matchAll(/--- FILE: ([^\s]+) ---/g)].map((m) => m[1] as string);
-      const map: Record<string, string> = {};
-      for (const p of paths) map[p] = `forced ${p}`;
-      return JSON.stringify(map);
-    });
-    const summary = await buildIndex(root, { force: true });
-    expect(summary.new).toBe(0);
-    expect(summary.stale).toBe(3);
-    expect(summary.unchanged).toBe(0);
-    expect(cliCalls).toBeGreaterThan(0);
-    expect(getDescription(root, 'src/main.ts')).toBe('forced src/main.ts');
-  });
-
-  test('counts empty descriptions as errors', async () => {
-    setClaudeRunner(async () => {
-      throw new Error('boom');
-    });
-    const summary = await buildIndex(root);
-    expect(summary.errors).toBe(3);
-  });
-});
 
 describe('getStatus', () => {
   let root: string;
@@ -185,17 +75,15 @@ describe('getStatus', () => {
     expect(status.unchanged).toBe(0);
   });
 
-  test('cache_exists is true after buildIndex', async () => {
-    stubRunner();
-    await buildIndex(root);
+  test('cache_exists is true after an index pass', async () => {
+    await indexAll(root);
     const status = getStatus(root);
     expect(status.cache_exists).toBe(true);
     expect(status.unchanged).toBe(3);
   });
 
   test('matches pinned ts-captures/status.txt fixture', async () => {
-    stubRunner();
-    await buildIndex(root);
+    await indexAll(root);
     const status = getStatus(root);
     const rendered = `${JSON.stringify(status, Object.keys(status).sort(), 2)}\n`;
     const expected = readFileSync(join(FIXTURES_DIR, 'ts-captures', 'status.txt'), 'utf8');
@@ -208,19 +96,18 @@ describe('getDescription', () => {
   beforeEach(() => {
     root = makeProject('getdesc');
     writeProjectFile(root, 'src/main.ts', 'export const main = 1;\n');
-    stubRunner();
   });
   afterEach(() => {
     rmSync(root, { recursive: true, force: true });
   });
 
   test('returns stored description for indexed path', async () => {
-    await buildIndex(root);
+    await indexAll(root);
     expect(getDescription(root, 'src/main.ts')).toBe('stub description for src/main.ts');
   });
 
   test('returns null for unknown path', async () => {
-    await buildIndex(root);
+    await indexAll(root);
     expect(getDescription(root, 'does-not-exist.ts')).toBeNull();
   });
 
@@ -234,14 +121,13 @@ describe('clearCache', () => {
   beforeEach(() => {
     root = makeProject('clear');
     writeProjectFile(root, 'src/main.ts', 'export const main = 1;\n');
-    stubRunner();
   });
   afterEach(() => {
     rmSync(root, { recursive: true, force: true });
   });
 
   test('returns true when cache exists and deletes the file', async () => {
-    await buildIndex(root);
+    await indexAll(root);
     expect(clearCache(root)).toBe(true);
     expect(clearCache(root)).toBe(false);
   });
@@ -258,7 +144,6 @@ describe('lookup', () => {
     writeProjectFile(root, 'README.md', '# readme\n');
     writeProjectFile(root, 'src/main.ts', 'export const main = 1;\n');
     writeProjectFile(root, 'src/util.ts', 'export const util = 2;\n');
-    stubRunner();
   });
   afterEach(() => {
     rmSync(root, { recursive: true, force: true });
@@ -269,7 +154,7 @@ describe('lookup', () => {
   });
 
   test('case-insensitive match on path', async () => {
-    await buildIndex(root);
+    await indexAll(root);
     const hits = lookup(root, 'UTIL');
     expect(hits).toEqual([
       { path: 'src/util.ts', description: 'stub description for src/util.ts' },
@@ -277,14 +162,14 @@ describe('lookup', () => {
   });
 
   test('matches against description text', async () => {
-    await buildIndex(root);
+    await indexAll(root);
     // "stub description" appears in every description — all files hit.
     const hits = lookup(root, 'stub description');
     expect(hits.map((h) => h.path)).toEqual(['README.md', 'src/main.ts', 'src/util.ts']);
   });
 
   test('result order is sorted by path', async () => {
-    await buildIndex(root);
+    await indexAll(root);
     const hits = lookup(root, 'stub');
     const paths = hits.map((h) => h.path);
     const sorted = [...paths].sort();
@@ -292,7 +177,7 @@ describe('lookup', () => {
   });
 
   test('matches pinned ts-captures/lookup_util.txt fixture', async () => {
-    await buildIndex(root);
+    await indexAll(root);
     const hits = lookup(root, 'util');
     let rendered = '';
     for (const hit of hits) {
@@ -310,7 +195,6 @@ describe('formatIndexForContext', () => {
     writeProjectFile(root, 'README.md', '# readme\n');
     writeProjectFile(root, 'src/main.ts', 'export const main = 1;\n');
     writeProjectFile(root, 'src/util.ts', 'export const util = 2;\n');
-    stubRunner();
   });
   afterEach(() => {
     rmSync(root, { recursive: true, force: true });
@@ -320,8 +204,8 @@ describe('formatIndexForContext', () => {
     expect(formatIndexForContext(root)).toBe('');
   });
 
-  test('renders a sorted markdown list after buildIndex', async () => {
-    await buildIndex(root);
+  test('renders a sorted markdown list after an index pass', async () => {
+    await indexAll(root);
     const rendered = formatIndexForContext(root);
     const expected = readFileSync(join(FIXTURES_DIR, 'ts-captures', 'context.txt'), 'utf8');
     expect(rendered).toBe(expected);

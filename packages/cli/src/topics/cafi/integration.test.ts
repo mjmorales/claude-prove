@@ -4,20 +4,17 @@
  * Each test spawns `bun run bin/run.ts cafi <action>` against a
  * freshly-seeded tmp project and asserts on stdout/stderr/exit-code.
  *
- * The `index` action shells out to the Claude CLI under the hood. We
- * can't reach `setClaudeRunner` across a subprocess boundary, so we
- * neutralise the describer by emptying `PATH` — the `claude` spawn
- * fails, every description comes back empty, `summary.errors` equals
- * `summary.total`, and the build still exits 0.
+ * The describe phase between `plan` and `save` is driven by the Claude
+ * session in production; here the test plays driver — it parses the plan
+ * JSON, fabricates descriptions, and pipes them back through `save`.
  *
  * For actions that require cache state (`get`, `lookup`, `clear`,
  * `context`) we seed `file-index.json` directly via `saveCache` from
- * `@claude-prove/shared` so the test does not depend on the Claude
- * CLI at all.
+ * `@claude-prove/shared` so the test does not depend on the plan/save
+ * round trip at all.
  *
- * The `gate` action reads its payload from stdin, so its integration
- * test pipes a canned Glob hook payload via `Bun.spawnSync`'s `stdin`
- * option and asserts the injected `additionalContext` on stdout.
+ * The `gate` and `save` actions read from stdin, so their integration
+ * tests pipe payloads via `Bun.spawnSync`'s `stdin` option.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -37,10 +34,8 @@ interface CliResult {
 }
 
 function runCli(args: string[], env: Record<string, string> = {}): CliResult {
-  // Invoke bun via its absolute path (`process.execPath`) so tests that
-  // scrub PATH still launch the CLI. The child process inherits the
-  // scrubbed PATH, which is what disables `claude` resolution inside
-  // describer.ts.
+  // Invoke bun via its absolute path (`process.execPath`) so the CLI
+  // launches regardless of the caller's PATH.
   const proc = Bun.spawnSync({
     cmd: [process.execPath, 'run', CLI_ENTRY, 'cafi', ...args],
     stdout: 'pipe',
@@ -86,7 +81,6 @@ function makeProject(prefix: string): string {
           config: {
             excludes: [],
             max_file_size: 102400,
-            concurrency: 1,
             batch_size: 5,
             triage: true,
           },
@@ -120,27 +114,86 @@ function seedCache(root: string, files: Record<string, string>): void {
   saveCache(cachePath(root), { version: 1, files: entries });
 }
 
-describe('cafi CLI — index', () => {
-  test('index with claude unavailable: exit 0, summary.errors > 0, warning on stderr', () => {
-    const root = makeProject('index');
+describe('cafi CLI — plan -> save round trip', () => {
+  test('plan emits the batched delta; save merges driver descriptions', () => {
+    const root = makeProject('plan-save');
     try {
       writeProjectFile(root, 'README.md', '# readme\n');
       writeProjectFile(root, 'src/main.ts', 'export const main = 1;\n');
-      // Empty PATH forces `claude` spawn to fail — describer returns empty strings.
-      const { stdout, stderr, exitCode } = runCli(['index', '--project-root', root], {
-        PATH: '',
-      });
-      expect(exitCode).toBe(0);
-      // The describer's `logger.info` writes triage progress to stdout; the
-      // JSON summary is the final block. Slice off the `{...}` run.
-      const jsonStart = stdout.lastIndexOf('{');
-      const jsonEnd = stdout.lastIndexOf('}');
-      const summary = JSON.parse(stdout.slice(jsonStart, jsonEnd + 1));
-      expect(summary.total).toBe(2);
-      expect(summary.new).toBe(2);
-      expect(summary.errors).toBe(2);
-      expect(stderr).toContain('2 files received empty descriptions');
+
+      const planRun = runCli(['plan', '--project-root', root]);
+      expect(planRun.exitCode).toBe(0);
+      // stdout is pure JSON — triage progress goes to stderr.
+      const plan = JSON.parse(planRun.stdout);
+      expect(plan.total).toBe(2);
+      expect(plan.new).toBe(2);
+      expect(plan.deleted).toEqual([]);
+      expect(plan.batches).toHaveLength(1);
+
+      // Play the driver: describe every planned file and save.
+      const files: Record<string, { hash: string; description: string }> = {};
+      for (const batch of plan.batches) {
+        for (const entry of batch.files) {
+          files[entry.path] = { hash: entry.hash, description: `driver hint for ${entry.path}` };
+        }
+      }
+      const saveRun = runCliWithStdin(
+        ['save', '--project-root', root],
+        JSON.stringify({ files, deleted: plan.deleted }),
+      );
+      expect(saveRun.exitCode).toBe(0);
+      const result = JSON.parse(saveRun.stdout);
+      expect(result).toEqual({ saved: 2, pruned: 0, rejected: [] });
       expect(existsSync(cachePath(root))).toBe(true);
+
+      // The loop converges: a second plan has nothing left to describe.
+      const replan = JSON.parse(runCli(['plan', '--project-root', root]).stdout);
+      expect(replan.new).toBe(0);
+      expect(replan.stale).toBe(0);
+      expect(replan.unchanged).toBe(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('save rejects drifted files and warns on stderr, exit 0', () => {
+    const root = makeProject('save-drift');
+    try {
+      writeProjectFile(root, 'src/main.ts', 'export const main = 1;\n');
+      const saveRun = runCliWithStdin(
+        ['save', '--project-root', root],
+        JSON.stringify({
+          files: { 'src/main.ts': { hash: 'f'.repeat(64), description: 'drifted' } },
+        }),
+      );
+      expect(saveRun.exitCode).toBe(0);
+      const result = JSON.parse(saveRun.stdout);
+      expect(result.rejected).toEqual([{ path: 'src/main.ts', reason: 'hash-drift' }]);
+      expect(saveRun.stderr).toContain('1 file(s) rejected');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('save with a malformed payload exits 1', () => {
+    const root = makeProject('save-bad');
+    try {
+      const saveRun = runCliWithStdin(['save', '--project-root', root], 'not json');
+      expect(saveRun.exitCode).toBe(1);
+      expect(saveRun.stderr).toContain('payload is not valid JSON');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('cafi CLI — index (removed)', () => {
+  test('exits 1 pointing at /prove:index', () => {
+    const root = makeProject('index-removed');
+    try {
+      const { stderr, exitCode } = runCli(['index', '--project-root', root]);
+      expect(exitCode).toBe(1);
+      expect(stderr).toContain('/prove:index');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -307,7 +360,7 @@ describe('cafi CLI — error paths', () => {
     const { stderr, exitCode } = runCli(['bogus']);
     expect(exitCode).toBe(1);
     expect(stderr).toContain('Unknown cafi action: bogus');
-    expect(stderr).toContain('Known: index, status, get, lookup, clear, context, gate');
+    expect(stderr).toContain('Known: plan, save, status, get, lookup, clear, context, gate, index');
   });
 });
 

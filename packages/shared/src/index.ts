@@ -1,4 +1,5 @@
 export * from './cache';
+export * from './file-lock';
 export * from './file-walker';
 export * from './git';
 export * from './logger';
