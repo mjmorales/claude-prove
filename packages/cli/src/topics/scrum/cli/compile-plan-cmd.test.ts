@@ -390,6 +390,260 @@ describe('runCompilePlanCmd — compilation', () => {
     expect(team_map).toEqual({});
   });
 
+  test('layered milestone (epics + stories) compiles to leaf stories only', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    // Two epics, each with two story children. createTask validates parent_id
+    // exists, so parents are seeded first (and at earlier timestamps).
+    store.createTask({
+      id: 'e1',
+      title: 'Epic 1',
+      milestoneId: 'm1',
+      layer: 'epic',
+      status: 'accepted',
+      createdAt: '2026-01-01T00:00:01.000Z',
+    });
+    store.createTask({
+      id: 'e2',
+      title: 'Epic 2',
+      milestoneId: 'm1',
+      layer: 'epic',
+      status: 'accepted',
+      createdAt: '2026-01-01T00:00:02.000Z',
+    });
+    for (const [seq, [id, parent]] of [
+      ['e1s1', 'e1'],
+      ['e1s2', 'e1'],
+      ['e2s1', 'e2'],
+      ['e2s2', 'e2'],
+    ].entries()) {
+      store.createTask({
+        id,
+        title: `Story ${id}`,
+        milestoneId: 'm1',
+        parentId: parent,
+        layer: 'story',
+        createdAt: `2026-01-01T00:00:1${seq}.000Z`,
+      });
+    }
+
+    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const { plan, scrum_map } = parsePlan(res.stdout);
+
+    // The 4 story leaves compile in; the 2 epic containers do NOT. 4 leaves =>
+    // full mode (threshold is on emitted leaves, not the actionable count of 6).
+    expect(plan.tasks).toHaveLength(4);
+    expect(plan.mode).toBe('full');
+    const emittedScrumIds = Object.values(scrum_map).sort();
+    expect(emittedScrumIds).toEqual(['e1s1', 'e1s2', 'e2s1', 'e2s2']);
+    // No epic id leaks into the scrum-map sidecar.
+    expect(emittedScrumIds).not.toContain('e1');
+    expect(emittedScrumIds).not.toContain('e2');
+    // Container-free leaves with no inter-leaf deps all land in wave 1.
+    expect(plan.tasks.every((t) => t.wave === 1)).toBe(true);
+    expect(plan.tasks.every((t) => t.deps.length === 0)).toBe(true);
+  });
+
+  test('flat milestone output is unchanged by the container filter', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    seedTask(store, 'a', 'm1', 1);
+    seedTask(store, 'b', 'm1', 2);
+    seedTask(store, 'c', 'm1', 3);
+    store.addDep('a', 'b', 'blocks');
+    store.addDep('b', 'c', 'blocks');
+
+    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const { plan, scrum_map } = parsePlan(res.stdout);
+    // Identical to the pre-filter linear-chain expectation: no parent_id present,
+    // so nothing is excluded.
+    expect(plan.tasks.map((t) => [t.id, t.wave])).toEqual([
+      ['1.1', 1],
+      ['2.1', 2],
+      ['3.1', 3],
+    ]);
+    const byId = Object.fromEntries(plan.tasks.map((t) => [t.id, t]));
+    expect(byId['2.1'].deps).toEqual(['1.1']);
+    expect(byId['3.1'].deps).toEqual(['2.1']);
+    expect(scrum_map).toEqual({ '1.1': 'a', '2.1': 'b', '3.1': 'c' });
+  });
+
+  test('epic whose children are all done/cancelled stays in as a leaf-equivalent', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    store.createTask({
+      id: 'e1',
+      title: 'Epic 1',
+      milestoneId: 'm1',
+      layer: 'epic',
+      createdAt: '2026-01-01T00:00:01.000Z',
+    });
+    // Both children are terminal => out of the actionable set => e1 has no
+    // in-plan child => e1 is NOT a container, it is residual parent-level work.
+    store.createTask({
+      id: 'e1s1',
+      title: 'Story 1',
+      milestoneId: 'm1',
+      parentId: 'e1',
+      layer: 'story',
+      status: 'done',
+      createdAt: '2026-01-01T00:00:02.000Z',
+    });
+    store.createTask({
+      id: 'e1s2',
+      title: 'Story 2',
+      milestoneId: 'm1',
+      parentId: 'e1',
+      layer: 'story',
+      status: 'cancelled',
+      createdAt: '2026-01-01T00:00:03.000Z',
+    });
+
+    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const { plan, scrum_map } = parsePlan(res.stdout);
+    expect(plan.tasks).toHaveLength(1);
+    expect(scrum_map).toEqual({ '1.1': 'e1' });
+  });
+
+  test('childless epic stays in (no children at all => not a container)', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    store.createTask({
+      id: 'e1',
+      title: 'Epic 1',
+      milestoneId: 'm1',
+      layer: 'epic',
+      createdAt: '2026-01-01T00:00:01.000Z',
+    });
+    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const { plan, scrum_map } = parsePlan(res.stdout);
+    expect(plan.tasks).toHaveLength(1);
+    expect(scrum_map).toEqual({ '1.1': 'e1' });
+  });
+
+  test('a leaf blocked_by an excluded epic re-targets onto the epic in-plan children', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    store.createTask({
+      id: 'e1',
+      title: 'Epic 1',
+      milestoneId: 'm1',
+      layer: 'epic',
+      createdAt: '2026-01-01T00:00:01.000Z',
+    });
+    store.createTask({
+      id: 'e1s1',
+      title: 'Story 1',
+      milestoneId: 'm1',
+      parentId: 'e1',
+      layer: 'story',
+      createdAt: '2026-01-01T00:00:02.000Z',
+    });
+    store.createTask({
+      id: 'e1s2',
+      title: 'Story 2',
+      milestoneId: 'm1',
+      parentId: 'e1',
+      layer: 'story',
+      createdAt: '2026-01-01T00:00:03.000Z',
+    });
+    // A flat downstream task blocked_by the EPIC container. The edge must
+    // re-target onto e1's in-plan children (e1s1, e1s2), landing the downstream
+    // in wave 2 behind both.
+    seedTask(store, 'down', 'm1', 9);
+    store.addDep('e1', 'down', 'blocks'); // e1 blocks down => down blocked_by e1
+
+    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const { plan, scrum_map } = parsePlan(res.stdout);
+    const byScrum = Object.fromEntries(Object.entries(scrum_map).map(([p, s]) => [s, p]));
+    const byId = Object.fromEntries(plan.tasks.map((t) => [t.id, t]));
+    // No epic id emitted.
+    expect(Object.values(scrum_map)).not.toContain('e1');
+    // The two stories are sources (wave 1); the downstream depends on both.
+    expect(byId[byScrum.e1s1].wave).toBe(1);
+    expect(byId[byScrum.e1s2].wave).toBe(1);
+    expect(byId[byScrum.down].wave).toBe(2);
+    expect(byId[byScrum.down].deps.sort()).toEqual([byScrum.e1s1, byScrum.e1s2].sort());
+  });
+
+  test('a child blocked_by its own excluded parent drops the self-edge', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    store.createTask({
+      id: 'e1',
+      title: 'Epic 1',
+      milestoneId: 'm1',
+      layer: 'epic',
+      createdAt: '2026-01-01T00:00:01.000Z',
+    });
+    store.createTask({
+      id: 'e1s1',
+      title: 'Story 1',
+      milestoneId: 'm1',
+      parentId: 'e1',
+      layer: 'story',
+      createdAt: '2026-01-01T00:00:02.000Z',
+    });
+    // e1s1 blocked_by its own parent e1. Re-targeting e1 -> {e1s1} would create a
+    // self-edge; it must be dropped so e1s1 stays a wave-1 source.
+    store.addDep('e1', 'e1s1', 'blocks');
+
+    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const { plan, scrum_map } = parsePlan(res.stdout);
+    expect(Object.values(scrum_map)).toEqual(['e1s1']);
+    expect(plan.tasks[0]?.wave).toBe(1);
+    expect(plan.tasks[0]?.deps).toEqual([]);
+  });
+
+  test('nested epic->story->task tree compiles to task leaves; edge at epic re-targets to tasks', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    store.createTask({
+      id: 'e1',
+      title: 'Epic',
+      milestoneId: 'm1',
+      layer: 'epic',
+      createdAt: '2026-01-01T00:00:01.000Z',
+    });
+    store.createTask({
+      id: 's1',
+      title: 'Story',
+      milestoneId: 'm1',
+      parentId: 'e1',
+      layer: 'story',
+      createdAt: '2026-01-01T00:00:02.000Z',
+    });
+    store.createTask({
+      id: 't1',
+      title: 'Task 1',
+      milestoneId: 'm1',
+      parentId: 's1',
+      layer: 'task',
+      createdAt: '2026-01-01T00:00:03.000Z',
+    });
+    store.createTask({
+      id: 't2',
+      title: 'Task 2',
+      milestoneId: 'm1',
+      parentId: 's1',
+      layer: 'task',
+      createdAt: '2026-01-01T00:00:04.000Z',
+    });
+    seedTask(store, 'down', 'm1', 9);
+    store.addDep('e1', 'down', 'blocks'); // down blocked_by the epic two levels up
+
+    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const { plan, scrum_map } = parsePlan(res.stdout);
+    const emitted = Object.values(scrum_map).sort();
+    // Only the two task leaves + the flat downstream; epic AND story excluded.
+    expect(emitted).toEqual(['down', 't1', 't2']);
+    const byScrum = Object.fromEntries(Object.entries(scrum_map).map(([p, s]) => [s, p]));
+    const byId = Object.fromEntries(plan.tasks.map((t) => [t.id, t]));
+    // The edge at the epic re-targets to the task-layer leaves several levels down.
+    expect(byId[byScrum.down].deps.sort()).toEqual([byScrum.t1, byScrum.t2].sort());
+    expect(byId[byScrum.down].wave).toBe(2);
+  });
+
   test('--out writes a team-map.json sibling alongside scrum-map.json', () => {
     store.createMilestone({ id: 'm1', title: 'M1' });
     store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });

@@ -6,6 +6,22 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — `scrum compile-plan` excludes containment parents from the executable plan (fixes #37)
+
+*(No `.claude/.prove.json` change, no store migration — behavior change to the emitted `plan.json`/`scrum-map.json` for layered milestones only.)* Compiling a milestone with a layered containment tree (`epic → story → task` via `parent_id`/`--layer`) previously emitted the epic/story container tasks themselves as wave-1 plan tasks alongside their children — each with a synthesized single step duplicating the container description. Dispatching those would re-implement the children's work monolithically. A milestone with 2 accepted epics + 8 stories compiled to a 10-task plan where two tasks were the epics.
+
+**Container-exclusion predicate.** A task is now excluded from the executable plan iff at least one of its `parent_id` children is itself in the actionable set (i.e. it is a containment parent of in-plan work). The exclusion is by this child-presence test, never by `layer` alone:
+
+- An epic/story whose children are ALL done/cancelled/out-of-milestone (none in the plan) STAYS in — it is residual parent-level work, not a container, so it never silently vanishes.
+- An epic with no children at all STAYS in.
+- The deepest leaves of any tree always survive (a leaf has no in-plan child).
+
+`scrum-map.json` and `team-map.json` likewise carry no container ids — the sidecars map only emitted plan tasks.
+
+**Dependency re-wiring.** A `blocked_by` edge pointing AT an excluded container is re-targeted onto that container's in-plan leaf descendants (transitively, across nested `epic→story→task`), so waves stay correct; a re-target that would create a self-edge (a child blocked_by its own ancestor) is dropped. `mode` (`full` at ≥ 4 tasks) is computed on the emitted leaf count, not the pre-filter actionable count.
+
+This restores the documented "the plan is regenerable — re-run compile rather than hand-editing" invariant: the prior hand-filtering workaround (deleting the epic tasks from `plan.json` after compile) is no longer needed. No action required on update.
+
 ## Unreleased — Per-action `--help` usage lines + full-usage argument errors (fixes #36)
 
 *(No `.claude/.prove.json` change, no store migration — help/error text and one resolution path only.)* Required positionals and per-action flags are now discoverable without failing repeatedly, and a topic's `--help` is no longer a flat dump spanning every action.
