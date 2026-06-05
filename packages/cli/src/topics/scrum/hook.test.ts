@@ -12,7 +12,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { onSessionStart, onStop, onSubagentStop } from './hook';
-import { openScrumStore } from './store';
+import { ScrumStore, openScrumStore } from './store';
+import type { ScrumEvent } from './types';
 
 // ---------------------------------------------------------------------------
 // Test harness
@@ -364,6 +365,184 @@ describe('onSubagentStop', () => {
     const payload = JSON.parse(result.stdout) as { decision?: string; reason?: string };
     expect(payload.decision).toBe('block');
     expect(payload.reason).toContain('made some progress');
+  });
+});
+
+// ===========================================================================
+// onSubagentStop — advisory contribution floor
+// ===========================================================================
+
+describe('onSubagentStop — advisory contribution floor', () => {
+  // Run-window the writeRun fixture stamps: [started_at, ended_at). A seat's
+  // contribution lands inside it; the reconcile's own bookkeeping events stamp
+  // at the real (far-later) wall clock, so they fall OUTSIDE this window.
+  const IN_WINDOW_TS = '2026-04-23T10:00:00Z';
+  const SEAT_AGENT = 'team-auth-engineer';
+
+  let savedAgent: string | undefined;
+
+  // The computed-key delete form keeps biome's noDelete rule satisfied while
+  // truly unsetting the var (an `= undefined` assignment coerces to the string
+  // "undefined", which is not the same as absent).
+  function clearAgent(): void {
+    const key = 'PROVE_AGENT';
+    if (key in process.env) delete process.env[key];
+  }
+
+  beforeEach(() => {
+    savedAgent = process.env.PROVE_AGENT;
+  });
+
+  afterEach(() => {
+    if (savedAgent === undefined) clearAgent();
+    else process.env.PROVE_AGENT = savedAgent;
+  });
+
+  function contributionMisses(taskId: string): ScrumEvent[] {
+    const store = openScrumStore({ cwd: project });
+    try {
+      return store.listEventsForTask(taskId).filter((e) => {
+        const payload = e.payload as Record<string, unknown> | null;
+        return (
+          e.kind === 'blocker_raised' &&
+          payload !== null &&
+          payload.escalation_type === 'contribution_miss'
+        );
+      });
+    } finally {
+      store.close();
+    }
+  }
+
+  test('team seat with no contribution raises one contribution_miss alert and does not block', () => {
+    process.env.PROVE_AGENT = SEAT_AGENT;
+    seedStore((store) => {
+      store.createTask({ id: 'floor-miss', title: 'Floor miss' });
+    });
+    const runDir = writeRun('feature-floor', 'miss', 'floor-miss');
+
+    const result = onSubagentStop({ cwd: runDir, subagent_type: 'general-purpose' });
+
+    // Advisory: the reconcile result stands, never a `decision: block`.
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('scrum: reconciled');
+    const parsed = JSON.parse(result.stdout) as { decision?: string };
+    expect(parsed.decision).toBeUndefined();
+
+    // Exactly one contribution_miss alert, surfaced via the blocker_raised event
+    // surface scrum alerts reads.
+    const misses = contributionMisses('floor-miss');
+    expect(misses).toHaveLength(1);
+    expect((misses[0]?.payload as Record<string, unknown>).summary).toContain(SEAT_AGENT);
+
+    // It lands in listOpenEscalations — the exact source `scrum alerts` reads.
+    const store = openScrumStore({ cwd: project });
+    try {
+      const open = store.listOpenEscalations();
+      expect(
+        open.some((e) => e.task_id === 'floor-miss' && e.escalation_type === 'contribution_miss'),
+      ).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
+  test('team seat with an in-window contribution raises no alert', () => {
+    process.env.PROVE_AGENT = SEAT_AGENT;
+    seedStore((store) => {
+      store.createTask({ id: 'floor-hit', title: 'Floor hit' });
+      // A contribution the seat stamped while the run was live.
+      store.appendEvent({
+        taskId: 'floor-hit',
+        kind: 'note',
+        agent: SEAT_AGENT,
+        ts: IN_WINDOW_TS,
+        payload: { text: 'did the work' },
+      });
+    });
+    const runDir = writeRun('feature-floor', 'hit', 'floor-hit');
+
+    const result = onSubagentStop({ cwd: runDir, subagent_type: 'general-purpose' });
+
+    expect(result.stdout).toContain('scrum: reconciled');
+    expect(contributionMisses('floor-hit')).toHaveLength(0);
+  });
+
+  test('non-team PROVE_AGENT is a clean no-op (no alert)', () => {
+    process.env.PROVE_AGENT = 'general-purpose';
+    seedStore((store) => {
+      store.createTask({ id: 'floor-nonteam', title: 'Floor non-team' });
+    });
+    const runDir = writeRun('feature-floor', 'nonteam', 'floor-nonteam');
+
+    const result = onSubagentStop({ cwd: runDir, subagent_type: 'general-purpose' });
+
+    expect(result.stdout).toContain('scrum: reconciled');
+    expect(contributionMisses('floor-nonteam')).toHaveLength(0);
+  });
+
+  test('unset PROVE_AGENT is a clean no-op (no alert)', () => {
+    clearAgent();
+    seedStore((store) => {
+      store.createTask({ id: 'floor-noagent', title: 'Floor no agent' });
+    });
+    const runDir = writeRun('feature-floor', 'noagent', 'floor-noagent');
+
+    const result = onSubagentStop({ cwd: runDir, subagent_type: 'general-purpose' });
+
+    expect(result.stdout).toContain('scrum: reconciled');
+    expect(contributionMisses('floor-noagent')).toHaveLength(0);
+  });
+
+  test('an orphan run (no linked task) never raises a contribution miss', () => {
+    process.env.PROVE_AGENT = SEAT_AGENT;
+    const runDir = writeRun('feature-floor', 'orphan', null);
+
+    const result = onSubagentStop({ cwd: runDir, subagent_type: 'general-purpose' });
+
+    expect(result.exitCode).toBe(0);
+    const parsed = JSON.parse(result.stdout) as { decision?: string };
+    expect(parsed.decision).toBeUndefined();
+    expect(contributionMisses('__orphan__')).toHaveLength(0);
+  });
+
+  test('a throw inside the floor is swallowed — the hook still returns its reconcile result', () => {
+    process.env.PROVE_AGENT = SEAT_AGENT;
+    seedStore((store) => {
+      store.createTask({ id: 'floor-throw', title: 'Floor throw' });
+    });
+    const runDir = writeRun('feature-floor', 'throw', 'floor-throw');
+
+    // Force ONLY the floor's `blocker_raised` append to throw; reconcile's own
+    // bookkeeping appends pass through to the original so the run still
+    // reconciles. The floor's catch must swallow the throw and leave the
+    // returned reconcile result intact.
+    const originalAppend = ScrumStore.prototype.appendEvent;
+    ScrumStore.prototype.appendEvent = function patched(this: ScrumStore, input) {
+      if (input.kind === 'blocker_raised') throw new Error('boom');
+      return originalAppend.call(this, input);
+    };
+    try {
+      const result = onSubagentStop({ cwd: runDir, subagent_type: 'general-purpose' });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('scrum: reconciled');
+      const parsed = JSON.parse(result.stdout) as { decision?: string };
+      expect(parsed.decision).toBeUndefined();
+    } finally {
+      ScrumStore.prototype.appendEvent = originalAppend;
+    }
+
+    // The throw aborted the floor's append, so no alert landed — but reconcile's
+    // own events did, proving the failure was isolated to the floor.
+    expect(contributionMisses('floor-throw')).toHaveLength(0);
+    const store = openScrumStore({ cwd: project });
+    try {
+      expect(store.listEventsForTask('floor-throw').some((e) => e.kind === 'run_completed')).toBe(
+        true,
+      );
+    } finally {
+      store.close();
+    }
   });
 });
 

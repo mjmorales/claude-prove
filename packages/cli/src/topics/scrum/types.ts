@@ -87,12 +87,21 @@ export type DepKind = 'blocks' | 'blocked_by';
  * agent→driver report so the driver routes it; there is NO agent-to-agent
  * autonomy.
  *
- *   blocked         — a hard dependency the worker cannot satisfy itself
- *   ambiguous       — the spec/criteria admit multiple defensible readings
- *   conflict        — two requirements/constraints contradict
- *   missing_context — needed information is absent and unreachable from the run
+ *   blocked          — a hard dependency the worker cannot satisfy itself
+ *   ambiguous        — the spec/criteria admit multiple defensible readings
+ *   conflict         — two requirements/constraints contradict
+ *   missing_context  — needed information is absent and unreachable from the run
+ *   contribution_miss — advisory: a team-role seat stopped without stamping any
+ *                       contribution on its task within the dispatch window. It
+ *                       surfaces in `alerts` for the operator and NEVER blocks —
+ *                       the floor that raises it is purely advisory.
  */
-export type EscalationType = 'blocked' | 'ambiguous' | 'conflict' | 'missing_context';
+export type EscalationType =
+  | 'blocked'
+  | 'ambiguous'
+  | 'conflict'
+  | 'missing_context'
+  | 'contribution_miss';
 
 /** Runtime-checkable list of the closed `EscalationType` set. */
 export const ESCALATION_TYPES: EscalationType[] = [
@@ -100,6 +109,7 @@ export const ESCALATION_TYPES: EscalationType[] = [
   'ambiguous',
   'conflict',
   'missing_context',
+  'contribution_miss',
 ];
 
 /**

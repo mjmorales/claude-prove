@@ -27,15 +27,17 @@ import { type GateVerdict, evaluateSessionEndGate } from './handoff-gate';
 import {
   type BoundAction,
   ORPHAN_TASK_ID,
+  type ReconcileRunResult,
   type StaleEscalationSweepResult,
   type TriggerBinding,
   bubbleStaleEscalations,
   computeBoundActions,
+  detectContributionMiss,
   reconcileRunCompleted,
   sweepUnreconciled,
 } from './reconcile';
 import { type ScrumStore, openScrumStore } from './store';
-import type { ScrumEvent, ScrumTask } from './types';
+import type { EscalationPayload, ScrumEvent, ScrumTask } from './types';
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -145,6 +147,13 @@ export function onSubagentStop(payload: Record<string, unknown> | null): HookRes
       // correct root when firing from a linked worktree or a subdirectory.
       const result = reconcileRunCompleted(statePath, store, project);
       if (result.kind === 'skipped') return EMPTY_HOOK_RESULT;
+
+      // Advisory contribution floor: a team-role seat that stops without
+      // stamping any contribution on its task gets surfaced in `alerts`, never
+      // blocked. Runs AFTER reconcile (so the seat's own run_completed/synthesis
+      // events are already in the window) and never touches `result` — the
+      // reconcile outcome and the non-blocking exit code stand regardless.
+      raiseContributionMissIfAny(store, statePath, result);
       // Surface the blocking reason (e.g. story-close floor rejection, orphan
       // task-not-found) so the operator sees WHY reconcile stalled, not just
       // that a run was processed.
@@ -355,6 +364,95 @@ function formatDigest(digest: SessionStartDigest): string {
 // ---------------------------------------------------------------------------
 // Subagent-stop helpers
 // ---------------------------------------------------------------------------
+
+/** Earliest timestamp the contribution window opens at when a run records no start. */
+const CONTRIBUTION_WINDOW_EPOCH = '0000-01-01T00:00:00.000Z';
+
+/**
+ * Advisory contribution floor. When the stopping subagent carries a team-role
+ * identity (`PROVE_AGENT=team-<slug>-<role>`) and the detector finds NO
+ * contribution stamped by that seat on its task within the dispatch window,
+ * append one `blocker_raised` event typed `contribution_miss` so the miss
+ * surfaces in `scrum alerts`. Reuses the existing escalation event surface —
+ * `listOpenEscalations()` already reads `blocker_raised` rows — so there is no
+ * new alert plumbing.
+ *
+ * Strictly advisory and strictly non-blocking by construction:
+ *   - it only APPENDS an event; it never returns a result or a `decision: block`
+ *     payload, so the caller's reconcile outcome and exit code are untouched;
+ *   - a non-team `PROVE_AGENT` (detector `isTeamRoleAgent: false`) is a clean
+ *     no-op, as is a seat that DID contribute, a non-`reconciled` run, or an
+ *     orphan run with no linked task;
+ *   - any error is swallowed (logged to stderr at most) so the floor can never
+ *     brick the subagent-stop hook — mirroring the non-blocking discipline the
+ *     rest of this file holds.
+ *
+ * The window is `[run start, run end)`, read from the run's `state.json`
+ * (`started_at` .. `ended_at`/`updated_at`). Anchoring the close on the run's
+ * recorded end — not the current instant — is deliberate: the reconcile that
+ * just ran stamps its own bookkeeping events (`run_completed`, …) with the
+ * ambient `PROVE_AGENT` actor at reconcile time, which is AFTER the run ended.
+ * A `now` window-end would count those engine-written events as the seat's
+ * contribution and mask every real miss; the run-end window-end excludes them
+ * while still covering everything the seat stamped while working. A far-past
+ * epoch backstops a missing `started_at` so a real contribution is never
+ * excluded by an absent start.
+ */
+function raiseContributionMissIfAny(
+  store: ScrumStore,
+  statePath: string,
+  result: ReconcileRunResult,
+): void {
+  try {
+    if (result.kind !== 'reconciled' || result.taskId === null) return;
+
+    const agentName = process.env.PROVE_AGENT ?? '';
+    if (agentName === '') return;
+
+    const window = readRunWindow(statePath);
+    const windowStart = window.start ?? CONTRIBUTION_WINDOW_EPOCH;
+    const windowEnd = window.end ?? new Date().toISOString();
+
+    const verdict = detectContributionMiss(store, agentName, result.taskId, windowStart, windowEnd);
+    if (!verdict.missed) return;
+
+    const payload: EscalationPayload = {
+      escalation_type: 'contribution_miss',
+      summary: `team agent ${agentName} (role ${verdict.role}, team ${verdict.slug}) stopped without contributing to task ${result.taskId}`,
+    };
+    store.appendEvent({ taskId: result.taskId, kind: 'blocker_raised', payload });
+  } catch (err) {
+    // Advisory floor — a failure here must never alter the reconcile outcome.
+    process.stderr.write(`scrum contribution floor: ${errMsg(err)}\n`);
+  }
+}
+
+/**
+ * Read the `[started_at, ended_at)` window the run recorded in its `state.json`.
+ * `end` falls back to `updated_at` when `ended_at` is absent. A missing or
+ * malformed field reads as null so the caller can apply its own backstop.
+ */
+function readRunWindow(statePath: string): { start: string | null; end: string | null } {
+  try {
+    const raw = readFileSync(statePath, 'utf8');
+    const parsed = JSON.parse(raw) as {
+      started_at?: unknown;
+      ended_at?: unknown;
+      updated_at?: unknown;
+    };
+    return {
+      start: nonEmptyString(parsed.started_at),
+      end: nonEmptyString(parsed.ended_at ?? parsed.updated_at),
+    };
+  } catch {
+    return { start: null, end: null };
+  }
+}
+
+/** A non-empty string value, or null for any other type or the empty string. */
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
 
 /**
  * Resolve the run directory from the subagent's cwd. Walks upward from
