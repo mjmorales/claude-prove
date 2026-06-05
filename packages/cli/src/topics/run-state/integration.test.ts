@@ -15,6 +15,7 @@ import { describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { CURRENT_SCHEMA_VERSION } from './schemas';
 
 const CLI_PATH = resolve(import.meta.dir, '../../../bin/run.ts');
 const FROZEN = '2026-04-22T12:00:00Z';
@@ -503,7 +504,9 @@ describe('run-state CLI integration', () => {
 
       const result = runCli(['migrate', '--runs-root', runsRoot], root);
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('1 processed, 0 failed');
+      // Freshly-converted artifacts are stamped at the current version, so the
+      // structural pass version-bumps nothing.
+      expect(result.stdout).toContain('1 converted, 0 version-bumped, 0 failed');
       const plan = JSON.parse(readFileSync(join(legacy, 'plan.json'), 'utf8'));
       expect(plan.kind).toBe('plan');
       expect(plan.tasks.length).toBe(1);
@@ -511,6 +514,51 @@ describe('run-state CLI integration', () => {
       const state = JSON.parse(readFileSync(join(legacy, 'state.json'), 'utf8'));
       expect(state.kind).toBe('state');
       expect(state.slug).toBe('legacy');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('migrate version-bumps a behind-version JSON-first plan.json in place', () => {
+    const root = setupProjectRoot();
+    try {
+      const runsRoot = join(root, '.prove', 'runs');
+      const runDir = join(runsRoot, 'main', 'behind');
+      mkdirSync(runDir, { recursive: true });
+      // A v3 plan.json — behind the current schema, no markdown to convert.
+      const planFile = join(runDir, 'plan.json');
+      writeFileSync(
+        planFile,
+        `${JSON.stringify({ schema_version: '3', kind: 'plan', mode: 'simple', tasks: [{ id: '1.1', title: 'T', wave: 1, steps: [] }] }, null, 2)}\n`,
+      );
+
+      const result = runCli(['migrate', '--runs-root', runsRoot], root);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('schema_version bumped: plan.json');
+      const plan = JSON.parse(readFileSync(planFile, 'utf8'));
+      expect(plan.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+      // Data preserved through the bump.
+      expect(plan.tasks[0].id).toBe('1.1');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('migrate --dry-run reports the version bump without writing', () => {
+    const root = setupProjectRoot();
+    try {
+      const runsRoot = join(root, '.prove', 'runs');
+      const runDir = join(runsRoot, 'main', 'behind');
+      mkdirSync(runDir, { recursive: true });
+      const planFile = join(runDir, 'plan.json');
+      const before = `${JSON.stringify({ schema_version: '3', kind: 'plan', tasks: [] }, null, 2)}\n`;
+      writeFileSync(planFile, before);
+
+      const result = runCli(['migrate', '--runs-root', runsRoot, '--dry-run'], root);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('schema_version bumped: plan.json');
+      // --dry-run leaves the artifact untouched.
+      expect(readFileSync(planFile, 'utf8')).toBe(before);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

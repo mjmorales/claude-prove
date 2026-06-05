@@ -6,7 +6,18 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { MIGRATIONS, type MigrationFn, detectVersion, planMigration } from './schema-migrate';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  MIGRATIONS,
+  type MigrationFn,
+  canAdvanceStructurally,
+  detectVersion,
+  migrateAllArtifacts,
+  migrateRunArtifacts,
+  planMigration,
+} from './schema-migrate';
 import { CURRENT_SCHEMA_VERSION } from './schemas';
 
 describe('detectVersion', () => {
@@ -282,5 +293,134 @@ describe('full chain to CURRENT_SCHEMA_VERSION', () => {
       const [out] = fn({ schema_version: key.split('_to_')[0] });
       expect(out.schema_version).toBe(target);
     }
+  });
+});
+
+describe('canAdvanceStructurally', () => {
+  test('a version with a registered first hop can advance', () => {
+    expect(canAdvanceStructurally('1')).toBe(true);
+    expect(canAdvanceStructurally('3')).toBe(true);
+  });
+
+  test('the current version has no next hop and cannot advance', () => {
+    expect(canAdvanceStructurally(CURRENT_SCHEMA_VERSION)).toBe(false);
+  });
+
+  test('a version with no registered first hop cannot advance', () => {
+    withoutHop('3_to_4', () => {
+      expect(canAdvanceStructurally('3')).toBe(false);
+    });
+  });
+});
+
+/** Remove a structural hop for the duration of one test, then restore it. */
+function withoutHop(key: string, body: () => void): void {
+  const saved = MIGRATIONS[key];
+  delete MIGRATIONS[key];
+  try {
+    body();
+  } finally {
+    if (saved) MIGRATIONS[key] = saved;
+  }
+}
+
+describe('migrateRunArtifacts / migrateAllArtifacts', () => {
+  let root: string;
+
+  function setup(): string {
+    root = mkdtempSync(join(tmpdir(), 'schema-migrate-artifacts-'));
+    return root;
+  }
+
+  function writeArtifact(runDir: string, name: string, data: Record<string, unknown>): void {
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, name), `${JSON.stringify(data, null, 2)}\n`, 'utf8');
+  }
+
+  test('bumps a behind-version plan.json in place and preserves data', () => {
+    const runDir = join(setup(), 'main', 'a');
+    writeArtifact(runDir, 'plan.json', {
+      schema_version: '3',
+      kind: 'plan',
+      tasks: [{ id: '1.1', title: 'T' }],
+    });
+    try {
+      const result = migrateRunArtifacts(runDir);
+      expect(result.bumped).toEqual(['plan.json']);
+      const out = JSON.parse(readFileSync(join(runDir, 'plan.json'), 'utf8'));
+      expect(out.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+      expect(out.tasks[0].id).toBe('1.1');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a current artifact is a no-op (no bump, no rewrite)', () => {
+    const runDir = join(setup(), 'main', 'a');
+    const body = `${JSON.stringify({ schema_version: CURRENT_SCHEMA_VERSION, kind: 'plan' }, null, 2)}\n`;
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, 'plan.json'), body, 'utf8');
+    try {
+      const result = migrateRunArtifacts(runDir);
+      expect(result.bumped).toEqual([]);
+      expect(readFileSync(join(runDir, 'plan.json'), 'utf8')).toBe(body);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('--dry-run reports the bump without writing', () => {
+    const runDir = join(setup(), 'main', 'a');
+    const body = `${JSON.stringify({ schema_version: '3', kind: 'plan' }, null, 2)}\n`;
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, 'plan.json'), body, 'utf8');
+    try {
+      const result = migrateRunArtifacts(runDir, { dryRun: true });
+      expect(result.bumped).toEqual(['plan.json']);
+      expect(readFileSync(join(runDir, 'plan.json'), 'utf8')).toBe(body);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a corrupt artifact records a per-run error without aborting', () => {
+    const runDir = join(setup(), 'main', 'a');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(join(runDir, 'plan.json'), '{ not json', 'utf8');
+    try {
+      const result = migrateRunArtifacts(runDir);
+      expect(result.error).toBeDefined();
+      expect(result.bumped).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('migrateAllArtifacts sweeps every behind-version run dir', () => {
+    setup();
+    const runsRoot = join(root, '.prove', 'runs');
+    writeArtifact(join(runsRoot, 'main', 'a'), 'plan.json', { schema_version: '3', kind: 'plan' });
+    writeArtifact(join(runsRoot, 'feat', 'b'), 'prd.json', { schema_version: '2', kind: 'prd' });
+    writeArtifact(join(runsRoot, 'main', 'c'), 'state.json', {
+      schema_version: CURRENT_SCHEMA_VERSION,
+      kind: 'state',
+    });
+    try {
+      const results = migrateAllArtifacts(runsRoot);
+      const bumpedRuns = results.filter((r) => r.bumped.length > 0);
+      expect(bumpedRuns).toHaveLength(2);
+      expect(
+        JSON.parse(readFileSync(join(runsRoot, 'main', 'a', 'plan.json'), 'utf8')).schema_version,
+      ).toBe(CURRENT_SCHEMA_VERSION);
+      expect(
+        JSON.parse(readFileSync(join(runsRoot, 'feat', 'b', 'prd.json'), 'utf8')).schema_version,
+      ).toBe(CURRENT_SCHEMA_VERSION);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('a missing runs root yields an empty sweep', () => {
+    expect(migrateAllArtifacts(join(tmpdir(), 'no-such-runs-root-xyz'))).toEqual([]);
   });
 });

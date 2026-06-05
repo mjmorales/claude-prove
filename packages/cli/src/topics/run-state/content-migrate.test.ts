@@ -20,6 +20,7 @@ import {
   planContentMigration,
   planRunContentMigration,
 } from './content-migrate';
+import { MIGRATIONS as STRUCTURAL_MIGRATIONS, migrateRunArtifacts } from './schema-migrate';
 import { CURRENT_SCHEMA_VERSION } from './schemas';
 
 // --------------------------------------------------------------------------
@@ -167,6 +168,19 @@ describe('planRunContentMigration', () => {
       expect(log?.hops).toHaveLength(1);
     });
   });
+
+  test('a behind-version artifact with NO structural path and NO content hop is NOT listed', () => {
+    const runDir = join(makeScratch(), 'main', 'add-login');
+    // v3 plan.json, but with the 3_to_4 structural hop removed AND no content
+    // hop registered: the lag is unmigratable by either surface, so the
+    // planner must not report it (otherwise it disagrees with `migrate`, which
+    // would process zero such artifacts).
+    writeArtifact(runDir, 'plan.json', { schema_version: '3', kind: 'plan' });
+    withoutStructuralHop('3_to_4', () => {
+      const plan = planRunContentMigration(runDir);
+      expect(plan.artifacts).toEqual([]);
+    });
+  });
 });
 
 // --------------------------------------------------------------------------
@@ -215,8 +229,61 @@ describe('planContentMigration', () => {
 });
 
 // --------------------------------------------------------------------------
+// Cross-surface agreement — `migrate` and `migrate-runs` never disagree on the
+// same artifact. A v3 plan.json is either migrated to v4 by the structural
+// sweep, or it is not listed by the content planner.
+// --------------------------------------------------------------------------
+
+describe('migrate / migrate-runs agreement on a v3 plan.json', () => {
+  test('a v3 plan.json IS migrated to v4 by the structural sweep AND listed by the planner', () => {
+    const runDir = join(makeScratch(), 'main', 'add-login');
+    writeArtifact(runDir, 'plan.json', { schema_version: '3', kind: 'plan', tasks: [] });
+
+    // migrate-runs lists it (a structural hop applies, even with no content hop).
+    const listed = planRunContentMigration(runDir);
+    expect(listed.artifacts).toHaveLength(1);
+    expect(listed.artifacts[0].fromVersion).toBe('3');
+    expect(listed.artifacts[0].toVersion).toBe('4');
+    expect(listed.artifacts[0].hops).toEqual([]);
+
+    // migrate (structural sweep) actually advances it to v4.
+    const result = migrateRunArtifacts(runDir);
+    expect(result.bumped).toEqual(['plan.json']);
+    const after = JSON.parse(readFileSync(join(runDir, 'plan.json'), 'utf8'));
+    expect(after.schema_version).toBe('4');
+
+    // After the bump it is current — the planner no longer lists it.
+    expect(planRunContentMigration(runDir).artifacts).toEqual([]);
+  });
+
+  test('an unmigratable v3 plan.json is processed by neither surface', () => {
+    const runDir = join(makeScratch(), 'main', 'add-login');
+    writeArtifact(runDir, 'plan.json', { schema_version: '3', kind: 'plan', tasks: [] });
+    withoutStructuralHop('3_to_4', () => {
+      // migrate-runs does not list it (no hop applies).
+      expect(planRunContentMigration(runDir).artifacts).toEqual([]);
+      // migrate does not bump it (planMigration finds no hop -> no change).
+      expect(migrateRunArtifacts(runDir).bumped).toEqual([]);
+      const after = JSON.parse(readFileSync(join(runDir, 'plan.json'), 'utf8'));
+      expect(after.schema_version).toBe('3');
+    });
+  });
+});
+
+// --------------------------------------------------------------------------
 // Helpers
 // --------------------------------------------------------------------------
+
+/** Remove a structural hop for the duration of one test, then restore it. */
+function withoutStructuralHop(key: string, body: () => void): void {
+  const saved = STRUCTURAL_MIGRATIONS[key];
+  delete STRUCTURAL_MIGRATIONS[key];
+  try {
+    body();
+  } finally {
+    if (saved) STRUCTURAL_MIGRATIONS[key] = saved;
+  }
+}
 
 function synthHop(from: string, to: string, kinds: ContentHop['kinds']): ContentHop {
   return {

@@ -14,7 +14,10 @@
  * retroactively change what an earlier migration does.
  */
 
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { CURRENT_SCHEMA_VERSION } from './schemas';
+import { writeJsonAtomic } from './state';
 
 /** Parsed run-state artifact; migrations mutate a shallow clone. */
 export type ArtifactData = Record<string, unknown>;
@@ -194,4 +197,132 @@ export function planMigration(data: ArtifactData): [ArtifactData, MigrationChang
   }
 
   return [result, allChanges];
+}
+
+/**
+ * Whether the deterministic structural chain can advance an artifact AT ALL
+ * from `from` — i.e. the first hop `<from>_to_<from+1>` is registered. This is
+ * exactly when `run-state migrate` would change the artifact (it advances as
+ * far as the dense prefix of the chain reaches, stopping at the first gap).
+ *
+ * Shared with the content planner so `migrate-runs` reports an artifact as
+ * behind only when SOME migration would actually run — structural here, or a
+ * content hop. Same-version (already current) is never behind, so the caller
+ * gates on `from === CURRENT_SCHEMA_VERSION` before asking.
+ */
+export function canAdvanceStructurally(from: string): boolean {
+  const next = String(Number.parseInt(from, 10) + 1);
+  if (Number.isNaN(Number.parseInt(next, 10)) || next === from) return false;
+  return MIGRATIONS[`${from}_to_${next}`] !== undefined;
+}
+
+// --------------------------------------------------------------------------
+// JSON-first run-artifact version sweep
+//
+// `planMigration` above hops a single parsed artifact. The sweep below applies
+// it across every JSON-first run artifact (prd.json/plan.json/state.json) under
+// a runs root — the deterministic structural half of `run-state migrate`,
+// distinct from the markdown->JSON converter in `migrate.ts`. A v3 plan.json
+// is brought to v4 here (the `schema_version` bump), so this surface and the
+// `migrate-runs` content planner agree on whether an artifact is behind.
+// --------------------------------------------------------------------------
+
+/** The JSON-first run artifacts the structural sweep version-bumps in place. */
+const VERSIONED_ARTIFACTS = ['prd.json', 'plan.json', 'state.json'] as const;
+
+/** Outcome of structurally version-bumping one run directory's artifacts. */
+export interface ArtifactVersionResult {
+  /** Absolute run directory path. */
+  runDir: string;
+  /** Artifact filenames actually bumped (a hop changed `schema_version`). */
+  bumped: string[];
+  /** Present when an artifact in this run could not be processed. */
+  error?: string;
+}
+
+export interface MigrateArtifactsOptions {
+  dryRun?: boolean;
+}
+
+/**
+ * Apply the structural version chain to every JSON-first artifact in one run
+ * directory. An artifact already at `CURRENT_SCHEMA_VERSION` is a no-op (no
+ * write); a behind-version artifact is rewritten in place via `writeJsonAtomic`
+ * unless `dryRun`. Absent artifacts are skipped — not every run holds all three.
+ */
+export function migrateRunArtifacts(
+  runDir: string,
+  opts: MigrateArtifactsOptions = {},
+): ArtifactVersionResult {
+  const { dryRun = false } = opts;
+  const bumped: string[] = [];
+
+  for (const name of VERSIONED_ARTIFACTS) {
+    const file = join(runDir, name);
+    if (!existsSync(file)) continue;
+    let data: ArtifactData;
+    try {
+      data = JSON.parse(readFileSync(file, 'utf8')) as ArtifactData;
+    } catch (e) {
+      return {
+        runDir,
+        bumped,
+        error: `${name} is not valid JSON: ${e instanceof Error ? e.message : String(e)}`,
+      };
+    }
+    const from = detectVersion(data);
+    if (from === CURRENT_SCHEMA_VERSION) continue;
+    const [migrated] = planMigration(data);
+    // Bump only on a real advance: `planMigration` returns a gap-describing
+    // "change" without advancing the version when a hop is missing, so gate on
+    // the version actually moving — not on `changes` being non-empty.
+    if (detectVersion(migrated) === from) continue;
+    if (!dryRun) writeJsonAtomic(file, migrated);
+    bumped.push(name);
+  }
+
+  return { runDir, bumped };
+}
+
+/**
+ * Walk a runs root and structurally version-bump every JSON-first run
+ * directory found. A run dir is any directory holding a versioned artifact.
+ * Mirrors the per-run isolation in `migrate.ts::migrateAll`: a corrupt
+ * artifact in one run records an `error` marker without aborting the sweep.
+ */
+export function migrateAllArtifacts(
+  runsRoot: string,
+  opts: MigrateArtifactsOptions = {},
+): ArtifactVersionResult[] {
+  const results: ArtifactVersionResult[] = [];
+  if (!existsSync(runsRoot)) return results;
+  for (const runDir of iterArtifactRunDirs(runsRoot).sort()) {
+    results.push(migrateRunArtifacts(runDir, opts));
+  }
+  return results;
+}
+
+/** Recursively collect directories that hold any versioned JSON artifact. */
+function iterArtifactRunDirs(root: string): string[] {
+  const out: string[] = [];
+  walkArtifactDirs(root, out);
+  return out;
+}
+
+function walkArtifactDirs(dir: string, acc: string[]): void {
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return;
+  }
+  if (VERSIONED_ARTIFACTS.some((name) => existsSync(join(dir, name)))) acc.push(dir);
+  for (const name of entries) {
+    const child = join(dir, name);
+    try {
+      if (statSync(child).isDirectory()) walkArtifactDirs(child, acc);
+    } catch {
+      // unreadable child — skip, mirrors migrate.ts::walk
+    }
+  }
 }
