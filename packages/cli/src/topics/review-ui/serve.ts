@@ -29,9 +29,8 @@ import { execFileSync } from 'node:child_process';
 import { openSync } from 'node:fs';
 import { connect } from 'node:net';
 import { join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { runningFromCompiledBinary } from '@claude-prove/installer';
-import { resolvePluginRoot } from '@claude-prove/installer/plugin-root';
 import type { DaemonOptions, DaemonStatus, SpawnContext, SpawnFn } from './daemon';
 import * as daemon from './daemon';
 import { resolveReviewUiPort } from './port-config';
@@ -39,7 +38,7 @@ import {
   CHILD_PORT_ENV,
   CHILD_REPO_ROOT_ENV,
   CHILD_WEB_ROOT_ENV,
-  serverEntryPath,
+  loadServerModule,
 } from './serve-child';
 
 /** The four lifecycle verbs `review-ui serve` accepts. */
@@ -278,10 +277,9 @@ function isPortBusy(port: number): Promise<boolean> {
   });
 }
 
-/** Resolve the server's `resolveWebRoot()` via a runtime dynamic import. */
+/** Resolve the server's `resolveWebRoot()` through the shared module loader. */
 async function defaultResolveWebRoot(): Promise<string | null> {
-  const entry = serverEntryPath(resolvePluginRoot());
-  const mod = (await import(pathToFileURL(entry).href)) as { resolveWebRoot(): string | null };
+  const mod = await loadServerModule();
   return mod.resolveWebRoot();
 }
 
