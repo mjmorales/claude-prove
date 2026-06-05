@@ -377,11 +377,12 @@ describe('claude-prove scrum tag', () => {
 // ---------------------------------------------------------------------------
 
 describe('claude-prove scrum link-run', () => {
-  test('missing positional: exit 1', () => {
+  test('missing positional: exit 1 with full usage line naming both positionals', () => {
     const repo = trackRepo('lr-missing');
     const res = runScrum(['link-run'], repo);
     expect(res.exitCode).toBe(1);
-    expect(res.stderr).toContain('<task-id> positional argument required');
+    expect(res.stderr).toContain('Usage: claude-prove scrum link-run <task-id> <run-path> [flags]');
+    expect(res.stderr).toContain('the following arguments are required: task-id, run-path');
   });
 
   test('unknown task: exit 1', () => {

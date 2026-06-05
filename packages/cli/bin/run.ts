@@ -11,6 +11,8 @@
 import './web-dist.tar' with { type: 'file' };
 import { cac } from 'cac';
 import pjson from '../package.json' with { type: 'json' };
+import { interceptActionHelp } from '../src/core/cli/help-interceptor';
+import { bindCli } from '../src/core/cli/usage';
 import { register as registerAcb } from '../src/topics/acb';
 import { register as registerCafi } from '../src/topics/cafi';
 import { register as registerClaudeMd } from '../src/topics/claude-md';
@@ -60,6 +62,20 @@ registerHandoff(cli);
 
 cli.help();
 cli.version(pjson.version);
+
+// Bind the action registry's usage helpers to this cac instance so
+// per-action dispatchers can raise full-usage errors and the help
+// interceptor can render action-scoped help.
+bindCli(cli);
+
+// Intercept `<topic> <action> [<subaction>] ... --help` before cac parses:
+// cac's stock help only knows the topic command, so it would print the flat
+// all-flags dump. The interceptor prints the action-scoped usage line + only
+// that action's flags for registered actions; everything else falls through
+// to cac unchanged.
+if (interceptActionHelp(process.argv.slice(2))) {
+  process.exit(0);
+}
 
 // Parse with run: false so we can await async action handlers (install
 // upgrade needs to fetch the release binary). Sync handlers still work
