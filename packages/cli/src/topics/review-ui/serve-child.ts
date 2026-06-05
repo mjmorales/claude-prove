@@ -11,19 +11,27 @@
  * the child trusts the values it is handed rather than re-resolving them.
  *
  * The server lives in `@claude-prove/review-ui-server`, which itself depends on
- * `@claude-prove/cli` — a static import here would be a build cycle. The child
- * therefore reaches the server through a runtime dynamic `import()` of the
- * server entry module resolved off the plugin root, keeping the CLI free of any
- * compile-time edge to the server package.
+ * `@claude-prove/cli`. A STATIC top-level import would create a tsc build cycle
+ * (CLI → server → CLI). The child therefore reaches the server through a single
+ * runtime dynamic `import()` of the STRING-LITERAL package specifier
+ * `@claude-prove/review-ui-server`. The literal is the load-bearing detail:
+ * `bun build --compile` statically traces literal dynamic-import specifiers and
+ * bakes the resolved module — plus its whole transitive dependency tree
+ * (fastify, @fastify/*, simple-git, chokidar) — into the compiled binary's
+ * virtual filesystem. The package's `exports` map points at its source entry,
+ * so the same specifier resolves to the server source under `bun run`/`tsx`
+ * from a checkout and to the bundled graph inside a compiled binary. One
+ * specifier serves both shapes: no plugin-dir path arithmetic, no
+ * `server/dist/index.js` that a sources-only marketplace clone never ships, and
+ * no bare `require('fastify')` against a clone that has no `node_modules`.
  *
  * Binds 127.0.0.1 ONLY: the review UI executes git against the operator's repo,
  * so the listener must never be reachable off the loopback interface.
  */
 
-import { join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
-import { detectMode, runningFromCompiledBinary } from '@claude-prove/installer/detect-mode';
-import { resolvePluginRoot } from '@claude-prove/installer/plugin-root';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { runningFromCompiledBinary } from '@claude-prove/installer/detect-mode';
 
 /** Env keys the parent sets on the detached child; read here verbatim. */
 export const CHILD_REPO_ROOT_ENV = 'PROVE_REVIEW_UI_REPO_ROOT';
@@ -33,38 +41,49 @@ export const CHILD_WEB_ROOT_ENV = 'PROVE_REVIEW_UI_WEB_ROOT';
 /** The child always binds loopback — never an externally reachable interface. */
 const CHILD_HOST = '127.0.0.1';
 
-/** Shape of the server entry module the child dynamically imports. */
-interface ServerModule {
+/**
+ * Shape of the server entry module both the child boot path and the parent's
+ * web-root resolution consume. Declared locally (and cast at the import site)
+ * so the CLI's tsc graph carries no hard type edge to the server package —
+ * which would reintroduce the CLI → server → CLI cycle the dynamic import
+ * exists to avoid.
+ */
+export interface ServerModule {
   startServer(opts: {
     host: string;
     port: number;
     repoRoot: string;
     webRoot: string | null;
   }): Promise<unknown>;
+  resolveWebRoot(): string | null;
 }
 
 /**
- * Resolve the server entry module path.
+ * Load the review-ui server entry module.
  *
- * Dev mode loads the TypeScript source resolved RELATIVE TO THIS MODULE's own
- * location (`.../packages/cli/src/topics/review-ui/` → `.../packages/review-ui/
- * server/src/index.ts`), not off the plugin root. That guarantees the CLI and
- * the server come from the same checkout even when `CLAUDE_PROVE_PLUGIN_DIR`
- * points at a different working tree — a static import would couple their
- * builds (the server depends on the CLI), so the runtime path must.
+ * The specifier MUST stay a string literal: `bun build --compile` only traces
+ * and bundles literal dynamic-import targets, so a computed path would leave the
+ * server (and fastify) out of the binary and the marketplace install would fail
+ * with `Cannot find module` / `Cannot find package 'fastify'`. Using the package
+ * name (resolved to source via the server package's `exports` map) keeps the
+ * CLI's strict tsconfig from pulling the server source into its own program —
+ * the package boundary type-checks the server under its own config — while bun
+ * resolves the identical specifier to the bundled graph in a compiled binary.
  *
- * Compiled mode loads the built `dist/index.js` off the plugin root, because a
- * Bun standalone binary bundles the CLI from a virtual filesystem and cannot
- * resolve a sibling source tree relative to its own bundled module URL.
+ * Wraps the import so a missing/broken bundle surfaces an actionable error
+ * (e.g. a binary compiled without the server traced in) instead of a raw
+ * module-resolution stack.
  */
-export function serverEntryPath(pluginRoot: string): string {
-  if (detectMode(pluginRoot) === 'dev') {
-    const here = fileURLToPath(import.meta.url);
-    // serve-child.ts → review-ui → topics → src → cli → packages (five up).
-    const packagesDir = resolve(here, '..', '..', '..', '..', '..');
-    return join(packagesDir, 'review-ui', 'server', 'src', 'index.ts');
+export async function loadServerModule(): Promise<ServerModule> {
+  try {
+    return (await import('@claude-prove/review-ui-server')) as unknown as ServerModule;
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    const shape = runningFromCompiledBinary()
+      ? 'this compiled binary was built without the review-ui server bundled in'
+      : 'the review-ui server source is not present in this checkout';
+    throw new Error(`review-ui serve: cannot load the embedded server (${shape}): ${detail}`);
   }
-  return join(pluginRoot, 'packages', 'review-ui', 'server', 'dist', 'index.js');
 }
 
 /**
@@ -87,8 +106,7 @@ export async function serveChild(env: NodeJS.ProcessEnv = process.env): Promise<
   const webRootRaw = env[CHILD_WEB_ROOT_ENV];
   const webRoot = webRootRaw && webRootRaw.length > 0 ? webRootRaw : null;
 
-  const entry = serverEntryPath(resolvePluginRoot());
-  const mod = (await import(pathToFileURL(entry).href)) as ServerModule;
+  const mod = await loadServerModule();
   await mod.startServer({ host: CHILD_HOST, port, repoRoot, webRoot });
 }
 

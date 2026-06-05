@@ -6,6 +6,18 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — `review-ui serve` boots on a published plugin install (fixes #38)
+
+*(No `.claude/.prove.json` change, no store migration — distribution shape + module-resolution path only.)* `claude-prove review-ui serve start` now boots the loopback daemon from a marketplace plugin install (a sources-only clone with no build step and no `node_modules`). The compiled `claude-prove` binary is now fully self-contained: the review-ui Fastify server — and its whole dependency tree (fastify, @fastify/*, simple-git, chokidar) — is bundled INTO the binary, alongside the already-embedded web bundle. A published install needs nothing on disk outside the binary itself.
+
+**What was broken.** The daemon resolved the server as a separate on-disk module (`packages/review-ui/server/dist/index.js`), which a sources-only clone never ships (`Cannot find module`); pointing `CLAUDE_PROVE_PLUGIN_DIR` at a source checkout hit a path-join bug that dropped the plugin-dir prefix and produced an absolute `/review-ui/server/src/index.ts` (`Cannot find module`); and even with `dist/` copied in, the server's `require('fastify')` failed against a clone with no `node_modules` (`Cannot find package 'fastify'`).
+
+**How it's fixed.** The CLI loads the server through one string-literal dynamic `import('@claude-prove/review-ui-server')`, which `bun build --compile` statically traces and bakes — with all transitive deps — into the binary's virtual filesystem. The server package's `exports` map resolves the same specifier to its source entry, so dev (`bun run` from a checkout) loads the checkout's server and a compiled binary loads the bundled copy — one specifier, no plugin-dir path arithmetic. Two compiled-only boot bugs surfaced and were fixed in the same pass: the server's self-exec guard now suppresses a spurious second listener under the bundled binary, and the child boot no longer hits the `process.exit` that tore the just-bound listener down.
+
+**Release pipeline.** No new build step. The existing `scripts/build-review-ui-embed.sh` (web bundle → `web-dist.tar`) still runs before the compile step; the server now rides the same `bun build --compile packages/cli/bin/run.ts` that already produced the binary — its static import graph pulls the server in automatically.
+
+Auto-adoption: full — the fix lands in the compiled binary; no action required on update beyond installing the new release.
+
 ## Unreleased — `scrum compile-plan` excludes containment parents from the executable plan (fixes #37)
 
 *(No `.claude/.prove.json` change, no store migration — behavior change to the emitted `plan.json`/`scrum-map.json` for layered milestones only.)* Compiling a milestone with a layered containment tree (`epic → story → task` via `parent_id`/`--layer`) previously emitted the epic/story container tasks themselves as wave-1 plan tasks alongside their children — each with a synthesized single step duplicating the container description. Dispatching those would re-implement the children's work monolithically. A milestone with 2 accepted epics + 8 stories compiled to a 10-task plan where two tasks were the epics.
@@ -21,7 +33,6 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 **Dependency re-wiring.** A `blocked_by` edge pointing AT an excluded container is re-targeted onto that container's in-plan leaf descendants (transitively, across nested `epic→story→task`), so waves stay correct; a re-target that would create a self-edge (a child blocked_by its own ancestor) is dropped. `mode` (`full` at ≥ 4 tasks) is computed on the emitted leaf count, not the pre-filter actionable count.
 
 This restores the documented "the plan is regenerable — re-run compile rather than hand-editing" invariant: the prior hand-filtering workaround (deleting the epic tasks from `plan.json` after compile) is no longer needed. No action required on update.
-
 ## Unreleased — Per-action `--help` usage lines + full-usage argument errors (fixes #36)
 
 *(No `.claude/.prove.json` change, no store migration — help/error text and one resolution path only.)* Required positionals and per-action flags are now discoverable without failing repeatedly, and a topic's `--help` is no longer a flat dump spanning every action.

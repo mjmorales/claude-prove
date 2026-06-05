@@ -6,11 +6,11 @@
 // node:sqlite` import would resolve cleanly under Node yet break every
 // transaction call site — a worse failure than the import throw it replaces.
 // Every shipped consumer runs under Bun: the CLI is a Bun binary and the
-// review-ui server launches in-process under the native daemon — its dev and
-// production entry is `bun run .../server/src/index.ts`. The compiled binary
-// loads the tsc-built `dist/index.js` (also under Bun). Launch the server
-// under Bun, never bare Node — node:sqlite lacks the transaction() API this
-// wrapper depends on.
+// review-ui server launches in-process under the native daemon. In dev the
+// entry is the checkout's `server/src/index.ts`; the compiled binary bundles
+// that same server source into its virtual filesystem (so a published install
+// needs no on-disk module), also under Bun. Launch the server under Bun, never
+// bare Node — node:sqlite lacks the transaction() API this wrapper depends on.
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';

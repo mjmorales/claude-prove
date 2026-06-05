@@ -71,6 +71,16 @@ export function register(cli: CAC): void {
           );
           process.exit(1);
         }
+        // The detached child boots the in-process server and must STAY ALIVE on
+        // the bound socket. `serveChild()` resolves the instant the listener
+        // binds (not when it closes), so it must run OUTSIDE the `process.exit`
+        // path below — exiting here would tear the just-bound server down. The
+        // compiled binary reaches the child only through this hidden token; the
+        // open socket keeps the event loop alive after this returns.
+        if (action === 'serve' && sub === SERVE_CHILD_TOKEN) {
+          await serveChild();
+          return;
+        }
         const code = await dispatch(action, sub, path, flags);
         process.exit(code);
       },
@@ -96,15 +106,9 @@ async function dispatch(
       return runProject({ action: verb, path });
     }
     case 'serve': {
-      // The hidden child token is the detached server's own boot path, not an
-      // operator verb — route it straight into the in-process server.
-      if (sub === SERVE_CHILD_TOKEN) {
-        await serveChild();
-        // serveChild's listener keeps the process alive; we only reach here if
-        // it returns (it never should under a bound server), so report success.
-        return 0;
-      }
-      // Empty sub prints usage naming the four verbs and exits 1.
+      // The hidden `__child` token is handled in the action body (it must avoid
+      // the `process.exit` that would kill the just-bound listener), so it never
+      // reaches here. Empty sub prints usage naming the four verbs and exits 1.
       if (flags.port !== undefined) {
         const pinned = Number(flags.port);
         if (!Number.isInteger(pinned) || pinned <= 0) {

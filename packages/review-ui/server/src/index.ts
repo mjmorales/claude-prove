@@ -1,6 +1,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
+import { runningFromCompiledBinary } from "@claude-prove/installer";
 import Fastify, { type FastifyInstance } from "fastify";
 import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
@@ -181,8 +182,19 @@ export async function startServer(
  * True when this module is the process entrypoint (`node dist/index.js` /
  * `tsx src/index.ts`), false when imported. Compares the resolved module path
  * against argv[1] so importing the module triggers no listen/exit side effect.
+ *
+ * A compiled binary must short-circuit to false BEFORE the path comparison.
+ * When this server is bundled into the `claude-prove` standalone binary (so a
+ * marketplace install can serve without `node_modules`), Bun maps argv[1] AND
+ * every bundled module's `import.meta.url` to the same `/$bunfs` virtual entry,
+ * making the identity check vacuously true. The CLI reaches this module by
+ * importing it (`serveChild` calls `startServer` explicitly), so an unguarded
+ * self-exec would boot a SECOND server on the default port alongside the one
+ * the CLI started — a port collision. The binary never runs this module as its
+ * own entrypoint, so the guard simply suppresses the spurious match.
  */
 function isMain(): boolean {
+  if (runningFromCompiledBinary()) return false;
   const entry = process.argv[1];
   if (!entry) return false;
   return path.resolve(entry) === fileURLToPath(import.meta.url);
