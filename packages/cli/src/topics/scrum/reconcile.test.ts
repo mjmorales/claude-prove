@@ -28,6 +28,7 @@ import {
   buildContextBundle,
   computeBoundActions,
   detectContributionMiss,
+  isRunOrphan,
   parseTeamAgentName,
   reconcileMilestoneClosed,
   reconcileRunCompleted,
@@ -266,6 +267,165 @@ describe('reconcileRunCompleted — orphan run', () => {
     expect(
       store.listEventsForTask(ORPHAN_TASK_ID).some((e) => e.kind === 'unlinked_run_detected'),
     ).toBe(true);
+  });
+});
+
+// ===========================================================================
+// unlinked_run_detected dedup — repeated sweeps over an unchanged orphan
+// ===========================================================================
+
+describe('reconcileRunCompleted — unlinked_run_detected dedup', () => {
+  test('repeated reconcile calls for the same orphan run emit exactly one event', () => {
+    const statePath = writeRun({ branch: 'feat', slug: 'orphan-once', taskId: null });
+
+    reconcileRunCompleted(statePath, store);
+    reconcileRunCompleted(statePath, store);
+    reconcileRunCompleted(statePath, store);
+
+    const events = store.listEventsForTask(ORPHAN_TASK_ID, 1000);
+    const orphanEvents = events.filter((e) => e.kind === 'unlinked_run_detected');
+    expect(orphanEvents).toHaveLength(1);
+  });
+
+  test('two distinct orphan runs each emit exactly one event (dedup is per run_path)', () => {
+    const s1 = writeRun({ branch: 'feat-a', slug: 'dup-one', taskId: null });
+    const s2 = writeRun({ branch: 'feat-b', slug: 'dup-two', taskId: null });
+
+    // Two sweeps over both runs.
+    reconcileRunCompleted(s1, store);
+    reconcileRunCompleted(s2, store);
+    reconcileRunCompleted(s1, store);
+    reconcileRunCompleted(s2, store);
+
+    const events = store.listEventsForTask(ORPHAN_TASK_ID, 1000);
+    const orphanEvents = events.filter((e) => e.kind === 'unlinked_run_detected');
+    expect(orphanEvents).toHaveLength(2);
+  });
+
+  test('sweepUnreconciled repeated over an unchanged orphan emits one event total', () => {
+    writeRun({ branch: 'feat', slug: 'sweep-orphan', taskId: null });
+
+    sweepUnreconciled(store, 0);
+    sweepUnreconciled(store, 0);
+    sweepUnreconciled(store, 0);
+
+    const events = store.listEventsForTask(ORPHAN_TASK_ID, 1000);
+    const orphanEvents = events.filter((e) => e.kind === 'unlinked_run_detected');
+    expect(orphanEvents).toHaveLength(1);
+  });
+
+  test('dedup is not window-bounded — suppresses after >1000 prior orphan events', () => {
+    // After first reconcile the target event is in the store.
+    const statePath = writeRun({ branch: 'feat', slug: 'many-orphans', taskId: null });
+    reconcileRunCompleted(statePath, store);
+
+    // Push 1001 noise events for unrelated paths so the old scan-based
+    // listEventsForTask(…, 1000) window would push the target off the bottom.
+    for (let i = 0; i < 1001; i++) {
+      store.appendEvent({
+        taskId: ORPHAN_TASK_ID,
+        kind: 'unlinked_run_detected',
+        payload: { run_path: `noise/runs/branch/slug-${i}`, reason: 'plan.json missing task_id' },
+      });
+    }
+
+    // The targeted SQL query must still suppress the second emit.
+    reconcileRunCompleted(statePath, store);
+
+    // Exactly one event for the target run_path regardless of ordering.
+    const targetPath = '.prove/runs/feat/many-orphans';
+    expect(store.hasOrphanEventForRunPath(targetPath, 'plan.json missing task_id')).toBe(true);
+    const events = store
+      .listEventsForTask(ORPHAN_TASK_ID, 2000)
+      .filter(
+        (e) =>
+          e.kind === 'unlinked_run_detected' &&
+          (e.payload as Record<string, unknown>)?.run_path === targetPath,
+      );
+    expect(events).toHaveLength(1);
+  });
+
+  test('same run path with a different reason emits a second event', () => {
+    // First reconcile: default reason 'plan.json missing task_id'.
+    const statePath = writeRun({ branch: 'feat', slug: 'two-reasons', taskId: null });
+    reconcileRunCompleted(statePath, store);
+
+    const runPath = '.prove/runs/feat/two-reasons';
+    const secondReason = "task 'some-id' not found in scrum store";
+
+    // Directly append a second orphan event for the same path but a different reason,
+    // matching the second callsite in reconcileRunCompleted.
+    store.appendEvent({
+      taskId: ORPHAN_TASK_ID,
+      kind: 'unlinked_run_detected',
+      payload: {
+        run_path: runPath,
+        run_status: 'completed',
+        branch: 'feat',
+        slug: 'two-reasons',
+        reason: secondReason,
+      },
+    });
+
+    // Both (run_path, reason) pairs must be present.
+    expect(store.hasOrphanEventForRunPath(runPath, 'plan.json missing task_id')).toBe(true);
+    expect(store.hasOrphanEventForRunPath(runPath, secondReason)).toBe(true);
+
+    const events = store
+      .listEventsForTask(ORPHAN_TASK_ID, 1000)
+      .filter((e) => e.kind === 'unlinked_run_detected');
+    expect(events).toHaveLength(2);
+  });
+
+  test('same run path same reason is still suppressed on repeat reconcile', () => {
+    const statePath = writeRun({ branch: 'feat', slug: 'same-reason', taskId: null });
+
+    reconcileRunCompleted(statePath, store);
+    reconcileRunCompleted(statePath, store);
+
+    const events = store
+      .listEventsForTask(ORPHAN_TASK_ID, 1000)
+      .filter((e) => e.kind === 'unlinked_run_detected');
+    expect(events).toHaveLength(1);
+  });
+});
+
+// ===========================================================================
+// isRunOrphan — shared orphan predicate (gh#33)
+// ===========================================================================
+
+describe('isRunOrphan', () => {
+  test('returns true when no layer knows the link', () => {
+    const statePath = writeRun({ branch: 'feat', slug: 'truly-orphan', taskId: null });
+    const runDir = statePath.replace('/state.json', '');
+    expect(isRunOrphan(runDir, store)).toBe(true);
+  });
+
+  test('returns false when plan.task_id is set and the task exists', () => {
+    store.createTask({ id: 'scrum-iso-1', title: 'Linked' });
+    const statePath = writeRun({ branch: 'feat', slug: 'iso-linked', taskId: 'scrum-iso-1' });
+    const runDir = statePath.replace('/state.json', '');
+    expect(isRunOrphan(runDir, store)).toBe(false);
+  });
+
+  test('returns false when nested tasks[n].task_id provides the link', () => {
+    store.createTask({ id: 'scrum-iso-2', title: 'Nested link' });
+    const statePath = writeRun({
+      branch: 'feat',
+      slug: 'iso-nested',
+      taskId: null,
+      nestedTaskId: 'scrum-iso-2',
+    });
+    const runDir = statePath.replace('/state.json', '');
+    expect(isRunOrphan(runDir, store)).toBe(false);
+  });
+
+  test('returns false when store run-link resolves the run (no plan.task_id)', () => {
+    store.createTask({ id: 'scrum-iso-3', title: 'Store-linked' });
+    const statePath = writeRun({ branch: 'feat', slug: 'iso-store', taskId: null });
+    const runDir = statePath.replace('/state.json', '');
+    store.linkRun({ taskId: 'scrum-iso-3', runPath: join('.prove', 'runs', 'feat', 'iso-store') });
+    expect(isRunOrphan(runDir, store)).toBe(false);
   });
 });
 

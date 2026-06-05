@@ -1033,8 +1033,45 @@ function rebuildContextBundle(store: ScrumStore, taskId: string, projectRoot: st
 }
 
 // ---------------------------------------------------------------------------
+// Shared orphan predicate — consumed by reconciler and alerts alike
+// ---------------------------------------------------------------------------
+
+/**
+ * True when a run directory is a genuine orphan: none of the three link-resolution
+ * layers (`plan.task_id`, `plan.tasks[n].task_id`, store reverse lookup) can identify
+ * a linked scrum task.
+ *
+ * Exported so `scrum alerts` can apply the same predicate as the reconciler, keeping
+ * both surfaces in sync. Reads `plan.json` from `runDir` (non-throwing; a missing or
+ * malformed file is treated as no plan-side link and falls through to the store lookup).
+ */
+export function isRunOrphan(runDir: string, store: ScrumStore): boolean {
+  const planPath = join(runDir, 'plan.json');
+  const plan = readJsonOrNull<PlanJsonLite>(planPath);
+  return resolveLinkedTaskId(plan, store, runDir) === null;
+}
+
+// ---------------------------------------------------------------------------
 // Internals — orphan path
 // ---------------------------------------------------------------------------
+
+/**
+ * True when an `unlinked_run_detected` event for `runPath` + `reason` already
+ * exists in the store. Guards `emitOrphanEvent` so repeated reconcile sweeps
+ * emit exactly one event per run per orphan reason.
+ *
+ * The dedup key is (run_path, reason): a run that re-orphans for a DIFFERENT
+ * reason emits a new event. A run that re-orphans for the SAME reason after
+ * being linked and then unlinked again stays suppressed — this is the accepted
+ * limitation of log-keyed dedup (the historical event wins).
+ *
+ * The query is targeted via SQL WHERE on `json_extract` so it is not
+ * window-bounded; it stays correct regardless of how many orphan events have
+ * accumulated on the sentinel task.
+ */
+function hasOrphanEventForRun(store: ScrumStore, runPath: string, reason: string): boolean {
+  return store.hasOrphanEventForRunPath(runPath, reason);
+}
 
 function emitOrphanEvent(
   store: ScrumStore,
@@ -1043,15 +1080,18 @@ function emitOrphanEvent(
   extraReason?: string,
 ): void {
   ensureOrphanTask(store);
+  const runPath = toRunPath(runDir);
+  const reason = extraReason ?? 'plan.json missing task_id';
+  if (hasOrphanEventForRun(store, runPath, reason)) return;
   store.appendEvent({
     taskId: ORPHAN_TASK_ID,
     kind: 'unlinked_run_detected',
     payload: {
-      run_path: toRunPath(runDir),
+      run_path: runPath,
       run_status: state.run_status ?? 'unknown',
       branch: state.branch ?? null,
       slug: state.slug ?? null,
-      reason: extraReason ?? 'plan.json missing task_id',
+      reason,
     },
   });
 }
