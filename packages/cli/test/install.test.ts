@@ -19,6 +19,18 @@ const BIN = join(__dirname, '..', 'bin', 'run.ts');
 // fire time — never an absolute checkout path.
 const EXPECTED_DEV_PREFIX =
   'bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts"';
+// Compiled mode emits the installed-binary invocation (literal $HOME, expanded
+// at fire time).
+const EXPECTED_COMPILED_PREFIX = '"$HOME/.local/bin/claude-prove"';
+
+/** Write `.claude/.prove.json` with an explicit `dev_mode` into a fixture. */
+function writeDevModeConfig(project: string, devMode: boolean): void {
+  mkdirSync(join(project, '.claude'), { recursive: true });
+  writeFileSync(
+    join(project, '.claude', '.prove.json'),
+    `${JSON.stringify({ schema_version: '10', validators: [], dev_mode: devMode }, null, 2)}\n`,
+  );
+}
 
 interface RunResult {
   stdout: string;
@@ -77,6 +89,23 @@ describe('claude-prove install init', () => {
     }
   });
 
+  test('honors an explicit dev_mode:false — emits the compiled binary prefix', () => {
+    const project = makeNodeFixture('init-devmode-off');
+    try {
+      writeDevModeConfig(project, false);
+      const { stdout, status } = runBin(['install', 'init', '--project', project]);
+
+      expect(status).toBe(0);
+      expect(stdout).toContain('mode=compiled, dev_mode config');
+
+      const settings = JSON.parse(readFileSync(join(project, '.claude', 'settings.json'), 'utf8'));
+      const firstCommand = settings.hooks.PostToolUse[0].hooks[0].command as string;
+      expect(firstCommand.startsWith(EXPECTED_COMPILED_PREFIX)).toBe(true);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
   test('second run without --force is idempotent (no mtime change)', () => {
     const project = makeNodeFixture('idem');
     try {
@@ -126,6 +155,58 @@ describe('claude-prove install init-hooks', () => {
       const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
       const firstCommand = settings.hooks.PostToolUse[0].hooks[0].command as string;
       expect(firstCommand.startsWith(EXPECTED_DEV_PREFIX)).toBe(true);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test('honors an explicit dev_mode:false — emits the compiled binary prefix', () => {
+    const project = makeNodeFixture('hooks-devmode-off');
+    try {
+      writeDevModeConfig(project, false);
+      const settingsPath = join(project, '.claude', 'settings.json');
+      const { stdout, status } = runBin(['install', 'init-hooks', '--settings', settingsPath]);
+
+      expect(status).toBe(0);
+      expect(stdout).toContain('mode=compiled, dev_mode config');
+
+      const settings = JSON.parse(readFileSync(settingsPath, 'utf8'));
+      const firstCommand = settings.hooks.PostToolUse[0].hooks[0].command as string;
+      expect(firstCommand.startsWith(EXPECTED_COMPILED_PREFIX)).toBe(true);
+    } finally {
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test('flipping dev_mode to false rewrites dev-prefix hooks without --force', () => {
+    const project = makeNodeFixture('hooks-devmode-flip');
+    try {
+      const settingsPath = join(project, '.claude', 'settings.json');
+
+      // First pass: no config — detection on this runnable checkout emits the
+      // dev prefix.
+      const first = runBin(['install', 'init-hooks', '--settings', settingsPath]);
+      expect(first.status).toBe(0);
+      expect(first.stdout).toContain('mode=dev, detected');
+      const before = JSON.parse(readFileSync(settingsPath, 'utf8'));
+      expect(
+        (before.hooks.PostToolUse[0].hooks[0].command as string).startsWith(EXPECTED_DEV_PREFIX),
+      ).toBe(true);
+
+      // Opt out via config: the rewrite must land on command drift alone,
+      // no --force required.
+      writeDevModeConfig(project, false);
+      const second = runBin(['install', 'init-hooks', '--settings', settingsPath]);
+      expect(second.status).toBe(0);
+      expect(second.stdout).toContain('wrote');
+      expect(second.stdout).toContain('mode=compiled, dev_mode config');
+
+      const after = JSON.parse(readFileSync(settingsPath, 'utf8'));
+      expect(
+        (after.hooks.PostToolUse[0].hooks[0].command as string).startsWith(
+          EXPECTED_COMPILED_PREFIX,
+        ),
+      ).toBe(true);
     } finally {
       rmSync(project, { recursive: true, force: true });
     }

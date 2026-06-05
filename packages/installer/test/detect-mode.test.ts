@@ -1,17 +1,46 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { detectMode, isCompiledEntrypoint, runningFromCompiledBinary } from '../src/detect-mode';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const DEV_FIXTURE = join(HERE, '__fixtures__', 'dev-plugin');
 const COMPILED_FIXTURE = join(HERE, '__fixtures__', 'compiled-plugin');
 
+/**
+ * Build a plugin-root shape in a tmp dir. `node_modules/` is gitignored, so
+ * the runnable-checkout shape cannot live as a committed fixture — each test
+ * constructs exactly the tree it classifies.
+ */
+function makePluginRoot(opts: { sources: boolean; workspaceDeps: boolean }): string {
+  const root = mkdtempSync(join(tmpdir(), 'installer-detect-mode-'));
+  if (opts.sources) {
+    mkdirSync(join(root, 'packages', 'cli', 'src'), { recursive: true });
+  }
+  if (opts.workspaceDeps) {
+    mkdirSync(join(root, 'node_modules', '@claude-prove', 'shared'), { recursive: true });
+  }
+  return root;
+}
+
 describe('detectMode', () => {
-  test("returns 'dev' when packages/cli/src/ exists under pluginRoot", () => {
-    expect(detectMode(DEV_FIXTURE)).toBe('dev');
+  test("returns 'dev' for a runnable checkout (sources + workspace deps)", () => {
+    const root = makePluginRoot({ sources: true, workspaceDeps: true });
+    try {
+      expect(detectMode(root)).toBe('dev');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("returns 'compiled' for a marketplace clone (sources, no workspace deps)", () => {
+    const root = makePluginRoot({ sources: true, workspaceDeps: false });
+    try {
+      expect(detectMode(root)).toBe('compiled');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   test("returns 'compiled' when packages/cli/src/ is absent", () => {
@@ -19,11 +48,11 @@ describe('detectMode', () => {
   });
 
   test("returns 'compiled' for an existing directory with no packages tree", () => {
-    const empty = mkdtempSync(join(tmpdir(), 'installer-detect-mode-'));
+    const root = makePluginRoot({ sources: false, workspaceDeps: false });
     try {
-      expect(detectMode(empty)).toBe('compiled');
+      expect(detectMode(root)).toBe('compiled');
     } finally {
-      rmSync(empty, { recursive: true, force: true });
+      rmSync(root, { recursive: true, force: true });
     }
   });
 

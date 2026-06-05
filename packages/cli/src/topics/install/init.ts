@@ -10,6 +10,7 @@
 import { mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import {
+  type Mode,
   bootstrapProveJson,
   detectMode,
   ensureProjectLink,
@@ -18,6 +19,7 @@ import {
   resolvePluginRoot,
   writeSettingsHooks,
 } from '@claude-prove/installer';
+import { readDevModeSetting } from './dev-mode-setting';
 import { disabledToolsFromConfig } from './disabled-tools';
 
 export interface InitOptions {
@@ -33,7 +35,12 @@ export function runInit(opts: InitOptions): number {
     : join(projectRoot, '.claude', 'settings.json');
 
   const pluginRoot = resolvePluginRoot();
-  const mode = detectMode(pluginRoot);
+  // The project's explicit `dev_mode` is the authority for the hook command
+  // prefix; filesystem detection only seeds the choice when the config is
+  // silent (fresh project, field absent).
+  const devMode = readDevModeSetting(projectRoot);
+  const mode: Mode = devMode === undefined ? detectMode(pluginRoot) : devMode ? 'dev' : 'compiled';
+  const modeSource = devMode === undefined ? 'detected' : 'dev_mode config';
   const prefix = resolveBinaryPath(mode);
 
   // writeSettingsHooks writes a sibling `.tmp` before renaming, so the
@@ -64,7 +71,7 @@ export function runInit(opts: InitOptions): number {
 
   const configPath = join(projectRoot, '.claude', '.prove.json');
   console.log(
-    `claude-prove install init: ${hooksWrote ? 'wrote' : 'up-to-date'} ${settingsPath}; bootstrapped ${configPath} (mode=${mode})`,
+    `claude-prove install init: ${hooksWrote ? 'wrote' : 'up-to-date'} ${settingsPath}; bootstrapped ${configPath} (mode=${mode}, ${modeSource})`,
   );
   return 0;
 }

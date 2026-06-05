@@ -9,11 +9,13 @@
 import { mkdirSync } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import {
+  type Mode,
   detectMode,
   resolveBinaryPath,
   resolvePluginRoot,
   writeSettingsHooks,
 } from '@claude-prove/installer';
+import { readDevModeSetting } from './dev-mode-setting';
 import { disabledToolsFromConfig } from './disabled-tools';
 
 export interface InitHooksOptions {
@@ -26,10 +28,6 @@ export function runInitHooks(opts: InitHooksOptions): number {
     ? resolve(opts.settings)
     : join(process.cwd(), '.claude', 'settings.json');
 
-  const pluginRoot = resolvePluginRoot();
-  const mode = detectMode(pluginRoot);
-  const prefix = resolveBinaryPath(mode);
-
   // Ensure the settings directory exists before writeSettingsHooks stages
   // its sibling `.tmp`.
   const settingsDir = dirname(settingsPath);
@@ -38,10 +36,20 @@ export function runInitHooks(opts: InitHooksOptions): number {
   // `.claude/` — an unusual --settings path should read the cwd config rather
   // than a phantom sibling directory that has no .prove.json.
   const projectRoot = basename(settingsDir) === '.claude' ? dirname(settingsDir) : process.cwd();
+
+  // The project's explicit `dev_mode` is the authority for the hook command
+  // prefix; filesystem detection only seeds the choice when the config is
+  // silent (fresh project, field absent).
+  const devMode = readDevModeSetting(projectRoot);
+  const mode: Mode =
+    devMode === undefined ? detectMode(resolvePluginRoot()) : devMode ? 'dev' : 'compiled';
+  const modeSource = devMode === undefined ? 'detected' : 'dev_mode config';
+  const prefix = resolveBinaryPath(mode);
+
   const disabledTools = disabledToolsFromConfig(projectRoot);
   const wrote = writeSettingsHooks(settingsPath, prefix, { force: opts.force, disabledTools });
   console.log(
-    `claude-prove install init-hooks: ${wrote ? 'wrote' : 'up-to-date'} ${settingsPath} (mode=${mode})`,
+    `claude-prove install init-hooks: ${wrote ? 'wrote' : 'up-to-date'} ${settingsPath} (mode=${mode}, ${modeSource})`,
   );
   return 0;
 }

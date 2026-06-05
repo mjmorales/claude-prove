@@ -30,12 +30,20 @@ export function runningFromCompiledBinary(): boolean {
 }
 
 /**
- * Classify the plugin installation as dev (in-repo TypeScript sources) or
- * compiled (shipped binary / installed plugin without sources).
+ * Classify the plugin installation as dev (a RUNNABLE in-repo TypeScript
+ * checkout) or compiled (shipped binary / any install the bun wrapper cannot
+ * actually run).
  *
- * Dev mode is signalled by the presence of `<pluginRoot>/packages/cli/src/` --
- * that directory only exists in the working copy of the repo. Compiled
- * installs distribute built artifacts and omit it.
+ * Dev mode requires both signals:
+ *   1. `<pluginRoot>/packages/cli/src/` exists — sources are present.
+ *   2. `<pluginRoot>/node_modules/@claude-prove/shared` resolves — the
+ *      workspace install has run, so `bun run packages/cli/bin/run.ts` can
+ *      resolve its workspace deps.
+ *
+ * Sources alone are NOT a dev checkout: a marketplace clone ships the full
+ * repo without `bun install`, and a `bun run` invocation against it dies with
+ * a module-resolution error on every hook fire. Such trees classify as
+ * compiled so codegen emits the bare `claude-prove` binary invocation.
  *
  * Throws when `pluginRoot` is empty so callers cannot accidentally classify
  * process.cwd() or the filesystem root.
@@ -46,8 +54,15 @@ export function detectMode(pluginRoot: string): Mode {
   }
   const cliSrc = join(pluginRoot, 'packages', 'cli', 'src');
   try {
-    const stat = statSync(cliSrc);
-    return stat.isDirectory() ? 'dev' : 'compiled';
+    if (!statSync(cliSrc).isDirectory()) return 'compiled';
+  } catch {
+    return 'compiled';
+  }
+  // Workspace-install marker; statSync follows the symlink bun creates for
+  // workspace packages, so a dangling link also classifies as compiled.
+  const workspaceDep = join(pluginRoot, 'node_modules', '@claude-prove', 'shared');
+  try {
+    return statSync(workspaceDep).isDirectory() ? 'dev' : 'compiled';
   } catch {
     return 'compiled';
   }
