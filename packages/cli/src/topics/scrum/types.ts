@@ -1671,6 +1671,16 @@ export interface AskAwaitReport {
  *                           store boundary in `recordLore`, not by a SQL
  *                           constraint.
  *   created_at            — when the entry was appended (ISO-8601).
+ *   superseded_by         — what replaced this entry (v28), or NULL while the
+ *                           entry is LIVE. A typed soft reference in
+ *                           `lore:<id>` | `decision:<id>` form: a consolidation
+ *                           points at the same team's distilled Lore entry, a
+ *                           Lore→Codex promotion points at the accepted
+ *                           decision. No foreign key (the referent spans two
+ *                           tables); existence is validated at the store
+ *                           boundary in `supersedeLore`.
+ *   reason                — why the entry was replaced (v28). NULL while live;
+ *                           required on every supersession write.
  */
 export interface LoreRow {
   id: number;
@@ -1678,6 +1688,8 @@ export interface LoreRow {
   body: string;
   author_contributor_id: string;
   created_at: string;
+  superseded_by: string | null;
+  reason: string | null;
 }
 
 /**
@@ -1705,6 +1717,38 @@ export interface RecordLoreInput {
  * never written).
  */
 export interface RecordLoreResult {
+  row: LoreRow;
+  /** Set when the team had no seated tech_lead to author-check against. */
+  warning: string | null;
+}
+
+/**
+ * Input to `supersedeLore` (v28). Retires one LIVE Lore entry by pointing it at
+ * its replacement — the compaction write. Exactly ONE of `byLoreId` /
+ * `byDecisionId` must be set: a consolidation points at another Lore entry of
+ * the SAME team (live at write time), a promotion/duplication retire points at
+ * an ACCEPTED Codex decision. The entry's `body`/author/timestamp stay
+ * immutable; only the supersession pointer and reason land. Authorship follows
+ * the Lore layer's rule: the team's seated `tech_lead` must author the write
+ * (vacant seat = warn-and-allow, matching `recordLore`).
+ */
+export interface SupersedeLoreInput {
+  loreId: number;
+  /** Replacement Lore entry id (consolidation). Mutually exclusive with `byDecisionId`. */
+  byLoreId?: number;
+  /** Replacement Codex decision id (promotion / codex-duplicate retire). Mutually exclusive with `byLoreId`. */
+  byDecisionId?: string;
+  reason: string;
+  authorContributorId: string;
+}
+
+/**
+ * The result of `supersedeLore` (v28): the updated (now superseded) Lore row
+ * plus the same bootstrapping warning contract as `recordLore` — set when the
+ * team had no seated tech_lead to author-check against; the write still
+ * completes.
+ */
+export interface SupersedeLoreResult {
   row: LoreRow;
   /** Set when the team had no seated tech_lead to author-check against. */
   warning: string | null;

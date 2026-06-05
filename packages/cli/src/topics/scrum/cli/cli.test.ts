@@ -533,7 +533,7 @@ describe('runTaskCmd', () => {
       expect(shown.task.run_id).toBe('feat-prov');
       expect(shown.task.provenance.worker_id).toBe('worker-42');
       expect(shown.task.provenance.run_id).toBe('feat-prov');
-      expect(shown.task.provenance.schema_version).toBe(27);
+      expect(shown.task.provenance.schema_version).toBe(28);
     } finally {
       restoreEnv('PROVE_WORKER_ID', savedWorker);
       restoreEnv('PROVE_RUN_SLUG', savedSlug);
@@ -3340,7 +3340,7 @@ describe('runTeamCmd', () => {
     const artifact = join(workspace, 'teams', 'payments.md');
     expect(existsSync(artifact)).toBe(true);
     const content = readFileSync(artifact, 'utf8');
-    expect(content).toContain('schema_version: 27');
+    expect(content).toContain('schema_version: 28');
     expect(content).toContain('team:');
     expect(content).toContain('slug: payments');
     expect(content).toContain('team_type: stream_aligned');
@@ -4031,6 +4031,8 @@ interface LoreRow {
   body: string;
   author_contributor_id: string;
   created_at: string;
+  superseded_by: string | null;
+  reason: string | null;
 }
 
 describe('runLoreCmd', () => {
@@ -4183,6 +4185,174 @@ describe('runLoreCmd', () => {
     expect(res.exit).toBe(1);
     expect(res.stdout.trim()).toBe('null');
     expect(res.stderr).toContain("no entry '999999'");
+  });
+
+  test('supersede retires a live entry by lore pointer and reflects into the artifact', () => {
+    createTeam('payments');
+    seatTechLead('payments', 'CT-lead');
+    const oldRes = withCapture(() =>
+      runLoreCmd('record', ['payments'], {
+        body: 'verbose narration',
+        author: 'CT-lead',
+        workspaceRoot: workspace,
+      }),
+    );
+    const headRes = withCapture(() =>
+      runLoreCmd('record', ['payments'], {
+        body: 'the distilled invariant',
+        author: 'CT-lead',
+        workspaceRoot: workspace,
+      }),
+    );
+    const oldId = (JSON.parse(oldRes.stdout.trim()) as LoreRow).id;
+    const headId = (JSON.parse(headRes.stdout.trim()) as LoreRow).id;
+
+    const res = withCapture(() =>
+      runLoreCmd('supersede', [String(oldId)], {
+        by: String(headId),
+        reason: 'folded into the consolidation',
+        author: 'CT-lead',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as LoreRow;
+    expect(row.superseded_by).toBe(`lore:${headId}`);
+    expect(row.reason).toBe('folded into the consolidation');
+    expect(res.stderr).toContain(`entry ${oldId} -> lore:${headId}`);
+
+    // The artifact window drops the retired entry but keeps the full count.
+    const content = readFileSync(join(workspace, 'teams', 'payments.md'), 'utf8');
+    expect(content).toContain('count: 2');
+    expect(content).toContain('live: 1');
+    expect(content).toContain('the distilled invariant');
+    expect(content).not.toContain('verbose narration');
+  });
+
+  test('supersede demands exactly one replacement form and a reason', () => {
+    createTeam('payments');
+    seatTechLead('payments', 'CT-lead');
+    const rec = withCapture(() =>
+      runLoreCmd('record', ['payments'], {
+        body: 'x',
+        author: 'CT-lead',
+        workspaceRoot: workspace,
+      }),
+    );
+    const id = String((JSON.parse(rec.stdout.trim()) as LoreRow).id);
+    const noForm = withCapture(() =>
+      runLoreCmd('supersede', [id], { reason: 'r', author: 'CT-lead', workspaceRoot: workspace }),
+    );
+    expect(noForm.exit).toBe(1);
+    expect(noForm.stderr).toContain('exactly one of --by');
+    const bothForms = withCapture(() =>
+      runLoreCmd('supersede', [id], {
+        by: '1',
+        byDecision: 'd',
+        reason: 'r',
+        author: 'CT-lead',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(bothForms.exit).toBe(1);
+    const noReason = withCapture(() =>
+      runLoreCmd('supersede', [id], { by: '1', author: 'CT-lead', workspaceRoot: workspace }),
+    );
+    expect(noReason.exit).toBe(1);
+    expect(noReason.stderr).toContain('--reason');
+  });
+
+  test('list --live filters retired entries; bare list keeps the history', () => {
+    createTeam('payments');
+    seatTechLead('payments', 'CT-lead');
+    const a = withCapture(() =>
+      runLoreCmd('record', ['payments'], {
+        body: 'rot',
+        author: 'CT-lead',
+        workspaceRoot: workspace,
+      }),
+    );
+    const b = withCapture(() =>
+      runLoreCmd('record', ['payments'], {
+        body: 'keep',
+        author: 'CT-lead',
+        workspaceRoot: workspace,
+      }),
+    );
+    const aId = String((JSON.parse(a.stdout.trim()) as LoreRow).id);
+    const bId = String((JSON.parse(b.stdout.trim()) as LoreRow).id);
+    withCapture(() =>
+      runLoreCmd('supersede', [aId], {
+        by: bId,
+        reason: 'folded',
+        author: 'CT-lead',
+        workspaceRoot: workspace,
+      }),
+    );
+    const live = withCapture(() =>
+      runLoreCmd('list', ['payments'], { live: true, workspaceRoot: workspace }),
+    );
+    expect((JSON.parse(live.stdout.trim()) as LoreRow[]).map((r) => r.body)).toEqual(['keep']);
+    expect(live.stderr).toContain('1 live entries');
+    const all = withCapture(() => runLoreCmd('list', ['payments'], { workspaceRoot: workspace }));
+    expect((JSON.parse(all.stdout.trim()) as LoreRow[]).map((r) => r.body)).toEqual([
+      'rot',
+      'keep',
+    ]);
+  });
+
+  test('promote lifts an entry into a gated Codex draft with deterministic id', () => {
+    createTeam('payments');
+    seatTechLead('payments', 'CT-lead');
+    const rec = withCapture(() =>
+      runLoreCmd('record', ['payments'], {
+        body: 'a durable convention',
+        author: 'CT-lead',
+        workspaceRoot: workspace,
+      }),
+    );
+    const id = (JSON.parse(rec.stdout.trim()) as LoreRow).id;
+    const res = withCapture(() =>
+      runLoreCmd('promote', [String(id)], { kind: 'adr', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+    const decision = JSON.parse(res.stdout.trim()) as {
+      id: string;
+      kind: string;
+      status: string;
+      write_status: string;
+      source_lore_id: number;
+    };
+    expect(decision.id).toBe(`lore-promotion-payments-${id}`);
+    expect(decision.kind).toBe('adr');
+    expect(decision.status).toBe('draft');
+    expect(decision.write_status).toBe('draft');
+    expect(decision.source_lore_id).toBe(id);
+    expect(res.stderr).toContain('awaiting approve');
+  });
+
+  test('promote rejects a non-gated kind (it would bypass the write-gate)', () => {
+    createTeam('payments');
+    seatTechLead('payments', 'CT-lead');
+    const rec = withCapture(() =>
+      runLoreCmd('record', ['payments'], {
+        body: 'x',
+        author: 'CT-lead',
+        workspaceRoot: workspace,
+      }),
+    );
+    const id = String((JSON.parse(rec.stdout.trim()) as LoreRow).id);
+    const res = withCapture(() =>
+      runLoreCmd('promote', [id], { kind: 'note', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown --kind 'note'");
+  });
+
+  test('promote on an unknown lore id exits 1', () => {
+    const res = withCapture(() => runLoreCmd('promote', ['999'], { workspaceRoot: workspace }));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain("unknown lore id '999'");
   });
 
   test('an unknown lore action exits 1', () => {

@@ -2537,7 +2537,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 27,
+      schema_version: 28,
     });
   });
 
@@ -2550,7 +2550,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(27);
+    expect(updated.provenance.schema_version).toBe(28);
   });
 });
 
@@ -4005,6 +4005,262 @@ describe('ScrumStore — promoteLoreToCodex (v22)', () => {
 
   test('rejects an unknown lore id', () => {
     expect(() => store.promoteLoreToCodex({ loreId: 99999 })).toThrow(/unknown lore id '99999'/);
+  });
+});
+
+describe('ScrumStore — Lore supersession (v28)', () => {
+  beforeEach(() => {
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
+  });
+
+  /** Append one Lore entry to `payments` and return its row. */
+  function seedLore(body: string) {
+    return store.recordLore({ teamSlug: 'payments', body, authorContributorId: 'ct-lead' }).row;
+  }
+
+  test('a fresh Lore entry is LIVE (no supersession pointer)', () => {
+    const lore = seedLore('a standing convention');
+    expect(lore.superseded_by).toBeNull();
+    expect(lore.reason).toBeNull();
+  });
+
+  test('supersedeLore by a consolidation entry retires the source with a lore: pointer', () => {
+    const old = seedLore('verbose narration');
+    const consolidation = seedLore('the distilled invariant');
+    const { row, warning } = store.supersedeLore({
+      loreId: old.id,
+      byLoreId: consolidation.id,
+      reason: 'folded into the consolidation',
+      authorContributorId: 'ct-lead',
+    });
+    expect(row.superseded_by).toBe(`lore:${consolidation.id}`);
+    expect(row.reason).toBe('folded into the consolidation');
+    expect(warning).toBeNull();
+    // Append-only: body, author, and timestamp stay immutable.
+    expect(row.body).toBe('verbose narration');
+    expect(row.author_contributor_id).toBe(old.author_contributor_id);
+    expect(row.created_at).toBe(old.created_at);
+  });
+
+  test('listLiveLores filters retired entries; listLores keeps the full history', () => {
+    const old = seedLore('rot');
+    const head = seedLore('keep');
+    store.supersedeLore({
+      loreId: old.id,
+      byLoreId: head.id,
+      reason: 'folded',
+      authorContributorId: 'ct-lead',
+    });
+    expect(store.listLiveLores('payments').map((l) => l.id)).toEqual([head.id]);
+    expect(store.listLores('payments').map((l) => l.id)).toEqual([old.id, head.id]);
+  });
+
+  test('supersedeLore by an ACCEPTED decision stores a decision: pointer', () => {
+    const lore = seedLore('substance the codex already owns');
+    store.recordDecision({ id: 'standing-adr', title: 'Standing ADR', content: 'the rule' });
+    const { row } = store.supersedeLore({
+      loreId: lore.id,
+      byDecisionId: 'standing-adr',
+      reason: 'duplicates the accepted decision',
+      authorContributorId: 'ct-lead',
+    });
+    expect(row.superseded_by).toBe('decision:standing-adr');
+  });
+
+  test('a draft decision cannot replace Lore (it could still be rejected)', () => {
+    const lore = seedLore('x');
+    const draft = store.promoteLoreToCodex({ loreId: lore.id });
+    expect(() =>
+      store.supersedeLore({
+        loreId: lore.id,
+        byDecisionId: draft.id,
+        reason: 'premature',
+        authorContributorId: 'ct-lead',
+      }),
+    ).toThrow(/not accepted/);
+  });
+
+  test('a supersession is resolved ONCE (one-shot, mirroring the write-gate rule)', () => {
+    const old = seedLore('first');
+    const head = seedLore('second');
+    store.supersedeLore({
+      loreId: old.id,
+      byLoreId: head.id,
+      reason: 'folded',
+      authorContributorId: 'ct-lead',
+    });
+    expect(() =>
+      store.supersedeLore({
+        loreId: old.id,
+        byLoreId: head.id,
+        reason: 'again',
+        authorContributorId: 'ct-lead',
+      }),
+    ).toThrow(/already superseded/);
+  });
+
+  test('guards: unknown ids, self, exactly-one replacement form, empty reason', () => {
+    const lore = seedLore('a');
+    expect(() =>
+      store.supersedeLore({
+        loreId: 999,
+        byLoreId: lore.id,
+        reason: 'r',
+        authorContributorId: 'ct-lead',
+      }),
+    ).toThrow(/unknown lore id '999'/);
+    expect(() =>
+      store.supersedeLore({
+        loreId: lore.id,
+        byLoreId: 999,
+        reason: 'r',
+        authorContributorId: 'ct-lead',
+      }),
+    ).toThrow(/unknown replacement lore id '999'/);
+    expect(() =>
+      store.supersedeLore({
+        loreId: lore.id,
+        byLoreId: lore.id,
+        reason: 'r',
+        authorContributorId: 'ct-lead',
+      }),
+    ).toThrow(/cannot supersede itself/);
+    expect(() =>
+      store.supersedeLore({ loreId: lore.id, reason: 'r', authorContributorId: 'ct-lead' }),
+    ).toThrow(/exactly one of/);
+    expect(() =>
+      store.supersedeLore({
+        loreId: lore.id,
+        byLoreId: 1,
+        byDecisionId: 'd',
+        reason: 'r',
+        authorContributorId: 'ct-lead',
+      }),
+    ).toThrow(/exactly one of/);
+    const other = seedLore('b');
+    expect(() =>
+      store.supersedeLore({
+        loreId: lore.id,
+        byLoreId: other.id,
+        reason: '   ',
+        authorContributorId: 'ct-lead',
+      }),
+    ).toThrow(/non-empty reason/);
+  });
+
+  test('a consolidation stays within its team', () => {
+    const lore = seedLore('payments wisdom');
+    store.createTeam({ slug: 'shipping', teamType: 'stream_aligned' });
+    store.rotateTeamMember({ teamSlug: 'shipping', role: 'tech_lead', contributorId: 'ct-ship' });
+    const foreign = store.recordLore({
+      teamSlug: 'shipping',
+      body: 'shipping wisdom',
+      authorContributorId: 'ct-ship',
+    }).row;
+    expect(() =>
+      store.supersedeLore({
+        loreId: lore.id,
+        byLoreId: foreign.id,
+        reason: 'wrong team',
+        authorContributorId: 'ct-lead',
+      }),
+    ).toThrow(/belongs to team 'shipping'/);
+  });
+
+  test('the replacement must be the LIVE head, not a retired entry', () => {
+    const a = seedLore('a');
+    const b = seedLore('b');
+    const c = seedLore('c');
+    store.supersedeLore({
+      loreId: b.id,
+      byLoreId: c.id,
+      reason: 'folded',
+      authorContributorId: 'ct-lead',
+    });
+    expect(() =>
+      store.supersedeLore({
+        loreId: a.id,
+        byLoreId: b.id,
+        reason: 'points at history',
+        authorContributorId: 'ct-lead',
+      }),
+    ).toThrow(/itself superseded.*live head/);
+  });
+
+  test('authorship: only the seated tech_lead may retire; vacant seat warns and allows', () => {
+    const old = seedLore('x');
+    const head = seedLore('y');
+    expect(() =>
+      store.supersedeLore({
+        loreId: old.id,
+        byLoreId: head.id,
+        reason: 'r',
+        authorContributorId: 'ct-impostor',
+      }),
+    ).toThrow(/only ct-lead may retire/);
+    // The rejected write never lands.
+    expect(store.getLore(old.id)?.superseded_by).toBeNull();
+    // Vacate the seat: the write is allowed with a warning (bootstrapping).
+    store.createTeam({ slug: 'solo', teamType: 'stream_aligned' });
+    const a = store.recordLore({ teamSlug: 'solo', body: 'a', authorContributorId: 'ct-solo' }).row;
+    const b = store.recordLore({ teamSlug: 'solo', body: 'b', authorContributorId: 'ct-solo' }).row;
+    const { row, warning } = store.supersedeLore({
+      loreId: a.id,
+      byLoreId: b.id,
+      reason: 'folded',
+      authorContributorId: 'ct-solo',
+    });
+    expect(row.superseded_by).toBe(`lore:${b.id}`);
+    expect(warning).toMatch(/no current tech_lead/);
+  });
+
+  test('approveDecision auto-retires a LIVE promotion source (promoted to codex)', () => {
+    const lore = seedLore('promote me');
+    const draft = store.promoteLoreToCodex({ loreId: lore.id });
+    // While the draft is pending, the source stays live.
+    expect(store.getLore(lore.id)?.superseded_by).toBeNull();
+    store.approveDecision(draft.id, 'ct-anyone');
+    const retired = store.getLore(lore.id);
+    expect(retired?.superseded_by).toBe(`decision:${draft.id}`);
+    expect(retired?.reason).toBe('promoted to codex');
+  });
+
+  test('rejectDecision leaves the promotion source LIVE', () => {
+    const lore = seedLore('maybe not');
+    const draft = store.promoteLoreToCodex({ loreId: lore.id });
+    store.rejectDecision(draft.id, 'ct-anyone', 'not durable');
+    expect(store.getLore(lore.id)?.superseded_by).toBeNull();
+  });
+
+  test('approveDecision leaves an already-superseded source as-is (resolved once, elsewhere)', () => {
+    const lore = seedLore('folded between record and approve');
+    const draft = store.promoteLoreToCodex({ loreId: lore.id });
+    const consolidation = seedLore('the consolidation that won');
+    store.supersedeLore({
+      loreId: lore.id,
+      byLoreId: consolidation.id,
+      reason: 'folded',
+      authorContributorId: 'ct-lead',
+    });
+    store.approveDecision(draft.id, 'ct-anyone');
+    const row = store.getLore(lore.id);
+    expect(row?.superseded_by).toBe(`lore:${consolidation.id}`);
+    expect(row?.reason).toBe('folded');
+  });
+
+  test('teamTerminate promotes only LIVE Lore (retired sources are skipped)', () => {
+    const old = seedLore('rot');
+    const head = seedLore('keep');
+    store.supersedeLore({
+      loreId: old.id,
+      byLoreId: head.id,
+      reason: 'folded',
+      authorContributorId: 'ct-lead',
+    });
+    store.teamTerminate('payments', 'milestone shipped');
+    const promos = store.listDecisions().filter((d) => d.source_lore_id !== null);
+    expect(promos.map((d) => d.source_lore_id)).toEqual([head.id]);
   });
 });
 

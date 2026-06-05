@@ -415,9 +415,10 @@ const LORE_ARTIFACT_LIMIT = 10;
  * plus a human skeleton body. The frontmatter is the file's mirror of the
  * `scrum_teams` row, its `scrum_team_scopes` rows, its open `scrum_team_members`
  * rows, its active `scrum_team_accepts` / `scrum_team_exposes` rows, and its
- * `scrum_lores` rows. The `lore:` block carries the total entry count plus the
- * most recent entries (newest-first, capped) — the aggregate the team and any
- * promotion/compaction step reads.
+ * `scrum_lores` rows. The `lore:` block carries the total entry count, the live
+ * count, and the most recent LIVE entries (newest-first, capped; superseded
+ * entries stay in the store's history but leave the window) — the aggregate the
+ * team and any promotion/compaction step reads.
  */
 function renderTeamArtifact(
   row: Team,
@@ -428,8 +429,13 @@ function renderTeamArtifact(
 ): string {
   const acceptList = iface.accepts.map((a) => a.ask_type);
   const exposeList = iface.exposes.map((e) => `${e.name}=${e.schema_ref}`);
+  // The recent window carries LIVE entries only (v28): a superseded entry's
+  // substance lives in its replacement, so surfacing both would double the
+  // tokens every team agent reads for no added signal. `count` stays the full
+  // append-only total; `live` is the window's population.
+  const liveLores = lores.filter((l) => l.superseded_by === null);
   // listLores returns oldest-first; the artifact surfaces the newest entries.
-  const recentLore = [...lores].reverse().slice(0, LORE_ARTIFACT_LIMIT);
+  const recentLore = [...liveLores].reverse().slice(0, LORE_ARTIFACT_LIMIT);
   const frontmatter = [
     '---',
     `schema_version: ${SCRUM_SCHEMA_VERSION}`,
@@ -459,6 +465,7 @@ function renderTeamArtifact(
         )),
     'lore:',
     `  count: ${lores.length}`,
+    `  live: ${liveLores.length}`,
     '  recent:',
     ...(recentLore.length === 0
       ? ['    []']
@@ -500,9 +507,9 @@ function renderTeamArtifact(
     '',
     '## Lore',
     '',
-    `- Entries: ${lores.length}`,
+    `- Entries: ${lores.length} (${liveLores.length} live)`,
     ...(recentLore.length === 0
-      ? ['- <!-- no Lore recorded -->']
+      ? ['- <!-- no live Lore -->']
       : recentLore.map((l) => `- [${l.id}] ${l.author_contributor_id}: ${l.body}`)),
     '',
   ].join('\n');

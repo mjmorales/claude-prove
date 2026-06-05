@@ -43,6 +43,7 @@ import {
   SCRUM_MIGRATION_V25_SQL,
   SCRUM_MIGRATION_V26_SQL,
   SCRUM_MIGRATION_V27_SQL,
+  SCRUM_MIGRATION_V28_SQL,
   SCRUM_SCHEMA_VERSION,
   ensureScrumSchemaRegistered,
 } from './schemas';
@@ -564,13 +565,13 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('full migration chain from v0 applies v1..v27 in order', () => {
+  test('full migration chain from v0 applies v1..v28 in order', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       const result = runMigrations(raw);
       expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-        26, 27,
+        26, 27, 28,
       ]);
     } finally {
       raw.close();
@@ -583,7 +584,7 @@ describe('scrum domain registration', () => {
       const first = runMigrations(raw);
       expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
-        26, 27,
+        26, 27, 28,
       ]);
 
       const second = runMigrations(raw);
@@ -621,6 +622,7 @@ describe('scrum domain registration', () => {
         { version: 25 },
         { version: 26 },
         { version: 27 },
+        { version: 28 },
       ]);
     } finally {
       raw.close();
@@ -651,7 +653,7 @@ describe('scrum domain registration', () => {
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(log).toHaveLength(27);
+      expect(log).toHaveLength(28);
       const [
         v1,
         v2,
@@ -680,6 +682,7 @@ describe('scrum domain registration', () => {
         v25,
         v26,
         v27,
+        v28,
       ] = log;
       if (
         !v1 ||
@@ -708,9 +711,10 @@ describe('scrum domain registration', () => {
         !v24 ||
         !v25 ||
         !v26 ||
-        !v27
+        !v27 ||
+        !v28
       )
-        throw new Error('expected twenty-seven log entries');
+        throw new Error('expected twenty-eight log entries');
       expect(v1.domain).toBe('scrum');
       expect(v1.version).toBe(1);
       expect(v1.description).toContain('scrum_tasks');
@@ -794,6 +798,9 @@ describe('scrum domain registration', () => {
       expect(v27.domain).toBe('scrum');
       expect(v27.version).toBe(27);
       expect(v27.description).toContain('team_slug');
+      expect(v28.domain).toBe('scrum');
+      expect(v28.version).toBe(28);
+      expect(v28.description).toContain('superseded_by');
     } finally {
       raw.close();
     }
@@ -846,8 +853,33 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_SCHEMA_VERSION tracks the top migration version (27)', () => {
-    expect(SCRUM_SCHEMA_VERSION).toBe(27);
+  test('SCRUM_MIGRATION_V28_SQL adds scrum_lores superseded_by + reason', () => {
+    expect(SCRUM_MIGRATION_V28_SQL).toContain('ALTER TABLE scrum_lores ADD COLUMN superseded_by');
+    expect(SCRUM_MIGRATION_V28_SQL).toContain('ALTER TABLE scrum_lores ADD COLUMN reason');
+  });
+
+  test('v28 ADD COLUMN defaults supersession columns to NULL on existing Lore (live)', () => {
+    const raw = openStore({ path: ':memory:' });
+    try {
+      runMigrations(raw);
+      raw.exec(
+        "INSERT INTO scrum_teams (slug, team_type, created_at) VALUES ('payments', 'stream_aligned', '2026-01-01T00:00:00Z')",
+      );
+      raw.exec(
+        "INSERT INTO scrum_lores (team_slug, body, author_contributor_id, created_at) VALUES ('payments', 'prefer idempotent migrations', 'CT-lead', '2026-01-01T00:00:00Z')",
+      );
+      const row = raw.all<{ superseded_by: string | null; reason: string | null }>(
+        'SELECT superseded_by, reason FROM scrum_lores WHERE team_slug = ?',
+        ['payments'],
+      );
+      expect(row).toEqual([{ superseded_by: null, reason: null }]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('SCRUM_SCHEMA_VERSION tracks the top migration version (28)', () => {
+    expect(SCRUM_SCHEMA_VERSION).toBe(28);
   });
 
   test('v11 ADD COLUMN defaults worker_id/run_id to NULL on existing rows', () => {
@@ -980,7 +1012,7 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V14_SQL).toContain('idx_scrum_teams_type');
   });
 
-  test('a fresh store ends at version 27 with scrum_teams present', () => {
+  test('a fresh store ends at version 28 with scrum_teams present', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -989,7 +1021,7 @@ describe('scrum domain registration', () => {
         'SELECT MAX(version) AS version FROM _migrations_log WHERE domain = ?',
         ['scrum'],
       );
-      expect(top).toEqual([{ version: 27 }]);
+      expect(top).toEqual([{ version: 28 }]);
 
       const tables = raw.all<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_teams'",
@@ -1263,7 +1295,7 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V19_SQL).toContain('REFERENCES scrum_teams(slug)');
   });
 
-  test('a fresh store has scrum_lores with the v19 column shape', () => {
+  test('a fresh store has scrum_lores with the v19 column shape + v28 supersession columns', () => {
     const raw = openStore({ path: ':memory:' });
     try {
       runMigrations(raw);
@@ -1272,7 +1304,17 @@ describe('scrum domain registration', () => {
       );
       expect(tables).toEqual([{ name: 'scrum_lores' }]);
       const cols = raw.all<{ name: string }>('PRAGMA table_info(scrum_lores)').map((c) => c.name);
-      expect(cols).toEqual(['id', 'team_slug', 'body', 'author_contributor_id', 'created_at']);
+      // v28 appends the supersession pointer + reason after the v19 base
+      // columns (ADD COLUMN lands them at the end), NULL defaults.
+      expect(cols).toEqual([
+        'id',
+        'team_slug',
+        'body',
+        'author_contributor_id',
+        'created_at',
+        'superseded_by',
+        'reason',
+      ]);
     } finally {
       raw.close();
     }

@@ -748,12 +748,13 @@ ALTER TABLE scrum_teams ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
  *                 stored exactly as the roster and operator history store their
  *                 holders. `created_at` records when the entry was appended.
  *
- * APPEND-ONLY, no supersession column: Lore is never updated or deleted in
- * place — a correction is a NEW entry, not an edit, so the full history of what
- * a team believed at each point survives. This mirrors the position-history
- * idiom (intervals are appended, never rewritten) rather than the
- * accept/expose supersession idiom (which carries a `status`/`superseded_by`
- * pointer); a Lore entry has no lifecycle state to flip, so it carries neither.
+ * APPEND-ONLY: Lore is never updated or deleted in place — a correction is a
+ * NEW entry, not an edit, so the full history of what a team believed at each
+ * point survives. This mirrors the position-history idiom (intervals are
+ * appended, never rewritten). At this version a Lore entry carried no lifecycle
+ * state at all; v28 adds the supersession pointer (`superseded_by` + `reason`)
+ * once compaction gives an entry exactly one state to flip — see v28 for the
+ * rationale.
  *
  * Readable by ALL, but written ONLY by the team's current `tech_lead`. The
  * authorship guard is enforced at the store boundary in `recordLore` (reading
@@ -1098,6 +1099,48 @@ export const SCRUM_MIGRATION_V27_SQL = `
 ALTER TABLE scrum_tasks ADD COLUMN team_slug TEXT;
 `;
 
+// ---------------------------------------------------------------------------
+// Migration v28 — Lore supersession (compaction lifecycle on scrum_lores)
+// ---------------------------------------------------------------------------
+
+/**
+ * v28: a supersession pointer on `scrum_lores` — the compaction lifecycle. Two
+ * nullable TEXT columns, no new table:
+ *
+ *   superseded_by — what replaced this entry, or NULL while the entry is LIVE.
+ *                   A TYPED SOFT reference in `lore:<id>` | `decision:<id>`
+ *                   form: a consolidation replaces an entry with another Lore
+ *                   row of the same team, while a Lore→Codex promotion replaces
+ *                   it with a `scrum_decisions` row. The replacement spans two
+ *                   tables, so the column carries NO foreign key — the (kind,
+ *                   ref) addressing matches the annotation target idiom (v20);
+ *                   referent existence is validated at the store boundary in
+ *                   `supersedeLore`, not by SQL.
+ *   reason        — why the entry was replaced. NULL while live; required by
+ *                   the store boundary on every supersession write, matching
+ *                   the `scrum_decisions` supersession convention.
+ *
+ * v19 deliberately shipped Lore with no supersession column ("a Lore entry has
+ * no lifecycle state to flip"). Compaction introduces exactly one such state:
+ * an entry FOLDED into a distilled consolidation, or PROMOTED into the Codex,
+ * is replaced-with-pointer — the append-only-with-supersession discipline, not
+ * an edit or a delete. The row survives untouched (`body`, author, timestamp
+ * immutable); only the live/superseded read surface changes. Live entries are
+ * `WHERE superseded_by IS NULL` — the filter the team artifact's recent window
+ * and the disband Lore→Codex sweep read, so a folded entry leaves the visible
+ * window the moment its replacement lands while history stays fully auditable.
+ *
+ * A supersession is resolved ONCE: re-superseding an already-superseded entry
+ * is refused at the store boundary (mirroring the decision write-gate's
+ * one-shot rule). `ADD COLUMN` with a NULL default is safe on a populated
+ * table (every existing entry is live). No CHECK — the columns stay
+ * forward-compatible TEXT, matching the v2–v27 convention.
+ */
+export const SCRUM_MIGRATION_V28_SQL = `
+ALTER TABLE scrum_lores ADD COLUMN superseded_by TEXT;
+ALTER TABLE scrum_lores ADD COLUMN reason TEXT;
+`;
+
 /**
  * Current scrum-domain store version — the highest migration version this
  * module registers. Stamped as the per-artifact `schema_version` on the
@@ -1105,7 +1148,7 @@ ALTER TABLE scrum_tasks ADD COLUMN team_slug TEXT;
  * scrum row reports the schema it was read under. Bump in lockstep with the
  * top migration version on every additive hop.
  */
-export const SCRUM_SCHEMA_VERSION = 27;
+export const SCRUM_SCHEMA_VERSION = 28;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
@@ -1330,6 +1373,14 @@ export function ensureScrumSchemaRegistered(): void {
         description: 'add scrum_tasks.team_slug (nullable soft reference) for the team binding',
         up: (db: Database) => {
           db.exec(SCRUM_MIGRATION_V27_SQL);
+        },
+      },
+      {
+        version: 28,
+        description:
+          'add scrum_lores.superseded_by (typed soft ref lore:<id> | decision:<id>) + reason — the compaction lifecycle (append-only-with-supersession)',
+        up: (db: Database) => {
+          db.exec(SCRUM_MIGRATION_V28_SQL);
         },
       },
     ],

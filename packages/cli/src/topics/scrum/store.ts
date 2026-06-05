@@ -81,6 +81,8 @@ import type {
   ScrumTag,
   ScrumTask,
   SetOperatorOfRecordInput,
+  SupersedeLoreInput,
+  SupersedeLoreResult,
   TaskBounds,
   TaskLayer,
   TaskStatus,
@@ -357,7 +359,8 @@ const ASK_COLUMNS =
   'id, from_team, to_team, ask_type, blocking_artifact, state, mapped_artifact, rejected_reason, counter_proposal, created_at';
 
 /** Canonical `scrum_lores` SELECT column list (v19); maps 1:1 to `LoreRow`. */
-const LORE_COLUMNS = 'id, team_slug, body, author_contributor_id, created_at';
+const LORE_COLUMNS =
+  'id, team_slug, body, author_contributor_id, created_at, superseded_by, reason';
 
 /**
  * The Codex subtype a Lore→Codex promotion defaults to (v22). A generalized team
@@ -2285,6 +2288,16 @@ export class ScrumStore {
    * untyped/non-gated decision has no write-gate to approve); its gate is
    * already resolved (`approved`/`rejected`); or a `glossary` responder holds no
    * `tech_lead` slot anywhere. None of these mutate the row.
+   *
+   * Promotion retire (v28): when the approved decision carries a
+   * `source_lore_id` (it was lifted via `promoteLoreToCodex`) and that source
+   * Lore entry is still LIVE, approval retires the source mechanically —
+   * `superseded_by = 'decision:<id>'`, reason `promoted to codex`. The Codex now
+   * owns the content, so the source's replacement is determined, not judged;
+   * the structural transition fires on approve, never on record (a draft could
+   * still be rejected, which leaves the Lore untouched). A source already
+   * superseded (e.g. folded into a consolidation between record and approve) is
+   * left as-is — its supersession was resolved once, elsewhere.
    */
   approveDecision(id: string, responder: string): DecisionRow {
     const existing = this.requireGatedDraft(id, 'approveDecision');
@@ -2294,10 +2307,18 @@ export class ScrumStore {
       );
     }
     const respondedAt = isoNow();
-    this.prep(
-      "UPDATE scrum_decisions SET status = 'accepted', write_status = 'approved', gate_responder = ?, gate_responded_at = ? WHERE id = ?",
-    ).run(responder, respondedAt, id);
-    return this.requireDecision(id, 'approveDecision');
+    const approve = this.db.transaction(() => {
+      this.prep(
+        "UPDATE scrum_decisions SET status = 'accepted', write_status = 'approved', gate_responder = ?, gate_responded_at = ? WHERE id = ?",
+      ).run(responder, respondedAt, id);
+      if (existing.source_lore_id !== null) {
+        this.prep(
+          'UPDATE scrum_lores SET superseded_by = ?, reason = ? WHERE id = ? AND superseded_by IS NULL',
+        ).run(`decision:${id}`, 'promoted to codex', existing.source_lore_id);
+      }
+      return this.requireDecision(id, 'approveDecision');
+    });
+    return approve();
   }
 
   /**
@@ -3444,16 +3465,19 @@ export class ScrumStore {
         slug,
       );
 
-      // Promote the disbanding team's Lore into the Codex as gated DRAFTS — a
-      // disbanding team's durable, generally-applicable learnings are lifted into
-      // shared long-term memory before the team goes inactive. Each promotion is
-      // a PROPOSAL (a draft awaiting a separate approve gate), never an
-      // auto-acceptance. `promoteLoreToCodex` uses a deterministic decision id
-      // per Lore, so a re-promotion upserts rather than duplicates — but the
+      // Promote the disbanding team's LIVE Lore into the Codex as gated DRAFTS —
+      // a disbanding team's durable, generally-applicable learnings are lifted
+      // into shared long-term memory before the team goes inactive. Each
+      // promotion is a PROPOSAL (a draft awaiting a separate approve gate), never
+      // an auto-acceptance. Superseded entries are skipped: their substance
+      // already lives in the consolidation or decision that replaced them, so
+      // re-promoting a retired source would only mint duplicates of memory the
+      // store already keeps. `promoteLoreToCodex` uses a deterministic decision
+      // id per Lore, so a re-promotion upserts rather than duplicates — but the
       // disband itself never re-runs (an already-inactive team throws above), so
       // double-promotion cannot happen on this path. The promotion's inner
       // transaction nests as a SAVEPOINT inside this disband transaction.
-      for (const lore of this.listLores(slug)) {
+      for (const lore of this.listLiveLores(slug)) {
         this.promoteLoreToCodex({ loreId: lore.id });
       }
 
@@ -3557,6 +3581,123 @@ export class ScrumStore {
       id,
     ) as LoreRow | null;
     return row ?? null;
+  }
+
+  /**
+   * A team's LIVE Lore entries — the rows no supersession has retired
+   * (`superseded_by IS NULL`), oldest-first. The read surface that carries a
+   * team's CURRENT wisdom: the team artifact's recent window and the disband
+   * Lore→Codex sweep read this, while `listLores` keeps serving the full
+   * append-only history (superseded rows included) for audit and provenance.
+   */
+  listLiveLores(teamSlug: string): LoreRow[] {
+    return this.prep(
+      `SELECT ${LORE_COLUMNS} FROM scrum_lores WHERE team_slug = ? AND superseded_by IS NULL ORDER BY id ASC`,
+    ).all(teamSlug) as LoreRow[];
+  }
+
+  /**
+   * Retire one LIVE Lore entry by pointing it at its replacement — the
+   * compaction write (v28). Append-only-with-supersession: the row's `body`,
+   * author, and timestamp stay immutable; only the `superseded_by` pointer and
+   * `reason` land, so the full history survives while the entry leaves every
+   * live read surface (`listLiveLores`, the team artifact's recent window).
+   *
+   * Exactly ONE replacement form must be given:
+   *   - `byLoreId` (consolidation) — must name an EXISTING, LIVE Lore entry of
+   *     the SAME team, and not the entry itself. Pointing at another team's
+   *     entry, a retired entry, or itself throws WITHOUT writing.
+   *   - `byDecisionId` (promotion / codex-duplicate retire) — must name an
+   *     EXISTING decision whose `status` is `accepted`; a draft could still be
+   *     rejected, which would leave a dangling retire, so only an accepted
+   *     decision may replace Lore. The pointer is stored in the typed soft-ref
+   *     form `lore:<id>` / `decision:<id>`.
+   *
+   * A supersession is resolved ONCE: an already-superseded entry throws
+   * (mirroring the decision write-gate's one-shot rule) — chains grow by
+   * superseding the LIVE head, never by re-pointing history. `reason` is
+   * required. Authorship follows the Lore layer's rule exactly as `recordLore`:
+   * a SEATED tech_lead must author the write (mismatch throws), a vacant seat
+   * warns and allows (the bootstrapping tolerance).
+   */
+  supersedeLore(input: SupersedeLoreInput): SupersedeLoreResult {
+    const lore = this.getLore(input.loreId);
+    if (lore === null) {
+      throw new Error(`supersedeLore: unknown lore id '${input.loreId}'`);
+    }
+    if (lore.superseded_by !== null) {
+      throw new Error(
+        `supersedeLore: lore ${lore.id} is already superseded by '${lore.superseded_by}'; a supersession is resolved once`,
+      );
+    }
+    if (input.reason.trim().length === 0) {
+      throw new Error('supersedeLore: a non-empty reason is required');
+    }
+
+    const hasLore = input.byLoreId !== undefined;
+    const hasDecision = input.byDecisionId !== undefined;
+    if (hasLore === hasDecision) {
+      throw new Error(
+        'supersedeLore: exactly one of byLoreId (consolidation) or byDecisionId (promotion) is required',
+      );
+    }
+
+    let pointer: string;
+    if (input.byLoreId !== undefined) {
+      if (input.byLoreId === input.loreId) {
+        throw new Error(`supersedeLore: lore ${input.loreId} cannot supersede itself`);
+      }
+      const replacement = this.getLore(input.byLoreId);
+      if (replacement === null) {
+        throw new Error(`supersedeLore: unknown replacement lore id '${input.byLoreId}'`);
+      }
+      if (replacement.team_slug !== lore.team_slug) {
+        throw new Error(
+          `supersedeLore: replacement lore ${replacement.id} belongs to team '${replacement.team_slug}', not '${lore.team_slug}'; a consolidation stays within its team`,
+        );
+      }
+      if (replacement.superseded_by !== null) {
+        throw new Error(
+          `supersedeLore: replacement lore ${replacement.id} is itself superseded; supersede by the live head instead`,
+        );
+      }
+      pointer = `lore:${replacement.id}`;
+    } else {
+      const decision = this.getDecision(input.byDecisionId as string);
+      if (decision === null) {
+        throw new Error(`supersedeLore: unknown replacement decision '${input.byDecisionId}'`);
+      }
+      if (decision.status !== 'accepted') {
+        throw new Error(
+          `supersedeLore: replacement decision '${decision.id}' is '${decision.status}', not accepted; only an accepted decision may replace Lore`,
+        );
+      }
+      pointer = `decision:${decision.id}`;
+    }
+
+    // Same authorship rule as recordLore: the Lore layer is tech_lead-owned,
+    // and retiring an entry changes what every reader sees just as writing one
+    // does — so the same seated-tech_lead gate (with the same vacant-seat
+    // warn-and-allow tolerance) guards both writes.
+    const techLead = this.getTeamRoster(lore.team_slug).current.tech_lead;
+    let warning: string | null = null;
+    if (techLead === null) {
+      warning = `team '${lore.team_slug}' has no current tech_lead; superseding Lore by ${input.authorContributorId} without an authorship check`;
+    } else if (techLead.contributor_id !== input.authorContributorId) {
+      throw new Error(
+        `supersedeLore: '${input.authorContributorId}' is not the current tech_lead of team '${lore.team_slug}'; only ${techLead.contributor_id} may retire Lore`,
+      );
+    }
+
+    this.prep('UPDATE scrum_lores SET superseded_by = ?, reason = ? WHERE id = ?').run(
+      pointer,
+      input.reason,
+      lore.id,
+    );
+    const row = this.prep(`SELECT ${LORE_COLUMNS} FROM scrum_lores WHERE id = ?`).get(
+      lore.id,
+    ) as LoreRow;
+    return { row, warning };
   }
 
   /**

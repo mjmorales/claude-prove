@@ -63,8 +63,10 @@
  *   claude-prove scrum team interface <slug>     (active accepts[] + exposes[])
  *   claude-prove scrum team terminate <slug>     [--reason text]   (manual team-local disband: release scope, supersede exposes, vacate roster, flip status to inactive)
  *   claude-prove scrum lore record <slug>        --body TEXT --author CT-UUID   (append a team-scoped Lore entry; rejects a non-tech_lead author, warns when no tech_lead seated)
- *   claude-prove scrum lore list <slug>          [--human]   (team Lore entries, oldest-first)
+ *   claude-prove scrum lore list <slug>          [--live] [--human]   (team Lore entries, oldest-first; --live = not yet superseded)
  *   claude-prove scrum lore show <id>            (one Lore entry by id)
+ *   claude-prove scrum lore supersede <id>       (--by LORE-ID | --by-decision DECISION-ID) --reason R --author CT-UUID   (retire a live entry by pointer; never deletes)
+ *   claude-prove scrum lore promote <id>         [--kind adr|glossary|pattern] [--title T] [--id D] (lift Lore into the Codex as a gated draft; approve auto-retires the source)
  *   claude-prove scrum annotation add            --target-kind task|team|decision --target REF --body TEXT --author ID   (append a per-artifact note; target is a soft reference, no authorship gate)
  *   claude-prove scrum annotation list           --target-kind K --target REF [--human]   (a target's notes, oldest-first)
  *   claude-prove scrum escalation raise          --task ID --type blocked|ambiguous|conflict|missing_context --summary TEXT [--layer RUNG] [--by ID]   (raise a typed escalation at a rung of the walk-up chain; default layer implementer)
@@ -243,6 +245,11 @@ interface ScrumFlags {
   // `body` + `author` are shared by `annotation add` (v20) below.
   body?: string;
   author?: string;
+  // `lore supersede`/`list` (v28). `byDecision` is the replacement Codex
+  // decision id (the `--by` lore-id form shares the decision-supersede flag
+  // above); `live` filters `lore list` to entries no supersession has retired.
+  byDecision?: string;
+  live?: boolean;
   // `annotation add`/`list` (v20). `targetKind` is the artifact class the note
   // attaches to (task | team | decision); `target` is the soft reference to the
   // specific target within that class.
@@ -390,7 +397,15 @@ export function register(cli: CAC): void {
     )
     .option(
       '--author <id>',
-      'lore record: the entry author (a contributor CT-UUID; must be the team current tech_lead when one is seated). annotation add: the note author (recorded, not gated)',
+      'lore record/supersede: the writing author (a contributor CT-UUID; must be the team current tech_lead when one is seated). annotation add: the note author (recorded, not gated)',
+    )
+    .option(
+      '--by-decision <id>',
+      'lore supersede: the replacement Codex decision id (the promotion / codex-duplicate retire form; --by takes the consolidation lore id)',
+    )
+    .option(
+      '--live',
+      'lore list: only entries no supersession has retired (the team-artifact window set)',
     )
     .option(
       '--target-kind <k>',
@@ -648,12 +663,23 @@ function dispatch(
 
     case 'lore':
       if (arg1 === undefined) {
-        console.error('error: scrum lore: sub-action required (one of: record | list | show)');
+        console.error(
+          'error: scrum lore: sub-action required (one of: record | list | show | supersede | promote)',
+        );
         return 1;
       }
       return runLoreCmd(arg1, [arg2], {
         body: flags.body,
         author: flags.author,
+        // CAC auto-casts numeric option values (`--by 6` arrives as the number
+        // 6); normalize to strings so the handler's parsing owns the shape.
+        by: flags.by === undefined ? undefined : String(flags.by),
+        byDecision: flags.byDecision,
+        reason: flags.reason,
+        kind: flags.kind,
+        title: flags.title,
+        id: flags.id === undefined ? undefined : String(flags.id),
+        live: flags.live,
         human: flags.human,
         workspaceRoot: flags.workspaceRoot,
       });
