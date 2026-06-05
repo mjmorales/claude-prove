@@ -1,8 +1,7 @@
 /**
  * validate.ts tests — entry-point wrapper that bridges JSON on disk /
- * parsed data to the field-spec validator-engine. Mirrors the coverage of
- * `tools/run_state/test_validate.py` plus the file-I/O edge cases only the
- * TS port exposes.
+ * parsed data to the field-spec validator-engine, including the file-I/O
+ * edge cases.
  */
 
 import { describe, expect, test } from 'bun:test';

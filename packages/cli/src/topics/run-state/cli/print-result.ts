@@ -1,8 +1,7 @@
 /**
- * Shared helper: serialize a state mutation result for stdout. Mirrors the
- * Python `_print_result` in `tools/run_state/__main__.py` — JSON format emits
- * pretty-printed state; md format emits `renderSummary(state, plan)` where the
- * plan is loaded from disk when available.
+ * Shared helper: serialize a state mutation result for stdout. JSON format
+ * emits pretty-printed state; md format emits `renderSummary(state, plan)`
+ * where the plan is loaded from disk when available.
  */
 
 import { existsSync, readFileSync } from 'node:fs';

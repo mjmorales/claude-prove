@@ -1,9 +1,8 @@
 /**
  * Schema definitions for `.prove/runs/<branch>/<slug>/` artifact files.
  *
- * Ported 1:1 from `tools/run_state/schemas.py`. Field names, types, enums,
- * defaults, and descriptions are identical to the Python source — on-disk
- * artifacts must stay readable across the cutover.
+ * Field names, types, enums, defaults, and descriptions are pinned —
+ * on-disk artifacts written by earlier versions must stay readable.
  *
  * Kind labels (`prd`, `plan`, `state`, `report`) select which schema applies
  * to a given file path via `inferKind(filename)`.
@@ -12,7 +11,7 @@
 import { basename, dirname } from 'node:path';
 import type { FieldSpec, Schema } from './validator-engine';
 
-// --- constants (mirrors tools/run_state/__init__.py and schemas.py top) ---
+// --- constants ---
 
 // v1 -> v2: plan.json tasks[] gained an optional `bounds` field (declared
 // per-task execution bounds). Absent bounds = unbounded, so the migration is

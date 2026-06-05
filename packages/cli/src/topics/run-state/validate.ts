@@ -2,14 +2,12 @@
  * Schema validation for `.prove/runs/` artifact JSON files.
  *
  * Thin wrapper around `validator-engine.ts`, parameterized by the per-kind
- * schemas in `schemas.ts`. Ported from `tools/run_state/validate.py`.
+ * schemas in `schemas.ts`.
  *
- * Return-shape divergence (deliberate): the Python source returns
- * `list[ValidationError]` / `tuple[dict, list[ValidationError]]`; the TS
- * port returns the envelope `{ ok, kind, version, errors }` so downstream
- * hooks can branch on `ok` without introspecting an error object. The error
- * *strings* inside `errors` match Python byte-for-byte — agents see the same
- * stderr wording.
+ * Returns the envelope `{ ok, kind, version, errors }` so downstream hooks
+ * can branch on `ok` without introspecting an error object. The error
+ * *strings* inside `errors` are pinned byte-for-byte by the parity
+ * captures — agents read this wording on stderr.
  */
 
 import { readFileSync } from 'node:fs';

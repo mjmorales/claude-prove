@@ -1,10 +1,10 @@
 /**
  * Field-spec DSL validator for `.prove/runs/<branch>/<slug>/` JSON artifacts.
  *
- * Ported 1:1 from `tools/run_state/_validator.py`. Error-string parity is
- * part of the contract — the run-state hooks (guard, validate, session-start,
- * stop, subagent-stop) pipe findings to stderr where agents read them. Any
- * drift from the Python wording breaks observability.
+ * Error-string wording is part of the contract — the run-state hooks
+ * (guard, validate, session-start, stop, subagent-stop) pipe findings to
+ * stderr where agents read them, and the parity captures pin the exact
+ * bytes. Any drift in wording breaks observability.
  *
  * Field-spec DSL (mirrors schemas.py, plus TS-only extensions noted below):
  *   - `type`:        "str" | "int" | "bool" | "list" | "dict" | "any"

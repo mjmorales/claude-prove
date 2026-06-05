@@ -1,8 +1,7 @@
 /**
  * One-shot migrators for legacy `.prove/runs/<branch>/<slug>/` layouts.
  *
- * Ported 1:1 from `tools/run_state/migrate.py`. Converts the legacy
- * markdown-first structure
+ * Converts the legacy markdown-first structure
  *
  *   .prove/runs/<branch>/<slug>/
  *     PRD.md

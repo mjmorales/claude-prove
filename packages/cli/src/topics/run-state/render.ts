@@ -6,9 +6,9 @@
  * persisted — presentations are derived on demand so the JSON stays the
  * single source of truth.
  *
- * Ported 1:1 from `tools/run_state/render.py`. Byte-equal output vs the
- * Python source is load-bearing: agents read these views through
- * `scripts/prove-run show` and drift changes orchestrator behavior.
+ * Byte-stable output is load-bearing: agents read these views through
+ * `claude-prove run-state show`, and drift changes orchestrator behavior.
+ * Parity with the frozen Python-reference captures is pinned by tests.
  */
 
 import type { PlanData, PrdData, ReportData, StateData } from './state';
@@ -547,10 +547,9 @@ function formatCounts(counts: Record<string, number>): string {
 // ---------------------------------------------------------------------------
 
 /**
- * Mirror `tools/run_state/__main__.py::cmd_current`: JSON dump of the full
- * state when `format='json'`, otherwise the `renderSummary` text. Callers
- * pass the plan for symmetry; it is forwarded to `renderSummary` which
- * currently ignores it.
+ * JSON dump of the full state when `format='json'`, otherwise the
+ * `renderSummary` text. Callers pass the plan for symmetry; it is
+ * forwarded to `renderSummary` which currently ignores it.
  */
 export function renderCurrent(state: StateData, options: RenderCurrentOptions = {}): string {
   const format = options.format ?? 'md';

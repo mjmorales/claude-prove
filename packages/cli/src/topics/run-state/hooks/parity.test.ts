@@ -1,11 +1,11 @@
 /**
- * Hook parity — asserts the TS port matches `tools/run_state/hook_*.py`
- * byte-for-byte on every captured case.
+ * Hook parity — asserts the TS hooks match the frozen Python-reference
+ * captures byte-for-byte on every case.
  *
- * Captures are regenerated via `__fixtures__/hooks/capture.sh`; this test
- * is the cutover guard rail. Any drift in stdout/stderr/exit for an
- * identical payload + setup fails here, pointing straight at the
- * offending case.
+ * `python-captures/` is a frozen snapshot of the original Python hooks'
+ * stdout/stderr/exit; the originals are deleted, so the captures cannot
+ * be regenerated — they are the reference. Any drift for an identical
+ * payload + setup fails here, pointing straight at the offending case.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -29,9 +29,9 @@ function walk(root: string): string[] {
   return out;
 }
 
-describe('hook byte-parity with tools/run_state/hook_*.py', () => {
+describe('hook byte-parity with frozen Python-reference captures', () => {
   if (!existsSync(PY_CAP) || !existsSync(TS_CAP)) {
-    test.skip('captures missing — run __fixtures__/hooks/capture.sh', () => {});
+    test.skip('captures missing under __fixtures__/hooks/', () => {});
     return;
   }
 

@@ -1,8 +1,8 @@
 /**
  * migrate.ts tests — legacy markdown → JSON conversion for `.prove/runs`.
  *
- * Mirrors `tools/run_state/test_migrate.py` semantic pins and adds parity
- * fixtures that compare TS output byte-for-byte against Python captures.
+ * Includes parity fixtures that compare output byte-for-byte against the
+ * frozen Python-reference captures.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
@@ -397,11 +397,11 @@ describe('parity vs python captures', () => {
 });
 
 /**
- * Reproduce a named parity case. Each case file contains the Python
- * capture for one scenario; `produceCase` runs the TS port against the
- * same input and returns the serialized envelope the capture script
- * wrote. The envelope shape — `{name, artifact, data}` with a trailing
- * newline — is defined by `__fixtures__/migrate/capture.sh`.
+ * Reproduce a named parity case. Each case file contains the frozen
+ * Python-reference capture for one scenario; `produceCase` runs the TS
+ * implementation against the same input and returns the serialized
+ * envelope in the captures' shape — `{name, artifact, data}` with a
+ * trailing newline.
  */
 function produceCase(filename: string): string {
   const base = filename.replace(/\.json$/, '');

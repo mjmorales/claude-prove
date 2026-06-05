@@ -8,8 +8,6 @@
  * self-correct.
  *
  * Non-matching writes exit 0 silently.
- *
- * Port of `tools/run_state/hook_validate.py`.
  */
 
 import { existsSync } from 'node:fs';

@@ -8,8 +8,8 @@
  *
  * Emergency override: `RUN_STATE_ALLOW_DIRECT=1` in the hook's environment.
  *
- * Port of `tools/run_state/hook_guard.py`. Stdout/stderr/exit bytes must
- * match the Python reference for the captured fixtures.
+ * Stdout/stderr/exit bytes must match the captured Python-reference
+ * fixtures under `__fixtures__/hooks/python-captures/` (parity tests).
  */
 
 import { pyJsonDump } from './json-compat';

@@ -1,8 +1,7 @@
 /**
- * state.ts tests — mirrors tools/run_state/test_state.py + test_reconcile.py.
+ * state.ts tests.
  *
- * Each test uses a fresh tmp directory; no fixture reuse. Mirrors Python's
- * per-test `@pytest.fixture(tmp_path)` isolation.
+ * Each test uses a fresh tmp directory; no fixture reuse.
  */
 import { describe, expect, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
