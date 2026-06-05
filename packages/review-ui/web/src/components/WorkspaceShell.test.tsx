@@ -2,14 +2,15 @@
  * Shell tests for the workspace switcher + behind-schema banner/hook.
  *
  * IMPORTANT: `../test/setup` MUST be the first import — it registers happy-dom
- * globals so `window`/`document` exist before testing-library mounts.
- *
- * We deliberately do NOT unregister happy-dom in afterAll. Bun runs every test
- * file in one shared process; this file sorts before the final DOM test file,
- * which owns the teardown. Setup is idempotent on register.
+ * globals so `window`/`document` exist before testing-library's module init.
+ * Bun runs every test file in one shared process in filesystem-dependent
+ * (unsorted) order, so this file owns its own DOM window:
+ * `beforeAll(registerDom)` + `afterAll(unregisterDom)`; the teardown also
+ * restores the native `fetch` so stubs installed here never leak into suites
+ * that run after this file.
  */
-import "../test/setup";
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { registerDom, unregisterDom } from "../test/setup";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -64,6 +65,9 @@ function resetEnv(): void {
   localStorage.clear();
   setActiveProjectKeyForRequests(null);
 }
+
+beforeAll(registerDom);
+afterAll(unregisterDom);
 
 describe("WorkspaceSwitcher", () => {
   beforeEach(resetEnv);

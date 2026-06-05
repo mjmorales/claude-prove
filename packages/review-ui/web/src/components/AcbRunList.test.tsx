@@ -8,18 +8,18 @@
  * fetch funnel's per-request `?project=` injection would never fire a refetch.
  *
  * IMPORTANT — happy-dom lifecycle. `../test/setup` MUST be the first import so
- * happy-dom globals exist before testing-library mounts. Bun runs every test
- * file in one shared process and sorts by path; a later DOM file owns the final
- * `afterAll` that unregisters happy-dom, so `beforeAll` re-registers defensively
- * (idempotent via setup). Do not import `screen` — its module-init binds
- * `document.body` too early under Bun's loader; use the `render()` return value.
+ * happy-dom globals exist before testing-library's module init. Bun runs every
+ * test file in one shared process in filesystem-dependent (unsorted) order, so
+ * this file owns its own DOM window: `beforeAll(registerDom)` +
+ * `afterAll(unregisterDom)`; the teardown also restores the native `fetch` so
+ * stubs installed here never leak into suites that run after this file.
+ * Do not import `screen` — its module-init binds `document.body` too early
+ * under Bun's loader; use the `render()` return value.
  */
-import "../test/setup";
-import { afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import { registerDom, unregisterDom } from "../test/setup";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render } from "@testing-library/react";
-import type { ReactNode } from "react";
 import { ActiveProjectProvider, type ProjectInfo } from "../lib/active-project";
 import { setActiveProjectKeyForRequests } from "../lib/fetch-utils";
 import { RunList } from "./RunList";
@@ -109,11 +109,8 @@ function seedActiveProject(project: ProjectInfo): void {
   useSelection.setState({ slug: null });
 }
 
-beforeAll(() => {
-  if (!GlobalRegistrator.isRegistered) {
-    GlobalRegistrator.register({ url: "http://localhost/" });
-  }
-});
+beforeAll(registerDom);
+afterAll(unregisterDom);
 
 describe("RunList — ACB surface", () => {
   beforeEach(() => {

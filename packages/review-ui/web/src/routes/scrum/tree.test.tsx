@@ -3,16 +3,15 @@
  * grouping, acceptance-criteria rendering, and project-scoped query keys.
  *
  * IMPORTANT: `../../test/setup` MUST be the first import — it registers
- * happy-dom globals so `window`/`document` exist before testing-library mounts.
- *
- * This file is the alphabetically-last DOM test file in the suite, so it OWNS
- * the happy-dom teardown: its `afterAll` unregisters the globals after every
- * DOM test has run. Earlier DOM test files deliberately skip the unregister so
- * they don't tear `window` out from under files that sort after them.
+ * happy-dom globals so `window`/`document` exist before testing-library's
+ * module init. Bun runs every test file in one shared process in
+ * filesystem-dependent (unsorted) order, so this file owns its own DOM window:
+ * `beforeAll(registerDom)` + `afterAll(unregisterDom)`; the teardown also
+ * restores the native `fetch` so stubs installed here never leak into suites
+ * that run after this file.
  */
-import "../../test/setup";
-import { afterAll, afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import { registerDom, unregisterDom } from "../../test/setup";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -241,12 +240,13 @@ function renderBoard(qc: QueryClient) {
   );
 }
 
+beforeAll(registerDom);
+afterAll(unregisterDom);
+
 // A representative legacy view (the board) must carry the active projectKey in
 // its query key so a workspace switch caches under a fresh, non-colliding key —
 // the same project-scoping the tree view applies. Cache distinctness across two
-// keys is the assertion (matching the tree view's pattern); this describe does
-// NOT own the happy-dom teardown — the `ScrumTreeView` block (which sorts last)
-// owns the unregister.
+// keys is the assertion (matching the tree view's pattern).
 describe("ScrumBoardView project-scoped query key", () => {
   beforeEach(() => {
     window.history.replaceState(null, "", "/scrum/board");
@@ -286,13 +286,6 @@ describe("ScrumTreeView", () => {
     installFetchMock();
   });
   afterEach(cleanup);
-  // This file sorts last among the DOM test files, so it owns the happy-dom
-  // teardown — leaving the globals patched would break downstream non-DOM tests.
-  afterAll(async () => {
-    if (GlobalRegistrator.isRegistered) {
-      await GlobalRegistrator.unregister();
-    }
-  });
 
   test("renders milestone groups with the nested containment tree", () => {
     const milestones = [mkMilestone("m1", "Alpha milestone")];

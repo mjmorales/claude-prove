@@ -14,18 +14,17 @@
  * we use the `render()` return value, which constructs queries lazily via
  * `within(container.parentNode)`.
  *
- * happy-dom lifecycle: we deliberately do NOT unregister happy-dom in afterAll.
- * Bun runs every test file in one shared process and sorts them by path; this
- * file sorts before `routes/runs/RunsPanels.test.tsx` (`rou` < `run`), which is
- * the last DOM file and owns the final unregister teardown. Unregistering here
- * would tear `window`/`document` out from under that still-pending DOM file.
- * Setup is idempotent on register.
+ * happy-dom lifecycle: Bun runs every test file in one shared process in
+ * filesystem-dependent (unsorted) order, so this file owns its own DOM window:
+ * `beforeAll(registerDom)` + `afterAll(unregisterDom)`; the teardown also
+ * restores the native `fetch` so stubs installed here never leak into suites
+ * that run after this file.
  *
  * For scrum tests we swap in a fresh QueryClient per test and stub `fetch`
  * so the read-only API contract is exercised without a real server.
  */
-import "../test/setup";
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { registerDom, unregisterDom } from "../test/setup";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render } from "@testing-library/react";
 import { MemoryRouter, Navigate, Route, Routes } from "react-router-dom";
@@ -101,6 +100,9 @@ function installFetchMock() {
   }) as typeof fetch;
 }
 
+beforeAll(registerDom);
+afterAll(unregisterDom);
+
 describe("App routes", () => {
   beforeEach(() => {
     resetSelection();
@@ -116,10 +118,6 @@ describe("App routes", () => {
   afterEach(() => {
     cleanup();
   });
-  // We deliberately do NOT unregister happy-dom here. Bun runs every test file
-  // in one shared process; this file sorts before `routes/scrum/tree.test.tsx`,
-  // the alphabetically-last DOM test file, which owns the teardown. Setup is
-  // idempotent on register.
 
   test("/ redirects to /acb and renders the ACB surface", () => {
     const r = render(

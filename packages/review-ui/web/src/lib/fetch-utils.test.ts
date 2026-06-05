@@ -5,9 +5,9 @@
  * scrumApi.ts URL — the proof that injection is single-sourced in fetch-utils
  * and not repeated per-route.
  *
- * No happy-dom: these tests only need a stubbed `fetch`, so they stay DOM-free
- * and own none of the shared-process happy-dom teardown the *.test.tsx files
- * coordinate (the alphabetically-last DOM test file owns unregister).
+ * No happy-dom: these tests only need a stubbed `fetch`, so they stay DOM-free.
+ * The stub is restored in `afterEach` — bun runs every test file in one shared
+ * process, so a leaked stub would corrupt whatever suite happens to run next.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { api } from "./api";

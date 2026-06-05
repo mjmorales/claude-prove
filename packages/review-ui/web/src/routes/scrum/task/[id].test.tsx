@@ -5,15 +5,15 @@
  * behind-schema button disable.
  *
  * IMPORTANT: `../../../test/setup` MUST be the first import — it registers
- * happy-dom globals so `window`/`document` exist before testing-library mounts.
- *
- * This file sorts BEFORE `routes/scrum/tree.test.tsx` (`task/` < `tree`), which
- * owns the happy-dom teardown. It therefore deliberately does NOT unregister the
- * globals — doing so would tear `window` out from under the file that sorts
- * after it.
+ * happy-dom globals so `window`/`document` exist before testing-library's
+ * module init. Bun runs every test file in one shared process in
+ * filesystem-dependent (unsorted) order, so this file owns its own DOM window:
+ * `beforeAll(registerDom)` + `afterAll(unregisterDom)`; the teardown also
+ * restores the native `fetch` so stubs installed here never leak into suites
+ * that run after this file.
  */
-import "../../../test/setup";
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { registerDom, unregisterDom } from "../../../test/setup";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -136,11 +136,14 @@ function seedDetail(qc: QueryClient, task: ScrumTask, projectKey: string | null)
 
 const flush = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
 
+beforeAll(registerDom);
+afterAll(unregisterDom);
+
 describe("ScrumTaskDetailView transition controls", () => {
   beforeEach(() => {
-    // Reset URL + storage so the provider seeds a null projectKey — a prior DOM
-    // test file leaves a `?project=` in window.location that would otherwise
-    // make the seeded query key (keyed under null) a cache miss.
+    // Reset URL + storage so the provider seeds a null projectKey — an earlier
+    // test leaves a `?project=` in window.location that would otherwise make
+    // the seeded query key (keyed under null) a cache miss.
     window.history.replaceState(null, "", "/scrum/task/seed");
     localStorage.clear();
     setActiveProjectKeyForRequests(null);

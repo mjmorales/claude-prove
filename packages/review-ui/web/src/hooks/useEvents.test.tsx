@@ -21,12 +21,14 @@
  * the intended key. Reconnection is driven by capturing the provider's
  * `setProjectKey` and flipping it inside `act`, which mirrors the live selector.
  *
- * We deliberately do NOT unregister happy-dom in afterAll. Bun runs every test
- * file in one shared process; the alphabetically-last DOM test file owns the
- * teardown, and this file sorts before it. Setup is idempotent on register.
+ * Bun runs every test file in one shared process in filesystem-dependent
+ * (unsorted) order, so this file owns its own DOM window:
+ * `beforeAll(registerDom)` + `afterAll(unregisterDom)`; the teardown also
+ * restores the native `fetch` and deletes the `EventSource` stub so neither
+ * leaks into suites that run after this file.
  */
-import "../test/setup";
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { registerDom, unregisterDom } from "../test/setup";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, renderHook } from "@testing-library/react";
 import type { ReactNode } from "react";
@@ -77,6 +79,14 @@ function installEventSourceStub(): void {
   (globalThis as unknown as { EventSource: unknown }).EventSource =
     StubEventSource as unknown;
 }
+
+beforeAll(registerDom);
+afterAll(async () => {
+  await unregisterDom();
+  // The stub is not a happy-dom global, so unregisterDom cannot restore it;
+  // delete it so no suite after this file sees a fake EventSource.
+  delete (globalThis as { EventSource?: unknown }).EventSource;
+});
 
 /** The single live stub — the bus is a singleton, so exactly one is open. */
 function liveSource(): StubEventSource {
