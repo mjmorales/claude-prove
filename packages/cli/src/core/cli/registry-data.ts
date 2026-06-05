@@ -48,7 +48,7 @@ const SCRUM_ACTIONS: TopicActions = {
     positionals: ['id'],
     flags: ['cascade', 'reason', 'detail', 'workspace-root'],
   },
-  'task move': { positionals: ['id'], flags: ['milestone', 'unassign', 'workspace-root'] },
+  'task move': { positionals: ['id'], flags: ['milestone', 'unassign', 'team', 'workspace-root'] },
   'task delete': { positionals: ['id'], flags: ['workspace-root'] },
   'task add-dep': { positionals: ['from', 'to'], flags: ['kind', 'workspace-root'] },
   'task remove-dep': { positionals: ['from', 'to'], flags: ['kind', 'workspace-root'] },
