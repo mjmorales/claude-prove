@@ -42,6 +42,10 @@
       "summary": "Explore options and record decisions"
     },
     {
+      "name": "compact",
+      "summary": "Anchor session context into prove primitives pre-compact and rehydrate post-compact"
+    },
+    {
       "name": "comprehend",
       "summary": "Socratic quiz on recent diffs to build code comprehension"
     },
@@ -63,7 +67,7 @@
     },
     {
       "name": "review-ui",
-      "summary": "Docker-based review UI for inspecting prove runs, ACB intent groups, and verdicts"
+      "summary": "Loopback review UI for inspecting prove runs, ACB intent groups, and verdicts"
     },
     {
       "name": "scrum",

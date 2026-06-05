@@ -62,12 +62,13 @@ Run before committing:
 ## Prove Commands
 
 - `/prove:brainstorm` — Explore options and record decisions
+- `/prove:compact` — Anchor session context into prove primitives pre-compact and rehydrate post-compact
 - `/prove:comprehend` — Socratic quiz on recent diffs to build code comprehension
 - `/prove:index` — Update the file index (run after significant changes)
 - `/prove:intake` — Render a charter/team/decompose HTML intake form, validate the pasted-back payload, and drive the one writer
 - `/prove:orchestrator` — Unified entry point for orchestrator, autopilot, and full-auto execution
 - `/prove:plan` — Plan a task or a specific step from the active plan.json
-- `/prove:review-ui` — Docker-based review UI for inspecting prove runs, ACB intent groups, and verdicts
+- `/prove:review-ui` — Loopback review UI for inspecting prove runs, ACB intent groups, and verdicts
 - `/prove:scrum` — Operate the scrum store backed by `.prove/prove.db` (tasks, milestones, tags, run-links)
 - `/prove:workflow` — Run a milestone/task tree as parallel waves via orchestrator full-mode, mirroring status to scrum
 
