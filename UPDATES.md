@@ -6,7 +6,15 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Unreleased — `review-ui serve` boots on a published plugin install (fixes #38)
+## v3.10.0 — Generated CLAUDE.md gains a Team Agents dispatch + memory-protocol section
+
+*(No `.claude/.prove.json` change, no store migration — regenerate CLAUDE.md to adopt.)* Projects with registered teams now get a `## Team Agents` section in the prove-managed CLAUDE.md block. The scanner detects the role-bound agent files (`.claude/agents/team-<slug>-<role>.md`, closed `tech_lead`/`engineer`/`implementer` role set — purely filename-driven, no store lookup) and the composer renders three things: the agent roster grouped by team, a dispatch directive (for work inside a team's scope, dispatch that team's role agent rather than a general-purpose agent; resolve scope from the team bundle `teams/<slug>.md`), and a memory-protocol reminder for dispatched team agents (read the bundle before acting; record learnings through `scrum annotation add --target-kind team`, `scrum lore record` on the tech_lead seat, and `scrum decision record`). Projects with no team agent files render no section — output is unchanged.
+
+`claude-md scan` JSON output gains a `team_agents` array (`{team, role, name}`, team-ascending then canonical role order); consumers of the scan shape should tolerate the new field.
+
+Auto-adoption: full on CLAUDE.md regeneration — `/prove:update` Step 8 (`claude-prove claude-md generate`) picks the section up automatically; or run `/prove:docs claude-md` to regenerate on demand.
+
+## v3.9.0 — `review-ui serve` boots on a published plugin install (fixes #38)
 
 *(No `.claude/.prove.json` change, no store migration — distribution shape + module-resolution path only.)* `claude-prove review-ui serve start` now boots the loopback daemon from a marketplace plugin install (a sources-only clone with no build step and no `node_modules`). The compiled `claude-prove` binary is now fully self-contained: the review-ui Fastify server — and its whole dependency tree (fastify, @fastify/*, simple-git, chokidar) — is bundled INTO the binary, alongside the already-embedded web bundle. A published install needs nothing on disk outside the binary itself.
 
@@ -18,7 +26,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 Auto-adoption: full — the fix lands in the compiled binary; no action required on update beyond installing the new release.
 
-## Unreleased — `scrum compile-plan` excludes containment parents from the executable plan (fixes #37)
+## v3.9.0 — `scrum compile-plan` excludes containment parents from the executable plan (fixes #37)
 
 *(No `.claude/.prove.json` change, no store migration — behavior change to the emitted `plan.json`/`scrum-map.json` for layered milestones only.)* Compiling a milestone with a layered containment tree (`epic → story → task` via `parent_id`/`--layer`) previously emitted the epic/story container tasks themselves as wave-1 plan tasks alongside their children — each with a synthesized single step duplicating the container description. Dispatching those would re-implement the children's work monolithically. A milestone with 2 accepted epics + 8 stories compiled to a 10-task plan where two tasks were the epics.
 
@@ -34,7 +42,7 @@ Auto-adoption: full — the fix lands in the compiled binary; no action required
 
 This restores the documented "the plan is regenerable — re-run compile rather than hand-editing" invariant: the prior hand-filtering workaround (deleting the epic tasks from `plan.json` after compile) is no longer needed. No action required on update.
 
-## Unreleased — Per-action `--help` usage lines + full-usage argument errors (fixes #36)
+## v3.9.0 — Per-action `--help` usage lines + full-usage argument errors (fixes #36)
 
 *(No `.claude/.prove.json` change, no store migration — help/error text and one resolution path only.)* Required positionals and per-action flags are now discoverable without failing repeatedly, and a topic's `--help` is no longer a flat dump spanning every action.
 
@@ -51,14 +59,6 @@ This restores the documented "the plan is regenerable — re-run compile rather 
 *(No `.claude/.prove.json` change, no store migration — behavior change only.)* `claude-prove run-state summary --slug <s>` previously dropped the `--slug` flag and printed a summary block for every run under `.prove/runs/<branch>/`, which silently corrupted scripted reads like `summary --slug X | tail -3` (it returned whichever run sorted last). The flag is now threaded into run selection: `--slug` resolves exactly one run (the branch autodetects when omitted, or pass `--branch` to disambiguate) and emits that single block. An unknown slug now errors (exit 2, `slug '<s>' is not registered`) instead of matching nothing. Without `--slug`, the sweep behavior is unchanged; `--branch` alone narrows the sweep to one branch namespace.
 
 No action required on update.
-
-## v3.10.0 — Generated CLAUDE.md gains a Team Agents dispatch + memory-protocol section
-
-*(No `.claude/.prove.json` change, no store migration — regenerate CLAUDE.md to adopt.)* Projects with registered teams now get a `## Team Agents` section in the prove-managed CLAUDE.md block. The scanner detects the role-bound agent files (`.claude/agents/team-<slug>-<role>.md`, closed `tech_lead`/`engineer`/`implementer` role set — purely filename-driven, no store lookup) and the composer renders three things: the agent roster grouped by team, a dispatch directive (for work inside a team's scope, dispatch that team's role agent rather than a general-purpose agent; resolve scope from the team bundle `teams/<slug>.md`), and a memory-protocol reminder for dispatched team agents (read the bundle before acting; record learnings through `scrum annotation add --target-kind team`, `scrum lore record` on the tech_lead seat, and `scrum decision record`). Projects with no team agent files render no section — output is unchanged.
-
-`claude-md scan` JSON output gains a `team_agents` array (`{team, role, name}`, team-ascending then canonical role order); consumers of the scan shape should tolerate the new field.
-
-Auto-adoption: full on CLAUDE.md regeneration — `/prove:update` Step 8 (`claude-prove claude-md generate`) picks the section up automatically; or run `/prove:docs claude-md` to regenerate on demand.
 
 ## v3.8.1 — `scrum contributor register` is idempotent on slug (fixes #30)
 
@@ -82,6 +82,36 @@ No action required on update; existing workflows that relied on the duplicate-sl
 
 Auto-adoption: full — new verbs and checks are active on update; agent files appear as teams are created/rotated (or via the one-time `sync-agents` backfill).
 
+## v3.6.0 — Editor autocomplete for `.claude/.prove.json` (`schemas/prove.schema.json`)
+
+*(Additive — opt-in per project; no config schema migration.)* A standard JSON Schema (draft-07) artifact, `schemas/prove.schema.json`, gives editors (VS Code, Cursor, JetBrains) autocomplete, hover docs, and inline validation for `.claude/.prove.json`. It is generated mechanically from `PROVE_SCHEMA` (`packages/cli/src/topics/schema/schemas.ts` stays the single source of truth) by `bun run scripts/generate-json-schema.ts`, and a drift-guard test fails CI whenever `PROVE_SCHEMA` changes without regeneration. Field descriptions, defaults, enums (validator phases, trigger statuses, decompose layers), and required keys all carry through.
+
+- **Embedding the reference** — add `"$schema": "https://raw.githubusercontent.com/mjmorales/claude-prove/main/schemas/prove.schema.json"` as the first key of `.claude/.prove.json` (or a relative path to a local checkout). `claude-prove schema validate` now skips a top-level `$schema` key — previously it warned as an unknown field (and failed under `--strict`). Nested `$schema` keys still warn like any unknown key.
+- **Editor-side strictness** — the JSON Schema closes objects (`additionalProperties: false`) wherever the CLI validator warns on unknown keys, so an editor squiggle and a `schema validate` WARN flag the same finding.
+
+**Migration.** None required. To adopt: add the `$schema` key as above.
+
+## v3.6.0 — Hook scaffolding: `dev_mode` config is the authority, detection requires a runnable checkout
+
+*(Fixes [#28](https://github.com/mjmorales/claude-prove/issues/28); behavior changes only — no config schema migration.)* `install init`/`init-hooks` used to pick the hook command prefix from filesystem detection alone: any plugin dir containing `packages/cli/src/` scaffolded `bun run …/run.ts` hook commands — including marketplace clones with no workspace `node_modules`, where every hook then died silently on module resolution. An explicit `dev_mode: false` could not opt out. Three coordinated fixes:
+
+- **`dev_mode` config is the authority.** `install init` and `install init-hooks` read `.claude/.prove.json::dev_mode` first: `true` → the interpolated `bun run` prefix, `false` → the bare-binary invocation, absent → filesystem detection seeds the choice. The banner names the source (`mode=compiled, dev_mode config` vs `mode=dev, detected`). Flipping `dev_mode` rewrites existing hook blocks on the next `init-hooks` run — no `--force` needed (command drift triggers the rewrite).
+- **Detection requires a runnable checkout.** `detectMode` reports `dev` only when `packages/cli/src/` exists AND `node_modules/@claude-prove/shared` resolves (the workspace install ran). A sources-only marketplace clone now classifies as `compiled`, so codegen emits the binary invocation that actually works.
+- **Doctor executes hook targets.** A new `hook-exec` check runs each distinct scaffolded hook command once with `--version` and FAILs on a non-zero exit — catching targets that exist on disk but die at fire time, with a fix hint (`bun install` the checkout, or set `"dev_mode": false` and re-run `claude-prove install init-hooks --force`).
+- **Doctor resolves bare hook commands on `$PATH`** *(fixes [#29](https://github.com/mjmorales/claude-prove/issues/29))*. The `hook-paths` check used to probe a bare `claude-prove …` hook command as a cwd-relative path, false-failing all 12 hooks on every binary install — and suggested `install init --force`, which on a misdetected machine could replace working hook commands with a broken form. Bare commands (no `/`) now resolve the way the firing shell does; a genuine `$PATH` miss reports a target-specific fix (`install upgrade` / fix PATH) instead of the regen advice.
+
+**Migration.** Affected projects (hooks scaffolded as `bun run …` against a non-runnable plugin dir): run `claude-prove install init-hooks --force` — with the fixed detection (or an explicit `"dev_mode": false`) the commands regenerate as bare-binary invocations. Verify with `claude-prove install doctor` (`hook-exec` must PASS). Hand-rewritten hook commands from the workaround are simply overwritten with the same shape.
+
+## v3.6.0 — Contributor identity chain: init registers, register merges, writes attribute
+
+*(Fixes the identity split-brain reported in [#27](https://github.com/mjmorales/claude-prove/issues/27); behavior changes only — no config schema migration.)* Bootstrapped identity artifacts used to stay files-only: `/prove:init` never minted a CT-UUID, so `operator set` was unsatisfiable, `contributor resolve` matched nothing, and every scrum write landed `created_by`/`last_modified_by: null` — permanently, since provenance is append-only. Three coordinated fixes:
+
+- **`/prove:init` registers the contributor.** After authoring the identity skeletons, the command now runs `scrum contributor register` (deriving display name/email/GitHub from git + `gh`), binds the minted CT-UUID, and offers `scrum operator set` plus `scrum contributor default set` behind one gate — the identity artifacts mirror real registry rows from the start. Re-runs detect an existing slug via `contributor list` and never duplicate.
+- **`scrum contributor register` merges instead of clobbering.** An existing `contributors/<slug>.md` (bootstrap-scaffolded or human-authored) keeps its body verbatim; register splices the registry `contributor:` block into the frontmatter (replacing a stale one), bumps the `last_modified_*` provenance pair, and prepends fresh frontmatter onto bare-markdown files. Only a missing file gets the full skeleton.
+- **Scrum writes stamp the ambient actor.** Every `claude-prove scrum` write resolves its actor as explicit agent → `PROVE_AGENT` env → the per-project default-contributor mapping (`contributor default set`) → NULL, and stamps `created_by`/`last_modified_by`/event `agent` accordingly. This covers task create/status/move/cancel/delete, acceptance + bounds edits, events, decisions, contributor registration, and operator transfers. The mapping lives in the machine-global `~/.claude-prove/config.json` (reads fall back per-key to the legacy `${XDG_CONFIG_HOME:-~/.config}/claude-prove/config.json`); a malformed file is backed aside (`.corrupt-*`) and the write proceeds unattributed — corruption never fails a command.
+
+**Migration.** Nothing structural. To repair an affected project: `claude-prove scrum contributor register --slug <you> [--github <handle>] [--email <addr>]` (your authored artifact body is preserved), then `claude-prove scrum operator set --contributor <CT-UUID>` and `claude-prove scrum contributor default set --id <CT-UUID>`. Provenance recorded before the repair stays NULL by design (append-only); new writes attribute from the next command on.
+
 ## v3.5.0 — Review UI goes Docker-free: native in-process daemon + schema v11
 
 *(Config schema v10 → v11 — run `/prove:update` or `claude-prove schema migrate --file .claude/.prove.json`. The review UI no longer ships or pulls a container image; if you have a stale container from an earlier version, remove it once with `docker rm -f prove-review`.)* The review UI's entire Docker delivery path is retired. There is no Dockerfile, no GitHub Container Registry image, and no `docker pull` on launch — the server now runs as a native in-process loopback daemon owned directly by the CLI.
@@ -101,45 +131,15 @@ Auto-adoption: full — new verbs and checks are active on update; agent files a
 
 **Migration summary.** Run `/prove:update` once to land schema v11 and the stripped keys. If an earlier Docker-based version left a `prove-review` container running, remove it once with `docker rm -f prove-review` — nothing recreates it. No other action is needed; the next `/prove:review-ui` starts the native daemon.
 
-## Unreleased — `smart-compaction` skill + `/prove:compact`
+## v3.5.0 — `smart-compaction` skill + `/prove:compact`
 
 *(Additive — new skill and thin command wrapper, discovered automatically on plugin load; nothing to configure. The command carries `core: true`, so a regenerated CLAUDE.md lists it — run `/prove:docs` claude-md regeneration to pick it up.)* Built-in context compaction summarizes by recency and drops the claude-prove state an agent needs to reorient. The `smart-compaction` skill makes compaction survivable by leaning on prove's durable anchors instead of the summary: `anchor` (pre-compact) sweeps the session for knowledge the store doesn't hold yet — untracked follow-ups, decisions with rationale, blockers, stale task statuses — persists each through `claude-prove scrum`, writes a ≤40-line pointer file (`.prove/compact-anchors.md`: branch/run/step identity, immediate next action, in-flight file paths, gotchas), and emits paste-ready `/compact` focus instructions; `rehydrate` (post-compact) runs a deterministic reorientation sequence (`scrum status`/`next-ready`/`alerts`, `run-state current`, git state, recent decisions, `cafi context`), reloads the in-flight working set, deletes the anchor file, and resumes. Bare `/prove:compact` auto-detects the phase from the anchor file's presence. Composes with the existing SessionStart `compact`-matcher hooks (mechanical digest) — the skill is the judgment layer on top; for session-ending transfers `/prove:task handoff` remains the right tool.
 
-## Unreleased — Editor autocomplete for `.claude/.prove.json` (`schemas/prove.schema.json`)
-
-*(Additive — opt-in per project; no config schema migration.)* A standard JSON Schema (draft-07) artifact, `schemas/prove.schema.json`, gives editors (VS Code, Cursor, JetBrains) autocomplete, hover docs, and inline validation for `.claude/.prove.json`. It is generated mechanically from `PROVE_SCHEMA` (`packages/cli/src/topics/schema/schemas.ts` stays the single source of truth) by `bun run scripts/generate-json-schema.ts`, and a drift-guard test fails CI whenever `PROVE_SCHEMA` changes without regeneration. Field descriptions, defaults, enums (validator phases, trigger statuses, decompose layers), and required keys all carry through.
-
-- **Embedding the reference** — add `"$schema": "https://raw.githubusercontent.com/mjmorales/claude-prove/main/schemas/prove.schema.json"` as the first key of `.claude/.prove.json` (or a relative path to a local checkout). `claude-prove schema validate` now skips a top-level `$schema` key — previously it warned as an unknown field (and failed under `--strict`). Nested `$schema` keys still warn like any unknown key.
-- **Editor-side strictness** — the JSON Schema closes objects (`additionalProperties: false`) wherever the CLI validator warns on unknown keys, so an editor squiggle and a `schema validate` WARN flag the same finding.
-
-**Migration.** None required. To adopt: add the `$schema` key as above.
-
-## Unreleased — Hook scaffolding: `dev_mode` config is the authority, detection requires a runnable checkout
-
-*(Fixes [#28](https://github.com/mjmorales/claude-prove/issues/28); behavior changes only — no config schema migration.)* `install init`/`init-hooks` used to pick the hook command prefix from filesystem detection alone: any plugin dir containing `packages/cli/src/` scaffolded `bun run …/run.ts` hook commands — including marketplace clones with no workspace `node_modules`, where every hook then died silently on module resolution. An explicit `dev_mode: false` could not opt out. Three coordinated fixes:
-
-- **`dev_mode` config is the authority.** `install init` and `install init-hooks` read `.claude/.prove.json::dev_mode` first: `true` → the interpolated `bun run` prefix, `false` → the bare-binary invocation, absent → filesystem detection seeds the choice. The banner names the source (`mode=compiled, dev_mode config` vs `mode=dev, detected`). Flipping `dev_mode` rewrites existing hook blocks on the next `init-hooks` run — no `--force` needed (command drift triggers the rewrite).
-- **Detection requires a runnable checkout.** `detectMode` reports `dev` only when `packages/cli/src/` exists AND `node_modules/@claude-prove/shared` resolves (the workspace install ran). A sources-only marketplace clone now classifies as `compiled`, so codegen emits the binary invocation that actually works.
-- **Doctor executes hook targets.** A new `hook-exec` check runs each distinct scaffolded hook command once with `--version` and FAILs on a non-zero exit — catching targets that exist on disk but die at fire time, with a fix hint (`bun install` the checkout, or set `"dev_mode": false` and re-run `claude-prove install init-hooks --force`).
-- **Doctor resolves bare hook commands on `$PATH`** *(fixes [#29](https://github.com/mjmorales/claude-prove/issues/29))*. The `hook-paths` check used to probe a bare `claude-prove …` hook command as a cwd-relative path, false-failing all 12 hooks on every binary install — and suggested `install init --force`, which on a misdetected machine could replace working hook commands with a broken form. Bare commands (no `/`) now resolve the way the firing shell does; a genuine `$PATH` miss reports a target-specific fix (`install upgrade` / fix PATH) instead of the regen advice.
-
-**Migration.** Affected projects (hooks scaffolded as `bun run …` against a non-runnable plugin dir): run `claude-prove install init-hooks --force` — with the fixed detection (or an explicit `"dev_mode": false`) the commands regenerate as bare-binary invocations. Verify with `claude-prove install doctor` (`hook-exec` must PASS). Hand-rewritten hook commands from the workaround are simply overwritten with the same shape.
-
-## Unreleased — Contributor identity chain: init registers, register merges, writes attribute
-
-*(Fixes the identity split-brain reported in [#27](https://github.com/mjmorales/claude-prove/issues/27); behavior changes only — no config schema migration.)* Bootstrapped identity artifacts used to stay files-only: `/prove:init` never minted a CT-UUID, so `operator set` was unsatisfiable, `contributor resolve` matched nothing, and every scrum write landed `created_by`/`last_modified_by: null` — permanently, since provenance is append-only. Three coordinated fixes:
-
-- **`/prove:init` registers the contributor.** After authoring the identity skeletons, the command now runs `scrum contributor register` (deriving display name/email/GitHub from git + `gh`), binds the minted CT-UUID, and offers `scrum operator set` plus `scrum contributor default set` behind one gate — the identity artifacts mirror real registry rows from the start. Re-runs detect an existing slug via `contributor list` and never duplicate.
-- **`scrum contributor register` merges instead of clobbering.** An existing `contributors/<slug>.md` (bootstrap-scaffolded or human-authored) keeps its body verbatim; register splices the registry `contributor:` block into the frontmatter (replacing a stale one), bumps the `last_modified_*` provenance pair, and prepends fresh frontmatter onto bare-markdown files. Only a missing file gets the full skeleton.
-- **Scrum writes stamp the ambient actor.** Every `claude-prove scrum` write resolves its actor as explicit agent → `PROVE_AGENT` env → the per-project default-contributor mapping (`contributor default set`) → NULL, and stamps `created_by`/`last_modified_by`/event `agent` accordingly. This covers task create/status/move/cancel/delete, acceptance + bounds edits, events, decisions, contributor registration, and operator transfers. The mapping lives in the machine-global `~/.claude-prove/config.json` (reads fall back per-key to the legacy `${XDG_CONFIG_HOME:-~/.config}/claude-prove/config.json`); a malformed file is backed aside (`.corrupt-*`) and the write proceeds unattributed — corruption never fails a command.
-
-**Migration.** Nothing structural. To repair an affected project: `claude-prove scrum contributor register --slug <you> [--github <handle>] [--email <addr>]` (your authored artifact body is preserved), then `claude-prove scrum operator set --contributor <CT-UUID>` and `claude-prove scrum contributor default set --id <CT-UUID>`. Provenance recorded before the repair stays NULL by design (append-only); new writes attribute from the next command on.
-
-## Unreleased — `plugin-cache-cleanup` skill + `/prove:cache-cleanup`
+## v3.3.0 — `plugin-cache-cleanup` skill + `/prove:cache-cleanup`
 
 *(Additive — new skill and thin command wrapper, discovered automatically on plugin load; nothing to configure.)* Claude Code keeps every installed plugin version under `<plugins-root>/cache/<marketplace>/<plugin>/<version>/` and never prunes superseded ones, so agents can Glob/Grep their way into stale skills, references, and CLI code from old prove versions. The `plugin-cache-cleanup` skill discovers all plugin roots (including claude-env's `~/.claude-envs/*/plugins`), builds the active set from every `installed_plugins.json`, classifies prove version dirs as active vs stale, and deletes the stale ones behind a single human gate — never touching manifests, `marketplaces/`, `data/`, or other plugins' caches. Invoke via `/prove:cache-cleanup` or trigger phrases ("prune the plugin cache", "remove old prove versions").
 
-## Unreleased — Portable plugin paths: `CLAUDE_PROVE_PLUGIN_DIR` + `install local-env` + `/prove:local-env`
+## v3.2.0 — Portable plugin paths: `CLAUDE_PROVE_PLUGIN_DIR` + `install local-env` + `/prove:local-env`
 
 *(Behavior change for dev-mode installs — one-time per-machine setup via `/prove:local-env`; installed-binary users are unaffected.)* Generated artifacts no longer bake a machine-absolute plugin checkout path. Dev-mode codegen (settings.json hook blocks, CLAUDE.md command examples, ACB runtime prompts, subagent discovery context) emits the shell-interpolated prefix `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts"`, expanded when the command fires. Compiled-mode hook commands emit `"$HOME/.local/bin/claude-prove"` instead of the expanded home path. Git-tracked artifacts are now byte-identical across contributor machines.
 
@@ -151,13 +151,13 @@ Auto-adoption: full — new verbs and checks are active on update; agent files a
 
 **Migration (dev-mode users / plugin contributors).** Run `/prove:local-env` once per machine (or `claude-prove install local-env --plugin-dir <checkout>`), then `claude-prove install init-hooks --force` and `claude-prove claude-md generate --project-root "$(pwd)"` to regenerate the tracked artifacts, and restart the Claude Code session so the env block is injected. `/prove:update` Step 5 detects the pre-portable format and offers the regeneration. No `.claude/.prove.json` change — the config schema is untouched.
 
-## Unreleased — Agent Routing Map built-in reference
+## v3.1.0 — Agent Routing Map built-in reference
 
 *(Additive — new bundled reference auto-injected into generated CLAUDE.md, nothing to configure.)* A new `references/agent-routing.md` cheatsheet maps task cues to the correct delegation surface — which subagent, skill, or direct CLI call owns a given flow. Centerpiece: the scrum routing convention (judgment writes → `scrum-master` agent; reads and skill-internal mechanical writes → direct `claude-prove scrum`; reconciliation → hooks only; never raw `sqlite3` against `.prove/prove.db`), plus a do-not-invoke-ad-hoc table for pipeline-internal agents (`validation-agent`, `brief-judge`, `pcd-*`).
 
 **Adoption.** The composer injects the reference as a built-in default (third entry in `PLUGIN_DEFAULT_REFERENCES`, after the CLI reference and Design Principles), so it lands automatically the next time CLAUDE.md is regenerated — `/prove:docs claude-md`, or `/prove:update` Step 8. No `.claude/.prove.json` change is needed; a user entry pointing at the same path is deduped, and `/prove:update` feature discovery excludes it from the `claude_md.references` offer list alongside the other built-ins.
 
-## Unreleased — report/v2: galley-proof redesign + first-class code rendering
+## v3.1.0 — report/v2: galley-proof redesign + first-class code rendering
 
 *(Auto-adopted — no config migration. Hand-authored `report render --file <doc.json>` inputs must move to `schema_version: "2"`.)* The report/v1 HTML renderer's visual language is redesigned and the block model learns to distinguish prose from code.
 
@@ -172,7 +172,7 @@ Built-in producers adopt the convention automatically: decompose previews chip `
 
 **Migration.** `report validate` and `report render` now require `schema_version: "2"` on document-input files; producer-driven actions (`brief`, `milestone-brief`, `timeline`, `status`, `decompose-preview`) need no changes.
 
-## Unreleased — configurable HTML-artifact opener (`artifacts.html_open` + `--open`)
+## v3.1.0 — configurable HTML-artifact opener (`artifacts.html_open` + `--open`)
 
 *(Config schema v9 → v10 — run `/prove:update` or `claude-prove schema migrate --file .claude/.prove.json`; the migration is a pure version bump, nothing is seeded.)* Operators consume rendered HTML artifacts (intake forms, decompose previews, briefs, dashboards, timelines) in different surfaces — an editor's embedded preview, a browser, a text editor. Two pieces:
 
