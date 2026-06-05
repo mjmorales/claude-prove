@@ -28,11 +28,20 @@
  *   6. hook-paths         — each prove-owned hook block in
  *                           `.claude/settings.json` points at an executable
  *                           command (interpolated forms are expanded the way
- *                           the firing shell would); machine-absolute dev
- *                           prefixes from the pre-portable format warn
- *   7. prove-json-version — `.claude/.prove.json` parses and its
+ *                           the firing shell would; bare commands resolve on
+ *                           $PATH); machine-absolute dev prefixes from the
+ *                           pre-portable format warn
+ *   7. hook-exec          — each distinct hook command target actually
+ *                           executes (`--version` probe): a path can exist
+ *                           yet still die at fire time, e.g. a `bun run`
+ *                           wrapper against a marketplace clone whose
+ *                           workspace deps were never installed
+ *   8. prove-json-version — `.claude/.prove.json` parses and its
  *                           schema_version matches CURRENT_SCHEMA_VERSION
- *   8. claude-cli         — `which claude` (warn on miss, never fail)
+ *   9. claude-cli         — `which claude` (warn on miss, never fail)
+ *
+ * The `--version` probe is the one check that executes a hook target; it is
+ * read-only and side-effect free, keeping doctor non-invasive.
  */
 
 import {
@@ -111,7 +120,9 @@ export function runDoctor(opts: DoctorOptions = {}): CheckResult[] {
   const stableRoot = checkStableRoot(cwd);
   if (stableRoot) results.push(stableRoot);
 
-  results.push(...checkSettingsHookPaths(cwd, localPluginDir.dir));
+  const hookPaths = checkSettingsHookPaths(cwd, localPluginDir.dir);
+  results.push(...hookPaths.results);
+  results.push(...checkHookExec(hookPaths.targets));
   results.push(checkProveJsonSchemaVersion(cwd));
   results.push(checkClaudeCli());
 
@@ -305,22 +316,33 @@ function checkBinaryOnPath(): CheckResult {
   };
 }
 
+/** Per-block path results plus the distinct verified targets for the exec probe. */
+interface HookPathsAudit {
+  results: CheckResult[];
+  targets: HookTarget[];
+}
+
 /**
  * For every prove-owned hook block in `.claude/settings.json`, verify the
  * command prefix points at something executable. Returns one result per
- * block (or a single informational pass when the file is absent).
+ * block (or a single informational result when the file is absent), plus
+ * the deduplicated set of verified targets so `checkHookExec` can probe
+ * each distinct command once instead of once per block.
  */
-function checkSettingsHookPaths(cwd: string, localPluginDir: string): CheckResult[] {
+function checkSettingsHookPaths(cwd: string, localPluginDir: string): HookPathsAudit {
   const path = join(cwd, DEFAULT_SETTINGS_REL);
   if (!existsSync(path)) {
-    return [
-      {
-        name: 'hook-paths',
-        status: 'warn',
-        message: `no ${DEFAULT_SETTINGS_REL} at ${cwd}`,
-        fix: 'run `claude-prove install init` to scaffold hook blocks',
-      },
-    ];
+    return {
+      results: [
+        {
+          name: 'hook-paths',
+          status: 'warn',
+          message: `no ${DEFAULT_SETTINGS_REL} at ${cwd}`,
+          fix: 'run `claude-prove install init` to scaffold hook blocks',
+        },
+      ],
+      targets: [],
+    };
   }
 
   let settings: SettingsFile;
@@ -328,29 +350,48 @@ function checkSettingsHookPaths(cwd: string, localPluginDir: string): CheckResul
     settings = JSON.parse(readFileSync(path, 'utf8')) as SettingsFile;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return [
-      {
-        name: 'hook-paths',
-        status: 'fail',
-        message: `failed to parse ${path}: ${msg}`,
-        fix: 'fix the JSON syntax or run `claude-prove install init --force`',
-      },
-    ];
+    return {
+      results: [
+        {
+          name: 'hook-paths',
+          status: 'fail',
+          message: `failed to parse ${path}: ${msg}`,
+          fix: 'fix the JSON syntax or run `claude-prove install init --force`',
+        },
+      ],
+      targets: [],
+    };
   }
 
   const proveBlocks = collectProveBlocks(settings);
   if (proveBlocks.length === 0) {
-    return [
-      {
-        name: 'hook-paths',
-        status: 'warn',
-        message: `no prove-owned hook blocks in ${DEFAULT_SETTINGS_REL}`,
-        fix: 'run `claude-prove install init` to scaffold hook blocks',
-      },
-    ];
+    return {
+      results: [
+        {
+          name: 'hook-paths',
+          status: 'warn',
+          message: `no prove-owned hook blocks in ${DEFAULT_SETTINGS_REL}`,
+          fix: 'run `claude-prove install init` to scaffold hook blocks',
+        },
+      ],
+      targets: [],
+    };
   }
 
-  return proveBlocks.map((block) => checkHookBlock(block, localPluginDir));
+  const results: CheckResult[] = [];
+  const targets = new Map<string, HookTarget>();
+  for (const block of proveBlocks) {
+    const audit = checkHookBlock(block, localPluginDir);
+    results.push(audit.result);
+    // Probe only targets whose path verification passed — exec on a missing
+    // path would just duplicate the hook-paths failure.
+    if (audit.result.status !== 'fail') {
+      for (const target of audit.targets) {
+        targets.set(`${target.kind}:${target.path}`, target);
+      }
+    }
+  }
+  return { results, targets: [...targets.values()] };
 }
 
 /**
@@ -398,54 +439,65 @@ function collectProveBlocks(settings: SettingsFile): HookBlock[] {
  * silently passed based solely on entry[0]. First failure wins; a block
  * with zero entries fails with an empty-block message.
  */
-function checkHookBlock(block: HookBlock, localPluginDir: string): CheckResult {
+function checkHookBlock(
+  block: HookBlock,
+  localPluginDir: string,
+): { result: CheckResult; targets: HookTarget[] } {
   const tool = block._tool ?? '<unknown>';
   const name = `hook-paths[${tool}:${block.matcher}]`;
+  const fail = (result: CheckResult) => ({ result, targets: [] });
 
   if (block.hooks.length === 0) {
-    return {
+    return fail({
       name,
       status: 'fail',
       message: 'hook block has no entries',
       fix: 'run `claude-prove install init --force`',
-    };
+    });
   }
 
+  const targets: HookTarget[] = [];
   const verifiedPaths: string[] = [];
   let bakedAbsolutePrefix = false;
   for (const entry of block.hooks) {
     if (!entry || typeof entry.command !== 'string') {
-      return {
+      return fail({
         name,
         status: 'fail',
         message: 'hook block has no command',
         fix: 'run `claude-prove install init --force`',
-      };
+      });
     }
 
     const tokens = entry.command.trim().split(/\s+/);
     const target = extractHookTarget(tokens, localPluginDir);
     if (!target) {
-      return {
+      return fail({
         name,
         status: 'fail',
         message: `could not parse hook command: ${entry.command}`,
         fix: 'run `claude-prove install init --force`',
-      };
+      });
     }
 
     const verdict = verifyHookTarget(target);
     if (verdict.status !== 'pass') {
       const interpolated = entry.command.includes(INTERPOLATION_MARKER);
-      return {
+      return fail({
         name,
         status: 'fail',
         message: verdict.message,
-        fix: interpolated
-          ? 'run `claude-prove install local-env --plugin-dir <your-checkout>`, then restart the session'
-          : 'run `claude-prove install init --force`',
-      };
+        // A target-specific fix (e.g. a $PATH miss) beats the generic regen
+        // advice — `install init --force` on a misdetected machine can
+        // replace working hook commands with a broken form.
+        fix:
+          verdict.fix ??
+          (interpolated
+            ? 'run `claude-prove install local-env --plugin-dir <your-checkout>`, then restart the session'
+            : 'run `claude-prove install init --force`'),
+      });
     }
+    targets.push(target);
     verifiedPaths.push(target.path);
 
     // A dev-entry script addressed by a literal absolute path is the
@@ -461,14 +513,17 @@ function checkHookBlock(block: HookBlock, localPluginDir: string): CheckResult {
 
   if (bakedAbsolutePrefix) {
     return {
-      name,
-      status: 'warn',
-      message: `machine-absolute dev prefix (pre-portable format): ${verifiedPaths.join(', ')}`,
-      fix: 'run `claude-prove install init-hooks --force` to regenerate portable hook commands',
+      result: {
+        name,
+        status: 'warn',
+        message: `machine-absolute dev prefix (pre-portable format): ${verifiedPaths.join(', ')}`,
+        fix: 'run `claude-prove install init-hooks --force` to regenerate portable hook commands',
+      },
+      targets,
     };
   }
 
-  return { name, status: 'pass', message: verifiedPaths.join(', ') };
+  return { result: { name, status: 'pass', message: verifiedPaths.join(', ') }, targets };
 }
 
 interface HookTarget {
@@ -512,7 +567,11 @@ function extractHookTarget(tokens: string[], localPluginDir: string): HookTarget
   return { kind: 'binary', path: expandHookToken(first, localPluginDir) };
 }
 
-function verifyHookTarget(target: HookTarget): { status: 'pass' | 'fail'; message: string } {
+function verifyHookTarget(target: HookTarget): {
+  status: 'pass' | 'fail';
+  message: string;
+  fix?: string;
+} {
   try {
     if (target.kind === 'script') {
       const stat = statSync(target.path);
@@ -521,11 +580,77 @@ function verifyHookTarget(target: HookTarget): { status: 'pass' | 'fail'; messag
       }
       return { status: 'pass', message: target.path };
     }
+    // A bare command (no path separator) is the documented portable form —
+    // the firing shell resolves it on $PATH, so doctor must too. accessSync
+    // on the raw token would probe cwd-relative and false-fail every bare
+    // `claude-prove` hook.
+    if (!target.path.includes('/')) {
+      const resolved = which(target.path);
+      if (resolved) return { status: 'pass', message: `${target.path} → ${resolved}` };
+      return {
+        status: 'fail',
+        message: `hook command not found on $PATH: ${target.path}`,
+        fix: 'install the binary (`claude-prove install upgrade`) or add its directory to PATH',
+      };
+    }
     accessSync(target.path, constants.X_OK);
     return { status: 'pass', message: target.path };
   } catch {
     return { status: 'fail', message: `hook target missing or not executable: ${target.path}` };
   }
+}
+
+/** Upper bound on one `--version` probe — a cold `bun run` can take seconds. */
+const HOOK_EXEC_TIMEOUT_MS = 20_000;
+
+/**
+ * Execute each distinct hook target once with `--version` and verify it
+ * exits 0. Path existence (hook-paths) is necessary but not sufficient: a
+ * `bun run` wrapper against a marketplace clone resolves to a real file yet
+ * dies on module resolution at fire time, leaving every scaffolded hook
+ * failing silently inside its timeout. This probe is the check that catches
+ * that class of breakage.
+ */
+function checkHookExec(targets: HookTarget[]): CheckResult[] {
+  return targets.map((target) => {
+    const argv =
+      target.kind === 'script'
+        ? ['bun', 'run', target.path, '--version']
+        : [target.path, '--version'];
+    const name = `hook-exec[${target.kind}]`;
+    const fix =
+      target.kind === 'script'
+        ? 'run `bun install` in the checkout, or set `"dev_mode": false` in .claude/.prove.json and re-run `claude-prove install init-hooks --force` to emit binary invocations'
+        : 'reinstall the binary (`claude-prove install upgrade`), then re-run `claude-prove install init-hooks --force`';
+
+    try {
+      const proc = Bun.spawnSync({
+        cmd: argv,
+        stdout: 'pipe',
+        stderr: 'pipe',
+        timeout: HOOK_EXEC_TIMEOUT_MS,
+      });
+      if (proc.exitCode === 0) {
+        const version = proc.stdout.toString().trim().split('\n')[0] ?? '';
+        return { name, status: 'pass' as const, message: `${argv.join(' ')} → ${version}` };
+      }
+      const stderrLine = proc.stderr.toString().trim().split('\n')[0] ?? '';
+      return {
+        name,
+        status: 'fail' as const,
+        message: `${argv.join(' ')} exited ${proc.exitCode}${stderrLine ? `: ${stderrLine}` : ''}`,
+        fix,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        name,
+        status: 'fail' as const,
+        message: `${argv.join(' ')} failed to spawn: ${msg}`,
+        fix,
+      };
+    }
+  });
 }
 
 /**

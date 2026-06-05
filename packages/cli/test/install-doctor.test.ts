@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CURRENT_SCHEMA_VERSION } from '../src/topics/schema/schemas';
 
@@ -100,6 +100,7 @@ describe('claude-prove install doctor', () => {
       expect(stdout).toContain('[PASS] plugin-dir-env');
       expect(stdout).toContain('(via process-env)');
       expect(stdout).toContain('[PASS] hook-paths[run_state:Write|Edit|MultiEdit]');
+      expect(stdout).toContain('[PASS] hook-exec[script]');
       expect(stdout).toContain('[PASS] prove-json-version');
       expect(stdout).toMatch(/\d+ passed, \d+ warnings, 0 failures/);
     } finally {
@@ -244,6 +245,33 @@ describe('claude-prove install doctor', () => {
     }
   });
 
+  test('hook target that exists but cannot execute fails hook-exec with the dev_mode fix', () => {
+    // Marketplace-clone shape: the dev entry point file exists (so the
+    // hook-paths and plugin-dir-env checks pass) but executing it dies on
+    // module resolution because the workspace deps were never installed.
+    const root = makeTmpProject('exec-dead');
+    try {
+      scaffoldHealthy(root);
+      const clone = join(root, 'clone');
+      mkdirSync(join(clone, 'packages', 'cli', 'bin'), { recursive: true });
+      writeFileSync(
+        join(clone, 'packages', 'cli', 'bin', 'run.ts'),
+        "import '@claude-prove/shared';\n",
+      );
+
+      const { stdout, stderr, status } = runDoctor(root, { CLAUDE_PROVE_PLUGIN_DIR: clone });
+      const combined = `${stdout}\n${stderr}`;
+
+      expect(status).toBe(1);
+      expect(combined).toContain('[PASS] hook-paths[run_state:Write|Edit|MultiEdit]');
+      expect(combined).toContain('[FAIL] hook-exec[script]');
+      expect(combined).toContain('Cannot find module');
+      expect(combined).toContain('"dev_mode": false');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('malformed .prove.json fails with schema-migrate fix hint', () => {
     const root = makeTmpProject('malformed');
     try {
@@ -298,6 +326,93 @@ describe('claude-prove install doctor', () => {
       expect(combined).toContain('[FAIL] hook-paths[run_state:Write|Edit|MultiEdit]');
       expect(combined).toContain('/nonexistent/claude-prove');
       expect(combined).toContain('install init --force');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('bare hook command resolves on $PATH and passes hook-paths + hook-exec', () => {
+    // The portable compiled-install form: hooks invoke `claude-prove ...`
+    // with no path, relying on $PATH the same way the firing shell does.
+    const root = makeTmpProject('bare-path');
+    try {
+      scaffoldHealthy(root);
+      const binDir = join(root, 'bin');
+      mkdirSync(binDir, { recursive: true });
+      writeFileSync(join(binDir, 'fake-prove'), '#!/bin/sh\necho "fake-prove 0.0.0-test"\n', {
+        mode: 0o755,
+      });
+
+      const settings = {
+        hooks: {
+          PostToolUse: [
+            {
+              matcher: 'Write|Edit|MultiEdit',
+              hooks: [
+                {
+                  type: 'command',
+                  command: 'fake-prove run-state hook validate',
+                  timeout: 5000,
+                },
+              ],
+              _tool: 'run_state',
+            },
+          ],
+        },
+      };
+      writeFileSync(
+        join(root, '.claude', 'settings.json'),
+        `${JSON.stringify(settings, null, 2)}\n`,
+      );
+
+      const { stdout, status } = runDoctor(root, {
+        PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`,
+      });
+
+      expect(status).toBe(0);
+      expect(stdout).toContain('[PASS] hook-paths[run_state:Write|Edit|MultiEdit]');
+      expect(stdout).toContain('[PASS] hook-exec[binary]');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('bare hook command missing from $PATH fails with the PATH-specific fix', () => {
+    const root = makeTmpProject('bare-miss');
+    try {
+      scaffoldHealthy(root);
+      const settings = {
+        hooks: {
+          PostToolUse: [
+            {
+              matcher: 'Write|Edit|MultiEdit',
+              hooks: [
+                {
+                  type: 'command',
+                  command: 'definitely-not-on-path-prove run-state hook validate',
+                  timeout: 5000,
+                },
+              ],
+              _tool: 'run_state',
+            },
+          ],
+        },
+      };
+      writeFileSync(
+        join(root, '.claude', 'settings.json'),
+        `${JSON.stringify(settings, null, 2)}\n`,
+      );
+
+      const { stdout, stderr, status } = runDoctor(root);
+      const combined = `${stdout}\n${stderr}`;
+
+      expect(status).toBe(1);
+      expect(combined).toContain('[FAIL] hook-paths[run_state:Write|Edit|MultiEdit]');
+      expect(combined).toContain('not found on $PATH: definitely-not-on-path-prove');
+      // A $PATH miss must NOT suggest the generic regen — that advice can
+      // replace working hook commands on a misdetected machine.
+      expect(combined).toContain('install upgrade');
+      expect(combined).not.toContain('install init --force');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
