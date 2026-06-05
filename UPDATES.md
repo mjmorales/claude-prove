@@ -8,11 +8,25 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — Lore supersession + `scrum lore promote`/`supersede` (store v28)
+
+*(Store migration v28 — auto-applies on the next `claude-prove scrum` open; no `.claude/.prove.json` migration.)* `scrum_lores` gains the compaction lifecycle: `superseded_by` (a typed soft reference — `lore:<id>` for a consolidation, `decision:<id>` for a promotion) plus `reason`. Rows are never edited or deleted — a retired entry keeps its body, author, and timestamp; only the pointer lands, and a supersession is resolved once. New CLI surface:
+
+- **`scrum lore supersede <id> (--by <loreId> | --by-decision <decisionId>) --reason R --author CT-UUID`** — retire a live entry by pointer. Same seated-tech_lead authorship gate as `lore record` (vacant seat warns and allows); a consolidation pointer must name a live entry of the same team, a decision pointer must name an `accepted` decision.
+- **`scrum lore promote <id> [--kind adr|glossary|pattern] [--title T] [--id D]`** — the store's Lore→Codex lift as a verb: records a gated draft under the deterministic `lore-promotion-<team>-<loreId>` id and stamps `source_lore_id`. Only gated kinds are accepted. **`scrum decision approve` on a promotion now auto-retires the still-live source Lore** (`superseded_by = decision:<id>`, reason `promoted to codex`); reject leaves it live.
+- **`scrum lore list <slug> --live`** — only entries no supersession has retired.
+
+The `teams/<slug>.md` artifact's `lore:` block now reports `count` (full history) plus `live`, and its recent window carries live entries only — a folded entry leaves the window the moment its replacement lands. Team disband promotes only live Lore (retired sources are skipped; their substance already lives in their replacement). The janitor skill's Phase 3 drives the new verbs.
+
+Migration: none beyond the automatic column add — existing Lore rows are all live by default. Empirical motivation: a janitor pass without supersession grew the funpack stress-target's memory footprint +16% (consolidations appended while their sources stayed visible); with supersession the same pass lands below the pre-cleanup baseline.
+
+---
+
 ## v3.12.0 — Janitor: memory-layer cleanup for team Lore, the Codex, and contributor artifacts
 
 *(No `.claude/.prove.json` migration, no store migration — new skill + agent + command only.)* New `/prove:janitor` command (thin wrapper over the `janitor` skill) and a `memory-janitor` agent. The janitor cleans prove's durable memory layers without ever deleting: a per-scope `memory-janitor` pass (one agent per team plus one for the Codex, read-only) classifies every Lore entry, annotation, decision, and contributor-artifact body as `keep | consolidate | promote | supersede | rewrite | noise`; an `AskUserQuestion` batch gate per scope approves; the driver then executes through existing CLI verbs only — `scrum lore record` for tech_lead-authored consolidation entries that cite the ids they fold, `scrum decision record`/`approve` for Lore→Codex promotions (deterministic `lore-promotion-<team>-<loreId>` ids, matching the store's promotion convention so a future mechanical promotion upserts), `scrum decision supersede` for Codex cleanup, and direct body edits for contributor artifacts. `prompting token-count` over `teams/*.md`, `contributors/*.md`, and `.prove/decisions/*.md` brackets the run as the before/after compaction metric.
 
-Known limitation, by design: Lore has no supersession column, so a consolidated source entry leaves the team artifact's recent-10 window only as newer entries accumulate; consolidation bodies name the ids they fold so readers treat them as authoritative. `references/agent-routing.md` gains the janitor cue row and lists `memory-janitor` as pipeline-internal (invoke via `/prove:janitor`, not ad hoc).
+Consolidated and promoted sources are retired by pointer via the store-v28 Lore supersession (see that entry); consolidation bodies still name the ids they fold so provenance reads in both directions. `references/agent-routing.md` gains the janitor cue row and lists `memory-janitor` as pipeline-internal (invoke via `/prove:janitor`, not ad hoc).
 
 Migration: none — the command is available after the plugin update. Auto-adoption: not a `core: true` command; invoke on demand when team bundles or the Codex feel bloated.
 
