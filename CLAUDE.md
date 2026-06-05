@@ -100,12 +100,12 @@ Dispatch and memory protocol:
 
 ## Release Tracking
 
-- **UPDATES.md mandatory for user-facing changes**: new commands, config fields, references, behavior changes get a `## vX.Y.Z` section before PR merge. Include: what changed, migration steps (manual + `/prove:update`), auto-adoption status.
+- **UPDATES.md mandatory for user-facing changes**: new commands, config fields, references, behavior changes get a `## Unreleased — <title>` section at the top of UPDATES.md before PR merge. NEVER hand-write a version heading — the release workflow stamps every `## Unreleased` heading with the cut version. Include: what changed, migration steps (manual + `/prove:update`), auto-adoption status.
 - **Feature discovery in sync**: new discoverable features (references, config fields) require `commands/update.md` Step 5 update. Auto-detected features (`core: true` commands) documented in UPDATES.md entry.
 - **Schema version bump on config shape changes**: field changes in `PROVE_SCHEMA`/`SETTINGS_SCHEMA` require `CURRENT_SCHEMA_VERSION` increment + migration path.
 - **CHANGELOG.md is auto-generated** -- NEVER edit manually. Conventional commits are the only input.
 - **Release checklist** (verify before tagging):
-  - `UPDATES.md` section for new version (if user-facing)
+  - `UPDATES.md` has an `## Unreleased` section covering the change (if user-facing) — the release workflow stamps the version
   - `CURRENT_SCHEMA_VERSION` matches if schema changed
   - `commands/update.md` Step 5 covers new discoverable features
   - New `core: true` commands have `summary:` frontmatter
@@ -126,7 +126,7 @@ When adding/removing/renaming `PROVE_SCHEMA` fields:
 4. Register in the `MIGRATIONS` map as `'N_to_M': _migrate_vN_to_vM`
 5. Add tests in `packages/cli/src/topics/schema/migrate.test.ts`: version bump, defaults, data preservation, full chain from v0
 6. Run `claude-prove schema migrate --file .claude/.prove.json` at the repo root; commit the updated file and delete the generated `.bak`
-7. Add `## vX.Y.Z` entry in `UPDATES.md` with migration instructions
+7. Add an `## Unreleased — <title>` entry in `UPDATES.md` with migration instructions (the release workflow stamps the version)
 
 ## Tool vs Pack Boundary
 

@@ -196,13 +196,25 @@ jobs:
 
           mv CHANGELOG.tmp CHANGELOG.md
 
+      - name: Stamp UPDATES.md Unreleased sections
+        if: steps.bump.outputs.skip != 'true'
+        run: |
+          NEW_VERSION="${{ steps.bump.outputs.new_version }}"
+          # UPDATES.md entries are authored under '## Unreleased — <title>'
+          # headings — authors never hand-write a version, because the next
+          # semver is unknowable until this job computes the bump. Rewrite the
+          # heading prefix only (titles preserved), so every entry pending at
+          # release time is stamped with the version that actually ships it.
+          # No-op when no Unreleased sections exist.
+          sed -i "s/^## Unreleased/## v${NEW_VERSION}/" UPDATES.md
+
       - name: Commit, tag, and push
         if: steps.bump.outputs.skip != 'true'
         run: |
           NEW_VERSION="${{ steps.bump.outputs.new_version }}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .claude-plugin/plugin.json .claude-plugin/marketplace.json packages/cli/package.json CHANGELOG.md
+          git add .claude-plugin/plugin.json .claude-plugin/marketplace.json packages/cli/package.json CHANGELOG.md UPDATES.md
           # Commit only if files actually changed (version may already match)
           if git diff --cached --quiet; then
             echo "Version files already at $NEW_VERSION, skipping commit."

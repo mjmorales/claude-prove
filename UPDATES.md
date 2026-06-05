@@ -4,6 +4,8 @@ Migration guide for features that require user action after updating the plugin.
 
 For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
+**Authoring convention:** write every new entry at the top of this file under a `## Unreleased — <title>` heading — never a hand-written version number, since the next semver is unknowable until the release cut. The release workflow stamps each pending `## Unreleased` heading with the version that ships it, in the same commit that bumps the version and regenerates the changelog.
+
 ---
 
 ## v3.10.0 — Generated CLAUDE.md gains a Team Agents dispatch + memory-protocol section
