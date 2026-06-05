@@ -1,0 +1,228 @@
+/**
+ * Lifecycle tests for the team-agent-file sync wired into `scrum team`.
+ *
+ * `runTeamCmd` opens its own `ScrumStore` against the unified prove.db, so each
+ * test chdir's into a fresh `.git`-shaped tmpdir (so `mainWorktreeRoot()`
+ * resolves) and passes that root as `workspaceRoot`. stdout/stderr are captured
+ * by patching `process.stdout.write` / `process.stderr.write` for the call.
+ *
+ * The contract pinned here: `create` writes the three per-role agent files with
+ * both region markers, `rotate` regenerates them without clobbering an authored
+ * body edit, `terminate` deletes all three, and an agent-file write failure stays
+ * non-fatal — it never changes the command exit code.
+ */
+
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { TEAM_ROLES, type TeamRole } from '../types';
+import { runTeamCmd } from './team-cmd';
+
+const BEGIN_MARKER = '<!-- BEGIN GENERATED: team-context-protocol -->';
+const END_MARKER = '<!-- END GENERATED: team-context-protocol -->';
+
+interface Captured {
+  stdout: string;
+  stderr: string;
+  exit: number;
+}
+
+function withCapture(fn: () => number): Captured {
+  let stdout = '';
+  let stderr = '';
+  const origStdout = process.stdout.write.bind(process.stdout);
+  const origStderr = process.stderr.write.bind(process.stderr);
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    stdout += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
+    return true;
+  }) as typeof process.stdout.write;
+  process.stderr.write = ((chunk: string | Uint8Array) => {
+    stderr += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    const exit = fn();
+    return { stdout, stderr, exit };
+  } finally {
+    process.stdout.write = origStdout;
+    process.stderr.write = origStderr;
+  }
+}
+
+let workspace: string;
+let originalCwd: string;
+
+beforeEach(() => {
+  originalCwd = process.cwd();
+  workspace = mkdtempSync(join(tmpdir(), 'team-cmd-unit-'));
+  mkdirSync(join(workspace, '.git'), { recursive: true });
+  process.chdir(workspace);
+});
+
+afterEach(() => {
+  process.chdir(originalCwd);
+  try {
+    rmSync(workspace, { recursive: true, force: true });
+  } catch {
+    /* best-effort */
+  }
+});
+
+/** The `.claude/agents/team-<slug>-<role>.md` path under the test workspace. */
+function agentPath(slug: string, role: TeamRole): string {
+  return join(workspace, '.claude', 'agents', `team-${slug}-${role}.md`);
+}
+
+/** Seat a team via the CLI, asserting exit 0. */
+function createTeam(slug: string): void {
+  const res = withCapture(() =>
+    runTeamCmd('create', [undefined], {
+      slug,
+      teamType: 'stream_aligned',
+      workspaceRoot: workspace,
+    }),
+  );
+  expect(res.exit).toBe(0);
+}
+
+describe('runTeamCmd create — agent files', () => {
+  test('writes all three role files with both region markers', () => {
+    createTeam('alpha');
+    for (const role of TEAM_ROLES) {
+      const path = agentPath('alpha', role);
+      expect(existsSync(path)).toBe(true);
+      const content = readFileSync(path, 'utf8');
+      expect(content).toContain(BEGIN_MARKER);
+      expect(content).toContain(END_MARKER);
+      expect(content).toContain(`name: team-alpha-${role}`);
+    }
+  });
+
+  test('an agent-file write failure does not change the exit code', () => {
+    // Make `.claude/agents` a non-writable directory so the per-role writes
+    // throw, proving the failure is reported but non-fatal.
+    const agentsDir = join(workspace, '.claude', 'agents');
+    mkdirSync(agentsDir, { recursive: true });
+    chmodSync(agentsDir, 0o500);
+    try {
+      const res = withCapture(() =>
+        runTeamCmd('create', [undefined], {
+          slug: 'beta',
+          teamType: 'stream_aligned',
+          workspaceRoot: workspace,
+        }),
+      );
+      expect(res.exit).toBe(0);
+      expect(res.stderr).toContain('write failed');
+    } finally {
+      chmodSync(agentsDir, 0o700);
+    }
+  });
+});
+
+describe('runTeamCmd rotate — agent files', () => {
+  test('regenerates the role files preserving an authored body', () => {
+    createTeam('gamma');
+    const leadPath = agentPath('gamma', 'tech_lead');
+    const authored = `${readFileSync(leadPath, 'utf8')}\n## AUTHORED_SENTINEL\nkeep me\n`;
+    writeFileSync(leadPath, authored, 'utf8');
+
+    const res = withCapture(() =>
+      runTeamCmd('rotate', ['gamma'], {
+        role: 'tech_lead',
+        contributor: 'CT-00000000-0000-0000-0000-000000000001',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+
+    const after = readFileSync(leadPath, 'utf8');
+    expect(after).toContain('AUTHORED_SENTINEL');
+    expect(after).toContain('keep me');
+    expect(after).toContain(BEGIN_MARKER);
+    expect(after).toContain(END_MARKER);
+  });
+});
+
+describe('runTeamCmd terminate — agent files', () => {
+  test('deletes all three role files', () => {
+    createTeam('delta');
+    for (const role of TEAM_ROLES) {
+      expect(existsSync(agentPath('delta', role))).toBe(true);
+    }
+
+    const res = withCapture(() => runTeamCmd('terminate', ['delta'], { workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+
+    for (const role of TEAM_ROLES) {
+      expect(existsSync(agentPath('delta', role))).toBe(false);
+    }
+  });
+
+  test('tolerates already-absent agent files (no throw, exit 0)', () => {
+    createTeam('epsilon');
+    // Remove the agent files out-of-band, then terminate — the rm tolerates ENOENT.
+    for (const role of TEAM_ROLES) {
+      rmSync(agentPath('epsilon', role), { force: true });
+    }
+    const res = withCapture(() =>
+      runTeamCmd('terminate', ['epsilon'], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+  });
+});
+
+describe('runTeamCmd sync-agents', () => {
+  test('regenerates every active team and reports the synced slugs', () => {
+    createTeam('one');
+    createTeam('two');
+    // Drop one file so sync-agents has something to rewrite.
+    rmSync(agentPath('one', 'engineer'), { force: true });
+
+    const res = withCapture(() =>
+      runTeamCmd('sync-agents', [undefined], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+    expect(JSON.parse(res.stdout)).toEqual(['one', 'two']);
+    expect(existsSync(agentPath('one', 'engineer'))).toBe(true);
+  });
+
+  test('a named slug syncs only that team', () => {
+    createTeam('solo');
+    const res = withCapture(() =>
+      runTeamCmd('sync-agents', ['solo'], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+    expect(JSON.parse(res.stdout)).toEqual(['solo']);
+  });
+
+  test('an unknown slug exits 1', () => {
+    const res = withCapture(() =>
+      runTeamCmd('sync-agents', ['ghost'], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stdout.trim()).toBe('null');
+  });
+
+  test('a terminated team is skipped by the all-teams sync', () => {
+    createTeam('live');
+    createTeam('dead');
+    withCapture(() => runTeamCmd('terminate', ['dead'], { workspaceRoot: workspace }));
+
+    const res = withCapture(() =>
+      runTeamCmd('sync-agents', [undefined], { workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+    expect(JSON.parse(res.stdout)).toEqual(['live']);
+  });
+});

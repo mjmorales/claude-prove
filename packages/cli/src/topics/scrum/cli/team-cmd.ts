@@ -5,8 +5,10 @@
  *   create --slug S --team-type T [--charter C] [--lifetime persistent|terminates_on_milestone] [--terminates-on M]
  *                              Insert the team registry row and scaffold/sync the
  *                              on-disk `teams/<slug>.md` artifact mirroring the
- *                              row. Prints the JSON row. A `terminates_on_milestone`
- *                              lifetime REQUIRES `--terminates-on <milestone>`; a
+ *                              row, plus the three per-role agent files under
+ *                              `.claude/agents/team-<slug>-<role>.md`. Prints the
+ *                              JSON row. A `terminates_on_milestone` lifetime
+ *                              REQUIRES `--terminates-on <milestone>`; a
  *                              `persistent` lifetime FORBIDS it (the store rejects
  *                              a mismatched pair with exit 1).
  *   show <slug>                Fetch one team by slug. Prints the JSON row, or
@@ -33,7 +35,9 @@
  *                              stderr. Reflects the updated roster into the
  *                              `teams/<slug>.md` artifact. The same contributor
  *                              filling multiple slots is permitted — it WARNS,
- *                              never rejects.
+ *                              never rejects. Regenerates the three per-role
+ *                              agent files so they track the new holder's
+ *                              resolved CT-UUID.
  *   roster <slug>              Print the current holder per role as
  *                              `{ slug, current: { tech_lead, engineer,
  *                              implementer } }`, or exit 1 with null when the slug
@@ -64,7 +68,14 @@
  *                              flips status to inactive, all atomically. Prints
  *                              the disband result (counts) as JSON. Rejects an
  *                              unknown team and an already-inactive team. Reflects
- *                              the inactive status into the artifact.
+ *                              the inactive status into the artifact and deletes
+ *                              the team's three per-role agent files.
+ *   sync-agents [<slug>]       Regenerate the `.claude/agents/team-<slug>-<role>.md`
+ *                              files for active teams: one named team, or every
+ *                              active team when no slug is given. Marker-merges
+ *                              each file, preserving an authored body. Prints the
+ *                              synced slugs as a JSON array. Exits 1 on an unknown
+ *                              or inactive named slug.
  *
  * Stdout contract: JSON result per action on stdout; one-line human summary on
  * stderr. `list` returns a JSON array (or a table with `--human`).
@@ -88,9 +99,16 @@
  * the team's ACTIVE accepts + exposes (superseded entries are omitted from the
  * artifact, retained in the store). `terminate` rewrites it with the team's
  * `status: inactive`, cleared scope, and emptied roster.
+ *
+ * Agent-file sync: `create` and `rotate` regenerate the three per-role agent
+ * files (`.claude/agents/team-<slug>-<role>.md`) so the committed seats track
+ * the seated roster; `terminate` deletes them so no stale seat survives. The
+ * agent files are a cosmetic mirror of the seats — a write/delete failure is a
+ * sync gap reported on stderr, never a store-mutation failure, and never changes
+ * an action's exit code.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
 import { SCRUM_SCHEMA_VERSION } from '../schemas';
@@ -107,6 +125,7 @@ import type {
 } from '../types';
 import { TEAM_LIFETIMES, TEAM_ROLES, TEAM_TYPES } from '../types';
 import { openCliStore } from './cli-store';
+import { teamAgentArtifactPath, writeTeamAgentArtifact } from './team-agent-artifact';
 
 export interface TeamCmdFlags {
   slug?: string;
@@ -144,7 +163,8 @@ export type TeamAction =
   | 'expose-add'
   | 'expose-supersede'
   | 'interface'
-  | 'terminate';
+  | 'terminate'
+  | 'sync-agents';
 
 const TEAM_ACTIONS: TeamAction[] = [
   'create',
@@ -160,6 +180,7 @@ const TEAM_ACTIONS: TeamAction[] = [
   'expose-supersede',
   'interface',
   'terminate',
+  'sync-agents',
 ];
 
 export function runTeamCmd(
@@ -207,6 +228,8 @@ export function runTeamCmd(
         return doInterface(store, args[0]);
       case 'terminate':
         return doTerminate(store, workspaceRoot, args[0], flags);
+      case 'sync-agents':
+        return doSyncAgents(store, workspaceRoot, args[0]);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -261,6 +284,7 @@ function doCreate(store: ScrumStore, workspaceRoot: string, flags: TeamCmdFlags)
     const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
     process.stderr.write(`scrum team create: store updated but artifact write failed: ${msg}\n`);
   }
+  syncTeamAgents(workspaceRoot, row, 'create');
   process.stderr.write(`scrum team create: ${row.slug} (${row.team_type})${createWhere}\n`);
   return 0;
 }
@@ -335,6 +359,50 @@ export function reconcileTeamArtifact(store: ScrumStore, workspaceRoot: string, 
   mkdirSync(dir, { recursive: true });
   writeFileSync(path, renderTeamArtifact(row, scopes, roster, iface, lores), 'utf8');
   return path;
+}
+
+/**
+ * Regenerate the team's three `.claude/agents/team-<slug>-<role>.md` files so the
+ * committed seats track the seated roster. Each write marker-merges over an
+ * existing file (preserving an authored body) or writes a fresh skeleton.
+ *
+ * The agent files are a cosmetic mirror of the team's seats, not authoritative
+ * store state: a write failure is a sync gap reported on stderr, never a
+ * store-mutation failure. Self-guarding so callers can invoke it after a
+ * successful store op without coupling the exit code to a filesystem error.
+ */
+function syncTeamAgents(workspaceRoot: string, team: Team, action: string): void {
+  for (const role of TEAM_ROLES) {
+    try {
+      writeTeamAgentArtifact(workspaceRoot, team, role);
+    } catch (agentErr) {
+      const msg = agentErr instanceof Error ? agentErr.message : String(agentErr);
+      process.stderr.write(
+        `scrum team ${action}: agent file team-${team.slug}-${role}.md write failed: ${msg}\n`,
+      );
+    }
+  }
+}
+
+/**
+ * Remove a disbanded team's three `.claude/agents/team-<slug>-<role>.md` files so
+ * no stale seat survives termination. A missing file (ENOENT) is the success
+ * case, not an error. Self-guarding for the same reason as `syncTeamAgents`: an
+ * agent-file delete failure is a cosmetic sync gap, never a store-mutation
+ * failure, and must not change the command's exit code.
+ */
+function deleteTeamAgents(workspaceRoot: string, slug: string, action: string): void {
+  for (const role of TEAM_ROLES) {
+    const path = teamAgentArtifactPath(workspaceRoot, slug, role);
+    try {
+      rmSync(path, { force: true });
+    } catch (agentErr) {
+      const msg = agentErr instanceof Error ? agentErr.message : String(agentErr);
+      process.stderr.write(
+        `scrum team ${action}: agent file team-${slug}-${role}.md delete failed: ${msg}\n`,
+      );
+    }
+  }
 }
 
 /** Most recent Lore entries surfaced in the team artifact (newest-first). */
@@ -628,15 +696,19 @@ function doRotate(
     process.stderr.write(`scrum team rotate: WARNING: ${warning}\n`);
   }
   let rotateWhere = '';
+  const rotatedTeam = store.getTeam(slug);
   try {
-    const team = store.getTeam(slug);
     // The team exists — rotateTeamMember already guarded it — so this is total.
-    const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+    const artifactPath =
+      rotatedTeam !== null ? reconcileTeamArtifact(store, workspaceRoot, rotatedTeam) : null;
     rotateWhere = artifactPath !== null ? ` -> ${artifactPath}` : '';
   } catch (artifactErr) {
     const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
     process.stderr.write(`scrum team rotate: store updated but artifact write failed: ${msg}\n`);
   }
+  // Rotate changes the resolved CT-UUID the agent protocol references, so the
+  // committed agent files must regenerate alongside the bundle.
+  if (rotatedTeam !== null) syncTeamAgents(workspaceRoot, rotatedTeam, 'rotate');
   process.stderr.write(
     `scrum team rotate: ${slug} ${row.role} -> ${row.contributor_id} from ${row.from_ts}${rotateWhere}\n`,
   );
@@ -888,9 +960,53 @@ function doTerminate(
     const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
     process.stderr.write(`scrum team terminate: store updated but artifact write failed: ${msg}\n`);
   }
+  // A disbanded team leaves no live seat behind — drop its agent files so no
+  // stale `team-<slug>-<role>.md` survives the termination.
+  deleteTeamAgents(workspaceRoot, slug, 'terminate');
   process.stderr.write(
     `scrum team terminate: ${slug} disbanded (scopes cleared=${result.scopesCleared}, exposes retired=${result.exposesRetired}, roster vacated=${result.rosterVacated})${terminateWhere}\n`,
   );
+  return 0;
+}
+
+// ---------------------------------------------------------------------------
+// sync-agents
+// ---------------------------------------------------------------------------
+
+/**
+ * Regenerate the agent files for active teams. With a `<slug>`, sync that one
+ * team (exit 1 on an unknown or inactive slug); without one, sync every active
+ * team in the registry. Prints the synced slugs as a JSON array; a count summary
+ * on stderr. Idempotent — a re-run marker-merges each file, preserving any
+ * authored body.
+ */
+function doSyncAgents(store: ScrumStore, workspaceRoot: string, slug: string | undefined): number {
+  let targets: Team[];
+  if (slug !== undefined && slug.length > 0) {
+    const team = store.getTeam(slug);
+    if (team === null) {
+      process.stdout.write('null\n');
+      process.stderr.write(`scrum team sync-agents: no team '${slug}'\n`);
+      return 1;
+    }
+    if (team.status !== 'active') {
+      process.stdout.write('null\n');
+      process.stderr.write(
+        `scrum team sync-agents: team '${slug}' is ${team.status}, not active\n`,
+      );
+      return 1;
+    }
+    targets = [team];
+  } else {
+    targets = store.listTeams().filter((team) => team.status === 'active');
+  }
+
+  for (const team of targets) {
+    syncTeamAgents(workspaceRoot, team, 'sync-agents');
+  }
+
+  process.stdout.write(`${JSON.stringify(targets.map((team) => team.slug))}\n`);
+  process.stderr.write(`scrum team sync-agents: ${targets.length} teams synced\n`);
   return 0;
 }
 

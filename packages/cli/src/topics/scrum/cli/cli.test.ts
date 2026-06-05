@@ -470,7 +470,7 @@ describe('runTaskCmd', () => {
       expect(shown.task.run_id).toBe('feat-prov');
       expect(shown.task.provenance.worker_id).toBe('worker-42');
       expect(shown.task.provenance.run_id).toBe('feat-prov');
-      expect(shown.task.provenance.schema_version).toBe(26);
+      expect(shown.task.provenance.schema_version).toBe(27);
     } finally {
       restoreEnv('PROVE_WORKER_ID', savedWorker);
       restoreEnv('PROVE_RUN_SLUG', savedSlug);
@@ -3073,7 +3073,7 @@ describe('runTeamCmd', () => {
     const artifact = join(workspace, 'teams', 'payments.md');
     expect(existsSync(artifact)).toBe(true);
     const content = readFileSync(artifact, 'utf8');
-    expect(content).toContain('schema_version: 26');
+    expect(content).toContain('schema_version: 27');
     expect(content).toContain('team:');
     expect(content).toContain('slug: payments');
     expect(content).toContain('team_type: stream_aligned');

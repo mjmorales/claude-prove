@@ -608,7 +608,7 @@ function dispatch(
     case 'team':
       if (arg1 === undefined) {
         console.error(
-          'error: scrum team: sub-action required (one of: create | show | list | scope-set | scope-show | rotate | roster | accept-add | accept-supersede | expose-add | expose-supersede | interface | terminate)',
+          'error: scrum team: sub-action required (one of: create | show | list | scope-set | scope-show | rotate | roster | accept-add | accept-supersede | expose-add | expose-supersede | interface | terminate | sync-agents)',
         );
         return 1;
       }
