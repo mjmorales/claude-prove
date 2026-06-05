@@ -38,10 +38,24 @@
  *                           workspace deps were never installed
  *   8. prove-json-version — `.claude/.prove.json` parses and its
  *                           schema_version matches CURRENT_SCHEMA_VERSION
- *   9. claude-cli         — `which claude` (warn on miss, never fail)
+ *   9. team-agent-markers — (only when `.claude/agents/` holds any
+ *                           `team-<slug>-<role>.md` file) each such file carries
+ *                           a single well-formed engine-owned region: both
+ *                           generated markers present, BEGIN before END, neither
+ *                           duplicated. A malformed/missing region means a later
+ *                           regeneration cannot splice the block in place
+ *  10. team-agent-drift   — (only when the scrum store exists) the on-disk
+ *                           team-agent files reconcile with the active-team
+ *                           registry: every active team has all three role
+ *                           files, and no role file survives for an
+ *                           unknown/inactive team
+ *  11. claude-cli         — `which claude` (warn on miss, never fail)
  *
  * The `--version` probe is the one check that executes a hook target; it is
- * read-only and side-effect free, keeping doctor non-invasive.
+ * read-only and side-effect free, keeping doctor non-invasive. The two
+ * team-agent checks are likewise report-only: they read files and the registry
+ * and surface drift, but never write — the repair path they name is
+ * `scrum team sync-agents`.
  */
 
 import {
@@ -50,6 +64,7 @@ import {
   existsSync,
   lstatSync,
   readFileSync,
+  readdirSync,
   readlinkSync,
   statSync,
 } from 'node:fs';
@@ -59,6 +74,9 @@ import { type Mode, detectMode } from '@claude-prove/installer/detect-mode';
 import { PLUGIN_DIR_ENV_VAR, resolvePluginRoot } from '@claude-prove/installer/plugin-root';
 import type { HookBlock, SettingsFile } from '@claude-prove/installer/write-settings-hooks';
 import { CURRENT_SCHEMA_VERSION } from '../schema/schemas';
+import { TEAM_AGENT_BEGIN_MARKER, TEAM_AGENT_END_MARKER } from '../scrum/cli/team-agent-artifact';
+import { openScrumStore } from '../scrum/store';
+import { TEAM_ROLES, type Team, type TeamRole } from '../scrum/types';
 
 export type CheckStatus = 'pass' | 'fail' | 'warn';
 
@@ -124,6 +142,12 @@ export function runDoctor(opts: DoctorOptions = {}): CheckResult[] {
   results.push(...hookPaths.results);
   results.push(...checkHookExec(hookPaths.targets));
   results.push(checkProveJsonSchemaVersion(cwd));
+
+  const markerCheck = checkTeamAgentMarkers(cwd);
+  if (markerCheck) results.push(markerCheck);
+  const driftCheck = checkTeamAgentRegistryDrift(cwd);
+  if (driftCheck) results.push(driftCheck);
+
   results.push(checkClaudeCli());
 
   return results;
@@ -183,6 +207,216 @@ function checkStableRoot(cwd: string): CheckResult | undefined {
     };
   }
   return { name: 'stable-root', status: 'pass', message: `${linkPath} -> ${target}` };
+}
+
+// ---------------------------------------------------------------------------
+// Team-agent file integrity (report-only; repair path = scrum team sync-agents)
+// ---------------------------------------------------------------------------
+
+const AGENTS_DIR_REL = join('.claude', 'agents');
+const PROVE_DB_REL = join('.prove', 'prove.db');
+/** The repair command every failing team-agent check names. */
+const SYNC_AGENTS_FIX = 'run `claude-prove scrum team sync-agents` to regenerate the role files';
+
+/** A discovered on-disk team-agent file, with its (slug, role) parsed out. */
+interface TeamAgentFile {
+  /** Absolute path under `.claude/agents/`. */
+  path: string;
+  /** Bare filename, for human-readable messages. */
+  name: string;
+  slug: string;
+  role: TeamRole;
+}
+
+/**
+ * Discover every `.claude/agents/team-<slug>-<role>.md` file and parse its
+ * (slug, role). A slug may itself contain hyphens, so the role is matched
+ * against the closed `TEAM_ROLES` suffix set rather than split on the last
+ * hyphen — `team-foo-bar-engineer.md` is slug `foo-bar`, role `engineer`.
+ * Files that match the `team-…` prefix but carry no known role suffix are not
+ * team-agent files and are skipped. Returns `undefined` when the agents dir is
+ * absent (nothing to check), an empty array when present but holding none.
+ */
+function discoverTeamAgentFiles(cwd: string): TeamAgentFile[] | undefined {
+  const dir = join(cwd, AGENTS_DIR_REL);
+  if (!existsSync(dir)) return undefined;
+
+  let entries: string[];
+  try {
+    entries = readdirSync(dir);
+  } catch {
+    return undefined;
+  }
+
+  const files: TeamAgentFile[] = [];
+  for (const name of entries) {
+    if (!name.startsWith('team-') || !name.endsWith('.md')) continue;
+    const stem = name.slice('team-'.length, -'.md'.length);
+    const role = TEAM_ROLES.find((r) => stem === r || stem.endsWith(`-${r}`));
+    if (!role) continue;
+    const slug = stem.slice(0, stem.length - role.length).replace(/-$/, '');
+    if (slug.length === 0) continue;
+    files.push({ path: join(dir, name), name, slug, role });
+  }
+  return files;
+}
+
+/**
+ * Verify the engine-owned generated region in each team-agent file is intact:
+ * both markers present, BEGIN strictly before END, and neither marker
+ * duplicated. A broken region is the one shape the marker-merge writer cannot
+ * re-splice in place — it would prepend a second region instead, so doctor
+ * surfaces it before that drift compounds. Runs only when team-agent files
+ * exist; skips cleanly otherwise.
+ */
+function checkTeamAgentMarkers(cwd: string): CheckResult | undefined {
+  const files = discoverTeamAgentFiles(cwd);
+  if (!files || files.length === 0) return undefined;
+
+  const malformed: string[] = [];
+  for (const file of files) {
+    let content: string;
+    try {
+      content = readFileSync(file.path, 'utf8');
+    } catch {
+      malformed.push(`${file.name} (unreadable)`);
+      continue;
+    }
+    const reason = markerDefect(content);
+    if (reason) malformed.push(`${file.name} (${reason})`);
+  }
+
+  if (malformed.length === 0) {
+    return {
+      name: 'team-agent-markers',
+      status: 'pass',
+      // Name the regen command even on pass so the operator knows what
+      // maintains the generated region: `scrum team sync-agents`.
+      message: `${files.length} team-agent file(s) carry a well-formed generated region (regen via \`scrum team sync-agents\`)`,
+    };
+  }
+  return {
+    name: 'team-agent-markers',
+    status: 'fail',
+    message: `malformed generated region: ${malformed.join(', ')}`,
+    fix: SYNC_AGENTS_FIX,
+  };
+}
+
+/**
+ * Return a short defect description when the generated region is malformed, or
+ * `undefined` when it is well-formed (exactly one BEGIN, exactly one END, BEGIN
+ * before END). Counts occurrences so a duplicated or nested marker is caught,
+ * not just an absent one.
+ */
+function markerDefect(content: string): string | undefined {
+  const begins = countOccurrences(content, TEAM_AGENT_BEGIN_MARKER);
+  const ends = countOccurrences(content, TEAM_AGENT_END_MARKER);
+  if (begins === 0 && ends === 0) return 'no generated markers';
+  if (begins === 0) return 'missing BEGIN marker';
+  if (ends === 0) return 'missing END marker';
+  if (begins > 1) return 'duplicate BEGIN marker';
+  if (ends > 1) return 'duplicate END marker';
+  if (content.indexOf(TEAM_AGENT_BEGIN_MARKER) > content.indexOf(TEAM_AGENT_END_MARKER)) {
+    return 'END marker precedes BEGIN marker';
+  }
+  return undefined;
+}
+
+/** Count non-overlapping occurrences of `needle` in `haystack`. */
+function countOccurrences(haystack: string, needle: string): number {
+  let count = 0;
+  let from = 0;
+  for (;;) {
+    const idx = haystack.indexOf(needle, from);
+    if (idx < 0) return count;
+    count++;
+    from = idx + needle.length;
+  }
+}
+
+/**
+ * Reconcile the on-disk team-agent files against the scrum team registry. Two
+ * drift classes fail:
+ *
+ *   - an `active` team is missing one of its three role files (a seat the
+ *     committed agents never materialized);
+ *   - a `team-<slug>-<role>.md` file survives for a slug the registry does not
+ *     know, or whose team is no longer active (a stale seat termination should
+ *     have deleted).
+ *
+ * Report-only — the named repair is `scrum team sync-agents` (which both
+ * backfills missing files and is the command termination forgot to follow).
+ * Skips cleanly when the scrum store is absent (`.prove/prove.db` missing):
+ * doctor is a non-invasive diagnostic and never creates the store just to read
+ * it. The store is opened against `cwd` (the real project root doctor runs in),
+ * never a worktree sharing the live db.
+ */
+function checkTeamAgentRegistryDrift(cwd: string): CheckResult | undefined {
+  const files = discoverTeamAgentFiles(cwd);
+  const storePath = join(cwd, PROVE_DB_REL);
+  // No store means no registry to reconcile against. When agent files exist
+  // without any store, that is itself drift worth surfacing; with neither,
+  // there is nothing to check.
+  if (!existsSync(storePath)) {
+    if (files && files.length > 0) {
+      return {
+        name: 'team-agent-drift',
+        status: 'warn',
+        message: `${files.length} team-agent file(s) present but no scrum store at ${PROVE_DB_REL} to reconcile against`,
+        fix: SYNC_AGENTS_FIX,
+      };
+    }
+    return undefined;
+  }
+
+  let teams: Team[];
+  try {
+    const store = openScrumStore({ override: storePath });
+    teams = store.listTeams();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      name: 'team-agent-drift',
+      status: 'warn',
+      message: `could not read team registry: ${msg}`,
+      fix: 'inspect `.prove/prove.db` or run `claude-prove store info`',
+    };
+  }
+
+  const activeSlugs = new Set(teams.filter((t) => t.status === 'active').map((t) => t.slug));
+  const knownActive = (slug: string): boolean => activeSlugs.has(slug);
+  const onDisk = files ?? [];
+
+  // Missing: an active team lacking one of its three role files.
+  const missing: string[] = [];
+  for (const slug of activeSlugs) {
+    for (const role of TEAM_ROLES) {
+      const present = onDisk.some((f) => f.slug === slug && f.role === role);
+      if (!present) missing.push(`team-${slug}-${role}.md`);
+    }
+  }
+
+  // Orphans: a role file for a slug the registry does not know as active.
+  const orphans = onDisk.filter((f) => !knownActive(f.slug)).map((f) => f.name);
+
+  if (missing.length === 0 && orphans.length === 0) {
+    return {
+      name: 'team-agent-drift',
+      status: 'pass',
+      message: `${activeSlugs.size} active team(s) reconcile with their on-disk role files`,
+    };
+  }
+
+  const parts: string[] = [];
+  if (missing.length > 0) parts.push(`missing ${missing.join(', ')}`);
+  if (orphans.length > 0) parts.push(`orphaned ${orphans.join(', ')}`);
+  return {
+    name: 'team-agent-drift',
+    status: 'fail',
+    message: `team-agent drift: ${parts.join('; ')}`,
+    fix: SYNC_AGENTS_FIX,
+  };
 }
 
 // ---------------------------------------------------------------------------

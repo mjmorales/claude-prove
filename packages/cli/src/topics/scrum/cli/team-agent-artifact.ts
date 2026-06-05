@@ -27,11 +27,19 @@ import type { Team, TeamRole } from '../types';
 
 export { teamAgentName };
 
-/** Region marker opening the engine-owned Team Context Protocol block. */
-const BEGIN_MARKER = '<!-- BEGIN GENERATED: team-context-protocol -->';
+/**
+ * Region marker opening the engine-owned Team Context Protocol block. Exported
+ * as the single source of truth for the marker format so a consumer (e.g. the
+ * doctor marker-integrity check) verifies the exact bytes this writer emits
+ * rather than re-declaring a drifting copy.
+ */
+export const TEAM_AGENT_BEGIN_MARKER = '<!-- BEGIN GENERATED: team-context-protocol -->';
 
 /** Region marker closing the engine-owned Team Context Protocol block. */
-const END_MARKER = '<!-- END GENERATED: team-context-protocol -->';
+export const TEAM_AGENT_END_MARKER = '<!-- END GENERATED: team-context-protocol -->';
+
+const BEGIN_MARKER = TEAM_AGENT_BEGIN_MARKER;
+const END_MARKER = TEAM_AGENT_END_MARKER;
 
 /**
  * Matches the marked region inclusive of both markers — the span the writer
