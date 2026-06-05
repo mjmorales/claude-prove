@@ -213,9 +213,20 @@ of decomposing it INTO existence is what makes it `proposed`):
 ```bash
 claude-prove scrum task create \
   --milestone <m> --parent <parent-id> --layer <epic|story|task> \
+  --team <parent-team-slug> \
   --title "<child.title>" --description "<child.description>"
 claude-prove scrum task status <child-id> proposed
 ```
+
+**Team inheritance — stamp the owning team onto every child.** A child inherits its parent's
+owning team unless it is explicitly reassigned. When the parent (`claude-prove scrum task show
+<parent-id>`) carries a `team_slug`, pass that exact slug as `--team <parent-team-slug>` on the
+child's create, so the assignment propagates down the containment tree and decomposed work lands
+on the owning team rather than team-less. The slug is validated against the team registry at the
+store boundary, so an unknown slug fails the create — surface it, don't swallow it. Omit `--team`
+only when the parent itself carries no team (a team-less root yields team-less children); reassign
+a child to a different team only on a deliberate ownership split, via `claude-prove scrum task move
+<child-id> --team <other-slug>` after creation.
 
 (At the `initiative → milestone` tier the child is a milestone entity instead:
 `claude-prove scrum milestone create --title "<child.title>" --target-state "<...>"
@@ -571,12 +582,16 @@ async function decompose(parent, tierIndex, { milestone, autoAcceptThrough, maxF
   }
 
   // L3: write each child as a layered scrum task, then move it to `proposed` (decomposed,
-  // awaiting the accept review).
+  // awaiting the accept review). A child inherits the parent's owning team — stamp the
+  // parent's team_slug onto every child so decomposed work lands on the owning team, not
+  // team-less. Omit --team when the parent carries no team (a team-less root → team-less
+  // children); the slug is validated against the registry at the store boundary.
   const created = [];
+  const teamFlag = parent.team_slug ? ` --team ${parent.team_slug}` : "";
   for (const c of children) {
     const out = await sh(
       `claude-prove scrum task create --milestone ${milestone} ` +
-      `--parent ${parent.id} --layer ${layer} ` +
+      `--parent ${parent.id} --layer ${layer}${teamFlag} ` +
       `--title ${q(c.title)} --description ${q(c.description)}`,
     );
     const task = JSON.parse(out.stdout);
