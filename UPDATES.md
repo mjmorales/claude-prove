@@ -6,6 +6,12 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.8.2 — `run-state summary --slug` filters to one run (fixes #31)
+
+*(No `.claude/.prove.json` change, no store migration — behavior change only.)* `claude-prove run-state summary --slug <s>` previously dropped the `--slug` flag and printed a summary block for every run under `.prove/runs/<branch>/`, which silently corrupted scripted reads like `summary --slug X | tail -3` (it returned whichever run sorted last). The flag is now threaded into run selection: `--slug` resolves exactly one run (the branch autodetects when omitted, or pass `--branch` to disambiguate) and emits that single block. An unknown slug now errors (exit 2, `slug '<s>' is not registered`) instead of matching nothing. Without `--slug`, the sweep behavior is unchanged; `--branch` alone narrows the sweep to one branch namespace.
+
+No action required on update.
+
 ## v3.8.1 — `scrum contributor register` is idempotent on slug (fixes #30)
 
 *(No `.claude/.prove.json` change, no store migration — behavior change only.)* Re-running `contributor register` against an existing slug no longer fails with a UNIQUE-constraint error. It now reconciles the row — provided flags override the stored fields, unset flags preserve them — and re-emits/merges the `contributors/<slug>.md` identity artifact, so a bare re-register repairs a registry row whose identity file was never emitted or was lost. The CT-UUID and created-* provenance never change: a provided `--id` that conflicts with the registered CT-UUID errors (exit 1), preserving attribution history.

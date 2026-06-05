@@ -515,4 +515,79 @@ describe('run-state CLI integration', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  describe('summary --slug filtering', () => {
+    // Initialize two runs under one branch so a slug filter has something to
+    // discriminate against — without the fix, `summary --slug` dumped both.
+    function setupTwoRuns(): { root: string; runsRoot: string } {
+      const root = setupProjectRoot();
+      const runsRoot = join(root, '.prove', 'runs');
+      const plan = writePlan(root);
+      for (const slug of ['alpha', 'omega']) {
+        const init = runCli(
+          ['init', '--branch', 'feature', '--slug', slug, '--plan', plan, '--runs-root', runsRoot],
+          root,
+        );
+        expect(init.exitCode).toBe(0);
+      }
+      return { root, runsRoot };
+    }
+
+    function countRunBlocks(stdout: string): number {
+      return stdout.split('\n').filter((line) => line.startsWith('Run ')).length;
+    }
+
+    test('--slug returns exactly one run block for the named run', () => {
+      const { root, runsRoot } = setupTwoRuns();
+      try {
+        const result = runCli(
+          ['summary', '--slug', 'alpha', '--branch', 'feature', '--runs-root', runsRoot],
+          root,
+        );
+        expect(result.exitCode).toBe(0);
+        expect(countRunBlocks(result.stdout)).toBe(1);
+        expect(result.stdout).toContain('Run feature/alpha:');
+        expect(result.stdout).not.toContain('Run feature/omega:');
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('--slug autodetects the branch when only the slug is given', () => {
+      const { root, runsRoot } = setupTwoRuns();
+      try {
+        const result = runCli(['summary', '--slug', 'omega', '--runs-root', runsRoot], root);
+        expect(result.exitCode).toBe(0);
+        expect(countRunBlocks(result.stdout)).toBe(1);
+        expect(result.stdout).toContain('Run feature/omega:');
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('unknown --slug errors with exit 2 instead of matching nothing', () => {
+      const { root, runsRoot } = setupTwoRuns();
+      try {
+        const result = runCli(['summary', '--slug', 'ghost', '--runs-root', runsRoot], root);
+        expect(result.exitCode).toBe(2);
+        expect(result.stderr).toContain("slug 'ghost' is not registered");
+        expect(result.stdout).toBe('');
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+
+    test('no --slug sweeps every run under runs-root', () => {
+      const { root, runsRoot } = setupTwoRuns();
+      try {
+        const result = runCli(['summary', '--runs-root', runsRoot], root);
+        expect(result.exitCode).toBe(0);
+        expect(countRunBlocks(result.stdout)).toBe(2);
+        expect(result.stdout).toContain('Run feature/alpha:');
+        expect(result.stdout).toContain('Run feature/omega:');
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  });
 });

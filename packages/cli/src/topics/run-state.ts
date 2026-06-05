@@ -217,7 +217,7 @@ function dispatch(
     case 'ls':
       return runLs({ runsRoot: flags.runsRoot });
     case 'summary':
-      return runSummary({ runsRoot: flags.runsRoot });
+      return runSummary({ runsRoot: flags.runsRoot, branch: flags.branch, slug: flags.slug });
     case 'current':
       return dispatchCurrent(flags);
     case 'step':

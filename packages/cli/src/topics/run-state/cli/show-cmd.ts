@@ -195,20 +195,82 @@ export function runCurrent(flags: CurrentFlags): number {
   }
 }
 
-export interface SummaryFlags {
-  runsRoot?: string;
-}
+export type SummaryFlags = RunSelection;
 
 export function runSummary(flags: SummaryFlags): number {
-  // Aggregate summaries across every active run under runs-root. Mirrors the
-  // `scripts/prove-run ls`-style sweep; per-run output uses renderSummary.
-  const runsRoot = flags.runsRoot ?? defaultRunsRoot();
+  // A `--slug` selects exactly one run: resolve it (branch autodetected when
+  // omitted) and summarize that run alone. Without `--slug`, sweep every
+  // active run under runs-root. Threading the slug into selection is what
+  // stops `summary --slug X` from silently dumping every run's block.
+  if (flags.slug) {
+    return runSummaryForSlug(flags);
+  }
+  return runSummarySweep(flags.runsRoot, flags.branch);
+}
+
+/**
+ * Single-run summary. `resolvePaths` autodetects the branch when only `--slug`
+ * is given and errors (exit 2) when the slug is not registered under any
+ * branch — so an unknown slug fails loudly instead of matching nothing.
+ */
+function runSummaryForSlug(flags: SummaryFlags): number {
+  let resolved: ReturnType<typeof resolvePaths>;
+  try {
+    resolved = resolvePaths(flags);
+  } catch (err) {
+    if (err instanceof ResolveError) {
+      console.error(`error: ${err.message}`);
+      return err.exitCode;
+    }
+    throw err;
+  }
+  if (!existsSync(resolved.paths.state)) {
+    console.error(
+      `error: no state.json for run ${resolved.branch}/${resolved.slug} at ${resolved.paths.state}`,
+    );
+    return 1;
+  }
+  try {
+    const state = loadState(resolved.paths);
+    const plan = existsSync(resolved.paths.plan)
+      ? readJsonOrThrow<PlanData>(resolved.paths.plan)
+      : null;
+    process.stdout.write(renderSummary(state, { plan }));
+    return 0;
+  } catch (err) {
+    if (err instanceof LoadError) {
+      console.error(`error: ${err.message}`);
+      return 1;
+    }
+    if (err instanceof SyntaxError) {
+      console.error(`error: invalid JSON in ${resolved.paths.state}: ${err.message}`);
+      return 1;
+    }
+    if (err instanceof Error) {
+      console.error(`error: cannot read ${resolved.paths.state}: ${err.message}`);
+      return 1;
+    }
+    throw err;
+  }
+}
+
+/**
+ * Aggregate summaries across active runs under runs-root. A `branch` filter
+ * narrows the sweep to one branch namespace; omitted, it spans every branch.
+ * Per-run output uses renderSummary.
+ */
+function runSummarySweep(
+  runsRootFlag: string | undefined,
+  branchFilter: string | undefined,
+): number {
+  const runsRoot = runsRootFlag ?? defaultRunsRoot();
   if (!existsSync(runsRoot)) {
     console.error(`error: no runs root at ${runsRoot}`);
     return 1;
   }
+  const branches = branchFilter ? [branchFilter] : sortedChildren(runsRoot);
   let emitted = 0;
-  for (const branch of sortedChildren(runsRoot)) {
+  for (const branch of branches) {
     const branchDir = join(runsRoot, branch);
     for (const slug of sortedChildren(branchDir)) {
       // Route reads through RunPaths + loadState so the lock-file sidecar is
