@@ -21,6 +21,10 @@
  *   TestSettingsSchema.test_empty_settings_valid        -> 'empty settings valid'
  *   TestSettingsSchema.test_hook_missing_type           -> 'hook missing type'
  *   TestSettingsSchema.test_hook_invalid_type_enum      -> 'hook invalid type enum'
+ *
+ * TS-only additions (no Python counterpart): the `$schema` editor-reference
+ * tests ('top-level $schema key never warns', 'nested $schema key still
+ * warns as unknown').
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -58,6 +62,25 @@ describe('TestProveSchema', () => {
     const config = { schema_version: '1' };
     const errors = validateConfig(config, PROVE_SCHEMA);
     expect(errorPaths(errors)).toEqual(new Set());
+  });
+
+  test('top-level $schema key never warns', () => {
+    const config = {
+      $schema: '../schemas/prove.schema.json',
+      schema_version: '1',
+    };
+    const errors = validateConfig(config, PROVE_SCHEMA, true);
+    expect(errorPaths(errors)).toEqual(new Set());
+    expect(warnPaths(errors)).toEqual(new Set());
+  });
+
+  test('nested $schema key still warns as unknown', () => {
+    const config = {
+      schema_version: '1',
+      claude_md: { $schema: 'bogus' },
+    };
+    const errors = validateConfig(config, PROVE_SCHEMA);
+    expect(warnPaths(errors).has('claude_md.$schema')).toBe(true);
   });
 
   test('wrong type validators', () => {

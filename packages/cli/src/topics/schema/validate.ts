@@ -7,6 +7,8 @@
  *   - Required fields absent from the data produce an error.
  *   - Unknown keys on a dict-with-`fields` produce a WARNING (unchanged by
  *     normal runs; `strict: true` promotes warnings to errors in place).
+ *     Exception: a top-level `$schema` key is silently allowed — it is the
+ *     JSON Schema editor reference (see `json-schema.ts`), not config.
  *   - Unknown-field warnings are emitted AFTER required-field errors for
  *     stable ordering in test output.
  *
@@ -150,6 +152,9 @@ function validateFields(
   // ordering of test output stays stable (matches Python source).
   for (const key of Object.keys(data)) {
     if (known.has(key)) continue;
+    // Top-level `$schema` is the editor's JSON Schema pointer, not config —
+    // never warn on it. Nested occurrences still warn like any unknown key.
+    if (prefix === '' && key === '$schema') continue;
     const path = prefix ? `${prefix}.${key}` : key;
     errors.push(
       new ValidationError(

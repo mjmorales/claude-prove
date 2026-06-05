@@ -1,4 +1,5 @@
 {
+  "$schema": "../schemas/prove.schema.json",
   "schema_version": "11",
   "artifacts": {
     "html_open": "cursor {file}"
@@ -11,7 +12,8 @@
     "references": "references/",
     "scrum": "packages/cli/src/topics/scrum/",
     "skills": "skills/",
-    "scripts": "scripts/"
+    "scripts": "scripts/",
+    "schemas": "schemas/"
   },
   "validators": [
     {

@@ -1,0 +1,264 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://raw.githubusercontent.com/mjmorales/claude-prove/main/schemas/prove.schema.json",
+  "$comment": "Generated from PROVE_SCHEMA (packages/cli/src/topics/schema/schemas.ts) by scripts/generate-json-schema.ts — do not edit by hand.",
+  "title": ".claude/.prove.json",
+  "description": "claude-prove project configuration (schema v11)",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "JSON Schema reference for editor autocomplete (ignored by claude-prove)"
+    },
+    "schema_version": {
+      "type": "string",
+      "description": "Schema version for migration tracking",
+      "default": "11"
+    },
+    "dev_mode": {
+      "type": "boolean",
+      "description": "Run prove from the working-tree source instead of the installed `claude-prove` binary. When true, user-facing codegen (CLAUDE.md, agent prompts, hook templates) emits `bun run <pluginDir>/packages/cli/bin/run.ts <topic>`; when false (default), emits bare `claude-prove <topic>`. Set by plugin developers working from a git checkout.",
+      "default": false
+    },
+    "scopes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Maps commit scope names to directory paths"
+    },
+    "validators": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Human-readable validator name"
+          },
+          "command": {
+            "type": "string",
+            "description": "Shell command to execute"
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Path to LLM validation prompt file"
+          },
+          "skill": {
+            "type": "string",
+            "description": "Skill to invoke as the gate (e.g. \"claude-skills:comment-audit\"); the driver runs it via the Skill tool. Mutually exclusive with command/prompt"
+          },
+          "phase": {
+            "type": "string",
+            "enum": [
+              "build",
+              "lint",
+              "test",
+              "custom",
+              "llm"
+            ],
+            "description": "Execution phase: build, lint, test, custom, or llm"
+          }
+        },
+        "required": [
+          "name",
+          "phase"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Ordered list of validation checks"
+    },
+    "reporters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Human-readable reporter name"
+          },
+          "command": {
+            "type": "string",
+            "description": "Shell command to execute"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Event types that trigger this reporter"
+          }
+        },
+        "required": [
+          "name",
+          "command",
+          "events"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Notification reporters for orchestrator events"
+    },
+    "claude_md": {
+      "type": "object",
+      "properties": {
+        "references": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "File path for @ inclusion (supports ~ expansion)"
+              },
+              "label": {
+                "type": "string",
+                "description": "Human-readable label for this reference"
+              }
+            },
+            "required": [
+              "path",
+              "label"
+            ],
+            "additionalProperties": false
+          },
+          "description": "External files to include in CLAUDE.md via @ references",
+          "default": []
+        }
+      },
+      "additionalProperties": false,
+      "description": "CLAUDE.md generation settings"
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": "Whether this tool is active in the project",
+            "default": true
+          },
+          "scope": {
+            "type": "string",
+            "description": "Activation scope (user or project)"
+          },
+          "config": {
+            "type": "object",
+            "description": "Tool-specific configuration overrides"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Tool activation state and configuration overrides. Known entries: acb, cafi, pcd, run_state, scrum (see TOOL_SCRUM_SCHEMA). Each entry has { enabled: bool, scope?: 'user' | 'project', config?: object }. The config object is free-form per tool. For acb, the supported config keys are base_branch and review_ui_port. The review UI image/tag are pinned by the tooling, never the project config."
+    },
+    "brief": {
+      "type": "object",
+      "properties": {
+        "single_pass_token_threshold": {
+          "type": "integer",
+          "description": "Token budget that splits single-pass from multipass brief synthesis. Episodes whose combined token count is at or below this threshold synthesize in one pass; above it, the episodes are chunked and synthesized across multiple passes.",
+          "default": 8000
+        },
+        "max_synthesis_retries": {
+          "type": "integer",
+          "description": "Retry budget for the Stage-2 brief synthesis step. On a failed synthesis attempt the step retries up to this many times before giving up.",
+          "default": 2
+        },
+        "prose_judge_on": {
+          "type": "boolean",
+          "description": "Whether the non-blocking Stage-2 prose judge runs. When true, the judge scores synthesized prose for quality without gating the pipeline; when false, the judge is skipped entirely.",
+          "default": true
+        }
+      },
+      "additionalProperties": false,
+      "description": "Agent Change Brief synthesis settings"
+    },
+    "memory": {
+      "type": "object",
+      "properties": {
+        "stale_threshold_days": {
+          "type": "integer",
+          "description": "Age in days past which a decision record is reported stale by the decision review-stale report. Report-only — staleness never prunes or supersedes a decision.",
+          "default": 90
+        }
+      },
+      "additionalProperties": false,
+      "description": "Durable-memory and decision-record settings"
+    },
+    "decomposition": {
+      "type": "object",
+      "properties": {
+        "auto_accept_through": {
+          "type": "string",
+          "enum": [
+            "none",
+            "epic",
+            "story",
+            "task"
+          ],
+          "description": "Decompose layer through which children are auto-promoted backlog->ready without a human accept gate. Layers order epic -> story -> task; every layer at or above the named one auto-accepts and the gate still fires below it. 'none' is the off setting: the accept gate fires at every layer.",
+          "default": "none"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Decompose-ladder settings"
+    },
+    "artifacts": {
+      "type": "object",
+      "properties": {
+        "html_open": {
+          "type": "string",
+          "description": "Shell command template used by `--open` (on `report` and `intake render`) to open a written HTML artifact. A `{file}` placeholder is replaced with the quoted artifact path; a template without the placeholder gets the path appended. Examples: 'cursor {file}' (editor embedded preview), 'open -a Safari {file}', 'xdg-open {file}'. Empty/absent = the platform default opener (macOS open, Windows start, else xdg-open).",
+          "default": ""
+        }
+      },
+      "additionalProperties": false,
+      "description": "Rendered-artifact handling (HTML opener preferences)"
+    },
+    "triggers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "on": {
+            "type": "string",
+            "enum": [
+              "backlog",
+              "proposed",
+              "accepted",
+              "ready",
+              "in_progress",
+              "review",
+              "blocked",
+              "done",
+              "cancelled"
+            ],
+            "description": "Task status whose entry fires this binding (the status-transition target — e.g. \"accepted\" fires the next-layer decompose)"
+          },
+          "workflow": {
+            "type": "string",
+            "description": "Bound next-action the reconciler surfaces when a task enters `on` (a workflow name or a short next-action label)"
+          },
+          "description": {
+            "type": "string",
+            "description": "Human-readable note on what this binding is for",
+            "default": ""
+          }
+        },
+        "required": [
+          "on",
+          "workflow"
+        ],
+        "additionalProperties": false
+      },
+      "description": "Declared trigger bindings: status-transition -> bound next-action. The scrum reconciler consults this table on session transitions (session-start / subagent-stop / stop) and surfaces the bound action via the session-start digest and next-ready. No resident evaluator — bindings fire only when a session reconciles; intra-run, a workflow script branches directly."
+    }
+  },
+  "required": [
+    "schema_version"
+  ],
+  "additionalProperties": false
+}
