@@ -32,8 +32,9 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
-import { type ScrumStore, openScrumStore } from '../store';
+import type { ScrumStore } from '../store';
 import type { OperatorHistoryRow } from '../types';
+import { openCliStore } from './cli-store';
 
 export interface OperatorCmdFlags {
   contributor?: string;
@@ -59,7 +60,7 @@ export function runOperatorCmd(action: string, flags: OperatorCmdFlags): number 
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
+  const store = openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'set':

@@ -7,6 +7,7 @@ export {
   type MigrationResult,
 } from './migrate';
 export {
+  MACHINE_CONFIG_DIR_ENV_VAR,
   type MachineConfig,
   machineConfigFilePath,
   readMachineConfig,

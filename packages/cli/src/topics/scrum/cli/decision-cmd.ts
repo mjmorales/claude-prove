@@ -46,8 +46,8 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { basename, isAbsolute, join, resolve } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
 import type { ListDecisionsFilter, RecordDecisionInput, ScrumStore } from '../store';
-import { openScrumStore } from '../store';
 import type { DecisionRow } from '../types';
+import { openCliStore } from './cli-store';
 
 export interface DecisionCmdFlags {
   topic?: string;
@@ -116,7 +116,7 @@ export function runDecisionCmd(
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
+  const store = openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'record':

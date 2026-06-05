@@ -11,6 +11,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
+  MACHINE_CONFIG_DIR_ENV_VAR,
+  machineConfigBaseDir,
   machineConfigFilePath,
   readMachineConfig,
   resolveDefaultContributor,
@@ -54,6 +56,23 @@ describe('readMachineConfig', () => {
       expect(readFileSync(join(base, aside[0]), 'utf8')).toBe('{ this is not json');
     } finally {
       rmSync(base, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('machineConfigBaseDir', () => {
+  test('env seam wins over the home default but loses to an explicit override', () => {
+    const saved = process.env[MACHINE_CONFIG_DIR_ENV_VAR];
+    try {
+      process.env[MACHINE_CONFIG_DIR_ENV_VAR] = '/env/seam';
+      expect(machineConfigBaseDir()).toBe('/env/seam');
+      expect(machineConfigBaseDir('/explicit/override')).toBe('/explicit/override');
+
+      delete process.env[MACHINE_CONFIG_DIR_ENV_VAR];
+      expect(machineConfigBaseDir()).toContain('.claude-prove');
+    } finally {
+      if (saved === undefined) delete process.env[MACHINE_CONFIG_DIR_ENV_VAR];
+      else process.env[MACHINE_CONFIG_DIR_ENV_VAR] = saved;
     }
   });
 });

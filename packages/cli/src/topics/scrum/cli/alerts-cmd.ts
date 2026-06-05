@@ -29,8 +29,9 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
-import { type ScrumStore, openScrumStore } from '../store';
+import type { ScrumStore } from '../store';
 import type { EscalationType, ScrumTask, TaskStatus } from '../types';
+import { openCliStore } from './cli-store';
 
 export interface AlertsCmdFlags {
   human?: boolean;
@@ -85,7 +86,7 @@ export function runAlertsCmd(flags: AlertsCmdFlags): number {
       : (mainWorktreeRoot() ?? process.cwd());
   const stalledAfterDays = resolveStalledAfterDays(flags.stalledAfterDays);
 
-  const store = openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
+  const store = openCliStore(workspaceRoot);
   try {
     const stalled = findStalledWip(store, stalledAfterDays);
     const escalations = findStaleEscalations(store);

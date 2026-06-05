@@ -53,7 +53,7 @@
 
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
-import { type ScrumStore, openScrumStore } from '../store';
+import type { ScrumStore } from '../store';
 import {
   ESCALATION_CHAIN,
   ESCALATION_RESOLUTION_MODES,
@@ -63,6 +63,7 @@ import {
   type EscalationRow,
   type EscalationType,
 } from '../types';
+import { openCliStore } from './cli-store';
 
 export interface EscalationCmdFlags {
   /** `raise`: the owning task id (a soft reference — existence not checked). */
@@ -103,7 +104,7 @@ export function runEscalationCmd(
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
+  const store = openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'raise':

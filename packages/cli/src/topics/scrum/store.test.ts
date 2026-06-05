@@ -2305,7 +2305,8 @@ describe('ScrumStore — last-touch provenance (v9)', () => {
       idempotent: true,
     };
     const updated = store.addCriterion('t1', criterion);
-    // No agent flows through acceptance edits, so the last touch is unattributed.
+    // No per-call agent and no ambient actor in scope, so the last touch is
+    // unattributed (see the defaultActor block for the attributed path).
     expect(updated.last_modified_by).toBeNull();
     if (updated.last_modified_at === null) throw new Error('expected last_modified_at');
     expect(updated.last_modified_at > PAST).toBe(true);
@@ -2442,6 +2443,91 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
     expect(updated.provenance.schema_version).toBe(26);
+  });
+});
+
+// ===========================================================================
+// Ambient write actor (defaultActor)
+// ===========================================================================
+
+describe('ScrumStore — ambient write actor (defaultActor)', () => {
+  const PAST = '2026-01-01T00:00:00Z';
+
+  // actor() reads PROVE_AGENT between the explicit value and defaultActor —
+  // snapshot + restore so a test's env mutation cannot leak into a sibling.
+  let savedAgent: string | undefined;
+  beforeEach(() => {
+    savedAgent = process.env.PROVE_AGENT;
+    unsetEnv('PROVE_AGENT');
+  });
+  afterEach(() => {
+    if (savedAgent === undefined) unsetEnv('PROVE_AGENT');
+    else process.env.PROVE_AGENT = savedAgent;
+  });
+
+  test('createTask falls back to defaultActor when no explicit agent flows', () => {
+    store.defaultActor = 'ct-operator';
+    const task = seedTask('t1', { createdAt: PAST });
+    expect(task.created_by_agent).toBe('ct-operator');
+    expect(task.last_modified_by).toBe('ct-operator');
+    expect(store.getTask('t1')?.provenance.created_by).toBe('ct-operator');
+    // The task_created event attributes to the same actor.
+    expect(store.listEventsForTask('t1')[0]?.agent).toBe('ct-operator');
+  });
+
+  test('explicit agent wins over PROVE_AGENT, which wins over defaultActor', () => {
+    store.defaultActor = 'ct-operator';
+    process.env.PROVE_AGENT = 'env-agent';
+
+    const envWins = seedTask('t-env');
+    expect(envWins.created_by_agent).toBe('env-agent');
+
+    const explicitWins = seedTask('t-explicit', { createdByAgent: 'alice' });
+    expect(explicitWins.created_by_agent).toBe('alice');
+  });
+
+  test('unset defaultActor preserves the historical unattributed-NULL behavior', () => {
+    const task = seedTask('t1');
+    expect(task.created_by_agent).toBeNull();
+    expect(store.updateTaskStatus('t1', 'ready').last_modified_by).toBeNull();
+  });
+
+  test('status, milestone, cancel, and soft-delete writes stamp the ambient actor', () => {
+    store.defaultActor = 'ct-operator';
+    seedMilestone('m1');
+    seedTask('t1', { createdAt: PAST });
+    expect(store.updateTaskStatus('t1', 'ready').last_modified_by).toBe('ct-operator');
+    expect(store.updateTaskMilestone('t1', 'm1').last_modified_by).toBe('ct-operator');
+
+    seedTask('t2', { createdAt: PAST });
+    expect(store.cancelTask('t2').last_modified_by).toBe('ct-operator');
+  });
+
+  test('acceptance and bounds editors stamp the ambient actor instead of NULL', () => {
+    store.defaultActor = 'ct-operator';
+    seedTask('t1', { createdAt: PAST });
+    const criterion: AcceptanceCriterion = {
+      id: 'c1',
+      text: 'builds',
+      verifies_by: 'bash',
+      check: 'true',
+      status: 'active',
+      idempotent: true,
+    };
+    expect(store.addCriterion('t1', criterion).last_modified_by).toBe('ct-operator');
+    expect(store.setBounds('t1', { tools: { allow: ['Bash(go test *)'] } }).last_modified_by).toBe(
+      'ct-operator',
+    );
+  });
+
+  test('registerContributor and setOperatorOfRecord fall back to the ambient actor', () => {
+    store.defaultActor = 'ct-operator';
+    const row = store.registerContributor({ slug: 'jane' });
+    expect(row.created_by).toBe('ct-operator');
+    expect(row.last_modified_by).toBe('ct-operator');
+
+    const interval = store.setOperatorOfRecord({ contributorId: row.id });
+    expect(interval.created_by).toBe('ct-operator');
   });
 });
 

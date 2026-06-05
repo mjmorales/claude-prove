@@ -24,7 +24,8 @@
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
-import { type ScrumStore, openScrumStore } from '../store';
+import type { ScrumStore } from '../store';
+import { openCliStore } from './cli-store';
 
 export interface InitCmdFlags {
   workspaceRoot?: string;
@@ -40,7 +41,7 @@ interface ImportSummary {
 export function runInitCmd(flags: InitCmdFlags): number {
   const workspaceRoot = resolveWorkspaceRoot(flags.workspaceRoot);
 
-  const store = openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
+  const store = openCliStore(workspaceRoot);
   try {
     if (hasExistingTasks(store)) {
       process.stdout.write(`${JSON.stringify({ seeded: false, reason: 'already-seeded' })}\n`);

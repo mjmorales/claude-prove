@@ -36,8 +36,9 @@
 
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
-import { type ScrumStore, openScrumStore } from '../store';
+import type { ScrumStore } from '../store';
 import type { LoreRow } from '../types';
+import { openCliStore } from './cli-store';
 import { reconcileTeamArtifact } from './team-cmd';
 
 export interface LoreCmdFlags {
@@ -69,7 +70,7 @@ export function runLoreCmd(
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
+  const store = openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'record':

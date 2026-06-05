@@ -15,9 +15,18 @@
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { MACHINE_CONFIG_DIR_ENV_VAR } from '@claude-prove/store';
 
 import { appendEntry } from '../../acb/reasoning-log-store';
 import { runAlertsCmd } from './alerts-cmd';
@@ -2458,6 +2467,131 @@ describe('runContributorCmd', () => {
     expect(content).toContain('github: janedoe');
   });
 
+  test('register merges into an existing artifact, preserving the authored body', () => {
+    // Simulate the bootstrap-then-author flow: a frontmatter-headed artifact
+    // whose skeleton body the operator has replaced with real prose.
+    const dir = join(workspace, 'contributors');
+    mkdirSync(dir, { recursive: true });
+    const authored = [
+      '---',
+      'schema_version: 1',
+      'provenance:',
+      '  created_by: null',
+      '  created_at: 2026-01-01T00:00:00.000Z',
+      '  last_modified_by: null',
+      '  last_modified_at: 2026-01-01T00:00:00.000Z',
+      '---',
+      '',
+      '# Contributor: Jane Doe',
+      '',
+      '## Identity',
+      '',
+      'Principal engineer; drives the auth roadmap.',
+      '',
+      '## Focus',
+      '',
+      'OAuth migration and session hardening.',
+      '',
+    ].join('\n');
+    writeFileSync(join(dir, 'jane-doe.md'), authored, 'utf8');
+
+    const res = withCapture(() =>
+      runContributorCmd('register', {
+        slug: 'jane-doe',
+        github: 'janedoe',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as ContributorRow;
+
+    const content = readFileSync(join(dir, 'jane-doe.md'), 'utf8');
+    // Registry fields landed in the frontmatter mirror...
+    expect(content).toContain('contributor:');
+    expect(content).toContain(`id: ${row.id}`);
+    expect(content).toContain('github: janedoe');
+    // ...the original scaffold stamp survives...
+    expect(content).toContain('created_at: 2026-01-01T00:00:00.000Z');
+    // ...and the authored body is preserved verbatim — never the skeleton.
+    expect(content).toContain('Principal engineer; drives the auth roadmap.');
+    expect(content).toContain('OAuth migration and session hardening.');
+    expect(content).not.toContain('<!-- Areas of ownership and current focus. -->');
+  });
+
+  test('register replaces a stale contributor block instead of stacking a second one', () => {
+    // An artifact carrying an out-of-date contributor block (e.g. files
+    // survived a store reset) — the merge must re-assert the fresh registry
+    // mirror, not append a duplicate `contributor:` key.
+    const dir = join(workspace, 'contributors');
+    mkdirSync(dir, { recursive: true });
+    const stale = [
+      '---',
+      'schema_version: 1',
+      'provenance:',
+      '  created_by: null',
+      '  created_at: 2026-01-01T00:00:00.000Z',
+      '  last_modified_by: null',
+      '  last_modified_at: 2026-01-01T00:00:00.000Z',
+      'contributor:',
+      '  id: ct-amy-stale',
+      '  slug: amy',
+      '  status: active',
+      '  display_name: null',
+      '  github: amy-old',
+      '  email: null',
+      '---',
+      '',
+      '# Contributor: Amy',
+      '',
+      'Owns the data pipeline.',
+      '',
+    ].join('\n');
+    writeFileSync(join(dir, 'amy.md'), stale, 'utf8');
+
+    const res = withCapture(() =>
+      runContributorCmd('register', { slug: 'amy', github: 'amy-new', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as ContributorRow;
+
+    const content = readFileSync(join(dir, 'amy.md'), 'utf8');
+    expect(content.match(/^contributor:$/gm)).toHaveLength(1);
+    expect(content).toContain(`id: ${row.id}`);
+    expect(content).not.toContain('ct-amy-stale');
+    expect(content).toContain('github: amy-new');
+    expect(content).toContain('Owns the data pipeline.');
+  });
+
+  test('register rejecting a duplicate slug leaves the existing artifact untouched', () => {
+    withCapture(() =>
+      runContributorCmd('register', { slug: 'zoe', github: 'zoe-gh', workspaceRoot: workspace }),
+    );
+    const path = join(workspace, 'contributors', 'zoe.md');
+    const before = readFileSync(path, 'utf8');
+
+    const res = withCapture(() =>
+      runContributorCmd('register', { slug: 'zoe', github: 'zoe-new', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(1);
+    expect(readFileSync(path, 'utf8')).toBe(before);
+  });
+
+  test('register prepends frontmatter onto a bare-markdown artifact, keeping its content', () => {
+    const dir = join(workspace, 'contributors');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'bob.md'), '# Bob\n\nHand-written notes.\n', 'utf8');
+
+    const res = withCapture(() =>
+      runContributorCmd('register', { slug: 'bob', workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+
+    const content = readFileSync(join(dir, 'bob.md'), 'utf8');
+    expect(content.startsWith('---\n')).toBe(true);
+    expect(content).toContain('contributor:');
+    expect(content).toContain('# Bob\n\nHand-written notes.\n');
+  });
+
   test('register without --slug exits 1', () => {
     const res = withCapture(() => runContributorCmd('register', { workspaceRoot: workspace }));
     expect(res.exit).toBe(1);
@@ -2677,6 +2811,99 @@ describe('runContributorCmd', () => {
       expect(res.exit).toBe(1);
       expect(res.stderr).toContain('sub-action required');
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Default-contributor provenance stamping — the cli-store seam end-to-end
+// ---------------------------------------------------------------------------
+
+describe('default-contributor provenance stamping', () => {
+  // The handlers resolve the ambient actor from the machine-global config and
+  // never thread an explicit base, so pin the env seam at the tmp workspace —
+  // the developer's real ~/.claude-prove is never read or written. Pin
+  // XDG_CONFIG_HOME too so the legacy read fallback is equally hermetic, and
+  // unset PROVE_AGENT so the mapping tier is what's exercised.
+  let savedMachineDir: string | undefined;
+  let savedXdg: string | undefined;
+  let savedAgent: string | undefined;
+
+  beforeEach(() => {
+    savedMachineDir = process.env[MACHINE_CONFIG_DIR_ENV_VAR];
+    savedXdg = process.env.XDG_CONFIG_HOME;
+    savedAgent = process.env.PROVE_AGENT;
+    process.env[MACHINE_CONFIG_DIR_ENV_VAR] = join(workspace, 'machine');
+    process.env.XDG_CONFIG_HOME = join(workspace, 'xdg');
+    restoreEnv('PROVE_AGENT', undefined);
+  });
+  afterEach(() => {
+    restoreEnv(MACHINE_CONFIG_DIR_ENV_VAR, savedMachineDir);
+    restoreEnv('XDG_CONFIG_HOME', savedXdg);
+    restoreEnv('PROVE_AGENT', savedAgent);
+  });
+
+  interface TaskJson {
+    id: string;
+    provenance: { created_by: string | null; last_modified_by: string | null };
+  }
+
+  test('cold task create/status writes stamp the mapped CT-UUID', () => {
+    const set = withCapture(() =>
+      runContributorCmd('default', { projectRoot: workspace, id: 'ct-operator-1' }, 'set'),
+    );
+    expect(set.exit).toBe(0);
+
+    const created = withCapture(() =>
+      runTaskCmd('create', [], { title: 'Attributed task', workspaceRoot: workspace }),
+    );
+    expect(created.exit).toBe(0);
+    const task = JSON.parse(created.stdout.trim()) as TaskJson;
+    expect(task.provenance.created_by).toBe('ct-operator-1');
+
+    const status = withCapture(() =>
+      runTaskCmd('status', [task.id, 'ready'], { workspaceRoot: workspace }),
+    );
+    expect(status.exit).toBe(0);
+    const updated = JSON.parse(status.stdout.trim()) as TaskJson;
+    expect(updated.provenance.last_modified_by).toBe('ct-operator-1');
+  });
+
+  test('an unmapped project root keeps writes unattributed (NULL)', () => {
+    const created = withCapture(() =>
+      runTaskCmd('create', [], { title: 'Unattributed task', workspaceRoot: workspace }),
+    );
+    expect(created.exit).toBe(0);
+    const task = JSON.parse(created.stdout.trim()) as TaskJson;
+    expect(task.provenance.created_by).toBeNull();
+  });
+
+  test('PROVE_AGENT wins over the mapped default contributor', () => {
+    withCapture(() =>
+      runContributorCmd('default', { projectRoot: workspace, id: 'ct-operator-1' }, 'set'),
+    );
+    process.env.PROVE_AGENT = 'orchestrator-worker';
+    const created = withCapture(() =>
+      runTaskCmd('create', [], { title: 'Env-attributed task', workspaceRoot: workspace }),
+    );
+    const task = JSON.parse(created.stdout.trim()) as TaskJson;
+    expect(task.provenance.created_by).toBe('orchestrator-worker');
+  });
+
+  test('a malformed machine config self-heals: write succeeds unattributed, corrupt file backed aside', () => {
+    const cfgDir = join(workspace, 'machine');
+    mkdirSync(cfgDir, { recursive: true });
+    writeFileSync(join(cfgDir, 'config.json'), '{ not json', 'utf8');
+
+    const created = withCapture(() =>
+      runTaskCmd('create', [], { title: 'Still works', workspaceRoot: workspace }),
+    );
+    expect(created.exit).toBe(0);
+    const task = JSON.parse(created.stdout.trim()) as TaskJson;
+    expect(task.provenance.created_by).toBeNull();
+    // The reader backs the corrupt file aside (never deletes) and proceeds
+    // with an empty config — corruption must not wedge store writes.
+    const entries = readdirSync(cfgDir);
+    expect(entries.some((name) => name.startsWith('config.json.corrupt-'))).toBe(true);
   });
 });
 

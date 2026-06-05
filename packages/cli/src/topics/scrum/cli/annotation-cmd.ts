@@ -32,8 +32,9 @@
 
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
-import { type ScrumStore, openScrumStore } from '../store';
+import type { ScrumStore } from '../store';
 import { ANNOTATION_TARGET_KINDS, type AnnotationRow, type AnnotationTargetKind } from '../types';
+import { openCliStore } from './cli-store';
 
 export interface AnnotationCmdFlags {
   /** `add`/`list`: the target's artifact class (task | team | decision). */
@@ -64,7 +65,7 @@ export function runAnnotationCmd(action: string, flags: AnnotationCmdFlags): num
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
+  const store = openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'add':

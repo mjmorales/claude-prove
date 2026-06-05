@@ -453,9 +453,32 @@ export class ScrumStore {
   private readonly db: Database;
   private readonly statements: Map<string, Statement> = new Map();
 
+  /**
+   * Ambient write actor — the identity stamped into `created_by` /
+   * `last_modified_by` / event `agent` columns when a write carries no
+   * explicit agent. The CLI layer seeds it from the per-user project-root →
+   * default-contributor mapping (`resolveDefaultContributor`) so cold CLI
+   * writes attribute to the operator instead of landing permanent NULLs in
+   * the append-only provenance. NULL (the default) keeps the store's
+   * historical "unattributed" behavior for callers that never set it.
+   */
+  defaultActor: string | null = null;
+
   constructor(store: Store) {
     this.store = store;
     this.db = store.getDb();
+  }
+
+  /**
+   * Resolve the actor for one write: explicit value → `PROVE_AGENT` run env →
+   * `defaultActor` → NULL. Mirrors `resolveRunContext` (the worker/run
+   * analog): empty strings read as unset at every tier.
+   */
+  private actor(explicit?: string | null): string | null {
+    if (explicit !== undefined && explicit !== null && explicit.length > 0) return explicit;
+    const env = process.env.PROVE_AGENT;
+    if (env !== undefined && env.length > 0) return env;
+    return this.defaultActor;
   }
 
   /** Close the underlying database connection. Idempotent. */
@@ -536,6 +559,7 @@ export class ScrumStore {
       workerId: input.workerId,
       runId: input.runId,
     });
+    const createdBy = this.actor(input.createdByAgent);
 
     const row: ScrumTask = {
       id: input.id,
@@ -549,20 +573,20 @@ export class ScrumStore {
       bounds,
       terminal_reason: null,
       terminal_detail: null,
-      created_by_agent: input.createdByAgent ?? null,
+      created_by_agent: createdBy,
       created_at: createdAt,
       last_event_at: createdAt,
       // Seed last-touch provenance (v9) to the creation event so a fresh task
       // already reads coherently before its first mutation.
-      last_modified_by: input.createdByAgent ?? null,
+      last_modified_by: createdBy,
       last_modified_at: createdAt,
       worker_id: workerId,
       run_id: runId,
       deleted_at: null,
       provenance: {
-        created_by: input.createdByAgent ?? null,
+        created_by: createdBy,
         created_at: createdAt,
-        last_modified_by: input.createdByAgent ?? null,
+        last_modified_by: createdBy,
         last_modified_at: createdAt,
         worker_id: workerId,
         run_id: runId,
@@ -689,7 +713,10 @@ export class ScrumStore {
    * the wider shape.
    */
   updateTaskStatus(id: string, next: TaskStatus, agent?: string | null): ScrumTask {
-    updateTaskStatusViaService(this.store, id, next, agent);
+    // Ambient-actor resolution (explicit -> PROVE_AGENT -> defaultActor ->
+    // NULL) happens HERE so the shared service keeps its narrow `agent ?? null`
+    // stamping while cold CLI writes still attribute to the mapped operator.
+    updateTaskStatusViaService(this.store, id, next, this.actor(agent));
     const updated = this.getTask(id);
     if (!updated) throw new Error(`updateTaskStatus: task '${id}' vanished mid-update`);
     return updated;
@@ -726,17 +753,18 @@ export class ScrumStore {
 
     const ts = isoNow();
     const { workerId, runId } = resolveRunContext();
+    const by = this.actor(agent);
     const tx = this.db.transaction(() => {
       this.prep(
         'UPDATE scrum_tasks SET milestone_id = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
-      ).run(nextMilestoneId, ts, agent ?? null, ts, workerId, runId, id);
+      ).run(nextMilestoneId, ts, by, ts, workerId, runId, id);
       this.prep(
         'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
       ).run(
         id,
         ts,
         'milestone_changed',
-        agent ?? null,
+        by,
         JSON.stringify({ from: task.milestone_id, to: nextMilestoneId }),
       );
     });
@@ -761,13 +789,14 @@ export class ScrumStore {
 
     const ts = isoNow();
     const { workerId, runId } = resolveRunContext();
+    const by = this.actor();
     const tx = this.db.transaction(() => {
       this.prep(
-        'UPDATE scrum_tasks SET deleted_at = ?, last_modified_by = NULL, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
-      ).run(ts, ts, workerId, runId, id);
+        'UPDATE scrum_tasks SET deleted_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+      ).run(ts, by, ts, workerId, runId, id);
       this.prep(
         'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
-      ).run(id, ts, 'task_deleted', null, JSON.stringify({ status: task.status }));
+      ).run(id, ts, 'task_deleted', by, JSON.stringify({ status: task.status }));
     });
     tx();
   }
@@ -793,7 +822,7 @@ export class ScrumStore {
       throw new Error(`cancelTask: task '${id}' is already terminal ('${task.status}')`);
     }
     this.transaction(() => {
-      this.cancelOne(id, opts.reason ?? 'cancelled', opts.detail ?? null, opts.agent ?? null);
+      this.cancelOne(id, opts.reason ?? 'cancelled', opts.detail ?? null, this.actor(opts.agent));
     });
     return this.requireTask(id, 'cancelTask');
   }
@@ -817,7 +846,7 @@ export class ScrumStore {
     if (!root) throw new Error(`cancelTaskCascade: unknown task '${rootId}'`);
 
     const cancelled: string[] = [];
-    const agent = opts.agent ?? null;
+    const agent = this.actor(opts.agent);
     const childDetail = `parent '${rootId}' cancelled`;
 
     this.transaction(() => {
@@ -1380,17 +1409,19 @@ export class ScrumStore {
   /**
    * Persist an acceptance object (or NULL) to `scrum_tasks.acceptance_json`.
    * Bumps last-touch provenance (v9): `last_modified_at = now()`,
-   * `last_modified_by = NULL` — these editors carry no agent, so the pair
-   * honestly records an unattributed most-recent write. Still stamps the
+   * `last_modified_by` = the ambient actor (`PROVE_AGENT` env / `defaultActor`,
+   * NULL when neither is in scope) — these editors take no per-call agent, so
+   * the ambient resolution is the only attribution available. Still stamps the
    * executing-worker/run attribution (v11) from the run env so the write's
    * unit and run are recorded even when the agent is not.
    */
   private writeAcceptance(taskId: string, acceptance: Acceptance | null): void {
     const { workerId, runId } = resolveRunContext();
     this.prep(
-      'UPDATE scrum_tasks SET acceptance_json = ?, last_modified_by = NULL, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+      'UPDATE scrum_tasks SET acceptance_json = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
     ).run(
       acceptance === null ? null : JSON.stringify(acceptance),
+      this.actor(),
       isoNow(),
       workerId,
       runId,
@@ -1423,12 +1454,20 @@ export class ScrumStore {
     const task = this.getTask(taskId);
     if (!task) throw new Error(`setBounds: unknown task '${taskId}'`);
     if (bounds !== null) validateBounds(bounds);
-    // Bump last-touch provenance (v9); no agent flows here, so by = NULL. Still
-    // stamps the executing-worker/run attribution (v11) from the run env.
+    // Bump last-touch provenance (v9); no per-call agent flows here, so the
+    // ambient actor (PROVE_AGENT env / defaultActor, else NULL) attributes the
+    // write. Still stamps the executing-worker/run attribution (v11).
     const { workerId, runId } = resolveRunContext();
     this.prep(
-      'UPDATE scrum_tasks SET bounds_json = ?, last_modified_by = NULL, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
-    ).run(bounds === null ? null : JSON.stringify(bounds), isoNow(), workerId, runId, taskId);
+      'UPDATE scrum_tasks SET bounds_json = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+    ).run(
+      bounds === null ? null : JSON.stringify(bounds),
+      this.actor(),
+      isoNow(),
+      workerId,
+      runId,
+      taskId,
+    );
     return this.requireTask(taskId, 'setBounds');
   }
 
@@ -1657,7 +1696,7 @@ export class ScrumStore {
     const tx = this.db.transaction(() => {
       const result = this.prep(
         'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
-      ).run(input.taskId, ts, input.kind, input.agent ?? null, JSON.stringify(payload));
+      ).run(input.taskId, ts, input.kind, this.actor(input.agent), JSON.stringify(payload));
       this.prep('UPDATE scrum_tasks SET last_event_at = ? WHERE id = ?').run(ts, input.taskId);
       return Number(result.lastInsertRowid);
     });
@@ -1942,7 +1981,7 @@ export class ScrumStore {
       source_path: input.sourcePath ?? null,
       content_sha: contentSha,
       recorded_at: recordedAt,
-      recorded_by_agent: input.recordedByAgent ?? null,
+      recorded_by_agent: this.actor(input.recordedByAgent),
       // A freshly inserted decision is always current; supersession is set
       // only via `supersedeDecision`. On upsert these are preserved when the
       // existing row is superseded and the incoming record asserts no status
@@ -2243,7 +2282,7 @@ export class ScrumStore {
    */
   registerContributor(input: RegisterContributorInput): Contributor {
     const createdAt = input.createdAt ?? isoNow();
-    const createdBy = input.createdBy ?? process.env.PROVE_AGENT ?? null;
+    const createdBy = this.actor(input.createdBy);
     const row: Contributor = {
       id: input.id && input.id.length > 0 ? input.id : mintContributorId(input.slug),
       slug: input.slug,
@@ -2350,7 +2389,7 @@ export class ScrumStore {
       throw new Error(`unknown contributor '${input.contributorId}' — register it first`);
     }
     const fromTs = input.fromTs ?? isoNow();
-    const createdBy = input.createdBy ?? process.env.PROVE_AGENT ?? null;
+    const createdBy = this.actor(input.createdBy);
 
     const append = this.db.transaction(() => {
       // Close the current open interval (if any) at the new holder's from_ts.

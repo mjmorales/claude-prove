@@ -5,8 +5,10 @@
  *   register --slug S [--display-name N] [--github G] [--email E] [--id CT-UUID] [--status active|inactive]
  *                              Mint a CT-UUID (or accept an explicit --id), insert
  *                              the registry row, and scaffold/sync the on-disk
- *                              `contributors/<slug>.md` identity artifact. Prints
- *                              the JSON row.
+ *                              `contributors/<slug>.md` identity artifact — a
+ *                              missing file gets the full skeleton; an existing
+ *                              file gets the registry frontmatter MERGED in with
+ *                              its authored body preserved. Prints the JSON row.
  *   list                       [--status active|inactive] [--human]
  *                              List the registry, ordered by slug.
  *   resolve [--github G] [--email E]
@@ -45,14 +47,15 @@
  * row. There is no second, competing contributor-file concept.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
 import { resolveDefaultContributor, setDefaultContributor } from '@claude-prove/store';
 import { renderProvenanceFrontmatter } from '../../install/bootstrap-identity';
-import { type ScrumStore, openScrumStore } from '../store';
+import type { ScrumStore } from '../store';
 import type { Contributor, ContributorStatus } from '../types';
 import { CONTRIBUTOR_STATUSES } from '../types';
+import { openCliStore } from './cli-store';
 
 export interface ContributorCmdFlags {
   slug?: string;
@@ -104,7 +107,7 @@ export function runContributorCmd(
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
+  const store = openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'register':
@@ -183,25 +186,48 @@ function emptyToNull(raw: string | undefined): string | null {
 }
 
 /**
- * Write (overwrite) the on-disk `contributors/<slug>.md` identity artifact that
- * mirrors the registry row. Extends the `install bootstrap-identity` contributor
- * file shape: a YAML frontmatter `schema_version` + `provenance` block, with the
- * `{id, slug, status, display_name, github, email}` registry fields embedded so
- * the file and the row carry one schema. Returns the written path.
+ * Write the on-disk `contributors/<slug>.md` identity artifact that mirrors
+ * the registry row. Extends the `install bootstrap-identity` contributor file
+ * shape: a YAML frontmatter `schema_version` + `provenance` block, with the
+ * `{id, slug, status, display_name, github, email}` registry fields embedded
+ * so the file and the row carry one schema. An ABSENT file gets the full
+ * skeleton; an EXISTING file (bootstrap-scaffolded or human-authored) gets the
+ * registry fields MERGED into its frontmatter with the authored body preserved
+ * verbatim — register repairs the registry mirror, it never clobbers authored
+ * content. Returns the written path.
  */
 function writeContributorArtifact(workspaceRoot: string, row: Contributor): string {
   const dir = join(workspaceRoot, 'contributors');
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${row.slug}.md`);
-  writeFileSync(path, renderContributorArtifact(row), 'utf8');
+  const content = existsSync(path)
+    ? mergeContributorArtifact(readFileSync(path, 'utf8'), row)
+    : renderContributorArtifact(row);
+  writeFileSync(path, content, 'utf8');
   return path;
 }
 
 /**
- * Render the contributor identity artifact: the provenance frontmatter the
- * bootstrap scaffolder emits, with a `contributor:` block carrying the registry
- * fields, plus a human skeleton body. The `contributor:` block is the file's
- * mirror of the `scrum_contributors` row.
+ * The `contributor:` frontmatter field block — the file's mirror of the
+ * `scrum_contributors` row. Shared by the fresh render and the merge path so
+ * both emit one shape.
+ */
+function contributorBlockLines(row: Contributor): string[] {
+  return [
+    'contributor:',
+    `  id: ${row.id}`,
+    `  slug: ${row.slug}`,
+    `  status: ${row.status}`,
+    `  display_name: ${yamlValue(row.display_name)}`,
+    `  github: ${yamlValue(row.github)}`,
+    `  email: ${yamlValue(row.email)}`,
+  ];
+}
+
+/**
+ * Render the contributor identity artifact from scratch: the provenance
+ * frontmatter the bootstrap scaffolder emits, with the `contributor:` block
+ * carrying the registry fields, plus a human skeleton body.
  */
 function renderContributorArtifact(row: Contributor): string {
   const frontmatter = renderProvenanceFrontmatter(row.created_at);
@@ -214,16 +240,7 @@ function renderContributorArtifact(row: Contributor): string {
     throw new Error('renderContributorArtifact: provenance frontmatter has no closing --- marker');
   }
   const head = frontmatter.slice(0, closing + 1);
-  const contributorBlock = [
-    'contributor:',
-    `  id: ${row.id}`,
-    `  slug: ${row.slug}`,
-    `  status: ${row.status}`,
-    `  display_name: ${yamlValue(row.display_name)}`,
-    `  github: ${yamlValue(row.github)}`,
-    `  email: ${yamlValue(row.email)}`,
-    '---',
-  ].join('\n');
+  const contributorBlock = [...contributorBlockLines(row), '---'].join('\n');
   const body = [
     `# Contributor: ${row.display_name ?? row.slug}`,
     '',
@@ -239,6 +256,67 @@ function renderContributorArtifact(row: Contributor): string {
     '',
   ].join('\n');
   return `${head}${contributorBlock}\n\n${body}`;
+}
+
+/** Matches a leading YAML frontmatter block: opening fence, inner lines, closing fence. */
+const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---(\n|$)/;
+
+/**
+ * Merge the registry row into an EXISTING artifact, preserving its authored
+ * body byte-for-byte. Two shapes arrive here:
+ *
+ *   - Frontmatter-headed (the bootstrap scaffold, or a prior register): any
+ *     stale `contributor:` block is dropped from the frontmatter, the fresh
+ *     block is spliced in before the closing fence, the `last_modified_by` /
+ *     `last_modified_at` provenance pair is bumped to mirror the row, and
+ *     every other frontmatter line plus the whole body pass through verbatim.
+ *   - Bare markdown (no frontmatter): a fresh provenance + contributor
+ *     frontmatter is prepended above the existing content, which becomes the
+ *     body unchanged.
+ */
+function mergeContributorArtifact(existing: string, row: Contributor): string {
+  const match = existing.match(FRONTMATTER_RE);
+  if (match === null) {
+    const frontmatter = renderProvenanceFrontmatter(row.created_at);
+    const closing = frontmatter.lastIndexOf('\n---');
+    if (closing < 0) {
+      throw new Error('mergeContributorArtifact: provenance frontmatter has no closing --- marker');
+    }
+    const head = frontmatter.slice(0, closing + 1);
+    return `${head}${[...contributorBlockLines(row), '---'].join('\n')}\n\n${existing}`;
+  }
+
+  const inner = match[1] ?? '';
+  const body = existing.slice(match[0].length);
+
+  // Drop any existing `contributor:` block (the key plus its indented
+  // children) — the fresh block re-asserts the registry mirror.
+  const kept: string[] = [];
+  let inContributorBlock = false;
+  for (const line of inner.split('\n')) {
+    if (/^contributor:\s*$/.test(line)) {
+      inContributorBlock = true;
+      continue;
+    }
+    if (inContributorBlock && /^\s+\S/.test(line)) continue;
+    inContributorBlock = false;
+    kept.push(line);
+  }
+
+  // Bump the last-touch provenance pair to mirror the row: register modified
+  // this artifact. Created-* lines stay as the file's original scaffold stamp.
+  const updated = kept.map((line) => {
+    if (/^ {2}last_modified_by:/.test(line)) {
+      return `  last_modified_by: ${yamlValue(row.last_modified_by)}`;
+    }
+    if (/^ {2}last_modified_at:/.test(line)) {
+      return `  last_modified_at: ${row.last_modified_at}`;
+    }
+    return line;
+  });
+
+  const frontmatter = ['---', ...updated, ...contributorBlockLines(row), '---'].join('\n');
+  return `${frontmatter}\n${body}`;
 }
 
 /**

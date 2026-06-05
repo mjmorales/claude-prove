@@ -35,6 +35,14 @@ import { dirname, join, resolve } from 'node:path';
 /** Directory prove owns in the user's home for machine-global state. */
 const STABLE_ROOT_DIR = '.claude-prove';
 
+/**
+ * Env override for the machine-config base dir. Primarily the seam that lets
+ * test suites exercise handler-level code paths (which never thread an
+ * explicit base) without touching the developer's real `~/.claude-prove/`;
+ * doubles as an escape hatch for unusual home layouts.
+ */
+export const MACHINE_CONFIG_DIR_ENV_VAR = 'CLAUDE_PROVE_MACHINE_CONFIG_DIR';
+
 /** Config filename under the machine-global root and the legacy XDG dir alike. */
 const CONFIG_FILENAME = 'config.json';
 
@@ -46,12 +54,15 @@ export interface MachineConfig {
 }
 
 /**
- * Resolve the machine-config base directory (the `~/.claude-prove` root). The
- * explicit override is the test seam — tests pass a tmp dir so they NEVER touch
- * the developer's real `~/.claude-prove/`.
+ * Resolve the machine-config base directory (the `~/.claude-prove` root).
+ * Precedence: explicit override param (direct-call test seam), then the
+ * `CLAUDE_PROVE_MACHINE_CONFIG_DIR` env var (handler-level test seam — those
+ * call sites never thread a base), then the home default.
  */
 export function machineConfigBaseDir(override?: string): string {
   if (override !== undefined && override.length > 0) return override;
+  const env = process.env[MACHINE_CONFIG_DIR_ENV_VAR];
+  if (env !== undefined && env.length > 0) return env;
   return join(homedir(), STABLE_ROOT_DIR);
 }
 

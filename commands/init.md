@@ -7,7 +7,7 @@ description: Detect project tech stack, generate .claude/.prove.json, and bootst
 Two halves run here:
 
 1. **Stack config** — delegate detection and validator emission to `claude-prove install init-config`, then layer interactive UX for scope, validator review, `.gitignore`, references, and CLAUDE.md.
-2. **Project-identity bootstrap** — drive a conversational interview (or honor selection flags) and author `charter.md`, `team.md`, and a contributor record. The CLI runs the mechanical pre-flight checks and scaffolds skip-if-exists skeletons; you author the prose content into them.
+2. **Project-identity bootstrap** — drive a conversational interview (or honor selection flags) and author `charter.md`, `team.md`, and a contributor record, then bring the identity chain live: register the contributor in the scrum registry (minting its CT-UUID) and offer operator-of-record + default-contributor wiring. The CLI runs the mechanical pre-flight checks and scaffolds skip-if-exists skeletons; you author the prose content into them.
 
 `claude-prove install init-config` is the source of truth for validator detection. It writes `<cwd>/.claude/.prove.json`, preserves user-custom validators, and carries every other top-level key (`scopes`, `reporters`, `claude_md`, `tools`, ...) across re-runs.
 
@@ -113,6 +113,52 @@ For every artifact the CLI reports as `created`, run a short interview and write
 - **contributor** (`contributors/$CONTRIBUTOR_ID.md`) — the operator's name, handle, role, and current focus.
 
 Leave the frontmatter `provenance` and `schema_version` values untouched — the CLI stamps them. Author into `created` skeletons only; skip every `skipped` artifact.
+
+### Register the contributor (mint the CT-UUID)
+
+The scaffolded contributor file exists on disk but has no registry row until it is registered. Skipping registration leaves the whole identity chain dead: `operator set` is unsatisfiable, `contributor resolve` matches nothing, and every scrum write stamps NULL provenance — permanently, since provenance is append-only. Run this whenever a contributor artifact is in scope (`created` OR `skipped`):
+
+1. Check for an existing row first — re-running init must not duplicate:
+
+   ```bash
+   "${PROVE_CLI[@]}" scrum contributor list
+   ```
+
+   If a row with slug `$CONTRIBUTOR_ID` exists, bind its `id` to `$CT_UUID` and skip to the wiring step.
+
+2. Derive the resolution keys: display name from `git config user.name`, email from `git config user.email`, GitHub handle from `gh api user --jq .login` when `gh` is authenticated (omit `--github` otherwise).
+
+3. Register:
+
+   ```bash
+   "${PROVE_CLI[@]}" scrum contributor register --slug "$CONTRIBUTOR_ID" \
+     --display-name "<name>" --email "<email>" --github "<handle>"
+   ```
+
+   `register` merges its registry frontmatter into the existing `contributors/$CONTRIBUTOR_ID.md`, preserving the authored body. Bind the `id` from the JSON output to `$CT_UUID`.
+
+### Wire the operator-of-record and default contributor
+
+`AskUserQuestion` (header: "Wiring"):
+- "Wire both (Recommended)" — set the operator-of-record AND the per-machine default contributor
+- "Operator only" — set the operator-of-record, skip the default mapping
+- "Skip" — leave both unwired
+
+On "Wire both" or "Operator only":
+
+```bash
+"${PROVE_CLI[@]}" scrum operator set --contributor "$CT_UUID"
+```
+
+Opens the holder interval in the position history and syncs `charter.md`'s `operator_of_record` frontmatter (tolerates a missing charter).
+
+On "Wire both", additionally:
+
+```bash
+"${PROVE_CLI[@]}" scrum contributor default set --id "$CT_UUID"
+```
+
+Maps this project root to the contributor in the per-user config, so cold `claude-prove scrum` writes on this machine stamp `created_by` / `last_modified_by` with `$CT_UUID` instead of NULL.
 
 ## Step 4: Show sections
 
@@ -220,7 +266,7 @@ bash "$PLUGIN_DIR/scripts/install-skills.sh"
 
 ## Step 10: Summary
 
-Report what was created or updated, including any identity artifacts (`charter.md`, `team.md`, `contributors/<id>.md`) and which were scaffolded vs skipped. Suggest next steps:
+Report what was created or updated, including any identity artifacts (`charter.md`, `team.md`, `contributors/<id>.md`) and which were scaffolded vs skipped, plus the identity-chain state: the registered CT-UUID, whether the operator-of-record was set, and whether the default-contributor mapping was written. Suggest next steps:
 - Review and customize validators in `$TARGET_CWD/.claude/.prove.json`
 - Review the authored charter / team / contributor content
 - Commit `.claude/.prove.json`, `.gitignore`, and any new identity artifacts
