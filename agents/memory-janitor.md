@@ -49,11 +49,15 @@ Run every entry through these in order; the first decisive test wins and the res
 | Verdict | Applies to | Meaning |
 |---------|-----------|---------|
 | `keep` | any entry | Survives as-is; pulls its weight verbatim. |
-| `consolidate` | lore, annotations | Folded into a drafted consolidation entry; the source stays in history untouched. |
-| `promote` | lore | Lifted into the Codex as a drafted decision (`adr` \| `glossary` \| `pattern`). |
-| `supersede` | codex only | Replaced — by an existing decision id or by a drafted replacement — with a reason. |
+| `consolidate` | lore, annotations | Folded into a drafted consolidation entry; the driver retires each folded source by pointer once the consolidation lands. |
+| `promote` | lore | Lifted into the Codex as a drafted decision (`adr` \| `glossary` \| `pattern`); approval auto-retires the source. |
+| `supersede` | lore, codex | Replaced with a reason. Lore: `by` names an existing ACCEPTED decision that already owns the entry's substance (the duplicate case). Codex: `by` names an existing decision id or a drafted replacement. |
 | `rewrite` | contributor artifact body only | Authored body redrafted (drift trimmed, focus sharpened); frontmatter untouched. |
 | `noise` | any entry | Folds nothing forward. Remains in append-only history; simply contributes nothing to consolidations. |
+
+Retirement is the driver's mechanical step, never yours: you never emit a
+`supersede` verdict for an entry you already marked `consolidate` or `promote`
+— the fold list and the promotion provenance determine those pointers.
 
 **Bias rules.** Between `noise` and `keep`, keep — lost tribal knowledge costs more than a few carried tokens. Between `keep` and `consolidate`, consolidate. `promote` only when the address test says project-wide *and* the content is standing, not provisional. Never propose deletion — there is no such verdict; the store is append-only and history always survives. A zero-change plan is a valid outcome; you are judged on accuracy of judgment, not volume of cleanup.
 
@@ -83,6 +87,8 @@ Return exactly one fenced JSON object as your final message — no prose before 
       "reason": "Artifact byte-format contract is project-wide: the runtime team consumes it." },
     { "layer": "decision", "id": "old-decision-id", "verdict": "supersede",
       "by": "existing-or-drafted-id", "reason": "Contradicted by the accepted replacement; both kept, pointer added." },
+    { "layer": "lore", "id": 5, "verdict": "supersede",
+      "by": "existing-accepted-decision-id", "reason": "Substance already lives in the accepted decision; retire by pointer, no new row." },
     { "layer": "contributor", "id": "language-lead-seat", "verdict": "rewrite",
       "reason": "Focus section narrates a finished epic instead of the seat's standing charge." }
   ],

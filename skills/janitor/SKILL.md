@@ -34,16 +34,16 @@ rot; a human batch gate owns approval. Three hard floors govern every phase:
 
 | Layer | Store | Cleanup mechanism available |
 |-------|-------|------------------------------|
-| Team Lore | `scrum_lores` (mirrored into `teams/<slug>.md`, recent-10 window) | Append a tech_lead-authored consolidation entry citing folded ids; promote project-wide entries to the Codex |
+| Team Lore | `scrum_lores` (mirrored into `teams/<slug>.md`, live recent-10 window) | Append a tech_lead-authored consolidation entry, then `lore supersede` each folded source; `lore promote` lifts project-wide entries into the Codex (approval auto-retires the source) |
 | Codex | `scrum_decisions` + `.prove/decisions/*.md` | `decision supersede --by --reason`; record consolidated replacements |
 | Annotations | `scrum_annotations` | Input signal only — durable findings get lifted into Lore or Codex; rows are never displaced |
 | Contributor artifacts | `contributors/<slug>.md` authored body | Direct Edit (frontmatter is registry-owned; never touch it) |
 
-**Known limitation — state it in the final report.** Lore has no supersession
-column: a consolidation entry displaces older entries from the team artifact's
-recent-10 window only as new entries accumulate. Until then both are visible,
-which is why every consolidation body must name the ids it folds — readers
-treat the consolidation as authoritative over its sources.
+A superseded Lore entry leaves the team artifact's recent window the moment its
+replacement pointer lands (`superseded_by = lore:<id> | decision:<id>` plus a
+reason) while the row itself survives untouched in the store's history — the
+same append-only-with-supersession discipline the Codex follows. Consolidation
+bodies still name the ids they fold, so provenance reads in both directions.
 
 ## Phase 0 — Scope and inventory (mechanical)
 
@@ -52,7 +52,7 @@ Parse arguments: zero or more team slugs (default: every team), optional
 
 ```bash
 claude-prove scrum team list                       # teams in scope
-claude-prove scrum lore list <slug>                # full Lore per team (JSON)
+claude-prove scrum lore list <slug> --live         # a team's LIVE Lore (JSON) — already-retired entries need no verdict
 claude-prove scrum annotation list --target-kind team --target <slug>
 claude-prove scrum decision list                   # the Codex
 claude-prove scrum decision review-stale           # staleness signal (report-only)
@@ -105,41 +105,59 @@ Per approved scope, in this order:
 
 **1. Lore consolidations.** Author each drafted body to
 `.prove/scratch/janitor/<team>-<draft-id>.md` with the Write tool (prose in a
-file, reviewable as text), then append as the seated tech_lead:
+file, reviewable as text), append it as the seated tech_lead, then retire each
+folded source by pointer:
 
 ```bash
 claude-prove scrum lore record <slug> \
   --body "$(cat .prove/scratch/janitor/<team>-<draft-id>.md)" \
   --author <tech_lead CT-UUID>
+# then, per id in the draft's `folds` list:
+claude-prove scrum lore supersede <folded-id> --by <new-entry-id> \
+  --reason "folded into consolidation entry <new-entry-id>" --author <tech_lead CT-UUID>
 ```
 
-The store enforces authorship: with a seated tech_lead the author MUST be that
-holder; with no tech_lead seated the write lands with a warning. Acting as the
-seat is the protocol — the batch gate is what authorizes it.
+The store enforces authorship on both writes: with a seated tech_lead the
+author MUST be that holder; with no tech_lead seated the write lands with a
+warning. Acting as the seat is the protocol — the batch gate is what authorizes
+it. A supersession resolves once: re-superseding an already-retired entry exits
+non-zero, so never re-run a fold that already landed.
 
-**2. Lore→Codex promotions.** Write the drafted decision markdown to
-`.prove/decisions/lore-promotion-<team>-<loreId>.md` (this deterministic id
-matches the store's promotion convention, so a future mechanical promotion
-upserts the same row instead of duplicating), then:
+**2. Lore→Codex promotions.** Three steps — stamp provenance, refine the body,
+resolve the gate:
 
 ```bash
-claude-prove scrum decision record .prove/decisions/lore-promotion-<team>-<loreId>.md --kind <adr|glossary|pattern>
+claude-prove scrum lore promote <lore-id> --kind <adr|glossary|pattern> --title "<title>"
+# write the agent's refined decision markdown over the raw-copied draft:
+#   .prove/decisions/lore-promotion-<team>-<loreId>.md   (Write tool)
+claude-prove scrum decision record .prove/decisions/lore-promotion-<team>-<loreId>.md --kind <same-kind>
 claude-prove scrum decision approve <decision-id> --by <responder>
 ```
 
-Gated kinds land as drafts; the batch gate already approved, so resolve the
-write-gate immediately. For `glossary` the responder must currently hold a
-`tech_lead` seat — use the team's tech_lead CT-UUID; for `adr`/`pattern` use
-the operator (`claude-prove scrum contributor default show`).
+`lore promote` records the gated draft under the deterministic
+`lore-promotion-<team>-<loreId>` id and stamps `source_lore_id`; re-recording
+the file upserts the refined body onto the same row without touching either.
+Approval resolves the write-gate AND auto-retires the source Lore
+(`superseded_by = decision:<id>`). For `glossary` the responder must currently
+hold a `tech_lead` seat — use the team's tech_lead CT-UUID; for `adr`/`pattern`
+use the operator (`claude-prove scrum contributor default show`).
 
-**3. Codex supersessions.** Record any drafted replacement first (same
+**3. Lore that duplicates an existing accepted decision.** No new row — retire
+the entry by pointing at the decision that already owns its substance:
+
+```bash
+claude-prove scrum lore supersede <lore-id> --by-decision <decision-id> \
+  --reason "duplicates the accepted decision" --author <tech_lead CT-UUID>
+```
+
+**4. Codex supersessions.** Record any drafted replacement first (same
 record/approve flow), then point the old row at its successor:
 
 ```bash
 claude-prove scrum decision supersede <old-id> --by <new-id> --reason "<why it changed>"
 ```
 
-**4. Contributor rewrites.** Edit only the authored body below the frontmatter
+**5. Contributor rewrites.** Edit only the authored body below the frontmatter
 of `contributors/<slug>.md`; the frontmatter is registry-owned and a later
 `contributor register` merge preserves the body you wrote.
 
@@ -150,10 +168,10 @@ claude-prove prompting token-count "teams/*.md" "contributors/*.md" ".prove/deci
 ```
 
 Report per scope: token delta against the Phase 0 baseline, entries
-kept / consolidated / promoted / superseded / rewritten / left as noise-in-history,
-each promotion's decision id, and the recent-10 window note from
-"What it cleans" wherever consolidated sources are still visible. A zero-write
-pass with an all-`keep` plan is a valid, reportable outcome.
+kept / consolidated / promoted / superseded / rewritten / left as
+noise-in-history, each promotion's decision id, and each team's `count`/`live`
+split from the artifact's `lore:` block. A zero-write pass with an all-`keep`
+plan is a valid, reportable outcome.
 
 ## Guards
 
