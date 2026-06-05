@@ -292,6 +292,19 @@ jobs:
             --outfile claude-prove
           mv claude-prove ${{ matrix.artifact }}
 
+      # A compiled binary differs from `bun run` sources in module identity —
+      # bunfs maps argv[1] AND every bundled module's import.meta.url to one
+      # virtual entry — so source-tree tests cannot catch compiled-only boot
+      # regressions (a binary that printed its version yet exited 1 on every
+      # command once shipped). Every matrix host can execute its own artifact
+      # (darwin-x64 runs under Rosetta on the arm64 macos runner), so execute
+      # it for real and require a clean exit plus the released version string.
+      - name: Smoke-test ${{ matrix.artifact }}
+        run: |
+          out=$(./${{ matrix.artifact }} --version)
+          echo "$out"
+          echo "$out" | grep -q "claude-prove/${{ needs.release.outputs.new_version }}"
+
       - name: Upload to GitHub Release
         # `tag_name` is required when the workflow is NOT triggered by a tag
         # push. This matrix runs on the branch-push event that cut the

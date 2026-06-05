@@ -22,7 +22,7 @@
 
 import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { detectMode } from '@claude-prove/installer/detect-mode';
+import { detectMode, runningFromCompiledBinary } from '@claude-prove/installer/detect-mode';
 import { resolvePluginRoot } from '@claude-prove/installer/plugin-root';
 
 /** Env keys the parent sets on the detached child; read here verbatim. */
@@ -96,8 +96,18 @@ export async function serveChild(env: NodeJS.ProcessEnv = process.env): Promise<
  * True when this module is the process entrypoint — i.e. the dev-mode parent
  * spawned `bun <this file>`. Importing the module (the compiled-mode topic
  * dispatch path) triggers no boot side effect.
+ *
+ * A compiled binary must short-circuit to false BEFORE the path comparison: a
+ * Bun standalone executable maps argv[1] AND every bundled module's
+ * `import.meta.url` to the same bunfs virtual entry, so the identity check is
+ * vacuously true for every invocation of the binary — `claude-prove --version`
+ * included — and the boot throws on the missing child env. The compiled child
+ * never enters here anyway; the parent re-invokes the binary with the hidden
+ * `review-ui serve __child` token, which dispatches to `serveChild()` through
+ * the topic.
  */
 function isMain(): boolean {
+  if (runningFromCompiledBinary()) return false;
   const entry = process.argv[1];
   if (!entry) return false;
   return resolve(entry) === fileURLToPath(import.meta.url);
