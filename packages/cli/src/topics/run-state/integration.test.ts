@@ -518,7 +518,7 @@ describe('run-state CLI integration', () => {
 
   describe('summary --slug filtering', () => {
     // Initialize two runs under one branch so a slug filter has something to
-    // discriminate against — without the fix, `summary --slug` dumped both.
+    // discriminate against.
     function setupTwoRuns(): { root: string; runsRoot: string } {
       const root = setupProjectRoot();
       const runsRoot = join(root, '.prove', 'runs');
