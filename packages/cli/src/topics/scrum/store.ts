@@ -1804,6 +1804,19 @@ export class ScrumStore {
     return rows.map((r) => decodeEvent(r));
   }
 
+  /**
+   * Returns true when an `unlinked_run_detected` event already exists for the
+   * given `runPath` + `reason` pair. Uses a targeted SQL WHERE on the event
+   * kind and JSON payload fields — not window-bounded — so it remains correct
+   * regardless of how many orphan events have accumulated on the sentinel task.
+   */
+  hasOrphanEventForRunPath(runPath: string, reason: string): boolean {
+    const row = this.prep(
+      "SELECT 1 FROM scrum_events WHERE kind = 'unlinked_run_detected' AND json_extract(payload_json, '$.run_path') = ? AND json_extract(payload_json, '$.reason') = ? LIMIT 1",
+    ).get(runPath, reason);
+    return row != null;
+  }
+
   /** Cross-task recent events. Used by the UI feed. */
   listRecentEvents(limit = 50): ScrumEvent[] {
     const rows = this.db

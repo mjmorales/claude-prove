@@ -313,6 +313,81 @@ describe('reconcileRunCompleted — unlinked_run_detected dedup', () => {
     const orphanEvents = events.filter((e) => e.kind === 'unlinked_run_detected');
     expect(orphanEvents).toHaveLength(1);
   });
+
+  test('dedup is not window-bounded — suppresses after >1000 prior orphan events', () => {
+    // After first reconcile the target event is in the store.
+    const statePath = writeRun({ branch: 'feat', slug: 'many-orphans', taskId: null });
+    reconcileRunCompleted(statePath, store);
+
+    // Push 1001 noise events for unrelated paths so the old scan-based
+    // listEventsForTask(…, 1000) window would push the target off the bottom.
+    for (let i = 0; i < 1001; i++) {
+      store.appendEvent({
+        taskId: ORPHAN_TASK_ID,
+        kind: 'unlinked_run_detected',
+        payload: { run_path: `noise/runs/branch/slug-${i}`, reason: 'plan.json missing task_id' },
+      });
+    }
+
+    // The targeted SQL query must still suppress the second emit.
+    reconcileRunCompleted(statePath, store);
+
+    // Exactly one event for the target run_path regardless of ordering.
+    const targetPath = '.prove/runs/feat/many-orphans';
+    expect(store.hasOrphanEventForRunPath(targetPath, 'plan.json missing task_id')).toBe(true);
+    const events = store
+      .listEventsForTask(ORPHAN_TASK_ID, 2000)
+      .filter(
+        (e) =>
+          e.kind === 'unlinked_run_detected' &&
+          (e.payload as Record<string, unknown>)?.run_path === targetPath,
+      );
+    expect(events).toHaveLength(1);
+  });
+
+  test('same run path with a different reason emits a second event', () => {
+    // First reconcile: default reason 'plan.json missing task_id'.
+    const statePath = writeRun({ branch: 'feat', slug: 'two-reasons', taskId: null });
+    reconcileRunCompleted(statePath, store);
+
+    const runPath = '.prove/runs/feat/two-reasons';
+    const secondReason = "task 'some-id' not found in scrum store";
+
+    // Directly append a second orphan event for the same path but a different reason,
+    // matching the second callsite in reconcileRunCompleted.
+    store.appendEvent({
+      taskId: ORPHAN_TASK_ID,
+      kind: 'unlinked_run_detected',
+      payload: {
+        run_path: runPath,
+        run_status: 'completed',
+        branch: 'feat',
+        slug: 'two-reasons',
+        reason: secondReason,
+      },
+    });
+
+    // Both (run_path, reason) pairs must be present.
+    expect(store.hasOrphanEventForRunPath(runPath, 'plan.json missing task_id')).toBe(true);
+    expect(store.hasOrphanEventForRunPath(runPath, secondReason)).toBe(true);
+
+    const events = store
+      .listEventsForTask(ORPHAN_TASK_ID, 1000)
+      .filter((e) => e.kind === 'unlinked_run_detected');
+    expect(events).toHaveLength(2);
+  });
+
+  test('same run path same reason is still suppressed on repeat reconcile', () => {
+    const statePath = writeRun({ branch: 'feat', slug: 'same-reason', taskId: null });
+
+    reconcileRunCompleted(statePath, store);
+    reconcileRunCompleted(statePath, store);
+
+    const events = store
+      .listEventsForTask(ORPHAN_TASK_ID, 1000)
+      .filter((e) => e.kind === 'unlinked_run_detected');
+    expect(events).toHaveLength(1);
+  });
 });
 
 // ===========================================================================
