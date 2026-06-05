@@ -306,8 +306,14 @@ export function register(cli: CAC): void {
     )
     .option('--stalled-after-days <n>', 'Alerts: stalled WIP threshold in days (default: 7)')
     .option('--from-git', 'decision recover: scan git history for .prove/decisions/*.md blobs')
-    .option('--by <id>', 'decision supersede: id of the replacement decision')
-    .option('--reason <text>', 'decision supersede: rationale recorded on the retired decision')
+    .option(
+      '--by <id>',
+      'decision supersede: id of the replacement decision; decision approve/reject: the gate responder (required; glossary approve needs a current tech_lead)',
+    )
+    .option(
+      '--reason <text>',
+      'decision supersede: rationale recorded on the retired decision; decision reject: optional gate rationale recorded on the row',
+    )
     .option('--out <path>', 'compile-plan: write plan.json here + scrum-map.json sibling')
     .option('--text <t>', 'task acceptance add: criterion text')
     .option('--verifies-by <k>', 'task acceptance add: bash | assert | gate | agent')
