@@ -29,6 +29,7 @@
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
+import { isRunOrphan } from '../reconcile';
 import type { ScrumStore } from '../store';
 import type { EscalationType, ScrumTask, TaskStatus } from '../types';
 import { openCliStore } from './cli-store';
@@ -197,8 +198,8 @@ function findOrphanRuns(store: ScrumStore, workspaceRoot: string): OrphanRun[] {
     for (const slug of readdirSync(branchDir)) {
       const runDir = join(branchDir, slug);
       if (!safeIsDir(runDir)) continue;
+      if (!isRunOrphan(runDir, store)) continue;
       const runPath = join('.prove', 'runs', branch, slug);
-      if (store.getTaskForRun(runPath) !== null) continue;
       orphans.push({ branch, slug, run_path: runPath });
     }
   }

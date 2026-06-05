@@ -1714,6 +1714,43 @@ describe('runAlertsCmd', () => {
     expect(payload.orphan_runs.some((r) => r.slug === 'tracked-run')).toBe(false);
   });
 
+  test('orphan runs: run with plan.task_id set to a known task is NOT flagged (predicate parity with reconciler)', () => {
+    // Regression guard for gh#33 surface disagreement: alerts must apply the same
+    // three-layer orphan predicate as the reconciler. A run whose plan.json carries
+    // a valid top-level task_id is not an orphan even when the store run-link row
+    // is absent (e.g. pre-link-run invocation).
+    withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'PlanLinked', id: 'pl' }),
+    );
+    const runDir = join(workspace, '.prove', 'runs', 'main', 'plan-linked-run');
+    mkdirSync(runDir, { recursive: true });
+    writeFileSync(
+      join(runDir, 'plan.json'),
+      JSON.stringify({ kind: 'plan', schema_version: '5', task_id: 'pl', tasks: [] }),
+    );
+
+    const res = withCapture(() => runAlertsCmd({ workspaceRoot: workspace }));
+    const payload = JSON.parse(res.stdout.trim()) as { orphan_runs: Array<{ slug: string }> };
+    expect(payload.orphan_runs.some((r) => r.slug === 'plan-linked-run')).toBe(false);
+  });
+
+  test('orphan runs: alerts count matches reconciler-flagged set (both use isRunOrphan)', () => {
+    // An orphan run and a tracked run. Alerts must surface exactly the same count
+    // as the reconciler would flag.
+    mkdirSync(join(workspace, '.prove', 'runs', 'main', 'untracked'), { recursive: true });
+    const trackedDir = join(workspace, '.prove', 'runs', 'main', 'tracked');
+    mkdirSync(trackedDir, { recursive: true });
+    withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'T', id: 't-match' }));
+    writeFileSync(
+      join(trackedDir, 'plan.json'),
+      JSON.stringify({ kind: 'plan', schema_version: '5', task_id: 't-match', tasks: [] }),
+    );
+
+    const res = withCapture(() => runAlertsCmd({ workspaceRoot: workspace }));
+    const payload = JSON.parse(res.stdout.trim()) as { orphan_runs: Array<{ slug: string }> };
+    expect(payload.orphan_runs.map((r) => r.slug)).toEqual(['untracked']);
+  });
+
   test('open escalations surface with type + age in JSON and --human', () => {
     withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'B', id: 'b' }));
     withCapture(() => runTaskCmd('status', ['b', 'ready'], {}));

@@ -28,6 +28,7 @@ import {
   buildContextBundle,
   computeBoundActions,
   detectContributionMiss,
+  isRunOrphan,
   parseTeamAgentName,
   reconcileMilestoneClosed,
   reconcileRunCompleted,
@@ -266,6 +267,90 @@ describe('reconcileRunCompleted — orphan run', () => {
     expect(
       store.listEventsForTask(ORPHAN_TASK_ID).some((e) => e.kind === 'unlinked_run_detected'),
     ).toBe(true);
+  });
+});
+
+// ===========================================================================
+// unlinked_run_detected dedup — repeated sweeps over an unchanged orphan
+// ===========================================================================
+
+describe('reconcileRunCompleted — unlinked_run_detected dedup', () => {
+  test('repeated reconcile calls for the same orphan run emit exactly one event', () => {
+    const statePath = writeRun({ branch: 'feat', slug: 'orphan-once', taskId: null });
+
+    reconcileRunCompleted(statePath, store);
+    reconcileRunCompleted(statePath, store);
+    reconcileRunCompleted(statePath, store);
+
+    const events = store.listEventsForTask(ORPHAN_TASK_ID, 1000);
+    const orphanEvents = events.filter((e) => e.kind === 'unlinked_run_detected');
+    expect(orphanEvents).toHaveLength(1);
+  });
+
+  test('two distinct orphan runs each emit exactly one event (dedup is per run_path)', () => {
+    const s1 = writeRun({ branch: 'feat-a', slug: 'dup-one', taskId: null });
+    const s2 = writeRun({ branch: 'feat-b', slug: 'dup-two', taskId: null });
+
+    // Two sweeps over both runs.
+    reconcileRunCompleted(s1, store);
+    reconcileRunCompleted(s2, store);
+    reconcileRunCompleted(s1, store);
+    reconcileRunCompleted(s2, store);
+
+    const events = store.listEventsForTask(ORPHAN_TASK_ID, 1000);
+    const orphanEvents = events.filter((e) => e.kind === 'unlinked_run_detected');
+    expect(orphanEvents).toHaveLength(2);
+  });
+
+  test('sweepUnreconciled repeated over an unchanged orphan emits one event total', () => {
+    writeRun({ branch: 'feat', slug: 'sweep-orphan', taskId: null });
+
+    sweepUnreconciled(store, 0);
+    sweepUnreconciled(store, 0);
+    sweepUnreconciled(store, 0);
+
+    const events = store.listEventsForTask(ORPHAN_TASK_ID, 1000);
+    const orphanEvents = events.filter((e) => e.kind === 'unlinked_run_detected');
+    expect(orphanEvents).toHaveLength(1);
+  });
+});
+
+// ===========================================================================
+// isRunOrphan — shared orphan predicate (gh#33)
+// ===========================================================================
+
+describe('isRunOrphan', () => {
+  test('returns true when no layer knows the link', () => {
+    const statePath = writeRun({ branch: 'feat', slug: 'truly-orphan', taskId: null });
+    const runDir = statePath.replace('/state.json', '');
+    expect(isRunOrphan(runDir, store)).toBe(true);
+  });
+
+  test('returns false when plan.task_id is set and the task exists', () => {
+    store.createTask({ id: 'scrum-iso-1', title: 'Linked' });
+    const statePath = writeRun({ branch: 'feat', slug: 'iso-linked', taskId: 'scrum-iso-1' });
+    const runDir = statePath.replace('/state.json', '');
+    expect(isRunOrphan(runDir, store)).toBe(false);
+  });
+
+  test('returns false when nested tasks[n].task_id provides the link', () => {
+    store.createTask({ id: 'scrum-iso-2', title: 'Nested link' });
+    const statePath = writeRun({
+      branch: 'feat',
+      slug: 'iso-nested',
+      taskId: null,
+      nestedTaskId: 'scrum-iso-2',
+    });
+    const runDir = statePath.replace('/state.json', '');
+    expect(isRunOrphan(runDir, store)).toBe(false);
+  });
+
+  test('returns false when store run-link resolves the run (no plan.task_id)', () => {
+    store.createTask({ id: 'scrum-iso-3', title: 'Store-linked' });
+    const statePath = writeRun({ branch: 'feat', slug: 'iso-store', taskId: null });
+    const runDir = statePath.replace('/state.json', '');
+    store.linkRun({ taskId: 'scrum-iso-3', runPath: join('.prove', 'runs', 'feat', 'iso-store') });
+    expect(isRunOrphan(runDir, store)).toBe(false);
   });
 });
 

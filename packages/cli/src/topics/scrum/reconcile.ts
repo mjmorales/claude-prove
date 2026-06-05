@@ -1033,8 +1033,45 @@ function rebuildContextBundle(store: ScrumStore, taskId: string, projectRoot: st
 }
 
 // ---------------------------------------------------------------------------
+// Shared orphan predicate — consumed by reconciler and alerts alike
+// ---------------------------------------------------------------------------
+
+/**
+ * True when a run directory is a genuine orphan: none of the three link-resolution
+ * layers (`plan.task_id`, `plan.tasks[n].task_id`, store reverse lookup) can identify
+ * a linked scrum task.
+ *
+ * Exported so `scrum alerts` can apply the same predicate as the reconciler, keeping
+ * both surfaces in sync. Reads `plan.json` from `runDir` (non-throwing; a missing or
+ * malformed file is treated as no plan-side link and falls through to the store lookup).
+ */
+export function isRunOrphan(runDir: string, store: ScrumStore): boolean {
+  const planPath = join(runDir, 'plan.json');
+  const plan = readJsonOrNull<PlanJsonLite>(planPath);
+  return resolveLinkedTaskId(plan, store, runDir) === null;
+}
+
+// ---------------------------------------------------------------------------
 // Internals — orphan path
 // ---------------------------------------------------------------------------
+
+/**
+ * True when an `unlinked_run_detected` event for `runPath` already exists in the
+ * orphan sentinel's event log. Guards `emitOrphanEvent` so repeated reconcile sweeps
+ * over an unchanged orphan run emit exactly one event rather than one per sweep.
+ *
+ * The dedup key is the `run_path` payload field — the same string `toRunPath`
+ * normalises to — so re-runs over an identical directory are collapsed regardless of
+ * which code path triggered the reconcile.
+ */
+function hasOrphanEventForRun(store: ScrumStore, runPath: string): boolean {
+  for (const event of store.listEventsForTask(ORPHAN_TASK_ID, 1000)) {
+    if (event.kind !== 'unlinked_run_detected') continue;
+    const payload = event.payload;
+    if (isRecord(payload) && payload.run_path === runPath) return true;
+  }
+  return false;
+}
 
 function emitOrphanEvent(
   store: ScrumStore,
@@ -1043,11 +1080,13 @@ function emitOrphanEvent(
   extraReason?: string,
 ): void {
   ensureOrphanTask(store);
+  const runPath = toRunPath(runDir);
+  if (hasOrphanEventForRun(store, runPath)) return;
   store.appendEvent({
     taskId: ORPHAN_TASK_ID,
     kind: 'unlinked_run_detected',
     payload: {
-      run_path: toRunPath(runDir),
+      run_path: runPath,
       run_status: state.run_status ?? 'unknown',
       branch: state.branch ?? null,
       slug: state.slug ?? null,
