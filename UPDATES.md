@@ -6,6 +6,20 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## v3.7.0 — Role-bound team agents: generated per-(team,role) agent files + task→team assignment
+
+*(No `.claude/.prove.json` change — the scrum store migrates itself to v27 on first write. For teams registered before this version, run `claude-prove scrum team sync-agents` once to backfill the agent files.)* Roster role slots now bind to execution: each registered team gets three committed, natively-discoverable agent definitions, tasks can carry an owning team, and the dispatch surfaces name the team's agents for spawning.
+
+**Generated team agent files (`.claude/agents/team-<slug>-<role>.md`).** `scrum team create` and `rotate` render one agent file per role (`tech_lead`/`engineer`/`implementer`); `terminate` deletes them. Each file is generated frontmatter plus a marker-delimited "Team Context Protocol" block (startup self-serve reads of the team's `teams/<slug>.md`, seated-contributor resolution via `scrum team roster`, per-role write commitments through `scrum annotation add` / `scrum lore record` / run-state); body prose outside the markers is authored and survives regeneration. `scrum team sync-agents [<slug>]` backfills/repairs files for active teams.
+
+**Task→team assignment (scrum store v27).** Tasks gain an optional `team_slug`: `scrum task create --team <slug>` and `scrum task move --team <slug>` (empty value unbinds), validated against the team registry (unknown or inactive teams are rejected); reassignment appends a `team_changed` event. The decompose ladder propagates the parent's team onto children.
+
+**Spawn-list wiring.** `scrum compile-plan` forwards `team_slug` onto plan tasks and writes a `team-map.json` sidecar; `orchestrator task-prompt` renders a "Team Agents" section and `orchestrator wave-plan` carries a `team_agents` map (plus a markdown column) listing the owning team's three deterministic agent names — derived purely from the slug, no store lookup.
+
+**Doctor + advisory floor.** `install doctor` gains two report-only checks (generated-region marker integrity; registry-vs-filesystem drift) whose fix hint is `scrum team sync-agents`. The scrum subagent-stop reconciler gains an advisory contribution floor: a team-role agent (identified via `PROVE_AGENT=team-<slug>-<role>`) that stops without stamping a contribution in its dispatch window raises a `contribution_miss` escalation in `scrum alerts` — never a block.
+
+Auto-adoption: full — new verbs and checks are active on update; agent files appear as teams are created/rotated (or via the one-time `sync-agents` backfill).
+
 ## v3.5.0 — Review UI goes Docker-free: native in-process daemon + schema v11
 
 *(Config schema v10 → v11 — run `/prove:update` or `claude-prove schema migrate --file .claude/.prove.json`. The review UI no longer ships or pulls a container image; if you have a stale container from an earlier version, remove it once with `docker rm -f prove-review`.)* The review UI's entire Docker delivery path is retired. There is no Dockerfile, no GitHub Container Registry image, and no `docker pull` on launch — the server now runs as a native in-process loopback daemon owned directly by the CLI.
