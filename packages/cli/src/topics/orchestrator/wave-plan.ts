@@ -21,6 +21,7 @@
 
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { teamAgentNames } from '../scrum/team-agent-names';
 
 export interface WavePlanOpts {
   runDir: string;
@@ -33,6 +34,7 @@ interface PlanTask {
   title?: string;
   wave?: number;
   deps?: string[];
+  team_slug?: string;
 }
 
 interface PlanShape {
@@ -56,6 +58,14 @@ interface Schedule {
   peak_concurrency: number;
   waves: WaveGroup[];
   warnings: string[];
+  // Per-task role-bound agent roster, keyed by task id, for tasks that carry a
+  // `team_slug`. Each value is the team's three deterministic agent names in
+  // canonical role order (`team-<slug>-tech_lead|engineer|implementer`). The
+  // batch dispatcher reads this to spawn role-bound agents per team-bound task;
+  // team-less tasks contribute no key. Names are derived from the slug alone (no
+  // store lookup), so a vacant seat still lists its deterministic name — seat
+  // resolution is the agent's runtime concern.
+  team_agents: Record<string, string[]>;
 }
 
 export function runWavePlan(opts: WavePlanOpts): number {
@@ -101,6 +111,8 @@ function buildSchedule(
 
   const warnings = collectWarnings(tasks, ids, waveOf);
 
+  const teamAgents = collectTeamAgents(tasks);
+
   // Group ids by wave, preserving plan order within each wave.
   const byWave = new Map<number, string[]>();
   for (const t of tasks) {
@@ -133,7 +145,23 @@ function buildSchedule(
     peak_concurrency: peakConcurrency,
     waves,
     warnings,
+    team_agents: teamAgents,
   };
+}
+
+/**
+ * Map each team-bound task id to its three role-bound agent names, in canonical
+ * role order. Tasks without a `team_slug` contribute no entry, so a team-less
+ * schedule yields an empty map and the batch dispatcher falls back to its
+ * generic worker. Names are derived from the slug alone — no store lookup — so
+ * every render surface agrees on the roster.
+ */
+function collectTeamAgents(tasks: PlanTask[]): Record<string, string[]> {
+  const agents: Record<string, string[]> = {};
+  for (const t of tasks) {
+    if (t.team_slug) agents[String(t.id)] = teamAgentNames(t.team_slug);
+  }
+  return agents;
 }
 
 /**
@@ -186,11 +214,14 @@ function renderMarkdown(s: Schedule): string {
     `- **Dispatch rounds**: ${s.dispatch_rounds} (peak concurrency ${s.peak_concurrency})`,
   );
   lines.push('');
-  lines.push('| Wave | Batch | Tasks |');
-  lines.push('|------|-------|-------|');
+  lines.push('| Wave | Batch | Tasks | Team Agents |');
+  lines.push('|------|-------|-------|-------------|');
   for (const w of s.waves) {
     w.batches.forEach((batch, idx) => {
-      lines.push(`| ${w.wave} | ${idx + 1}/${w.batches.length} | ${batch.join(', ')} |`);
+      const agents = renderBatchAgents(batch, s.team_agents);
+      lines.push(
+        `| ${w.wave} | ${idx + 1}/${w.batches.length} | ${batch.join(', ')} | ${agents} |`,
+      );
     });
   }
   if (s.warnings.length > 0) {
@@ -200,6 +231,21 @@ function renderMarkdown(s: Schedule): string {
     for (const warn of s.warnings) lines.push(`- ⚠️ ${warn}`);
   }
   return `${lines.join('\n')}\n`;
+}
+
+/**
+ * The dry-run "Team Agents" cell for one dispatch batch: each team-bound task in
+ * the batch contributes `id: <tech_lead>, <engineer>, <implementer>`, joined by
+ * `; `. A batch with no team-bound tasks renders an em-dash. Names come from the
+ * schedule's `team_agents` map, so the dry-run and the JSON schedule agree.
+ */
+function renderBatchAgents(batch: string[], teamAgents: Record<string, string[]>): string {
+  const parts: string[] = [];
+  for (const id of batch) {
+    const names = teamAgents[id];
+    if (names) parts.push(`${id}: ${names.join(', ')}`);
+  }
+  return parts.length > 0 ? parts.join('; ') : '—';
 }
 
 function readJson<T>(path: string): T | null {

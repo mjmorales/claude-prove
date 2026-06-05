@@ -50,6 +50,7 @@ interface ScheduleShape {
   max_agents: number | null;
   waves: Array<{ wave: number; tasks: string[]; batches: string[][] }>;
   warnings: string[];
+  team_agents: Record<string, string[]>;
 }
 
 function run(opts: { maxAgents?: number; format?: 'json' | 'md' } = {}): {
@@ -116,6 +117,8 @@ describe('runWavePlan — scheduling', () => {
     expect(s.dispatch_rounds).toBe(3);
     expect(s.peak_concurrency).toBe(2);
     expect(s.warnings).toEqual([]);
+    // No task carries a team_slug, so the role-bound roster is empty.
+    expect(s.team_agents).toEqual({});
   });
 
   test('--max-agents splits an oversized wave into batches', () => {
@@ -166,9 +169,10 @@ describe('runWavePlan — scheduling', () => {
     expect(res.exit).toBe(0);
     expect(res.stdout).toContain('# Workflow dry-run');
     expect(res.stdout).toContain('**Fan-out cap**: 4');
-    expect(res.stdout).toContain('| Wave | Batch | Tasks |');
-    expect(res.stdout).toContain('| 1 | 1/1 | 1.1 |');
-    expect(res.stdout).toContain('| 2 | 1/1 | 2.1 |');
+    expect(res.stdout).toContain('| Wave | Batch | Tasks | Team Agents |');
+    // team-less rows carry an em-dash in the Team Agents column
+    expect(res.stdout).toContain('| 1 | 1/1 | 1.1 | — |');
+    expect(res.stdout).toContain('| 2 | 1/1 | 2.1 | — |');
   });
 
   test('tasks default to wave 1 when wave is absent', () => {
@@ -177,5 +181,39 @@ describe('runWavePlan — scheduling', () => {
     const s: ScheduleShape = JSON.parse(res.stdout.trim());
     expect(s.wave_count).toBe(1);
     expect(s.waves[0].tasks).toEqual(['a', 'b']);
+  });
+});
+
+describe('runWavePlan — team-bound agents', () => {
+  test('JSON schedule lists the three role-ordered names for a team-bound task', () => {
+    writePlan({
+      mode: 'full',
+      tasks: [
+        { id: '1.1', wave: 1, team_slug: 'payments' },
+        { id: '1.2', wave: 1 }, // team-less sibling stays out of the roster
+      ],
+    });
+    const res = run();
+    expect(res.exit).toBe(0);
+    const s: ScheduleShape = JSON.parse(res.stdout.trim());
+    expect(s.team_agents['1.1']).toEqual([
+      'team-payments-tech_lead',
+      'team-payments-engineer',
+      'team-payments-implementer',
+    ]);
+    // team-less task contributes no key
+    expect('1.2' in s.team_agents).toBe(false);
+  });
+
+  test('markdown dry-run renders the role-bound roster in the Team Agents column', () => {
+    writePlan({
+      mode: 'full',
+      tasks: [{ id: '1.1', wave: 1, team_slug: 'payments' }],
+    });
+    const res = run({ format: 'md' });
+    expect(res.exit).toBe(0);
+    expect(res.stdout).toContain(
+      '| 1 | 1/1 | 1.1 | 1.1: team-payments-tech_lead, team-payments-engineer, team-payments-implementer |',
+    );
   });
 });
