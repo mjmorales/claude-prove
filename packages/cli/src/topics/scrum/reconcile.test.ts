@@ -27,6 +27,8 @@ import {
   bubbleStaleEscalations,
   buildContextBundle,
   computeBoundActions,
+  detectContributionMiss,
+  parseTeamAgentName,
   reconcileMilestoneClosed,
   reconcileRunCompleted,
   sweepUnreconciled,
@@ -953,5 +955,174 @@ describe('computeBoundActions', () => {
     store.createTask({ id: 'a2', title: 'A2', status: 'accepted' });
     store.createTask({ id: 'a3', title: 'A3', status: 'accepted' });
     expect(computeBoundActions(store, triggers, 2)).toHaveLength(2);
+  });
+});
+
+describe('parseTeamAgentName', () => {
+  test('parses a simple team-role seat', () => {
+    expect(parseTeamAgentName('team-auth-engineer')).toEqual({
+      slug: 'auth',
+      role: 'engineer',
+    });
+  });
+
+  test('anchors on the role suffix so a hyphenated slug survives', () => {
+    expect(parseTeamAgentName('team-data-platform-tech_lead')).toEqual({
+      slug: 'data-platform',
+      role: 'tech_lead',
+    });
+  });
+
+  test('returns null for a non-team agent name', () => {
+    expect(parseTeamAgentName('general-purpose')).toBeNull();
+    expect(parseTeamAgentName('task-planner')).toBeNull();
+  });
+
+  test('returns null when the name has the prefix but no role suffix', () => {
+    expect(parseTeamAgentName('team-auth')).toBeNull();
+  });
+
+  test('returns null when the slug is empty', () => {
+    expect(parseTeamAgentName('team-engineer')).toBeNull();
+  });
+});
+
+describe('detectContributionMiss', () => {
+  const WINDOW_START = '2024-01-01T00:00:00.000Z';
+  const WINDOW_END = '2024-01-01T01:00:00.000Z';
+
+  test('in-window contribution from the seat is not a miss', () => {
+    store.createTask({ id: 'team-task-1', title: 'Work' });
+    store.appendEvent({
+      taskId: 'team-task-1',
+      kind: 'note',
+      agent: 'team-auth-engineer',
+      ts: '2024-01-01T00:30:00.000Z',
+      payload: { text: 'did the work' },
+    });
+
+    const result = detectContributionMiss(
+      store,
+      'team-auth-engineer',
+      'team-task-1',
+      WINDOW_START,
+      WINDOW_END,
+    );
+    expect(result).toEqual({
+      isTeamRoleAgent: true,
+      missed: false,
+      role: 'engineer',
+      slug: 'auth',
+    });
+  });
+
+  test('seat with no in-window event is a miss', () => {
+    store.createTask({ id: 'team-task-2', title: 'Work' });
+
+    const result = detectContributionMiss(
+      store,
+      'team-auth-engineer',
+      'team-task-2',
+      WINDOW_START,
+      WINDOW_END,
+    );
+    expect(result).toEqual({
+      isTeamRoleAgent: true,
+      missed: true,
+      role: 'engineer',
+      slug: 'auth',
+    });
+  });
+
+  test('a non-team agent is a no-op (isTeamRoleAgent false, not missed)', () => {
+    store.createTask({ id: 'team-task-3', title: 'Work' });
+
+    const result = detectContributionMiss(
+      store,
+      'general-purpose',
+      'team-task-3',
+      WINDOW_START,
+      WINDOW_END,
+    );
+    expect(result).toEqual({ isTeamRoleAgent: false, missed: false });
+  });
+
+  test('window is half-open: the end instant is out of window, the start instant is in', () => {
+    store.createTask({ id: 'team-task-4', title: 'Work' });
+    // Stamped exactly at the end instant — excluded by the half-open `[start, end)`.
+    store.appendEvent({
+      taskId: 'team-task-4',
+      kind: 'note',
+      agent: 'team-auth-engineer',
+      ts: WINDOW_END,
+      payload: { text: 'too late' },
+    });
+
+    const atEnd = detectContributionMiss(
+      store,
+      'team-auth-engineer',
+      'team-task-4',
+      WINDOW_START,
+      WINDOW_END,
+    );
+    expect(atEnd.missed).toBe(true);
+
+    // Stamped exactly at the start instant — included.
+    store.appendEvent({
+      taskId: 'team-task-4',
+      kind: 'note',
+      agent: 'team-auth-engineer',
+      ts: WINDOW_START,
+      payload: { text: 'right on time' },
+    });
+    const atStart = detectContributionMiss(
+      store,
+      'team-auth-engineer',
+      'team-task-4',
+      WINDOW_START,
+      WINDOW_END,
+    );
+    expect(atStart.missed).toBe(false);
+  });
+
+  test("an event stamped by a different seat does not count as this seat's contribution", () => {
+    store.createTask({ id: 'team-task-5', title: 'Work' });
+    store.appendEvent({
+      taskId: 'team-task-5',
+      kind: 'note',
+      agent: 'team-auth-tech_lead',
+      ts: '2024-01-01T00:30:00.000Z',
+      payload: { text: 'lead stamped it' },
+    });
+
+    const result = detectContributionMiss(
+      store,
+      'team-auth-engineer',
+      'team-task-5',
+      WINDOW_START,
+      WINDOW_END,
+    );
+    expect(result.missed).toBe(true);
+  });
+
+  test('a vacant-slot dispatch is still evaluated — never short-circuited to no-miss', () => {
+    // No team is created and no holder is ever seated for the role; the detector
+    // reads presence off the event log alone, so a seat name with zero in-window
+    // contributions is still a miss rather than an auto-pass.
+    store.createTask({ id: 'team-task-6', title: 'Work' });
+
+    const result = detectContributionMiss(
+      store,
+      'team-vacant-implementer',
+      'team-task-6',
+      WINDOW_START,
+      WINDOW_END,
+    );
+    expect(result).toEqual({
+      isTeamRoleAgent: true,
+      missed: true,
+      role: 'implementer',
+      slug: 'vacant',
+    });
   });
 });

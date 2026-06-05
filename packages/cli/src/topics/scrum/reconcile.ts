@@ -28,8 +28,8 @@ import type { StoryBriefInput } from '../acb/milestone-brief';
 import type { LogEntry } from '../acb/reasoning-log';
 import { listEntries } from '../acb/reasoning-log-store';
 import type { ScrumStore } from './store';
-import { STALENESS_THRESHOLD_HOURS } from './types';
-import type { EscalationRow, ScrumEvent, ScrumTask, TaskStatus } from './types';
+import { STALENESS_THRESHOLD_HOURS, TEAM_ROLES } from './types';
+import type { EscalationRow, ScrumEvent, ScrumTask, TaskStatus, TeamRole } from './types';
 
 // ---------------------------------------------------------------------------
 // Public constants
@@ -40,6 +40,104 @@ export const ORPHAN_TASK_ID = '__orphan__';
 
 /** Fixed title for the lazily-created orphan sentinel task. */
 export const ORPHAN_TASK_TITLE = 'Unlinked run detections';
+
+// ---------------------------------------------------------------------------
+// Team-role contribution-presence detector
+// ---------------------------------------------------------------------------
+
+/**
+ * Parsed shape of a team-role agent name `team-<slug>-<role>`, returned by
+ * `parseTeamAgentName`. `<role>` is one of the closed `TEAM_ROLES`; `<slug>` is
+ * the non-empty remainder. A name that does not match this shape parses to null.
+ */
+export interface ParsedTeamAgentName {
+  slug: string;
+  role: TeamRole;
+}
+
+/** Leading marker every team-role agent name carries. */
+const TEAM_AGENT_PREFIX = 'team-';
+
+/**
+ * Parse a `team-<slug>-<role>` agent name into its `{ slug, role }` parts, or
+ * null for any name that is not a team-role seat.
+ *
+ * The role suffix is the disambiguator: a slug may itself contain hyphens
+ * (`team-data-platform-engineer` → slug `data-platform`, role `engineer`), so we
+ * anchor on the `-<role>` tail rather than splitting on `-`. Roles carry
+ * underscores, never hyphens, so exactly one closed role can be a valid suffix.
+ * The slug between prefix and role suffix must be non-empty — `team-engineer`
+ * (no slug) is not a seat.
+ */
+export function parseTeamAgentName(agentName: string): ParsedTeamAgentName | null {
+  if (!agentName.startsWith(TEAM_AGENT_PREFIX)) return null;
+  const afterPrefix = agentName.slice(TEAM_AGENT_PREFIX.length);
+  for (const role of TEAM_ROLES) {
+    const suffix = `-${role}`;
+    if (afterPrefix.endsWith(suffix)) {
+      const slug = afterPrefix.slice(0, afterPrefix.length - suffix.length);
+      if (slug.length > 0) return { slug, role };
+    }
+  }
+  return null;
+}
+
+/**
+ * Verdict of the contribution-presence detector. For a non-team agent name
+ * `isTeamRoleAgent` is false and the floor is a no-op (`missed` is false). For a
+ * team-role seat, `missed` is true when the event log carries NO contribution
+ * stamped by that exact agent within the dispatch window.
+ */
+export interface ContributionMissResult {
+  /** Whether `agentName` parsed as a `team-<slug>-<role>` seat. */
+  isTeamRoleAgent: boolean;
+  /** True only for a team-role seat with zero in-window contributions. */
+  missed: boolean;
+  /** The parsed role, present only for a team-role seat. */
+  role?: TeamRole;
+  /** The parsed team slug, present only for a team-role seat. */
+  slug?: string;
+}
+
+/**
+ * Did the stopping team-role agent stamp a contribution within its dispatch
+ * window? A pure, store-reading correlation over the append-only event log —
+ * isolated from reconciler wiring so it is unit-testable without a hook payload.
+ *
+ * Presence-only by design: a contribution is PRESENT when any event row for the
+ * task carries `agent === agentName` AND its `ts` lands in the half-open window
+ * `[windowStartTs, windowEndTs)` (the `[from_ts, to_ts)` interval convention the
+ * operator/team position histories use). The stamped author is advisory — this
+ * helper does NOT validate it against the position-history holder; that
+ * authority check is out of scope here.
+ *
+ * A vacant-slot dispatch (no current holder seated for the role) is evaluated
+ * identically: presence is read off the event log, never short-circuited to "no
+ * miss" by an empty roster. A name that is not a team-role seat returns
+ * `isTeamRoleAgent: false` so the floor never fires for general-purpose,
+ * task-planner, or other non-team agents.
+ */
+export function detectContributionMiss(
+  store: ScrumStore,
+  agentName: string,
+  taskId: string,
+  windowStartTs: string,
+  windowEndTs: string,
+): ContributionMissResult {
+  const parsed = parseTeamAgentName(agentName);
+  if (parsed === null) return { isTeamRoleAgent: false, missed: false };
+
+  const events = store.listEventsForTask(taskId);
+  const contributed = events.some(
+    (event) => event.agent === agentName && windowStartTs <= event.ts && event.ts < windowEndTs,
+  );
+  return {
+    isTeamRoleAgent: true,
+    missed: !contributed,
+    role: parsed.role,
+    slug: parsed.slug,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Return types
