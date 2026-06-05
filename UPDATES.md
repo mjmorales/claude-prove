@@ -8,7 +8,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Unreleased — Janitor: memory-layer cleanup for team Lore, the Codex, and contributor artifacts
+## v3.12.0 — Janitor: memory-layer cleanup for team Lore, the Codex, and contributor artifacts
 
 *(No `.claude/.prove.json` migration, no store migration — new skill + agent + command only.)* New `/prove:janitor` command (thin wrapper over the `janitor` skill) and a `memory-janitor` agent. The janitor cleans prove's durable memory layers without ever deleting: a per-scope `memory-janitor` pass (one agent per team plus one for the Codex, read-only) classifies every Lore entry, annotation, decision, and contributor-artifact body as `keep | consolidate | promote | supersede | rewrite | noise`; an `AskUserQuestion` batch gate per scope approves; the driver then executes through existing CLI verbs only — `scrum lore record` for tech_lead-authored consolidation entries that cite the ids they fold, `scrum decision record`/`approve` for Lore→Codex promotions (deterministic `lore-promotion-<team>-<loreId>` ids, matching the store's promotion convention so a future mechanical promotion upserts), `scrum decision supersede` for Codex cleanup, and direct body edits for contributor artifacts. `prompting token-count` over `teams/*.md`, `contributors/*.md`, and `.prove/decisions/*.md` brackets the run as the before/after compaction metric.
 
