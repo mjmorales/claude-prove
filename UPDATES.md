@@ -50,7 +50,14 @@ This restores the documented "the plan is regenerable — re-run compile rather 
 *(No `.claude/.prove.json` change, no store migration — behavior change only.)* `claude-prove run-state summary --slug <s>` previously dropped the `--slug` flag and printed a summary block for every run under `.prove/runs/<branch>/`, which silently corrupted scripted reads like `summary --slug X | tail -3` (it returned whichever run sorted last). The flag is now threaded into run selection: `--slug` resolves exactly one run (the branch autodetects when omitted, or pass `--branch` to disambiguate) and emits that single block. An unknown slug now errors (exit 2, `slug '<s>' is not registered`) instead of matching nothing. Without `--slug`, the sweep behavior is unchanged; `--branch` alone narrows the sweep to one branch namespace.
 
 No action required on update.
-## v3.8.1 — `scrum contributor register` is idempotent on slug (fixes #30)
+
+## v3.9.0 — Generated CLAUDE.md gains a Team Agents dispatch + memory-protocol section
+
+*(No `.claude/.prove.json` change, no store migration — regenerate CLAUDE.md to adopt.)* Projects with registered teams now get a `## Team Agents` section in the prove-managed CLAUDE.md block. The scanner detects the role-bound agent files (`.claude/agents/team-<slug>-<role>.md`, closed `tech_lead`/`engineer`/`implementer` role set — purely filename-driven, no store lookup) and the composer renders three things: the agent roster grouped by team, a dispatch directive (for work inside a team's scope, dispatch that team's role agent rather than a general-purpose agent; resolve scope from the team bundle `teams/<slug>.md`), and a memory-protocol reminder for dispatched team agents (read the bundle before acting; record learnings through `scrum annotation add --target-kind team`, `scrum lore record` on the tech_lead seat, and `scrum decision record`). Projects with no team agent files render no section — output is unchanged.
+
+`claude-md scan` JSON output gains a `team_agents` array (`{team, role, name}`, team-ascending then canonical role order); consumers of the scan shape should tolerate the new field.
+
+Auto-adoption: full on CLAUDE.md regeneration — `/prove:update` Step 8 (`claude-prove claude-md generate`) picks the section up automatically; or run `/prove:docs claude-md` to regenerate on demand.## v3.8.1 — `scrum contributor register` is idempotent on slug (fixes #30)
 
 *(No `.claude/.prove.json` change, no store migration — behavior change only.)* Re-running `contributor register` against an existing slug no longer fails with a UNIQUE-constraint error. It now reconciles the row — provided flags override the stored fields, unset flags preserve them — and re-emits/merges the `contributors/<slug>.md` identity artifact, so a bare re-register repairs a registry row whose identity file was never emitted or was lost. The CT-UUID and created-* provenance never change: a provided `--id` that conflicts with the registered CT-UUID errors (exit 1), preserving attribution history.
 

@@ -111,6 +111,53 @@
       "summary": "Run a milestone/task tree as parallel waves via orchestrator full-mode, mirroring status to scrum"
     }
   ],
+  "team_agents": [
+    {
+      "team": "discovery",
+      "role": "tech_lead",
+      "name": "team-discovery-tech_lead"
+    },
+    {
+      "team": "discovery",
+      "role": "engineer",
+      "name": "team-discovery-engineer"
+    },
+    {
+      "team": "discovery",
+      "role": "implementer",
+      "name": "team-discovery-implementer"
+    },
+    {
+      "team": "engine",
+      "role": "tech_lead",
+      "name": "team-engine-tech_lead"
+    },
+    {
+      "team": "engine",
+      "role": "engineer",
+      "name": "team-engine-engineer"
+    },
+    {
+      "team": "engine",
+      "role": "implementer",
+      "name": "team-engine-implementer"
+    },
+    {
+      "team": "methodology",
+      "role": "tech_lead",
+      "name": "team-methodology-tech_lead"
+    },
+    {
+      "team": "methodology",
+      "role": "engineer",
+      "name": "team-methodology-engineer"
+    },
+    {
+      "team": "methodology",
+      "role": "implementer",
+      "name": "team-methodology-implementer"
+    }
+  ],
   "plugin_version": "__PLUGIN_VERSION__",
   "plugin_dir": "__PLUGIN_DIR__",
   "project_root": "__PROJECT_ROOT__"

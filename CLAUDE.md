@@ -1,8 +1,8 @@
 <!-- prove:managed:start -->
 # claude-prove
 
-<!-- prove:plugin-version:3.4.0 -->
-**Prove plugin v3.4.0** — if `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" --version` does not match v3.4.0, run `/prove:update` to sync.
+<!-- prove:plugin-version:3.8.0 -->
+**Prove plugin v3.8.0** — if `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" --version` does not match v3.8.0, run `/prove:update` to sync.
 
 JavaScript/TypeScript (npm)
 
@@ -33,6 +33,22 @@ Before broad Glob/Grep searches, check the file index first:
 - `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" cafi lookup <keyword>` — search by keyword
 
 Only fall back to Glob/Grep when the index doesn't cover what you need.
+## Team Agents
+
+Role-bound team agents registered in `.claude/agents/`:
+
+- **discovery**: `team-discovery-tech_lead`, `team-discovery-engineer`, `team-discovery-implementer`
+- **engine**: `team-engine-tech_lead`, `team-engine-engineer`, `team-engine-implementer`
+- **methodology**: `team-methodology-tech_lead`, `team-methodology-engineer`, `team-methodology-implementer`
+
+Dispatch and memory protocol:
+
+- For subagent work that falls inside a team's scope, dispatch that team's role agent — never a general-purpose agent. Resolve scope from each team's bundle `teams/<slug>.md`; use a general-purpose agent only when no team's bundle scope covers the task.
+- Every dispatched team agent must honor its memory protocol: read its team bundle `teams/<slug>.md` (scope, roster, recent Lore) before acting, and record what it learns:
+  - seat notes with `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" scrum annotation add --target-kind team`
+  - team Lore with `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" scrum lore record` (tech_lead seat; non-lead seats route journal-worthy findings to a seat annotation instead)
+  - durable decisions with `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" scrum decision record`
+
 ## References
 
 ### claude-prove CLI Reference
@@ -70,12 +86,13 @@ Only fall back to Glob/Grep when the index doesn't cover what you need.
 ## Prove Commands
 
 - `/prove:brainstorm` — Explore options and record decisions
+- `/prove:compact` — Anchor session context into prove primitives pre-compact and rehydrate post-compact
 - `/prove:comprehend` — Socratic quiz on recent diffs to build code comprehension
 - `/prove:index` — Update the file index (run after significant changes)
 - `/prove:intake` — Render a charter/team/decompose HTML intake form, validate the pasted-back payload, and drive the one writer
 - `/prove:orchestrator` — Unified entry point for orchestrator, autopilot, and full-auto execution
 - `/prove:plan` — Plan a task or a specific step from the active plan.json
-- `/prove:review-ui` — Docker-based review UI for inspecting prove runs, ACB intent groups, and verdicts
+- `/prove:review-ui` — Loopback review UI for inspecting prove runs, ACB intent groups, and verdicts
 - `/prove:scrum` — Operate the scrum store backed by `.prove/prove.db` (tasks, milestones, tags, run-links)
 - `/prove:workflow` — Run a milestone/task tree as parallel waves via orchestrator full-mode, mirroring status to scrum
 

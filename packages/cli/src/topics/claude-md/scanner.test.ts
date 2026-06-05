@@ -23,6 +23,7 @@ import {
   scanKeyDirs,
   scanPluginVersion,
   scanProject,
+  scanTeamAgents,
 } from './scanner';
 
 function tmp(): string {
@@ -389,6 +390,55 @@ describe('scanCoreCommands', () => {
     created.push(root);
     write(root, 'commands/plain.md', '# No frontmatter\n\nJust content.');
     expect(scanCoreCommands(root)).toEqual([]);
+  });
+});
+
+describe('scanTeamAgents', () => {
+  const created: string[] = [];
+  afterEach(() => {
+    for (const d of created.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  test('empty when no .claude/agents dir', () => {
+    const root = tmp();
+    created.push(root);
+    expect(scanTeamAgents(root)).toEqual([]);
+  });
+
+  test('parses team and role, canonical role order within a team', () => {
+    const root = tmp();
+    created.push(root);
+    // Written in non-canonical filename order — output must still be
+    // tech_lead, engineer, implementer.
+    write(root, '.claude/agents/team-engine-engineer.md', '---\nname: x\n---\n');
+    write(root, '.claude/agents/team-engine-implementer.md', '---\nname: x\n---\n');
+    write(root, '.claude/agents/team-engine-tech_lead.md', '---\nname: x\n---\n');
+    expect(scanTeamAgents(root)).toEqual([
+      { team: 'engine', role: 'tech_lead', name: 'team-engine-tech_lead' },
+      { team: 'engine', role: 'engineer', name: 'team-engine-engineer' },
+      { team: 'engine', role: 'implementer', name: 'team-engine-implementer' },
+    ]);
+  });
+
+  test('teams sort ascending; hyphenated slugs keep the full slug', () => {
+    const root = tmp();
+    created.push(root);
+    write(root, '.claude/agents/team-ui-platform-tech_lead.md', '');
+    write(root, '.claude/agents/team-api-engineer.md', '');
+    expect(scanTeamAgents(root)).toEqual([
+      { team: 'api', role: 'engineer', name: 'team-api-engineer' },
+      { team: 'ui-platform', role: 'tech_lead', name: 'team-ui-platform-tech_lead' },
+    ]);
+  });
+
+  test('ignores non-team agents, unknown roles, and non-md files', () => {
+    const root = tmp();
+    created.push(root);
+    write(root, '.claude/agents/code-reviewer.md', '');
+    write(root, '.claude/agents/team-engine-manager.md', '');
+    write(root, '.claude/agents/team-engine-engineer.txt', '');
+    write(root, '.claude/agents/team-tech_lead.md', ''); // empty slug
+    expect(scanTeamAgents(root)).toEqual([]);
   });
 });
 

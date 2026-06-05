@@ -53,6 +53,7 @@ function fullScan(): ScanResult {
       { name: 'index', summary: 'Update the file index' },
       { name: 'claude-md', summary: 'Regenerate this file' },
     ],
+    team_agents: [],
     plugin_version: '0.19.0',
     plugin_dir: '/opt/prove',
     project_root: '/work/my-project',
@@ -75,6 +76,7 @@ function minimalScan(): ScanResult {
     },
     cafi: { available: false, file_count: 0 },
     core_commands: [],
+    team_agents: [],
     plugin_version: 'unknown',
     plugin_dir: '/opt/prove',
     project_root: '/work/empty-project',
@@ -330,6 +332,47 @@ describe('references', () => {
     // Label-less user entry should render the @path without a preceding ### heading.
     // (Built-in still has its own ### heading.)
     expect(r).toMatch(/\n\n@~\/\.claude\/standards\.md\n/);
+  });
+});
+
+describe('team agents', () => {
+  test('omitted when no team agents detected', () => {
+    expect(compose(fullScan())).not.toContain('## Team Agents');
+  });
+
+  test('renders agents grouped by team with dispatch directives', () => {
+    const scan = fullScan();
+    scan.team_agents = [
+      { team: 'engine', role: 'tech_lead', name: 'team-engine-tech_lead' },
+      { team: 'engine', role: 'engineer', name: 'team-engine-engineer' },
+      { team: 'engine', role: 'implementer', name: 'team-engine-implementer' },
+      { team: 'platform', role: 'tech_lead', name: 'team-platform-tech_lead' },
+    ];
+    const r = compose(scan);
+    expect(r).toContain('## Team Agents');
+    expect(r).toContain(
+      '- **engine**: `team-engine-tech_lead`, `team-engine-engineer`, `team-engine-implementer`',
+    );
+    expect(r).toContain('- **platform**: `team-platform-tech_lead`');
+    expect(r).toContain('Dispatch and memory protocol:');
+    expect(r).toContain("dispatch that team's role agent");
+    expect(r).toContain('read its team bundle `teams/<slug>.md`');
+    expect(r).toContain('`claude-prove scrum annotation add --target-kind team`');
+    expect(r).toContain(
+      '`claude-prove scrum lore record` (tech_lead seat; non-lead seats route journal-worthy findings to a seat annotation instead)',
+    );
+    expect(r).toContain('`claude-prove scrum decision record`');
+  });
+
+  test('memory-protocol commands use the dev prefix in dev mode', () => {
+    const scan = fullScan();
+    scan.prove_config.dev_mode = true;
+    scan.team_agents = [{ team: 'engine', role: 'engineer', name: 'team-engine-engineer' }];
+    const r = compose(scan);
+    expect(r).toContain(
+      'bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" scrum lore record',
+    );
+    expect(r).not.toContain('`claude-prove scrum lore record`');
   });
 });
 

@@ -19,6 +19,7 @@ import type {
   CoreCommand,
   ReferenceEntry,
   ScanResult,
+  TeamAgentSummary,
   ToolDirective,
   ValidatorSummary,
 } from './scanner';
@@ -97,6 +98,11 @@ export function compose(scan: ScanResult, _pluginDir?: string): string {
   // Tool directives (from enabled tools)
   if (prove.tool_directives.length > 0) {
     parts.push(renderToolDirectives(prove.tool_directives));
+  }
+
+  // Team agents (if role-bound team agent files exist)
+  if (scan.team_agents.length > 0) {
+    parts.push(renderTeamAgents(scan.team_agents, prefix));
   }
 
   // References — plugin built-ins first, then user-configured (deduped by path)
@@ -270,6 +276,49 @@ function renderToolDirectives(toolDirectives: ToolDirective[]): string {
     lines.push(td.directive);
     lines.push('');
   }
+  return lines.join('\n');
+}
+
+/**
+ * Render the Team Agents section: the registered role-bound agents grouped by
+ * team, plus the two dispatch directives — prefer a scope-matching team agent
+ * over a general-purpose agent, and hold every dispatched team agent to its
+ * memory protocol (bundle read before acting; annotation/Lore/Codex writes
+ * through the scrum CLI). Input arrives pre-sorted from `scanTeamAgents`
+ * (team-ascending, canonical role order), so grouping preserves that order.
+ */
+function renderTeamAgents(teamAgents: TeamAgentSummary[], prefix: string): string {
+  const byTeam = new Map<string, string[]>();
+  for (const agent of teamAgents) {
+    const names = byTeam.get(agent.team) ?? [];
+    names.push(agent.name);
+    byTeam.set(agent.team, names);
+  }
+
+  const lines: string[] = ['## Team Agents', ''];
+  lines.push('Role-bound team agents registered in `.claude/agents/`:');
+  lines.push('');
+  for (const [team, names] of byTeam) {
+    lines.push(`- **${team}**: ${names.map((n) => `\`${n}\``).join(', ')}`);
+  }
+  lines.push('');
+  lines.push('Dispatch and memory protocol:');
+  lines.push('');
+  lines.push(
+    "- For subagent work that falls inside a team's scope, dispatch that team's role agent — " +
+      "never a general-purpose agent. Resolve scope from each team's bundle `teams/<slug>.md`; " +
+      "use a general-purpose agent only when no team's bundle scope covers the task.",
+  );
+  lines.push(
+    '- Every dispatched team agent must honor its memory protocol: read its team bundle ' +
+      '`teams/<slug>.md` (scope, roster, recent Lore) before acting, and record what it learns:',
+  );
+  lines.push(`  - seat notes with \`${prefix} scrum annotation add --target-kind team\``);
+  lines.push(
+    `  - team Lore with \`${prefix} scrum lore record\` (tech_lead seat; non-lead seats route journal-worthy findings to a seat annotation instead)`,
+  );
+  lines.push(`  - durable decisions with \`${prefix} scrum decision record\``);
+  lines.push('');
   return lines.join('\n');
 }
 

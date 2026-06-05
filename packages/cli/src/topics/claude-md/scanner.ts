@@ -9,6 +9,7 @@
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { basename, extname, join, resolve, sep } from 'node:path';
+import { TEAM_ROLES } from '../scrum/types';
 
 // ---------------------------------------------------------------------------
 // Output types — kebab_case fields to match Python dict keys
@@ -76,6 +77,17 @@ export interface CoreCommand {
   summary: string;
 }
 
+/**
+ * A role-bound team agent detected from `.claude/agents/team-<slug>-<role>.md`.
+ * `name` is the full agent name (`team-<slug>-<role>`) — both the frontmatter
+ * `name` and the `PROVE_AGENT` value the seat's writes stamp.
+ */
+export interface TeamAgentSummary {
+  team: string;
+  role: string;
+  name: string;
+}
+
 export interface ScanResult {
   project: ProjectIdentity;
   tech_stack: TechStack;
@@ -84,6 +96,7 @@ export interface ScanResult {
   prove_config: ProveConfigSummary;
   cafi: CafiSummary;
   core_commands: CoreCommand[];
+  team_agents: TeamAgentSummary[];
   plugin_version: string;
   plugin_dir: string;
   project_root: string;
@@ -112,6 +125,7 @@ export function scanProject(projectRoot: string, pluginDir?: string): ScanResult
     prove_config: scanProveConfig(projectRoot, resolvedPlugin),
     cafi: scanCafi(projectRoot),
     core_commands: scanCoreCommands(resolvedPlugin),
+    team_agents: scanTeamAgents(projectRoot),
     plugin_version: scanPluginVersion(resolvedPlugin),
     plugin_dir: resolvedPlugin,
     project_root: resolve(projectRoot),
@@ -656,6 +670,50 @@ export function scanCoreCommands(pluginDir: string): CoreCommand[] {
   }
 
   return commands;
+}
+
+/**
+ * Detect role-bound team agent files (`.claude/agents/team-<slug>-<role>.md`).
+ *
+ * Purely filename-driven — no store lookup — so the scan stays deterministic
+ * and hermetic. Only the closed `TEAM_ROLES` suffixes match; other agent files
+ * under `.claude/agents/` are ignored. Results are ordered team-ascending,
+ * then canonical role order (`tech_lead`, `engineer`, `implementer`).
+ */
+export function scanTeamAgents(root: string): TeamAgentSummary[] {
+  const agentsDir = join(root, '.claude', 'agents');
+  if (!isDir(agentsDir)) return [];
+
+  let filenames: string[];
+  try {
+    filenames = readdirSync(agentsDir);
+  } catch {
+    return [];
+  }
+
+  const agents: TeamAgentSummary[] = [];
+  for (const filename of [...filenames].sort()) {
+    if (!filename.startsWith('team-') || !filename.endsWith('.md')) continue;
+    const stem = filename.slice(0, -'.md'.length);
+    // Role is the trailing segment; the slug may itself contain hyphens.
+    for (const role of TEAM_ROLES) {
+      if (!stem.endsWith(`-${role}`)) continue;
+      const team = stem.slice('team-'.length, -(role.length + 1));
+      if (team.length > 0) {
+        agents.push({ team, role, name: stem });
+      }
+      break;
+    }
+  }
+
+  agents.sort((a, b) => {
+    if (a.team !== b.team) return a.team < b.team ? -1 : 1;
+    return (
+      TEAM_ROLES.indexOf(a.role as (typeof TEAM_ROLES)[number]) -
+      TEAM_ROLES.indexOf(b.role as (typeof TEAM_ROLES)[number])
+    );
+  });
+  return agents;
 }
 
 /**
