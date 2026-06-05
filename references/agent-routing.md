@@ -13,6 +13,7 @@ Match a task cue to its delegation surface — subagent, skill, or direct CLI �
 | Code review of an orchestrated task or step | `principal-architect` agent | dispatched by orchestrator full mode; Agent tool for a manual review |
 | Reviewing or optimizing any LLM-fed text — `agents/*.md`, `commands/*.md`, `skills/*/SKILL.md`, CLAUDE.md, prompts | `llm-prompt-engineer` agent | Agent tool — mandatory gate before committing such text |
 | Code-quality audit and surgical fixes | `code-steward` agent | `/prove:steward` |
+| Memory-layer cleanup — compact team Lore, prune the Codex, refresh contributor artifacts | `memory-janitor` agent | `/prove:janitor` (janitor skill drives, batch-gated) |
 | Human-readable docs — READMEs, guides, API references | `technical-writer` agent | `/prove:docs` |
 | RFC-style specs, protocol definitions, format standards | `spec-writer` agent | `/prove:create` (spec type) |
 
@@ -35,3 +36,4 @@ These agents are stages of a pipeline that supplies their inputs; invoked standa
 | `validation-agent` | orchestrator validation gate (`validators` in `.claude/.prove.json`) |
 | `brief-judge` | `reasoning-brief` skill (Stage-2 prose judge — runs automatically) |
 | `pcd-triager`, `pcd-reviewer`, `pcd-synthesizer`, `pcd-annotator` | PCD audit pipeline via `/prove:steward` full mode |
+| `memory-janitor` | `janitor` skill via `/prove:janitor` (supplies inventory dumps, roster ids, and the batch gate) |

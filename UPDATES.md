@@ -8,6 +8,16 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — Janitor: memory-layer cleanup for team Lore, the Codex, and contributor artifacts
+
+*(No `.claude/.prove.json` migration, no store migration — new skill + agent + command only.)* New `/prove:janitor` command (thin wrapper over the `janitor` skill) and a `memory-janitor` agent. The janitor cleans prove's durable memory layers without ever deleting: a per-scope `memory-janitor` pass (one agent per team plus one for the Codex, read-only) classifies every Lore entry, annotation, decision, and contributor-artifact body as `keep | consolidate | promote | supersede | rewrite | noise`; an `AskUserQuestion` batch gate per scope approves; the driver then executes through existing CLI verbs only — `scrum lore record` for tech_lead-authored consolidation entries that cite the ids they fold, `scrum decision record`/`approve` for Lore→Codex promotions (deterministic `lore-promotion-<team>-<loreId>` ids, matching the store's promotion convention so a future mechanical promotion upserts), `scrum decision supersede` for Codex cleanup, and direct body edits for contributor artifacts. `prompting token-count` over `teams/*.md`, `contributors/*.md`, and `.prove/decisions/*.md` brackets the run as the before/after compaction metric.
+
+Known limitation, by design: Lore has no supersession column, so a consolidated source entry leaves the team artifact's recent-10 window only as newer entries accumulate; consolidation bodies name the ids they fold so readers treat them as authoritative. `references/agent-routing.md` gains the janitor cue row and lists `memory-janitor` as pipeline-internal (invoke via `/prove:janitor`, not ad hoc).
+
+Migration: none — the command is available after the plugin update. Auto-adoption: not a `core: true` command; invoke on demand when team bundles or the Codex feel bloated.
+
+---
+
 ## v3.11.0 — CAFI: the describe loop moves into the driver session (`cafi index` removed)
 
 *(No `.claude/.prove.json` migration, no store migration — CLI verb surface + skill behavior.)* `cafi index` used to shell out to an external `claude -p - --model haiku` process to generate routing-hint descriptions — the one place the CLI spawned a model, with the failure modes to match (silently empty descriptions when the `claude` binary was unavailable, fragile JSON parsing, hard 8KB content truncation). The describe loop is now driven by the Claude session itself, split along the engine boundary:
