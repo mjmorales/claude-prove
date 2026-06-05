@@ -213,6 +213,54 @@ describe('validateData', () => {
     expect(r.errors).toContain('  ERROR: task_id: expected str, got int');
   });
 
+  test('plan accepts nested tasks[n].task_id under strict (gh#32)', () => {
+    // A plan carrying the scrum id nested at tasks[n].task_id must pass strict
+    // validation rather than failing on an unknown field, so the scrum
+    // reconciler can see and track such a run.
+    const r = validateData(
+      {
+        schema_version: '1',
+        kind: 'plan',
+        tasks: [
+          {
+            id: '1.1',
+            title: 't',
+            wave: 1,
+            task_id: 'SCRUM-42',
+            steps: [{ id: '1.1.1', title: 's' }],
+          },
+        ],
+      },
+      'plan',
+      true,
+    );
+    expect(r.ok).toBe(true);
+    expect(r.errors).toEqual([]);
+  });
+
+  test('plan rejects empty nested tasks[n].task_id', () => {
+    const r = validateData(
+      {
+        schema_version: '1',
+        kind: 'plan',
+        tasks: [
+          {
+            id: '1.1',
+            title: 't',
+            wave: 1,
+            task_id: '',
+            steps: [{ id: '1.1.1', title: 's' }],
+          },
+        ],
+      },
+      'plan',
+    );
+    expect(r.ok).toBe(false);
+    expect(r.errors.some((e) => e.includes('task_id') && e.includes('non-empty string'))).toBe(
+      true,
+    );
+  });
+
   test('minimal valid report', () => {
     const r = validateData(
       {

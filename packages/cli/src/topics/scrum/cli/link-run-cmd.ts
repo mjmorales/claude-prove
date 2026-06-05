@@ -3,9 +3,20 @@
  *                        [--workspace-root W]`
  *
  * Retroactively link an orchestrator run to a scrum task. Used for
- * orphaned runs that predate Task 4's hook-driven auto-linkage.
+ * orphaned runs that predate the hook-driven auto-linkage.
  *
- * Stdout: JSON `{ linked: true, task_id, run_path, branch, slug }`
+ * Writes the link in BOTH layers so they cannot diverge: the store run-link
+ * row AND top-level `plan.task_id` in the run's plan.json (through the blessed
+ * run-state writer). The reconciler reads either layer, so a single write
+ * keeps both consistent. Without the plan.json half, a store-linked run would
+ * re-emit unlinked_run_detected on every reconciler sweep — the orphan
+ * split-brain.
+ *
+ * The plan write is best-effort: a missing or malformed plan.json (e.g. the
+ * run-dir is gone, or the link targets a non-run path) warns but does not fail
+ * the store link, because the reconciler treats the store row as authoritative.
+ *
+ * Stdout: JSON `{ linked: true, task_id, run_path, branch, slug, plan_updated }`
  * Stderr: one-line human summary
  *
  * Exit codes:
@@ -13,7 +24,9 @@
  *   1  missing positional args, unknown task, or invariant violation
  */
 
+import { isAbsolute, join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
+import { setPlanTaskId } from '../../run-state/state';
 import { openCliStore } from './cli-store';
 
 export interface LinkRunCmdFlags {
@@ -48,12 +61,29 @@ export function runLinkRunCmd(
       branch: flags.branch ?? null,
       slug: flags.slug ?? null,
     });
+
+    // Dual-write the plan side so the reconciler reads a consistent link from
+    // either layer. Best-effort: the store row is authoritative, so a plan.json
+    // that cannot be written (missing run-dir, non-run path) warns and proceeds.
+    const planPath = isAbsolute(runPath)
+      ? join(runPath, 'plan.json')
+      : join(workspaceRoot, runPath, 'plan.json');
+    let planUpdated = false;
+    try {
+      setPlanTaskId(planPath, taskId);
+      planUpdated = true;
+    } catch (planErr) {
+      const planMsg = planErr instanceof Error ? planErr.message : String(planErr);
+      process.stderr.write(`scrum link-run: warning — plan.task_id not written: ${planMsg}\n`);
+    }
+
     const payload = {
       linked: true,
       task_id: taskId,
       run_path: runPath,
       branch: flags.branch ?? null,
       slug: flags.slug ?? null,
+      plan_updated: planUpdated,
     };
     process.stdout.write(`${JSON.stringify(payload)}\n`);
     process.stderr.write(`scrum link-run: ${taskId} -> ${runPath}\n`);

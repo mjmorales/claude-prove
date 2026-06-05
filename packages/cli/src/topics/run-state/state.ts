@@ -436,6 +436,34 @@ function mutateState<T>(paths: RunPaths, mutator: (state: StateData) => T): T {
   return result;
 }
 
+/**
+ * Write top-level `plan.task_id` through the blessed run-state writer so the
+ * run artifact records its scrum linkage. The reconciler reads this field to
+ * decide tracked-vs-orphan; without it a store-linked run re-emits an
+ * unlinked_run_detected event on every sweep. Routing the write through this
+ * module (atomic temp-file + rename, key order preserved) keeps the "runs are
+ * mutated only through run-state" invariant intact — callers must never edit
+ * plan.json directly.
+ *
+ * Idempotent: re-linking the same `taskId` is a no-op write that preserves the
+ * existing plan shape. `planPath` is `<run-dir>/plan.json`. Throws if the file
+ * is absent or not a `kind: 'plan'` document so a typo'd run-path fails loud
+ * rather than silently writing an orphan plan.
+ */
+export function setPlanTaskId(planPath: string, taskId: string): void {
+  let plan: Record<string, unknown>;
+  try {
+    plan = readJson(planPath);
+  } catch {
+    throw new StateError(`plan.json not found or unreadable: ${planPath}`);
+  }
+  if (plan.kind !== 'plan') {
+    throw new StateError(`not a plan.json (kind='${String(plan.kind)}'): ${planPath}`);
+  }
+  plan.task_id = taskId;
+  writeJsonAtomic(planPath, plan);
+}
+
 // ---------------------------------------------------------------------------
 // State-tree helpers
 // ---------------------------------------------------------------------------

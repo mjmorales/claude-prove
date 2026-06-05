@@ -5,7 +5,7 @@
  * per-test `@pytest.fixture(tmp_path)` isolation.
  */
 import { describe, expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { RunPaths } from './paths';
@@ -25,6 +25,7 @@ import {
   newState,
   reconcile,
   reportWrite,
+  setPlanTaskId,
   stepComplete,
   stepFail,
   stepHalt,
@@ -567,6 +568,56 @@ describe('reconcile', () => {
       stepStart(paths, '1.1.1');
       reconcile(paths);
       expect(reconcile(paths)).toEqual([]);
+    } finally {
+      cleanup(tmp);
+    }
+  });
+});
+
+// --- setPlanTaskId -----------------------------------------------------
+
+describe('setPlanTaskId', () => {
+  test('writes top-level task_id and preserves existing plan shape', () => {
+    const { tmp, paths } = makeRun();
+    try {
+      setPlanTaskId(paths.plan, 'SCRUM-99');
+      const plan = JSON.parse(readFileSync(paths.plan, 'utf8')) as PlanData;
+      expect(plan.task_id).toBe('SCRUM-99');
+      expect(plan.kind).toBe('plan');
+      expect(plan.tasks).toHaveLength(2);
+      // Re-link is idempotent.
+      setPlanTaskId(paths.plan, 'SCRUM-99');
+      const again = JSON.parse(readFileSync(paths.plan, 'utf8')) as PlanData;
+      expect(again.task_id).toBe('SCRUM-99');
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('the written plan still validates under strict', () => {
+    const { tmp, paths } = makeRun();
+    try {
+      setPlanTaskId(paths.plan, 'SCRUM-99');
+      const plan = JSON.parse(readFileSync(paths.plan, 'utf8'));
+      const r = validateData(plan, 'plan', true);
+      expect(r.ok).toBe(true);
+    } finally {
+      cleanup(tmp);
+    }
+  });
+
+  test('throws StateError when plan.json is absent', () => {
+    expect(() => setPlanTaskId(join(mkTmp(), 'missing', 'plan.json'), 'SCRUM-1')).toThrow(
+      StateError,
+    );
+  });
+
+  test('throws StateError when the file is not a plan document', () => {
+    const tmp = mkTmp();
+    try {
+      const path = join(tmp, 'state.json');
+      writeFileSync(path, `${JSON.stringify({ kind: 'state' })}\n`);
+      expect(() => setPlanTaskId(path, 'SCRUM-1')).toThrow(/not a plan/);
     } finally {
       cleanup(tmp);
     }
