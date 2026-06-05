@@ -40,6 +40,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
+import { get } from 'node:http';
 import { connect } from 'node:net';
 import { join } from 'node:path';
 import { registryBaseDir } from '@claude-prove/store';
@@ -229,20 +230,32 @@ export function isListening(
  * Probe `GET http://host:port/api/health`; true on a 200. Distinguishes our
  * server from an arbitrary listener that merely holds the port. Any network
  * error, timeout, or non-200 is false.
+ *
+ * node:http, NOT global `fetch`: the web suites register happy-dom and stub
+ * `globalThis.fetch` per test file, and bun's single-process runner executes
+ * every test file in one process in filesystem-dependent order — any order
+ * that runs a DOM suite before this topic's tests leaves a leaked stub that
+ * answers (or 404s) every URL, silently inverting the health poll. node:http
+ * is immune to DOM global shadowing.
  */
-async function probeHealth(host: string, port: number): Promise<boolean> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), HEALTH_REQUEST_TIMEOUT_MS);
-  try {
-    const res = await fetch(`http://${host}:${port}/api/health`, {
-      signal: controller.signal,
-    });
-    return res.status === 200;
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
+function probeHealth(host: string, port: number): Promise<boolean> {
+  return new Promise((resolveProbe) => {
+    let settled = false;
+    const finish = (healthy: boolean) => {
+      if (settled) return;
+      settled = true;
+      resolveProbe(healthy);
+    };
+    const req = get(
+      { host, port, path: '/api/health', timeout: HEALTH_REQUEST_TIMEOUT_MS },
+      (res) => {
+        res.resume(); // drain so the socket is released
+        finish(res.statusCode === 200);
+      },
+    );
+    req.once('timeout', () => req.destroy()); // destroy surfaces as 'error'
+    req.once('error', () => finish(false));
+  });
 }
 
 /**
