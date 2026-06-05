@@ -33,6 +33,7 @@ Auto-adoption: full — the fix lands in the compiled binary; no action required
 **Dependency re-wiring.** A `blocked_by` edge pointing AT an excluded container is re-targeted onto that container's in-plan leaf descendants (transitively, across nested `epic→story→task`), so waves stay correct; a re-target that would create a self-edge (a child blocked_by its own ancestor) is dropped. `mode` (`full` at ≥ 4 tasks) is computed on the emitted leaf count, not the pre-filter actionable count.
 
 This restores the documented "the plan is regenerable — re-run compile rather than hand-editing" invariant: the prior hand-filtering workaround (deleting the epic tasks from `plan.json` after compile) is no longer needed. No action required on update.
+
 ## Unreleased — Per-action `--help` usage lines + full-usage argument errors (fixes #36)
 
 *(No `.claude/.prove.json` change, no store migration — help/error text and one resolution path only.)* Required positionals and per-action flags are now discoverable without failing repeatedly, and a topic's `--help` is no longer a flat dump spanning every action.
@@ -51,13 +52,15 @@ This restores the documented "the plan is regenerable — re-run compile rather 
 
 No action required on update.
 
-## v3.9.0 — Generated CLAUDE.md gains a Team Agents dispatch + memory-protocol section
+## v3.10.0 — Generated CLAUDE.md gains a Team Agents dispatch + memory-protocol section
 
 *(No `.claude/.prove.json` change, no store migration — regenerate CLAUDE.md to adopt.)* Projects with registered teams now get a `## Team Agents` section in the prove-managed CLAUDE.md block. The scanner detects the role-bound agent files (`.claude/agents/team-<slug>-<role>.md`, closed `tech_lead`/`engineer`/`implementer` role set — purely filename-driven, no store lookup) and the composer renders three things: the agent roster grouped by team, a dispatch directive (for work inside a team's scope, dispatch that team's role agent rather than a general-purpose agent; resolve scope from the team bundle `teams/<slug>.md`), and a memory-protocol reminder for dispatched team agents (read the bundle before acting; record learnings through `scrum annotation add --target-kind team`, `scrum lore record` on the tech_lead seat, and `scrum decision record`). Projects with no team agent files render no section — output is unchanged.
 
 `claude-md scan` JSON output gains a `team_agents` array (`{team, role, name}`, team-ascending then canonical role order); consumers of the scan shape should tolerate the new field.
 
-Auto-adoption: full on CLAUDE.md regeneration — `/prove:update` Step 8 (`claude-prove claude-md generate`) picks the section up automatically; or run `/prove:docs claude-md` to regenerate on demand.## v3.8.1 — `scrum contributor register` is idempotent on slug (fixes #30)
+Auto-adoption: full on CLAUDE.md regeneration — `/prove:update` Step 8 (`claude-prove claude-md generate`) picks the section up automatically; or run `/prove:docs claude-md` to regenerate on demand.
+
+## v3.8.1 — `scrum contributor register` is idempotent on slug (fixes #30)
 
 *(No `.claude/.prove.json` change, no store migration — behavior change only.)* Re-running `contributor register` against an existing slug no longer fails with a UNIQUE-constraint error. It now reconciles the row — provided flags override the stored fields, unset flags preserve them — and re-emits/merges the `contributors/<slug>.md` identity artifact, so a bare re-register repairs a registry row whose identity file was never emitted or was lost. The CT-UUID and created-* provenance never change: a provided `--id` that conflicts with the registered CT-UUID errors (exit 1), preserving attribution history.
 
