@@ -15,6 +15,7 @@
 
 import { readFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
+import { teamAgentNames } from '../scrum/team-agent-names';
 
 export interface TaskPromptOpts {
   runDir: string;
@@ -47,6 +48,8 @@ interface PlanTask {
   title?: string;
   description?: string;
   acceptance_criteria?: PlanCriterion[];
+  /** Owning team forwarded by compile-plan; drives the role-bound agent roster. */
+  team_slug?: string;
   steps?: PlanStep[];
 }
 
@@ -184,6 +187,11 @@ function renderTaskPrompt(input: RenderInput): string {
     sections.push('');
   }
 
+  if (task.team_slug) {
+    sections.push(renderTeamAgents(task.team_slug));
+    sections.push('');
+  }
+
   sections.push('## Acceptance Criteria (from PRD)');
   sections.push('');
   sections.push(formatBulletList(prdAc));
@@ -310,6 +318,23 @@ function renderCheckpointInterrupt(runDir: string, projectRoot: string): string 
     '3. Self-exit; do not continue past the checkpoint.',
     '',
     'This path is best-effort and layers ON TOP of the Layer-1 cancel-and-redispatch floor — it never replaces it. When you are mid-step or cannot stop cleanly, keep working: the token budget and subagent timeout remain the hard backstop.',
+  ].join('\n');
+}
+
+/**
+ * Render the task's role-bound team agent roster. The three names
+ * (`team-<slug>-tech_lead|engineer|implementer`) are derived deterministically
+ * from the slug over the canonical role enum — no store lookup — so the worker
+ * knows exactly which seats own this task's work without resolving the team
+ * from `prove.db`.
+ */
+function renderTeamAgents(teamSlug: string): string {
+  return [
+    `## Team Agents (team ${teamSlug})`,
+    '',
+    'This task is owned by a team. Its role-bound agents — derived from the team slug — are:',
+    '',
+    ...teamAgentNames(teamSlug).map((name) => `- \`${name}\``),
   ].join('\n');
 }
 

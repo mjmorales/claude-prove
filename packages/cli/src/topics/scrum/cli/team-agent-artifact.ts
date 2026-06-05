@@ -22,7 +22,10 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { teamAgentName } from '../team-agent-names';
 import type { Team, TeamRole } from '../types';
+
+export { teamAgentName };
 
 /** Region marker opening the engine-owned Team Context Protocol block. */
 const BEGIN_MARKER = '<!-- BEGIN GENERATED: team-context-protocol -->';
@@ -57,15 +60,6 @@ const AGENT_TOOLS = 'Read, Edit, Write, Bash, AskUserQuestion';
  */
 export function teamAgentArtifactPath(workspaceRoot: string, slug: string, role: TeamRole): string {
   return join(workspaceRoot, '.claude', 'agents', `team-${slug}-${role}.md`);
-}
-
-/**
- * The canonical agent name for a (team, role): `team-<slug>-<role>`. This is
- * both the frontmatter `name` and the `PROVE_AGENT` value the agent's writes
- * stamp, so a write is always attributable to a single seat.
- */
-export function teamAgentName(slug: string, role: TeamRole): string {
-  return `team-${slug}-${role}`;
 }
 
 /**

@@ -91,6 +91,12 @@ interface PlanTask {
   worktree: { path: string; branch: string };
   /** Forwarded from the scrum task's `bounds`; omitted when null (unbounded). */
   bounds?: PlanBounds;
+  /**
+   * Forwarded from the scrum task's `team_slug`; omitted when absent (team-less
+   * task). Carries the owning team into the plan so the render surfaces can
+   * derive the task's role-bound agent names without a store lookup.
+   */
+  team_slug?: string;
   steps: PlanStep[];
 }
 
@@ -139,17 +145,20 @@ export function runCompilePlanCmd(flags: CompilePlanCmdFlags): number {
       return 1;
     }
 
-    const { plan, scrumMap } = compile(store, actionable);
-    const payload: Record<string, unknown> = { plan, scrum_map: scrumMap };
+    const { plan, scrumMap, teamMap } = compile(store, actionable);
+    const payload: Record<string, unknown> = { plan, scrum_map: scrumMap, team_map: teamMap };
 
     if (flags.out !== undefined && flags.out.length > 0) {
       const planPath = flags.out;
       const mapPath = join(dirname(planPath), 'scrum-map.json');
+      const teamMapPath = join(dirname(planPath), 'team-map.json');
       mkdirSync(dirname(planPath), { recursive: true });
       writeFileSync(planPath, `${JSON.stringify(plan, null, 2)}\n`, 'utf8');
       writeFileSync(mapPath, `${JSON.stringify(scrumMap, null, 2)}\n`, 'utf8');
+      writeFileSync(teamMapPath, `${JSON.stringify(teamMap, null, 2)}\n`, 'utf8');
       payload.plan_path = planPath;
       payload.map_path = mapPath;
+      payload.team_map_path = teamMapPath;
     }
 
     const waveCount = plan.tasks.reduce((max, t) => Math.max(max, t.wave), 0);
@@ -177,7 +186,7 @@ export function runCompilePlanCmd(flags: CompilePlanCmdFlags): number {
 function compile(
   store: ScrumStore,
   tasks: ScrumTask[],
-): { plan: Plan; scrumMap: Record<string, string> } {
+): { plan: Plan; scrumMap: Record<string, string>; teamMap: Record<string, string> } {
   const inScope = new Set(tasks.map((t) => t.id));
 
   // deps[scrumId] = actionable predecessors (blocked_by edges, intersected with scope).
@@ -258,11 +267,28 @@ function compile(
     if (task.bounds !== null) {
       planTask.bounds = task.bounds;
     }
+    // Forward the owning team verbatim into the plan task. Read through an
+    // optional accessor so this lands cleanly whether or not the ScrumTask
+    // row carries `team_slug`; a vacant/absent slug forwards no key — absent =
+    // team-less.
+    const teamSlug = (task as { team_slug?: string | null }).team_slug;
+    if (teamSlug !== undefined && teamSlug !== null && teamSlug.length > 0) {
+      planTask.team_slug = teamSlug;
+    }
     return planTask;
   });
 
   const scrumMap: Record<string, string> = {};
   for (const [scrumId, planId] of scrumToPlan) scrumMap[planId] = scrumId;
+
+  // Parallel planId -> team_slug map: the milestone->team linkage the render
+  // surfaces consume, kept beside the planId->scrumId map rather than mixed
+  // into it so the flat scrum-map contract stays intact. Team-less tasks
+  // contribute no entry.
+  const teamMap: Record<string, string> = {};
+  for (const planTask of planTasks) {
+    if (planTask.team_slug !== undefined) teamMap[planTask.id] = planTask.team_slug;
+  }
 
   const plan: Plan = {
     schema_version: PLAN_SCHEMA_VERSION,
@@ -272,7 +298,7 @@ function compile(
     // here would mis-classify every reconciled run as orphan.
     tasks: planTasks,
   };
-  return { plan, scrumMap };
+  return { plan, scrumMap, teamMap };
 }
 
 /**

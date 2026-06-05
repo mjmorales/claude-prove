@@ -64,6 +64,7 @@ interface PlanShape {
     deps: string[];
     acceptance_criteria: PlanCriterion[];
     bounds?: unknown;
+    team_slug?: string;
     steps: Array<{ acceptance_criteria: PlanCriterion[] }>;
   }>;
 }
@@ -71,8 +72,10 @@ interface PlanShape {
 function parsePlan(stdout: string): {
   plan: PlanShape;
   scrum_map: Record<string, string>;
+  team_map: Record<string, string>;
   plan_path?: string;
   map_path?: string;
+  team_map_path?: string;
 } {
   return JSON.parse(stdout.trim());
 }
@@ -352,5 +355,67 @@ describe('runCompilePlanCmd — compilation', () => {
     const task = plan.tasks[0];
     if (!task) throw new Error('expected one plan task');
     expect('bounds' in task).toBe(false);
+  });
+
+  test('forwards team_slug onto the plan task and into the parallel team map', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.createTask({
+      id: 'a',
+      title: 'Task a',
+      milestoneId: 'm1',
+      teamSlug: 'payments',
+      createdAt: '2026-01-01T00:00:01.000Z',
+    });
+
+    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const { plan, team_map } = parsePlan(res.stdout);
+    const task = plan.tasks[0];
+    if (!task) throw new Error('expected one plan task');
+    expect(task.team_slug).toBe('payments');
+    // The milestone->team linkage survives in the parallel planId->team_slug map.
+    expect(team_map).toEqual({ '1.1': 'payments' });
+  });
+
+  test('team-less task emits no team_slug key and no team-map entry', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    seedTask(store, 'a', 'm1', 1);
+    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    expect(res.exit).toBe(0);
+    const { plan, team_map } = parsePlan(res.stdout);
+    const task = plan.tasks[0];
+    if (!task) throw new Error('expected one plan task');
+    expect('team_slug' in task).toBe(false);
+    expect(team_map).toEqual({});
+  });
+
+  test('--out writes a team-map.json sibling alongside scrum-map.json', () => {
+    store.createMilestone({ id: 'm1', title: 'M1' });
+    store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
+    store.createTask({
+      id: 'a',
+      title: 'Task a',
+      milestoneId: 'm1',
+      teamSlug: 'payments',
+      createdAt: '2026-01-01T00:00:01.000Z',
+    });
+    seedTask(store, 'b', 'm1', 2);
+
+    const outDir = join(workspace, '.prove', 'runs', 'feature', 'm1');
+    const planPath = join(outDir, 'plan.json');
+    const res = withCapture(() =>
+      runCompilePlanCmd({ milestone: 'm1', out: planPath, workspaceRoot: workspace }),
+    );
+    expect(res.exit).toBe(0);
+
+    const teamMapPath = join(outDir, 'team-map.json');
+    expect(existsSync(teamMapPath)).toBe(true);
+    // Only the team-bound task contributes an entry; the team-less one does not.
+    const writtenTeamMap = JSON.parse(readFileSync(teamMapPath, 'utf8'));
+    expect(writtenTeamMap).toEqual({ '1.1': 'payments' });
+
+    const { team_map_path } = parsePlan(res.stdout);
+    expect(team_map_path).toBe(teamMapPath);
   });
 });

@@ -183,6 +183,28 @@ describe('orchestrator task-prompt', () => {
     }
   });
 
+  test('team-assigned task → renders the three deterministic role-bound agent names', () => {
+    writePlan({
+      tasks: [{ id: '1', title: 'pay', description: 'do it', team_slug: 'payments' }],
+    });
+    writePrd(BASE_PRD);
+    const code = runTaskPrompt({ runDir, taskId: '1', projectRoot: project });
+    expect(code).toBe(0);
+    expect(stdoutBuf).toContain('## Team Agents (team payments)');
+    // All three role seats render, derived from the slug with no DB lookup.
+    expect(stdoutBuf).toContain('- `team-payments-tech_lead`');
+    expect(stdoutBuf).toContain('- `team-payments-engineer`');
+    expect(stdoutBuf).toContain('- `team-payments-implementer`');
+  });
+
+  test('team-less task → omits the Team Agents section', () => {
+    writePlan(BASE_PLAN);
+    writePrd(BASE_PRD);
+    const code = runTaskPrompt({ runDir, taskId: '1', projectRoot: project });
+    expect(code).toBe(0);
+    expect(stdoutBuf).not.toContain('## Team Agents');
+  });
+
   test('no worktree flag → omits the cd block', () => {
     writePlan(BASE_PLAN);
     writePrd(BASE_PRD);
