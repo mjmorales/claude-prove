@@ -8,7 +8,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Unreleased — Slashed branch names get a flat, percent-encoded run directory
+## v3.10.2 — Slashed branch names get a flat, percent-encoded run directory
 
 *(No `.claude/.prove.json` change, no store migration — on-disk run layout for slashed branch names only.)* A run initialized with a branch name containing `/` (git-flow style: `feat/login`, `orchestrator/<slug>`) used to nest its directory deeper than the canonical two-level `.prove/runs/<branch>/<slug>/` layout — `runs/feat/login/<slug>/` — which silently hid the run from every two-level enumerator: the Stop/SubagentStop/SessionStart hooks, `run-state ls`/`show --summary`, branch autodetection, and the scrum reconciler's run sweep.
 
@@ -18,7 +18,7 @@ Corner case: a run that was previously initialized with a slashed branch sits in
 
 Auto-adoption: full — the fix lands in the compiled binary; no action required on update beyond installing the new release.
 
-## Unreleased — Stop hook no longer halts runs with background agents in flight
+## v3.10.2 — Stop hook no longer halts runs with background agents in flight
 
 *(No `.claude/.prove.json` change, no store migration — hook behavior only.)* The session Stop hook reconciler halts any step still `in_progress` with no completion recorded — but Stop fires at the end of every driver turn, not only at true session termination. Under orchestrator full-mode, the driver dispatches background implementation agents into sub-task worktrees and yields its turn, so every started step was spuriously halted (`halt_reason: "session ended with step still in_progress — no completion recorded"`) seconds after dispatch, forcing manual re-start/complete.
 
