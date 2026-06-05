@@ -3,6 +3,8 @@
  *
  * Verifies the reconcile-on-exit behavior: an in_progress step gets halted
  * with the session-end diagnostic, and the systemMessage lists the change.
+ * Runs with live sub-task worktrees (background agents in flight) are
+ * skipped instead of halted.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -104,6 +106,124 @@ describe('runStop', () => {
       expect(after.tasks[0].steps[0].status).toBe('halted');
       expect(after.tasks[0].steps[0].halt_reason).toContain('session ended');
       expect(after.run_status).toBe('halted');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('skips a run with live task worktrees — background agents in flight', () => {
+    const root = mkProject();
+    try {
+      writeState(root, 'feature', 'demo', {
+        schema_version: '1',
+        kind: 'state',
+        run_status: 'running',
+        slug: 'demo',
+        branch: 'feature',
+        updated_at: 't',
+        tasks: [
+          {
+            id: '1.1',
+            status: 'in_progress',
+            started_at: 't',
+            ended_at: '',
+            review: { verdict: 'pending', notes: '', reviewer: '', reviewed_at: '' },
+            steps: [
+              {
+                id: '1.1.1',
+                status: 'in_progress',
+                started_at: 't',
+                ended_at: '',
+                commit_sha: '',
+                validator_summary: {
+                  build: 'pending',
+                  lint: 'pending',
+                  test: 'pending',
+                  custom: 'pending',
+                  llm: 'pending',
+                },
+                halt_reason: '',
+              },
+            ],
+          },
+        ],
+        dispatch: { dispatched: [] },
+      });
+
+      // Live sub-task worktree for this run: a background agent is in flight.
+      mkdirSync(join(root, '.claude', 'worktrees', 'demo-task-1'), { recursive: true });
+
+      const result = runStop({ cwd: root });
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('');
+
+      const after = JSON.parse(
+        readFileSync(join(root, '.prove', 'runs', 'feature', 'demo', 'state.json'), 'utf8'),
+      );
+      expect(after.tasks[0].steps[0].status).toBe('in_progress');
+      expect(after.run_status).toBe('running');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('worktrees of one run do not shield an unrelated run from reconciliation', () => {
+    const root = mkProject();
+    try {
+      const mkRun = (slug: string) => ({
+        schema_version: '1',
+        kind: 'state',
+        run_status: 'running',
+        slug,
+        branch: 'feature',
+        updated_at: 't',
+        tasks: [
+          {
+            id: '1.1',
+            status: 'in_progress',
+            started_at: 't',
+            ended_at: '',
+            review: { verdict: 'pending', notes: '', reviewer: '', reviewed_at: '' },
+            steps: [
+              {
+                id: '1.1.1',
+                status: 'in_progress',
+                started_at: 't',
+                ended_at: '',
+                commit_sha: '',
+                validator_summary: {
+                  build: 'pending',
+                  lint: 'pending',
+                  test: 'pending',
+                  custom: 'pending',
+                  llm: 'pending',
+                },
+                halt_reason: '',
+              },
+            ],
+          },
+        ],
+        dispatch: { dispatched: [] },
+      });
+      writeState(root, 'feature', 'dispatched', mkRun('dispatched'));
+      writeState(root, 'feature', 'abandoned', mkRun('abandoned'));
+
+      // Only `dispatched` has a live worktree; `abandoned` must still halt.
+      mkdirSync(join(root, '.claude', 'worktrees', 'dispatched-task-2'), { recursive: true });
+
+      const result = runStop({ cwd: root });
+      expect(result.stdout).toContain('feature/abandoned 1.1.1');
+      expect(result.stdout).not.toContain('feature/dispatched');
+
+      const dispatched = JSON.parse(
+        readFileSync(join(root, '.prove', 'runs', 'feature', 'dispatched', 'state.json'), 'utf8'),
+      );
+      expect(dispatched.tasks[0].steps[0].status).toBe('in_progress');
+
+      const abandoned = JSON.parse(
+        readFileSync(join(root, '.prove', 'runs', 'feature', 'abandoned', 'state.json'), 'utf8'),
+      );
+      expect(abandoned.tasks[0].steps[0].status).toBe('halted');
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -8,6 +8,14 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — Stop hook no longer halts runs with background agents in flight
+
+*(No `.claude/.prove.json` change, no store migration — hook behavior only.)* The session Stop hook reconciler halts any step still `in_progress` with no completion recorded — but Stop fires at the end of every driver turn, not only at true session termination. Under orchestrator full-mode, the driver dispatches background implementation agents into sub-task worktrees and yields its turn, so every started step was spuriously halted (`halt_reason: "session ended with step still in_progress — no completion recorded"`) seconds after dispatch, forcing manual re-start/complete.
+
+The Stop hook now skips reconciliation for any run with a live sub-task worktree (`.claude/worktrees/<slug>-task-*`): background work in flight means `in_progress` is the legitimate state, and the steps complete later via SubagentStop auto-complete or an explicit `run-state step`. Runs without live worktrees — simple-mode runs and genuinely abandoned ones — keep the exact prior halt behavior. Corollary: a stale, never-cleaned worktree now suppresses the halt for its run until removed (`claude-prove worktree remove|remove-all`), which is intentional — un-merged worktrees mean the run is not reconciled-clean.
+
+Auto-adoption: full — the fix lands in the compiled binary; no action required on update beyond installing the new release.
+
 ## v3.10.0 — Generated CLAUDE.md gains a Team Agents dispatch + memory-protocol section
 
 *(No `.claude/.prove.json` change, no store migration — regenerate CLAUDE.md to adopt.)* Projects with registered teams now get a `## Team Agents` section in the prove-managed CLAUDE.md block. The scanner detects the role-bound agent files (`.claude/agents/team-<slug>-<role>.md`, closed `tech_lead`/`engineer`/`implementer` role set — purely filename-driven, no store lookup) and the composer renders three things: the agent roster grouped by team, a dispatch directive (for work inside a team's scope, dispatch that team's role agent rather than a general-purpose agent; resolve scope from the team bundle `teams/<slug>.md`), and a memory-protocol reminder for dispatched team agents (read the bundle before acting; record learnings through `scrum annotation add --target-kind team`, `scrum lore record` on the tech_lead seat, and `scrum decision record`). Projects with no team agent files render no section — output is unchanged.

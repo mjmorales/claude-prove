@@ -9,7 +9,12 @@
  * invokes `reconcile()` on each. Emits a `systemMessage` when any step
  * actually changed (Stop does not support `hookSpecificOutput`).
  *
- * Port of `tools/run_state/hook_stop.py`.
+ * Stop fires at the end of every driver turn, not only at true session
+ * termination. A run whose work was dispatched to background agents in
+ * sub-task worktrees (`.claude/worktrees/<slug>-task-*`) is legitimately
+ * in_progress while the driver yields, so any run with a live task
+ * worktree is skipped — its steps complete later via SubagentStop or an
+ * explicit `run-state step`, and the worktrees are removed on merge.
  */
 
 import { existsSync, readdirSync } from 'node:fs';
@@ -77,6 +82,20 @@ function iterActiveRuns(runsRoot: string): RunLocator[] {
   return out;
 }
 
+/** True when the run has at least one live sub-task worktree
+ *  (`.claude/worktrees/<slug>-task-*`) — background agents in flight. */
+function hasLiveTaskWorktrees(project: string, slug: string): boolean {
+  const worktreeDir = join(project, '.claude', 'worktrees');
+  const prefix = `${slug}-task-`;
+  try {
+    return readdirSync(worktreeDir, { withFileTypes: true }).some(
+      (e) => e.isDirectory() && e.name.startsWith(prefix),
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function runStop(payload: Record<string, unknown> | null): HookResult {
   const effective = payload ?? {};
   const project = readCwd(effective) || process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -87,10 +106,15 @@ export function runStop(payload: Record<string, unknown> | null): HookResult {
   const allChanges: TaggedChange[] = [];
 
   for (const run of iterActiveRuns(runsRoot)) {
+    // Background agents in flight: the run's steps are legitimately
+    // in_progress while the driver yields its turn — halting them here
+    // would spuriously kill dispatched work seconds after dispatch.
+    if (hasLiveTaskWorktrees(project, run.slug)) continue;
+
     // Isolate each run: a malformed state.json, an I/O error, or an illegal
-    // task transition in one run must not abort reconciliation of the others.
-    // Stop fires once per session end, so an unguarded throw here would
-    // silently leave every later active run with ghost in_progress steps.
+    // task transition in one run must not abort reconciliation of the others —
+    // an unguarded throw here would leave every later active run with ghost
+    // in_progress steps until some future firing happens to get past it.
     try {
       const changes = reconcile(run.paths, { reasonOnHalt: HALT_REASON });
       for (const c of changes) {
