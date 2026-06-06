@@ -7,7 +7,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -20,16 +20,27 @@ interface RunResult {
   status: number;
 }
 
-function runBin(args: string[], env: Record<string, string>): RunResult {
-  const result = spawnSync('bun', ['run', BIN, ...args], {
-    encoding: 'utf8',
-    env: { ...process.env, NODE_ENV: 'test', ...env },
+// Async spawn, not spawnSync: the remote-resolution suite serves its GitHub
+// stub from THIS process via Bun.serve, and a synchronous child wait blocks
+// the event loop the stub needs to answer — the child then hangs until its
+// own fetch timeout aborts. Awaiting an async child keeps the loop free.
+function runBin(args: string[], env: Record<string, string>): Promise<RunResult> {
+  return new Promise((resolve) => {
+    const child = spawn('bun', ['run', BIN, ...args], {
+      env: { ...process.env, NODE_ENV: 'test', ...env },
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => {
+      stdout += d;
+    });
+    child.stderr.on('data', (d) => {
+      stderr += d;
+    });
+    child.on('close', (status) => {
+      resolve({ stdout, stderr, status: status ?? -1 });
+    });
   });
-  return {
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
-    status: result.status ?? -1,
-  };
 }
 
 /** Build a fake `plugin list` command that prints the given JSON payload. */
@@ -42,7 +53,7 @@ function stubPluginList(payload: unknown): string {
 }
 
 describe('claude-prove install latest — local resolution', () => {
-  test('picks the highest-semver prove@prove entry', () => {
+  test('picks the highest-semver prove@prove entry', async () => {
     const listPayload = [
       {
         id: 'prove@prove',
@@ -67,7 +78,7 @@ describe('claude-prove install latest — local resolution', () => {
       },
     ];
 
-    const { stdout, status } = runBin(['install', 'latest', '--offline'], {
+    const { stdout, status } = await runBin(['install', 'latest', '--offline'], {
       PROVE_PLUGIN_LIST_CMD: stubPluginList(listPayload),
     });
 
@@ -84,8 +95,8 @@ describe('claude-prove install latest — local resolution', () => {
     expect(parsed.errors).toEqual({});
   });
 
-  test('reports a local error when no prove@prove entry exists', () => {
-    const { stdout, status } = runBin(['install', 'latest', '--offline'], {
+  test('reports a local error when no prove@prove entry exists', async () => {
+    const { stdout, status } = await runBin(['install', 'latest', '--offline'], {
       PROVE_PLUGIN_LIST_CMD: stubPluginList([]),
     });
 
@@ -95,8 +106,8 @@ describe('claude-prove install latest — local resolution', () => {
     expect(parsed.errors.local).toContain('no prove@prove entry');
   });
 
-  test('reports a local error when the list command fails', () => {
-    const { stdout, status } = runBin(['install', 'latest', '--offline'], {
+  test('reports a local error when the list command fails', async () => {
+    const { stdout, status } = await runBin(['install', 'latest', '--offline'], {
       PROVE_PLUGIN_LIST_CMD: 'false',
     });
 
@@ -136,7 +147,7 @@ describe('claude-prove install latest — remote resolution', () => {
     server.stop(true);
   });
 
-  test('fetches tag_name + html_url and computes upToDate=false when versions diverge', () => {
+  test('fetches tag_name + html_url and computes upToDate=false when versions diverge', async () => {
     const listPayload = [
       {
         id: 'prove@prove',
@@ -147,7 +158,7 @@ describe('claude-prove install latest — remote resolution', () => {
       },
     ];
 
-    const { stdout, status } = runBin(['install', 'latest'], {
+    const { stdout, status } = await runBin(['install', 'latest'], {
       PROVE_PLUGIN_LIST_CMD: stubPluginList(listPayload),
       PROVE_GH_API_BASE: baseUrl,
     });
@@ -162,7 +173,7 @@ describe('claude-prove install latest — remote resolution', () => {
     expect(parsed.upToDate).toBe(false);
   });
 
-  test('computes upToDate=true when local matches remote', () => {
+  test('computes upToDate=true when local matches remote', async () => {
     const listPayload = [
       {
         id: 'prove@prove',
@@ -173,7 +184,7 @@ describe('claude-prove install latest — remote resolution', () => {
       },
     ];
 
-    const { stdout, status } = runBin(['install', 'latest'], {
+    const { stdout, status } = await runBin(['install', 'latest'], {
       PROVE_PLUGIN_LIST_CMD: stubPluginList(listPayload),
       PROVE_GH_API_BASE: baseUrl,
     });
@@ -183,7 +194,7 @@ describe('claude-prove install latest — remote resolution', () => {
     expect(parsed.upToDate).toBe(true);
   });
 
-  test('remote=null and error reported when releases API 404s', () => {
+  test('remote=null and error reported when releases API 404s', async () => {
     const listPayload = [
       {
         id: 'prove@prove',
@@ -194,7 +205,7 @@ describe('claude-prove install latest — remote resolution', () => {
       },
     ];
 
-    const { stdout, status } = runBin(['install', 'latest'], {
+    const { stdout, status } = await runBin(['install', 'latest'], {
       PROVE_PLUGIN_LIST_CMD: stubPluginList(listPayload),
       PROVE_GH_API_BASE: `${baseUrl}/missing`,
     });
