@@ -66,7 +66,7 @@ interface SeedTaskOptions {
 let store: Store;
 let tmpDir: string;
 
-beforeEach(() => {
+beforeEach(async () => {
   clearRegistry();
   registerSchema({
     domain: 'scrum',
@@ -74,13 +74,13 @@ beforeEach(() => {
       {
         version: 1,
         description: 'scrum transition test schema',
-        up: (db) => db.exec(SCRUM_TEST_SCHEMA_SQL),
+        up: (s) => s.exec(SCRUM_TEST_SCHEMA_SQL),
       },
     ],
   });
   tmpDir = mkdtempSync(join(tmpdir(), 'scrum-writes-'));
-  store = openStore({ path: join(tmpDir, '.prove', 'prove.db') });
-  runMigrations(store);
+  store = await openStore({ path: join(tmpDir, '.prove', 'prove.db') });
+  await runMigrations(store);
 });
 
 afterEach(() => {
@@ -89,12 +89,12 @@ afterEach(() => {
   clearRegistry();
 });
 
-function seedTask(id: string, opts: SeedTaskOptions = {}): void {
+async function seedTask(id: string, opts: SeedTaskOptions = {}): Promise<void> {
   const status = opts.status ?? 'backlog';
   const layer = opts.layer === undefined ? null : opts.layer;
   const acceptance = opts.acceptance === undefined ? null : opts.acceptance;
   const now = '2026-06-01T00:00:00Z';
-  store.run(
+  await store.run(
     'INSERT INTO scrum_tasks (id, status, layer, acceptance_json, created_at, last_event_at, last_modified_by, last_modified_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)',
     [
       id,
@@ -109,12 +109,13 @@ function seedTask(id: string, opts: SeedTaskOptions = {}): void {
   );
 }
 
-function eventCount(taskId: string, kind?: string): number {
+async function eventCount(taskId: string, kind?: string): Promise<number> {
   const sql = kind
     ? 'SELECT COUNT(*) AS n FROM scrum_events WHERE task_id = ? AND kind = ?'
     : 'SELECT COUNT(*) AS n FROM scrum_events WHERE task_id = ?';
   const params = kind ? [taskId, kind] : [taskId];
-  return (store.all<{ n: number }>(sql, params)[0]?.n ?? 0) as number;
+  const rows = await store.all<{ n: number }>(sql, params);
+  return (rows[0]?.n ?? 0) as number;
 }
 
 // A satisfied gate criterion clears both story acceptance floors without git or
@@ -134,25 +135,29 @@ const satisfiedGateCriterion: Acceptance = {
 };
 
 describe('updateTaskStatus — valid transition', () => {
-  test('emits exactly one status_changed event with payload {from,to} and updates the row', () => {
-    seedTask('t1', { status: 'backlog' });
-    const before = eventCount('t1', 'status_changed');
+  test('emits exactly one status_changed event with payload {from,to} and updates the row', async () => {
+    await seedTask('t1', { status: 'backlog' });
+    const before = await eventCount('t1', 'status_changed');
     expect(before).toBe(0);
 
-    const updated = updateTaskStatus(store, 't1', 'ready', 'agent-x');
+    const updated = await updateTaskStatus(store, 't1', 'ready', 'agent-x');
     expect(updated.status).toBe('ready');
 
-    expect(eventCount('t1', 'status_changed')).toBe(1);
-    const ev = store.all<{ agent: string | null; payload_json: string }>(
-      "SELECT agent, payload_json FROM scrum_events WHERE task_id = ? AND kind = 'status_changed'",
-      ['t1'],
+    expect(await eventCount('t1', 'status_changed')).toBe(1);
+    const ev = (
+      await store.all<{ agent: string | null; payload_json: string }>(
+        "SELECT agent, payload_json FROM scrum_events WHERE task_id = ? AND kind = 'status_changed'",
+        ['t1'],
+      )
     )[0];
     expect(ev?.agent).toBe('agent-x');
     expect(JSON.parse(ev?.payload_json ?? '{}')).toEqual({ from: 'backlog', to: 'ready' });
 
-    const row = store.all<{ status: string; last_modified_by: string | null }>(
-      'SELECT status, last_modified_by FROM scrum_tasks WHERE id = ?',
-      ['t1'],
+    const row = (
+      await store.all<{ status: string; last_modified_by: string | null }>(
+        'SELECT status, last_modified_by FROM scrum_tasks WHERE id = ?',
+        ['t1'],
+      )
     )[0];
     expect(row?.status).toBe('ready');
     expect(row?.last_modified_by).toBe('agent-x');
@@ -160,57 +165,63 @@ describe('updateTaskStatus — valid transition', () => {
 });
 
 describe('updateTaskStatus — invalid transition', () => {
-  test('throws and emits zero events', () => {
-    seedTask('t1', { status: 'backlog' });
-    expect(() => updateTaskStatus(store, 't1', 'done')).toThrow(/invalid transition/);
-    expect(eventCount('t1')).toBe(0);
+  test('throws and emits zero events', async () => {
+    await seedTask('t1', { status: 'backlog' });
+    await expect(updateTaskStatus(store, 't1', 'done')).rejects.toThrow(/invalid transition/);
+    expect(await eventCount('t1')).toBe(0);
   });
 
-  test('unknown task id throws and writes nothing', () => {
-    expect(() => updateTaskStatus(store, 'nope', 'ready')).toThrow(/unknown task/);
-    expect(eventCount('nope')).toBe(0);
+  test('unknown task id throws and writes nothing', async () => {
+    await expect(updateTaskStatus(store, 'nope', 'ready')).rejects.toThrow(/unknown task/);
+    expect(await eventCount('nope')).toBe(0);
   });
 
-  test('terminal status rejects every outgoing edge', () => {
-    seedTask('t1', { status: 'done' });
-    expect(() => updateTaskStatus(store, 't1', 'in_progress')).toThrow(/invalid transition/);
-    expect(eventCount('t1', 'status_changed')).toBe(0);
+  test('terminal status rejects every outgoing edge', async () => {
+    await seedTask('t1', { status: 'done' });
+    await expect(updateTaskStatus(store, 't1', 'in_progress')).rejects.toThrow(
+      /invalid transition/,
+    );
+    expect(await eventCount('t1', 'status_changed')).toBe(0);
   });
 });
 
 describe('updateTaskStatus — story acceptance floor', () => {
-  test('story with zero active criteria is rejected into ready', () => {
-    seedTask('s', { status: 'backlog', layer: 'story', acceptance: null });
-    expect(() => updateTaskStatus(store, 's', 'ready')).toThrow(/no active acceptance criteria/);
-    expect(eventCount('s', 'status_changed')).toBe(0);
+  test('story with zero active criteria is rejected into ready', async () => {
+    await seedTask('s', { status: 'backlog', layer: 'story', acceptance: null });
+    await expect(updateTaskStatus(store, 's', 'ready')).rejects.toThrow(
+      /no active acceptance criteria/,
+    );
+    expect(await eventCount('s', 'status_changed')).toBe(0);
   });
 
-  test('story with zero active criteria is rejected into in_progress', () => {
-    seedTask('s', { status: 'backlog', layer: 'story', acceptance: null });
-    expect(() => updateTaskStatus(store, 's', 'in_progress')).toThrow(
+  test('story with zero active criteria is rejected into in_progress', async () => {
+    await seedTask('s', { status: 'backlog', layer: 'story', acceptance: null });
+    await expect(updateTaskStatus(store, 's', 'in_progress')).rejects.toThrow(
       /no active acceptance criteria/,
     );
   });
 
-  test('story with zero active criteria is rejected into done', () => {
+  test('story with zero active criteria is rejected into done', async () => {
     // Reach in_progress without the floor by seeding it there directly, then
     // attempt the close — the floor must still reject the empty-criteria story.
-    seedTask('s', { status: 'in_progress', layer: 'story', acceptance: null });
-    expect(() => updateTaskStatus(store, 's', 'done')).toThrow(/no active acceptance criteria/);
-    expect(eventCount('s', 'status_changed')).toBe(0);
+    await seedTask('s', { status: 'in_progress', layer: 'story', acceptance: null });
+    await expect(updateTaskStatus(store, 's', 'done')).rejects.toThrow(
+      /no active acceptance criteria/,
+    );
+    expect(await eventCount('s', 'status_changed')).toBe(0);
   });
 
-  test('story passes into in_progress once it carries an active applicable criterion', () => {
-    seedTask('s', { status: 'backlog', layer: 'story', acceptance: satisfiedGateCriterion });
-    expect(() => updateTaskStatus(store, 's', 'in_progress')).not.toThrow();
+  test('story passes into in_progress once it carries an active applicable criterion', async () => {
+    await seedTask('s', { status: 'backlog', layer: 'story', acceptance: satisfiedGateCriterion });
+    await expect(updateTaskStatus(store, 's', 'in_progress')).resolves.toBeDefined();
     expect(
-      store.all<{ status: string }>('SELECT status FROM scrum_tasks WHERE id = ?', ['s'])[0]
+      (await store.all<{ status: string }>('SELECT status FROM scrum_tasks WHERE id = ?', ['s']))[0]
         ?.status,
     ).toBe('in_progress');
   });
 
-  test('a descendants-scoped criterion does not satisfy the parent floor', () => {
-    seedTask('s', {
+  test('a descendants-scoped criterion does not satisfy the parent floor', async () => {
+    await seedTask('s', {
       status: 'backlog',
       layer: 'story',
       acceptance: {
@@ -228,11 +239,13 @@ describe('updateTaskStatus — story acceptance floor', () => {
         ],
       },
     });
-    expect(() => updateTaskStatus(store, 's', 'ready')).toThrow(/no active acceptance criteria/);
+    await expect(updateTaskStatus(store, 's', 'ready')).rejects.toThrow(
+      /no active acceptance criteria/,
+    );
   });
 
-  test('an unsatisfied criterion blocks the close even though it clears the count', () => {
-    seedTask('s', {
+  test('an unsatisfied criterion blocks the close even though it clears the count', async () => {
+    await seedTask('s', {
       status: 'in_progress',
       layer: 'story',
       acceptance: {
@@ -249,8 +262,10 @@ describe('updateTaskStatus — story acceptance floor', () => {
         ],
       },
     });
-    expect(() => updateTaskStatus(store, 's', 'done')).toThrow(/unsatisfied acceptance criteria/);
-    expect(eventCount('s', 'status_changed')).toBe(0);
+    await expect(updateTaskStatus(store, 's', 'done')).rejects.toThrow(
+      /unsatisfied acceptance criteria/,
+    );
+    expect(await eventCount('s', 'status_changed')).toBe(0);
   });
 });
 
@@ -273,49 +288,51 @@ describe('updateTaskStatus — story synthesis floor', () => {
     );
   }
 
-  function seedStartedStory(id: string): void {
-    seedTask(id, { status: 'in_progress', layer: 'story', acceptance: satisfiedGateCriterion });
+  async function seedStartedStory(id: string): Promise<void> {
+    await seedTask(id, {
+      status: 'in_progress',
+      layer: 'story',
+      acceptance: satisfiedGateCriterion,
+    });
   }
 
-  test('story with a linked run but no synthesis entry is rejected into done', () => {
+  test('story with a linked run but no synthesis entry is rejected into done', async () => {
     const runDir = mkdtempSync(join(tmpdir(), 'scrum-synth-'));
     try {
-      seedStartedStory('s');
-      store.run('INSERT INTO scrum_run_links (task_id, run_path, linked_at) VALUES (?, ?, ?)', [
-        's',
-        runDir,
-        '2026-06-01T00:00:00Z',
-      ]);
-      expect(() => updateTaskStatus(store, 's', 'done')).toThrow(
+      await seedStartedStory('s');
+      await store.run(
+        'INSERT INTO scrum_run_links (task_id, run_path, linked_at) VALUES (?, ?, ?)',
+        ['s', runDir, '2026-06-01T00:00:00Z'],
+      );
+      await expect(updateTaskStatus(store, 's', 'done')).rejects.toThrow(
         /no synthesis reasoning-log entry/,
       );
-      expect(eventCount('s', 'status_changed')).toBe(0);
+      expect(await eventCount('s', 'status_changed')).toBe(0);
     } finally {
       rmSync(runDir, { recursive: true, force: true });
     }
   });
 
-  test('story with no linked run is exempt (no worker engaged)', () => {
-    seedStartedStory('s');
-    expect(() => updateTaskStatus(store, 's', 'done')).not.toThrow();
+  test('story with no linked run is exempt (no worker engaged)', async () => {
+    await seedStartedStory('s');
+    await expect(updateTaskStatus(store, 's', 'done')).resolves.toBeDefined();
     expect(
-      store.all<{ status: string }>('SELECT status FROM scrum_tasks WHERE id = ?', ['s'])[0]
+      (await store.all<{ status: string }>('SELECT status FROM scrum_tasks WHERE id = ?', ['s']))[0]
         ?.status,
     ).toBe('done');
   });
 
-  test('story passes into done once its most-recent run carries a synthesis entry', () => {
+  test('story passes into done once its most-recent run carries a synthesis entry', async () => {
     const runDir = mkdtempSync(join(tmpdir(), 'scrum-synth-'));
     try {
-      seedStartedStory('s');
+      await seedStartedStory('s');
       writeSynthesis(runDir);
-      store.run('INSERT INTO scrum_run_links (task_id, run_path, linked_at) VALUES (?, ?, ?)', [
-        's',
-        runDir,
-        '2026-06-01T00:00:00Z',
-      ]);
-      expect(() => updateTaskStatus(store, 's', 'done')).not.toThrow();
-      expect(eventCount('s', 'status_changed')).toBe(1);
+      await store.run(
+        'INSERT INTO scrum_run_links (task_id, run_path, linked_at) VALUES (?, ?, ?)',
+        ['s', runDir, '2026-06-01T00:00:00Z'],
+      );
+      await expect(updateTaskStatus(store, 's', 'done')).resolves.toBeDefined();
+      expect(await eventCount('s', 'status_changed')).toBe(1);
     } finally {
       rmSync(runDir, { recursive: true, force: true });
     }
@@ -327,13 +344,13 @@ describe('updateTaskStatus — story synthesis floor', () => {
     writeFileSync(join(dir, `${fileStem}.json`), `${json}\n`, 'utf8');
   }
 
-  test('a schema-invalid synthesis entry (missing outcome) fails the floor closed', () => {
+  test('a schema-invalid synthesis entry (missing outcome) fails the floor closed', async () => {
     // The entry IS type:'synthesis' but omits the required `outcome` field. A
     // lenient `.type === 'synthesis'` scan would wave the close through; the
     // strict read must THROW on the schema-invalid entry so the floor rejects.
     const runDir = mkdtempSync(join(tmpdir(), 'scrum-synth-bad-'));
     try {
-      seedStartedStory('s');
+      await seedStartedStory('s');
       writeRawEntry(
         runDir,
         'worker',
@@ -348,61 +365,57 @@ describe('updateTaskStatus — story synthesis floor', () => {
           // outcome intentionally omitted — required on synthesis entries.
         }),
       );
-      store.run('INSERT INTO scrum_run_links (task_id, run_path, linked_at) VALUES (?, ?, ?)', [
-        's',
-        runDir,
-        '2026-06-01T00:00:00Z',
-      ]);
-      expect(() => updateTaskStatus(store, 's', 'done')).toThrow(
+      await store.run(
+        'INSERT INTO scrum_run_links (task_id, run_path, linked_at) VALUES (?, ?, ?)',
+        ['s', runDir, '2026-06-01T00:00:00Z'],
+      );
+      await expect(updateTaskStatus(store, 's', 'done')).rejects.toThrow(
         /no synthesis reasoning-log entry/,
       );
-      expect(eventCount('s', 'status_changed')).toBe(0);
+      expect(await eventCount('s', 'status_changed')).toBe(0);
     } finally {
       rmSync(runDir, { recursive: true, force: true });
     }
   });
 
-  test('a malformed non-synthesis entry alongside a valid synthesis entry fails the floor closed', () => {
+  test('a malformed non-synthesis entry alongside a valid synthesis entry fails the floor closed', async () => {
     // A valid synthesis entry is present, but a SEPARATE non-synthesis file is
     // malformed JSON. The strict read walks every file and THROWS on the bad one
     // before the synthesis match is decided, so the floor must reject rather than
     // pass on the valid entry it would otherwise have found.
     const runDir = mkdtempSync(join(tmpdir(), 'scrum-synth-mixed-'));
     try {
-      seedStartedStory('s');
+      await seedStartedStory('s');
       writeSynthesis(runDir, 'aaa-worker'); // valid synthesis, sorts first by agent
       writeRawEntry(runDir, 'zzz-worker', 'broken', '{ not valid json');
-      store.run('INSERT INTO scrum_run_links (task_id, run_path, linked_at) VALUES (?, ?, ?)', [
-        's',
-        runDir,
-        '2026-06-01T00:00:00Z',
-      ]);
-      expect(() => updateTaskStatus(store, 's', 'done')).toThrow(
+      await store.run(
+        'INSERT INTO scrum_run_links (task_id, run_path, linked_at) VALUES (?, ?, ?)',
+        ['s', runDir, '2026-06-01T00:00:00Z'],
+      );
+      await expect(updateTaskStatus(store, 's', 'done')).rejects.toThrow(
         /no synthesis reasoning-log entry/,
       );
-      expect(eventCount('s', 'status_changed')).toBe(0);
+      expect(await eventCount('s', 'status_changed')).toBe(0);
     } finally {
       rmSync(runDir, { recursive: true, force: true });
     }
   });
 
-  test('only the most-recent linked run is consulted for synthesis', () => {
+  test('only the most-recent linked run is consulted for synthesis', async () => {
     const olderRun = mkdtempSync(join(tmpdir(), 'scrum-synth-old-'));
     const newerRun = mkdtempSync(join(tmpdir(), 'scrum-synth-new-'));
     try {
-      seedStartedStory('s');
+      await seedStartedStory('s');
       writeSynthesis(olderRun); // synthesis on the OLD run only
-      store.run('INSERT INTO scrum_run_links (task_id, run_path, linked_at) VALUES (?, ?, ?)', [
-        's',
-        olderRun,
-        '2026-01-01T00:00:00Z',
-      ]);
-      store.run('INSERT INTO scrum_run_links (task_id, run_path, linked_at) VALUES (?, ?, ?)', [
-        's',
-        newerRun,
-        '2026-02-01T00:00:00Z',
-      ]);
-      expect(() => updateTaskStatus(store, 's', 'done')).toThrow(/no synthesis/);
+      await store.run(
+        'INSERT INTO scrum_run_links (task_id, run_path, linked_at) VALUES (?, ?, ?)',
+        ['s', olderRun, '2026-01-01T00:00:00Z'],
+      );
+      await store.run(
+        'INSERT INTO scrum_run_links (task_id, run_path, linked_at) VALUES (?, ?, ?)',
+        ['s', newerRun, '2026-02-01T00:00:00Z'],
+      );
+      await expect(updateTaskStatus(store, 's', 'done')).rejects.toThrow(/no synthesis/);
     } finally {
       rmSync(olderRun, { recursive: true, force: true });
       rmSync(newerRun, { recursive: true, force: true });

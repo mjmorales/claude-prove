@@ -21,10 +21,9 @@
  * inverse.
  */
 
-import type { Database } from 'bun:sqlite';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
-import type { Store } from '../connection';
+import { type Store, withTx } from '../connection';
 
 // ---------------------------------------------------------------------------
 // Closed scrum status enum + task / acceptance domain types (canonical copy)
@@ -153,14 +152,13 @@ const ALLOWED_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
  * floors, then appends a `status_changed` event inside the same transaction as
  * the row update and bumps `last_event_at`. Returns the post-write task view.
  */
-export function updateTaskStatus(
+export async function updateTaskStatus(
   store: Store,
   id: string,
   next: TaskStatus,
   agent?: string | null,
-): TransitionTask {
-  const db = store.getDb();
-  const task = getTransitionTask(db, id);
+): Promise<TransitionTask> {
+  const task = await getTransitionTask(store, id);
   if (!task) throw new Error(`updateTaskStatus: unknown task '${id}'`);
   const allowed = ALLOWED_TRANSITIONS[task.status];
   if (!allowed.includes(next)) {
@@ -174,22 +172,23 @@ export function updateTaskStatus(
   // Non-story layers pass straight through.
   if (task.layer === 'story') {
     assertStoryAcceptanceFloor(task, next);
-    if (next === 'done') assertStorySynthesisFloor(store, db, id);
+    if (next === 'done') await assertStorySynthesisFloor(store, id);
   }
 
   const ts = isoNow();
   const { workerId, runId } = resolveRunContext();
-  const tx = db.transaction(() => {
-    db.prepare(
+  await withTx(store, async () => {
+    await store.run(
       'UPDATE scrum_tasks SET status = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
-    ).run(next, ts, agent ?? null, ts, workerId, runId, id);
-    db.prepare(
+      [next, ts, agent ?? null, ts, workerId, runId, id],
+    );
+    await store.run(
       'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
-    ).run(id, ts, 'status_changed', agent ?? null, JSON.stringify({ from: task.status, to: next }));
+      [id, ts, 'status_changed', agent ?? null, JSON.stringify({ from: task.status, to: next })],
+    );
   });
-  tx();
 
-  const updated = getTransitionTask(db, id);
+  const updated = await getTransitionTask(store, id);
   if (!updated) throw new Error(`updateTaskStatus: task '${id}' vanished mid-update`);
   return updated;
 }
@@ -252,8 +251,8 @@ function assertStoryAcceptanceFloor(task: TransitionTask, next: TaskStatus): voi
  * manually-driven story, which the floor intentionally does not gate.
  * Invariant: only called for `task.layer === 'story'`.
  */
-function assertStorySynthesisFloor(store: Store, db: Database, taskId: string): void {
-  const runs = listRunsForTask(db, taskId);
+async function assertStorySynthesisFloor(store: Store, taskId: string): Promise<void> {
+  const runs = await listRunsForTask(store, taskId);
   if (runs.length === 0) return;
 
   // listRunsForTask is ordered by linked_at ASC — the last entry is the
@@ -296,12 +295,11 @@ interface TransitionTaskRow {
  * `acceptance_json` degrades to `null` (with a stderr warning) rather than
  * throwing, so one poisoned row cannot brick the transition read.
  */
-function getTransitionTask(db: Database, id: string): TransitionTask | null {
-  const row = db
-    .prepare(
-      'SELECT id, status, layer, acceptance_json FROM scrum_tasks WHERE id = ? AND deleted_at IS NULL',
-    )
-    .get(id) as TransitionTaskRow | null;
+async function getTransitionTask(store: Store, id: string): Promise<TransitionTask | null> {
+  const row = await store.get<TransitionTaskRow>(
+    'SELECT id, status, layer, acceptance_json FROM scrum_tasks WHERE id = ? AND deleted_at IS NULL',
+    [id],
+  );
   if (!row) return null;
   return {
     id: row.id,
@@ -322,10 +320,11 @@ function safeParseAcceptance(raw: string | null, taskId: string): Acceptance | n
 }
 
 /** Run links for `taskId`, ordered by `linked_at` ASC (oldest first). */
-function listRunsForTask(db: Database, taskId: string): { run_path: string }[] {
-  return db
-    .prepare('SELECT run_path FROM scrum_run_links WHERE task_id = ? ORDER BY linked_at ASC')
-    .all(taskId) as { run_path: string }[];
+async function listRunsForTask(store: Store, taskId: string): Promise<{ run_path: string }[]> {
+  return await store.all<{ run_path: string }>(
+    'SELECT run_path FROM scrum_run_links WHERE task_id = ? ORDER BY linked_at ASC',
+    [taskId],
+  );
 }
 
 /**

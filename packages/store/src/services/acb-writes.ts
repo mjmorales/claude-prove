@@ -55,16 +55,16 @@ export interface GroupVerdictRecord {
  * primary key, so a re-upsert on the same pair updates in place rather than
  * inserting a second row.
  */
-export function upsertGroupVerdict(
+export async function upsertGroupVerdict(
   store: Store,
   slug: string,
   groupId: string,
   verdict: GroupVerdict,
   note: string | null,
   fixPrompt: string | null,
-): GroupVerdictRecord {
+): Promise<GroupVerdictRecord> {
   const updatedAt = isoNow();
-  store.run(
+  await store.run(
     `INSERT INTO acb_group_verdicts (slug, group_id, verdict, note, fix_prompt, updated_at)
        VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(slug, group_id) DO UPDATE SET
