@@ -15,7 +15,7 @@ describe('packages/store end-to-end', () => {
     clearRegistry();
   });
 
-  test('registers a synthetic domain, migrates, and lands a file-backed prove.db', () => {
+  test('registers a synthetic domain, migrates, and lands a file-backed prove.db', async () => {
     const repo = makeTmpGitRepo();
     try {
       registerSchema({
@@ -24,14 +24,12 @@ describe('packages/store end-to-end', () => {
           {
             version: 1,
             description: 'create orders table',
-            up: (db) => {
-              db.run('CREATE TABLE orders (id INTEGER PRIMARY KEY, total INTEGER)');
-            },
+            up: (store) => store.run('CREATE TABLE orders (id INTEGER PRIMARY KEY, total INTEGER)'),
           },
           {
             version: 2,
             description: 'add customer column',
-            up: (db) => db.run('ALTER TABLE orders ADD COLUMN customer TEXT'),
+            up: (store) => store.run('ALTER TABLE orders ADD COLUMN customer TEXT'),
           },
         ],
       });
@@ -39,26 +37,30 @@ describe('packages/store end-to-end', () => {
       const expectedPath = resolveDbPath({ cwd: repo });
       expect(expectedPath).toBe(join(repo, '.prove', 'prove.db'));
 
-      const store = openStore({ cwd: repo });
+      const store = await openStore({ cwd: repo });
       try {
         expect(store.path).toBe(expectedPath);
         expect(existsSync(expectedPath)).toBe(true);
 
-        const result = runMigrations(store);
+        const result = await runMigrations(store);
         expect(result.applied.map((a) => `${a.domain}:${a.version}`)).toEqual([
           'orders:1',
           'orders:2',
         ]);
 
         // Verify the schema landed and rows round-trip through the Store API.
-        store.run('INSERT INTO orders (id, total, customer) VALUES (?, ?, ?)', [42, 9900, 'alice']);
-        const rows = store.all<{ id: number; total: number; customer: string }>(
+        await store.run('INSERT INTO orders (id, total, customer) VALUES (?, ?, ?)', [
+          42,
+          9900,
+          'alice',
+        ]);
+        const rows = await store.all<{ id: number; total: number; customer: string }>(
           'SELECT id, total, customer FROM orders',
         );
         expect(rows).toEqual([{ id: 42, total: 9900, customer: 'alice' }]);
 
         // Migrations log reflects both applied versions.
-        const log = store.all<{ domain: string; version: number; description: string }>(
+        const log = await store.all<{ domain: string; version: number; description: string }>(
           'SELECT domain, version, description FROM _migrations_log ORDER BY version',
         );
         expect(log).toEqual([
@@ -70,9 +72,9 @@ describe('packages/store end-to-end', () => {
       }
 
       // Rerun on a fresh connection: no additional migrations, same state.
-      const store2 = openStore({ cwd: repo });
+      const store2 = await openStore({ cwd: repo });
       try {
-        const result = runMigrations(store2);
+        const result = await runMigrations(store2);
         expect(result.applied).toEqual([]);
         expect(result.alreadyUpToDate).toEqual([{ domain: 'orders', version: 2 }]);
       } finally {

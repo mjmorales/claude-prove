@@ -1,12 +1,16 @@
-import type { Database } from 'bun:sqlite';
+import type { Store } from './connection';
 
 export interface Migration {
   /** Monotonically increasing integer unique within the domain. */
   version: number;
   /** Short human-readable description (goes into _migrations_log). */
   description: string;
-  /** Forward migration. Runs inside a transaction managed by runMigrations. */
-  up: (db: Database) => void;
+  /**
+   * Forward migration. Runs inside a transaction managed by runMigrations and
+   * receives the async `Store`; an `up` that issues DDL/DML must `await` each
+   * `store.run`/`store.exec` (the driver is async). May be sync or async.
+   */
+  up: (store: Store) => void | Promise<void>;
 }
 
 export interface SchemaDef {
@@ -19,10 +23,8 @@ const registry = new Map<string, Migration[]>();
 
 /**
  * Register a schema definition with the store. Domains typically call this
- * from a side-effect import; see the "Registry model" section in
- * `.prove/decisions/2026-04-21-typescript-cli-unification.md`. Duplicate
- * `{domain, version}` pairs throw to catch merge-conflict bugs where two
- * migrations claim the same version.
+ * from a side-effect import. Duplicate `{domain, version}` pairs throw to
+ * catch merge-conflict bugs where two migrations claim the same version.
  */
 export function registerSchema(def: SchemaDef): void {
   const existing = registry.get(def.domain) ?? [];
