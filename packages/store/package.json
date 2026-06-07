@@ -18,6 +18,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@claude-prove/shared": "workspace:*"
+    "@claude-prove/shared": "workspace:*",
+    "@tursodatabase/database": "^0.6.1"
   }
 }
