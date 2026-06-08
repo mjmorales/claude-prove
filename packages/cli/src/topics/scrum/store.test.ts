@@ -1734,6 +1734,118 @@ describe('ScrumStore — recordCriterionVerdict + record option', () => {
   });
 });
 
+// Append-only verdict log + criterion-head view + supersession survival
+// ===========================================================================
+
+describe('ScrumStore — append-only criterion verdicts', () => {
+  /** Count rows in scrum_criterion_verdicts whose criterion belongs to `taskId`. */
+  async function verdictRowCount(taskId: string): Promise<number> {
+    const rows = (await store.getStore().all(
+      `SELECT COUNT(*) AS n FROM scrum_criterion_verdicts v
+       INNER JOIN scrum_acceptance_criteria c ON c.id = v.criterion_id
+       WHERE c.task_id = ?`,
+      [taskId],
+    )) as Array<{ n: number }>;
+    return (rows[0]?.n ?? 0) as number;
+  }
+
+  test('re-verifying APPENDS a second verdict row; the prior row is retained', async () => {
+    await seedTask('t', {
+      acceptance: { criteria: [ac('a', { verifies_by: 'agent', check: 'judge it' })] },
+    });
+    await store.recordCriterionVerdict('t', 'a', false, 'first pass failed');
+    expect(await verdictRowCount('t')).toBe(1);
+    // A re-verify must NOT update in place — it appends another row.
+    await store.recordCriterionVerdict('t', 'a', true, null, 'reviewer');
+    expect(await verdictRowCount('t')).toBe(2);
+  });
+
+  test('the criterion-head read returns ONLY the latest verdict', async () => {
+    await seedTask('t', {
+      acceptance: { criteria: [ac('a', { verifies_by: 'agent', check: 'judge it' })] },
+    });
+    await store.recordCriterionVerdict('t', 'a', false, 'regressed');
+    await store.recordCriterionVerdict('t', 'a', true, null, 'reviewer');
+    // Two rows on the log, but the reconstructed criterion reflects the head only.
+    expect(await verdictRowCount('t')).toBe(2);
+    const c = (await store.getTask('t'))?.acceptance?.criteria[0];
+    expect(c?.verification?.verdict).toBe('verified');
+    expect(c?.verification?.verified_by).toBe('reviewer');
+    expect(c?.verification?.reason).toBeNull();
+  });
+
+  test('a re-responded gate is rejected, so its single verdict row stays the head', async () => {
+    await seedTask('t', { acceptance: { criteria: [gateAc('g')] } });
+    await store.respondGate('t', 'g', 'approved', { responder: 'alice' });
+    // The gate is decided once; re-deciding is rejected (supersede to re-decide).
+    await expect(store.respondGate('t', 'g', 'rejected', { responder: 'bob' })).rejects.toThrow(
+      /already resolved/,
+    );
+    expect(await verdictRowCount('t')).toBe(1);
+    expect((await store.getTask('t'))?.acceptance?.criteria[0]?.gate?.verdict).toBe('approved');
+  });
+
+  test('the story-close floor reads the HEAD verdict (a failed-then-verified criterion closes)', async () => {
+    const runDir = mkdtempSync(join(tmpdir(), 'scrum-head-'));
+    try {
+      appendEntry(runDir, {
+        id: 'synth',
+        ts: '2026-06-01T00:00:00Z',
+        type: 'synthesis',
+        agent: 'worker',
+        run_path: runDir,
+        body: 'wrapped',
+        outcome: 'shipped',
+      });
+      await seedTask('s', {
+        layer: 'story',
+        status: 'in_progress',
+        acceptance: { criteria: [ac('b', { verifies_by: 'bash', check: 'true' })] },
+      });
+      await store.linkRun({ taskId: 's', runPath: runDir });
+      // First a failed verdict (the floor would block on this head)...
+      await store.recordCriterionVerdict('s', 'b', false, 'flaked');
+      await expect(store.updateTaskStatus('s', 'done')).rejects.toThrow(/cannot close.*b \(bash\)/);
+      // ...then a passing re-verify appends a newer head, so the close succeeds.
+      await store.recordCriterionVerdict('s', 'b', true);
+      await expect(store.updateTaskStatus('s', 'done')).resolves.toBeDefined();
+      expect((await store.getTask('s'))?.status).toBe('done');
+    } finally {
+      rmSync(runDir, { recursive: true, force: true });
+    }
+  });
+
+  test('supersession is append+flip: the superseded criterion row survives with status=superseded', async () => {
+    await seedTask('t', { acceptance: { criteria: [ac('c1'), ac('c2')] } });
+    await store.supersedeCriterion('t', 'c1', 'replaced', 'c2');
+    // The row is NOT deleted — it survives in the criteria table, flipped.
+    const rows = (await store.getStore().all(
+      'SELECT criterion_id, status, reason, superseded_by FROM scrum_acceptance_criteria WHERE task_id = ? ORDER BY criterion_id',
+      ['t'],
+    )) as Array<{ criterion_id: string; status: string; reason: string | null; superseded_by: string | null }>;
+    expect(rows).toHaveLength(2);
+    const c1 = rows.find((r) => r.criterion_id === 'c1');
+    expect(c1?.status).toBe('superseded');
+    expect(c1?.reason).toBe('replaced');
+    expect(c1?.superseded_by).toBe('c2');
+    expect(rows.find((r) => r.criterion_id === 'c2')?.status).toBe('active');
+  });
+
+  test('supersession preserves the criterion verdict history (verdict rows are not cascaded)', async () => {
+    await seedTask('t', {
+      acceptance: { criteria: [ac('a', { verifies_by: 'agent', check: 'judge it' })] },
+    });
+    await store.recordCriterionVerdict('t', 'a', true, null, 'reviewer');
+    expect(await verdictRowCount('t')).toBe(1);
+    await store.supersedeCriterion('t', 'a', 'no longer needed');
+    // The flip is a targeted UPDATE — the verdict row is untouched.
+    expect(await verdictRowCount('t')).toBe(1);
+    const c = (await store.getTask('t'))?.acceptance?.criteria[0];
+    expect(c?.status).toBe('superseded');
+    expect(c?.verification?.verdict).toBe('verified');
+  });
+});
+
 // recordTaskVerdict — the whole-task verify form
 // ===========================================================================
 

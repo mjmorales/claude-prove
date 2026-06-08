@@ -360,6 +360,48 @@ describe('updateTaskStatus — story acceptance floor', () => {
     );
     expect(await eventCount('s', 'status_changed')).toBe(0);
   });
+
+  test('the floor reads the HEAD verdict — a rejected-then-approved gate satisfies the close', async () => {
+    // Seed an in_progress story (no linked run, so the synthesis floor is exempt)
+    // with a single gate criterion, then append TWO verdict rows: a rejected one
+    // followed by an approved one. The floor must read only the latest (approved),
+    // so the close succeeds — proving it consults the criterion-head view, not the
+    // first or an aggregate of every appended verdict.
+    await seedTask('s', {
+      status: 'in_progress',
+      layer: 'story',
+      acceptance: {
+        criteria: [
+          {
+            id: 'g1',
+            text: 'gate',
+            verifies_by: 'gate',
+            check: '',
+            status: 'active',
+            idempotent: true,
+            gate: { verdict: 'gate_pending' },
+          },
+        ],
+      },
+    });
+    const rowId = (
+      await store.all<{ id: string }>(
+        'SELECT id FROM scrum_acceptance_criteria WHERE task_id = ? AND criterion_id = ?',
+        ['s', 'g1'],
+      )
+    )[0]?.id;
+    if (!rowId) throw new Error('expected the seeded criterion row');
+    await store.run(
+      "INSERT INTO scrum_criterion_verdicts (id, criterion_id, channel, verdict, reason, by_whom, comment, at) VALUES (?, ?, 'gate', 'rejected', NULL, NULL, NULL, ?)",
+      [ulid(), rowId, '2026-06-01T00:00:01Z'],
+    );
+    await store.run(
+      "INSERT INTO scrum_criterion_verdicts (id, criterion_id, channel, verdict, reason, by_whom, comment, at) VALUES (?, ?, 'gate', 'approved', NULL, NULL, NULL, ?)",
+      [ulid(), rowId, '2026-06-01T00:00:02Z'],
+    );
+    await expect(updateTaskStatus(store, 's', 'done')).resolves.toBeDefined();
+    expect(await eventCount('s', 'status_changed')).toBe(1);
+  });
 });
 
 describe('updateTaskStatus — story synthesis floor', () => {

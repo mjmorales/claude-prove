@@ -72,7 +72,7 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V1_SQL).not.toContain('AUTOINCREMENT');
   });
 
-  test('migration creates all 19 scrum_* tables', async () => {
+  test('migration creates all 21 scrum_* tables', async () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
@@ -82,10 +82,12 @@ describe('scrum domain registration', () => {
         )
       ).map((r) => r.name);
       expect(tables).toEqual([
+        'scrum_acceptance_criteria',
         'scrum_annotations',
         'scrum_asks',
         'scrum_context_bundles',
         'scrum_contributors',
+        'scrum_criterion_verdicts',
         'scrum_decisions',
         'scrum_deps',
         'scrum_escalations',
@@ -107,7 +109,7 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('migration creates all 22 scrum indexes', async () => {
+  test('migration creates all 24 scrum indexes', async () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
@@ -117,11 +119,13 @@ describe('scrum domain registration', () => {
         )
       ).map((r) => r.name);
       expect(indexes).toEqual([
+        'idx_scrum_acceptance_criteria_task',
         'idx_scrum_annotations_target',
         'idx_scrum_asks_blocking_artifact',
         'idx_scrum_asks_to_team',
         'idx_scrum_contributors_email',
         'idx_scrum_contributors_github',
+        'idx_scrum_criterion_verdicts_criterion',
         'idx_scrum_decisions_status',
         'idx_scrum_decisions_topic',
         'idx_scrum_deps_to_task',
@@ -217,7 +221,7 @@ describe('scrum domain registration', () => {
         'deleted_at:TEXT:0',
         'parent_id:TEXT:0',
         'layer:TEXT:0',
-        'acceptance_json:TEXT:0',
+        'acceptance_policy_json:TEXT:0',
         'bounds_json:TEXT:0',
         'terminal_reason:TEXT:0',
         'terminal_detail:TEXT:0',
@@ -240,14 +244,14 @@ describe('scrum domain registration', () => {
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<Record<string, unknown>>(
-        'SELECT parent_id, layer, acceptance_json, bounds_json, terminal_reason, terminal_detail, last_modified_by, last_modified_at, worker_id, run_id, team_slug FROM scrum_tasks WHERE id = ?',
+        'SELECT parent_id, layer, acceptance_policy_json, bounds_json, terminal_reason, terminal_detail, last_modified_by, last_modified_at, worker_id, run_id, team_slug FROM scrum_tasks WHERE id = ?',
         ['t1'],
       );
       expect(row).toEqual([
         {
           parent_id: null,
           layer: null,
-          acceptance_json: null,
+          acceptance_policy_json: null,
           bounds_json: null,
           terminal_reason: null,
           terminal_detail: null,
