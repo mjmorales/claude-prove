@@ -21,7 +21,7 @@ interface Captured {
   exit: number;
 }
 
-function withCapture(fn: () => number): Captured {
+async function withCapture(fn: () => number | Promise<number>): Promise<Captured> {
   let stdout = '';
   let stderr = '';
   const origStdout = process.stdout.write.bind(process.stdout);
@@ -35,7 +35,7 @@ function withCapture(fn: () => number): Captured {
     return true;
   }) as typeof process.stderr.write;
   try {
-    const exit = fn();
+    const exit = await fn();
     return { stdout, stderr, exit };
   } finally {
     process.stdout.write = origStdout;
@@ -85,13 +85,13 @@ let originalCwd: string;
 let store: ScrumStore;
 
 /** Open the workspace store; seed via the returned handle, then close. */
-function openStore(): ScrumStore {
-  return openScrumStore({ override: join(workspace, '.prove', 'prove.db') });
+async function openStore(): Promise<ScrumStore> {
+  return await openScrumStore({ override: join(workspace, '.prove', 'prove.db') });
 }
 
 /** Create a task at a deterministic timestamp so created_at ordering is stable. */
-function seedTask(s: ScrumStore, id: string, milestoneId: string, seq: number, status = 'backlog') {
-  s.createTask({
+async function seedTask(s: ScrumStore, id: string, milestoneId: string, seq: number, status = 'backlog') {
+  await s.createTask({
     id,
     title: `Task ${id}`,
     milestoneId,
@@ -100,12 +100,12 @@ function seedTask(s: ScrumStore, id: string, milestoneId: string, seq: number, s
   });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   originalCwd = process.cwd();
   workspace = mkdtempSync(join(tmpdir(), 'scrum-compile-'));
   mkdirSync(join(workspace, '.git'), { recursive: true });
   process.chdir(workspace);
-  store = openStore();
+  store = await openStore();
 });
 
 afterEach(() => {
@@ -123,40 +123,40 @@ afterEach(() => {
 });
 
 describe('runCompilePlanCmd — guards', () => {
-  test('missing --milestone exits 1', () => {
-    const res = withCapture(() => runCompilePlanCmd({ workspaceRoot: workspace }));
+  test('missing --milestone exits 1', async () => {
+    const res = await withCapture(() => runCompilePlanCmd({ workspaceRoot: workspace }));
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('--milestone <id> is required');
   });
 
-  test('unknown milestone exits 1', () => {
-    const res = withCapture(() =>
+  test('unknown milestone exits 1', async () => {
+    const res = await withCapture(() =>
       runCompilePlanCmd({ milestone: 'nope', workspaceRoot: workspace }),
     );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain("unknown milestone 'nope'");
   });
 
-  test('milestone with only done/cancelled tasks exits 1', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
-    seedTask(store, 'a', 'm1', 1, 'done');
-    seedTask(store, 'b', 'm1', 2, 'cancelled');
-    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+  test('milestone with only done/cancelled tasks exits 1', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
+    await seedTask(store, 'a', 'm1', 1, 'done');
+    await seedTask(store, 'b', 'm1', 2, 'cancelled');
+    const res = await withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('no actionable tasks');
   });
 });
 
 describe('runCompilePlanCmd — compilation', () => {
-  test('linear chain a->b->c yields waves 1/2/3, mapped deps, simple mode', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
-    seedTask(store, 'a', 'm1', 1);
-    seedTask(store, 'b', 'm1', 2);
-    seedTask(store, 'c', 'm1', 3);
-    store.addDep('a', 'b', 'blocks'); // a blocks b => b depends on a
-    store.addDep('b', 'c', 'blocks'); // b blocks c => c depends on b
+  test('linear chain a->b->c yields waves 1/2/3, mapped deps, simple mode', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
+    await seedTask(store, 'a', 'm1', 1);
+    await seedTask(store, 'b', 'm1', 2);
+    await seedTask(store, 'c', 'm1', 3);
+    await store.addDep('a', 'b', 'blocks'); // a blocks b => b depends on a
+    await store.addDep('b', 'c', 'blocks'); // b blocks c => c depends on b
 
-    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    const res = await withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
     expect(res.exit).toBe(0);
     const { plan, scrum_map } = parsePlan(res.stdout);
 
@@ -181,18 +181,18 @@ describe('runCompilePlanCmd — compilation', () => {
     expect(scrum_map).toEqual({ '1.1': 'a', '2.1': 'b', '3.1': 'c' });
   });
 
-  test('diamond with 4 tasks yields full mode and correct wave levels', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
-    seedTask(store, 'a', 'm1', 1);
-    seedTask(store, 'b', 'm1', 2);
-    seedTask(store, 'c', 'm1', 3);
-    seedTask(store, 'd', 'm1', 4);
-    store.addDep('a', 'b', 'blocks');
-    store.addDep('a', 'c', 'blocks');
-    store.addDep('b', 'd', 'blocks');
-    store.addDep('c', 'd', 'blocks');
+  test('diamond with 4 tasks yields full mode and correct wave levels', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
+    await seedTask(store, 'a', 'm1', 1);
+    await seedTask(store, 'b', 'm1', 2);
+    await seedTask(store, 'c', 'm1', 3);
+    await seedTask(store, 'd', 'm1', 4);
+    await store.addDep('a', 'b', 'blocks');
+    await store.addDep('a', 'c', 'blocks');
+    await store.addDep('b', 'd', 'blocks');
+    await store.addDep('c', 'd', 'blocks');
 
-    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    const res = await withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
     expect(res.exit).toBe(0);
     const { plan, scrum_map } = parsePlan(res.stdout);
 
@@ -206,13 +206,13 @@ describe('runCompilePlanCmd — compilation', () => {
     expect(byId[byScrum.d].deps.sort()).toEqual([byScrum.b, byScrum.c].sort());
   });
 
-  test('dependency on a done (out-of-scope) task is dropped as satisfied', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
-    seedTask(store, 'a', 'm1', 1, 'done');
-    seedTask(store, 'b', 'm1', 2);
-    store.addDep('a', 'b', 'blocks'); // b depends on a, but a is done
+  test('dependency on a done (out-of-scope) task is dropped as satisfied', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
+    await seedTask(store, 'a', 'm1', 1, 'done');
+    await seedTask(store, 'b', 'm1', 2);
+    await store.addDep('a', 'b', 'blocks'); // b depends on a, but a is done
 
-    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    const res = await withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
     expect(res.exit).toBe(0);
     const { plan, scrum_map } = parsePlan(res.stdout);
     expect(plan.tasks).toHaveLength(1);
@@ -221,27 +221,27 @@ describe('runCompilePlanCmd — compilation', () => {
     expect(scrum_map).toEqual({ '1.1': 'b' });
   });
 
-  test('dependency cycle exits 1', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
-    seedTask(store, 'a', 'm1', 1);
-    seedTask(store, 'b', 'm1', 2);
-    store.addDep('a', 'b', 'blocks');
-    store.addDep('b', 'a', 'blocks'); // cycle
+  test('dependency cycle exits 1', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
+    await seedTask(store, 'a', 'm1', 1);
+    await seedTask(store, 'b', 'm1', 2);
+    await store.addDep('a', 'b', 'blocks');
+    await store.addDep('b', 'a', 'blocks'); // cycle
 
-    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    const res = await withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('dependency cycle');
   });
 
-  test('--out writes plan.json and scrum-map.json sibling', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
-    seedTask(store, 'a', 'm1', 1);
-    seedTask(store, 'b', 'm1', 2);
-    store.addDep('a', 'b', 'blocks');
+  test('--out writes plan.json and scrum-map.json sibling', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
+    await seedTask(store, 'a', 'm1', 1);
+    await seedTask(store, 'b', 'm1', 2);
+    await store.addDep('a', 'b', 'blocks');
 
     const outDir = join(workspace, '.prove', 'runs', 'feature', 'm1');
     const planPath = join(outDir, 'plan.json');
-    const res = withCapture(() =>
+    const res = await withCapture(() =>
       runCompilePlanCmd({ milestone: 'm1', out: planPath, workspaceRoot: workspace }),
     );
     expect(res.exit).toBe(0);
@@ -261,9 +261,9 @@ describe('runCompilePlanCmd — compilation', () => {
     expect(map_path).toBe(mapPath);
   });
 
-  test('forwards full structured acceptance criteria (active only) into plan + step', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
-    store.createTask({
+  test('forwards full structured acceptance criteria (active only) into plan + step', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
+    await store.createTask({
       id: 'a',
       title: 'Task a',
       milestoneId: 'm1',
@@ -296,7 +296,7 @@ describe('runCompilePlanCmd — compilation', () => {
       },
     });
 
-    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    const res = await withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
     expect(res.exit).toBe(0);
     const { plan } = parsePlan(res.stdout);
     const task = plan.tasks[0];
@@ -316,23 +316,23 @@ describe('runCompilePlanCmd — compilation', () => {
     expect(task.steps[0]?.acceptance_criteria).toEqual([forwarded]);
   });
 
-  test('task with no acceptance forwards an empty criteria list', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
-    seedTask(store, 'a', 'm1', 1);
-    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+  test('task with no acceptance forwards an empty criteria list', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
+    await seedTask(store, 'a', 'm1', 1);
+    const res = await withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
     const { plan } = parsePlan(res.stdout);
     expect(plan.tasks[0]?.acceptance_criteria).toEqual([]);
   });
 
-  test('forwards declared bounds verbatim into the plan task', () => {
+  test('forwards declared bounds verbatim into the plan task', async () => {
     const bounds = {
       read: ['src/auth/**'],
       write: ['src/auth/**'],
       tools: { allow: ['Bash(go test *)'], deny: ['Bash(git push *)'] },
       budgets: { tokens: 200000, tool_calls: 100, wall_clock_s: 1800 },
     };
-    store.createMilestone({ id: 'm1', title: 'M1' });
-    store.createTask({
+    await store.createMilestone({ id: 'm1', title: 'M1' });
+    await store.createTask({
       id: 'a',
       title: 'Task a',
       milestoneId: 'm1',
@@ -340,16 +340,16 @@ describe('runCompilePlanCmd — compilation', () => {
       bounds,
     });
 
-    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    const res = await withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
     expect(res.exit).toBe(0);
     const { plan } = parsePlan(res.stdout);
     expect(plan.tasks[0]?.bounds).toEqual(bounds);
   });
 
-  test('task with no bounds emits no bounds key (absent = unbounded)', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
-    seedTask(store, 'a', 'm1', 1);
-    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+  test('task with no bounds emits no bounds key (absent = unbounded)', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
+    await seedTask(store, 'a', 'm1', 1);
+    const res = await withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
     expect(res.exit).toBe(0);
     const { plan } = parsePlan(res.stdout);
     const task = plan.tasks[0];
@@ -357,10 +357,10 @@ describe('runCompilePlanCmd — compilation', () => {
     expect('bounds' in task).toBe(false);
   });
 
-  test('forwards team_slug onto the plan task and into the parallel team map', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
+  test('forwards team_slug onto the plan task and into the parallel team map', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
     store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
-    store.createTask({
+    await store.createTask({
       id: 'a',
       title: 'Task a',
       milestoneId: 'm1',
@@ -368,7 +368,7 @@ describe('runCompilePlanCmd — compilation', () => {
       createdAt: '2026-01-01T00:00:01.000Z',
     });
 
-    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    const res = await withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
     expect(res.exit).toBe(0);
     const { plan, team_map } = parsePlan(res.stdout);
     const task = plan.tasks[0];
@@ -378,10 +378,10 @@ describe('runCompilePlanCmd — compilation', () => {
     expect(team_map).toEqual({ '1.1': 'payments' });
   });
 
-  test('team-less task emits no team_slug key and no team-map entry', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
-    seedTask(store, 'a', 'm1', 1);
-    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+  test('team-less task emits no team_slug key and no team-map entry', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
+    await seedTask(store, 'a', 'm1', 1);
+    const res = await withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
     expect(res.exit).toBe(0);
     const { plan, team_map } = parsePlan(res.stdout);
     const task = plan.tasks[0];
@@ -390,11 +390,11 @@ describe('runCompilePlanCmd — compilation', () => {
     expect(team_map).toEqual({});
   });
 
-  test('layered milestone (epics + stories) compiles to leaf stories only', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
+  test('layered milestone (epics + stories) compiles to leaf stories only', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
     // Two epics, each with two story children. createTask validates parent_id
     // exists, so parents are seeded first (and at earlier timestamps).
-    store.createTask({
+    await store.createTask({
       id: 'e1',
       title: 'Epic 1',
       milestoneId: 'm1',
@@ -402,7 +402,7 @@ describe('runCompilePlanCmd — compilation', () => {
       status: 'accepted',
       createdAt: '2026-01-01T00:00:01.000Z',
     });
-    store.createTask({
+    await store.createTask({
       id: 'e2',
       title: 'Epic 2',
       milestoneId: 'm1',
@@ -416,7 +416,7 @@ describe('runCompilePlanCmd — compilation', () => {
       ['e2s1', 'e2'],
       ['e2s2', 'e2'],
     ].entries()) {
-      store.createTask({
+      await store.createTask({
         id,
         title: `Story ${id}`,
         milestoneId: 'm1',
@@ -426,7 +426,7 @@ describe('runCompilePlanCmd — compilation', () => {
       });
     }
 
-    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    const res = await withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
     expect(res.exit).toBe(0);
     const { plan, scrum_map } = parsePlan(res.stdout);
 
@@ -444,15 +444,15 @@ describe('runCompilePlanCmd — compilation', () => {
     expect(plan.tasks.every((t) => t.deps.length === 0)).toBe(true);
   });
 
-  test('flat milestone output is unchanged by the container filter', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
-    seedTask(store, 'a', 'm1', 1);
-    seedTask(store, 'b', 'm1', 2);
-    seedTask(store, 'c', 'm1', 3);
-    store.addDep('a', 'b', 'blocks');
-    store.addDep('b', 'c', 'blocks');
+  test('flat milestone output is unchanged by the container filter', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
+    await seedTask(store, 'a', 'm1', 1);
+    await seedTask(store, 'b', 'm1', 2);
+    await seedTask(store, 'c', 'm1', 3);
+    await store.addDep('a', 'b', 'blocks');
+    await store.addDep('b', 'c', 'blocks');
 
-    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    const res = await withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
     expect(res.exit).toBe(0);
     const { plan, scrum_map } = parsePlan(res.stdout);
     // Identical to the pre-filter linear-chain expectation: no parent_id present,
@@ -468,9 +468,9 @@ describe('runCompilePlanCmd — compilation', () => {
     expect(scrum_map).toEqual({ '1.1': 'a', '2.1': 'b', '3.1': 'c' });
   });
 
-  test('epic whose children are all done/cancelled stays in as a leaf-equivalent', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
-    store.createTask({
+  test('epic whose children are all done/cancelled stays in as a leaf-equivalent', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
+    await store.createTask({
       id: 'e1',
       title: 'Epic 1',
       milestoneId: 'm1',
@@ -479,7 +479,7 @@ describe('runCompilePlanCmd — compilation', () => {
     });
     // Both children are terminal => out of the actionable set => e1 has no
     // in-plan child => e1 is NOT a container, it is residual parent-level work.
-    store.createTask({
+    await store.createTask({
       id: 'e1s1',
       title: 'Story 1',
       milestoneId: 'm1',
@@ -488,7 +488,7 @@ describe('runCompilePlanCmd — compilation', () => {
       status: 'done',
       createdAt: '2026-01-01T00:00:02.000Z',
     });
-    store.createTask({
+    await store.createTask({
       id: 'e1s2',
       title: 'Story 2',
       milestoneId: 'm1',
@@ -498,39 +498,39 @@ describe('runCompilePlanCmd — compilation', () => {
       createdAt: '2026-01-01T00:00:03.000Z',
     });
 
-    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    const res = await withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
     expect(res.exit).toBe(0);
     const { plan, scrum_map } = parsePlan(res.stdout);
     expect(plan.tasks).toHaveLength(1);
     expect(scrum_map).toEqual({ '1.1': 'e1' });
   });
 
-  test('childless epic stays in (no children at all => not a container)', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
-    store.createTask({
+  test('childless epic stays in (no children at all => not a container)', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
+    await store.createTask({
       id: 'e1',
       title: 'Epic 1',
       milestoneId: 'm1',
       layer: 'epic',
       createdAt: '2026-01-01T00:00:01.000Z',
     });
-    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    const res = await withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
     expect(res.exit).toBe(0);
     const { plan, scrum_map } = parsePlan(res.stdout);
     expect(plan.tasks).toHaveLength(1);
     expect(scrum_map).toEqual({ '1.1': 'e1' });
   });
 
-  test('a leaf blocked_by an excluded epic re-targets onto the epic in-plan children', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
-    store.createTask({
+  test('a leaf blocked_by an excluded epic re-targets onto the epic in-plan children', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
+    await store.createTask({
       id: 'e1',
       title: 'Epic 1',
       milestoneId: 'm1',
       layer: 'epic',
       createdAt: '2026-01-01T00:00:01.000Z',
     });
-    store.createTask({
+    await store.createTask({
       id: 'e1s1',
       title: 'Story 1',
       milestoneId: 'm1',
@@ -538,7 +538,7 @@ describe('runCompilePlanCmd — compilation', () => {
       layer: 'story',
       createdAt: '2026-01-01T00:00:02.000Z',
     });
-    store.createTask({
+    await store.createTask({
       id: 'e1s2',
       title: 'Story 2',
       milestoneId: 'm1',
@@ -549,10 +549,10 @@ describe('runCompilePlanCmd — compilation', () => {
     // A flat downstream task blocked_by the EPIC container. The edge must
     // re-target onto e1's in-plan children (e1s1, e1s2), landing the downstream
     // in wave 2 behind both.
-    seedTask(store, 'down', 'm1', 9);
-    store.addDep('e1', 'down', 'blocks'); // e1 blocks down => down blocked_by e1
+    await seedTask(store, 'down', 'm1', 9);
+    await store.addDep('e1', 'down', 'blocks'); // e1 blocks down => down blocked_by e1
 
-    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    const res = await withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
     expect(res.exit).toBe(0);
     const { plan, scrum_map } = parsePlan(res.stdout);
     const byScrum = Object.fromEntries(Object.entries(scrum_map).map(([p, s]) => [s, p]));
@@ -566,16 +566,16 @@ describe('runCompilePlanCmd — compilation', () => {
     expect(byId[byScrum.down].deps.sort()).toEqual([byScrum.e1s1, byScrum.e1s2].sort());
   });
 
-  test('a child blocked_by its own excluded parent drops the self-edge', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
-    store.createTask({
+  test('a child blocked_by its own excluded parent drops the self-edge', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
+    await store.createTask({
       id: 'e1',
       title: 'Epic 1',
       milestoneId: 'm1',
       layer: 'epic',
       createdAt: '2026-01-01T00:00:01.000Z',
     });
-    store.createTask({
+    await store.createTask({
       id: 'e1s1',
       title: 'Story 1',
       milestoneId: 'm1',
@@ -585,9 +585,9 @@ describe('runCompilePlanCmd — compilation', () => {
     });
     // e1s1 blocked_by its own parent e1. Re-targeting e1 -> {e1s1} would create a
     // self-edge; it must be dropped so e1s1 stays a wave-1 source.
-    store.addDep('e1', 'e1s1', 'blocks');
+    await store.addDep('e1', 'e1s1', 'blocks');
 
-    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    const res = await withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
     expect(res.exit).toBe(0);
     const { plan, scrum_map } = parsePlan(res.stdout);
     expect(Object.values(scrum_map)).toEqual(['e1s1']);
@@ -595,16 +595,16 @@ describe('runCompilePlanCmd — compilation', () => {
     expect(plan.tasks[0]?.deps).toEqual([]);
   });
 
-  test('nested epic->story->task tree compiles to task leaves; edge at epic re-targets to tasks', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
-    store.createTask({
+  test('nested epic->story->task tree compiles to task leaves; edge at epic re-targets to tasks', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
+    await store.createTask({
       id: 'e1',
       title: 'Epic',
       milestoneId: 'm1',
       layer: 'epic',
       createdAt: '2026-01-01T00:00:01.000Z',
     });
-    store.createTask({
+    await store.createTask({
       id: 's1',
       title: 'Story',
       milestoneId: 'm1',
@@ -612,7 +612,7 @@ describe('runCompilePlanCmd — compilation', () => {
       layer: 'story',
       createdAt: '2026-01-01T00:00:02.000Z',
     });
-    store.createTask({
+    await store.createTask({
       id: 't1',
       title: 'Task 1',
       milestoneId: 'm1',
@@ -620,7 +620,7 @@ describe('runCompilePlanCmd — compilation', () => {
       layer: 'task',
       createdAt: '2026-01-01T00:00:03.000Z',
     });
-    store.createTask({
+    await store.createTask({
       id: 't2',
       title: 'Task 2',
       milestoneId: 'm1',
@@ -628,10 +628,10 @@ describe('runCompilePlanCmd — compilation', () => {
       layer: 'task',
       createdAt: '2026-01-01T00:00:04.000Z',
     });
-    seedTask(store, 'down', 'm1', 9);
-    store.addDep('e1', 'down', 'blocks'); // down blocked_by the epic two levels up
+    await seedTask(store, 'down', 'm1', 9);
+    await store.addDep('e1', 'down', 'blocks'); // down blocked_by the epic two levels up
 
-    const res = withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
+    const res = await withCapture(() => runCompilePlanCmd({ milestone: 'm1', workspaceRoot: workspace }));
     expect(res.exit).toBe(0);
     const { plan, scrum_map } = parsePlan(res.stdout);
     const emitted = Object.values(scrum_map).sort();
@@ -644,21 +644,21 @@ describe('runCompilePlanCmd — compilation', () => {
     expect(byId[byScrum.down].wave).toBe(2);
   });
 
-  test('--out writes a team-map.json sibling alongside scrum-map.json', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
+  test('--out writes a team-map.json sibling alongside scrum-map.json', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
     store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
-    store.createTask({
+    await store.createTask({
       id: 'a',
       title: 'Task a',
       milestoneId: 'm1',
       teamSlug: 'payments',
       createdAt: '2026-01-01T00:00:01.000Z',
     });
-    seedTask(store, 'b', 'm1', 2);
+    await seedTask(store, 'b', 'm1', 2);
 
     const outDir = join(workspace, '.prove', 'runs', 'feature', 'm1');
     const planPath = join(outDir, 'plan.json');
-    const res = withCapture(() =>
+    const res = await withCapture(() =>
       runCompilePlanCmd({ milestone: 'm1', out: planPath, workspaceRoot: workspace }),
     );
     expect(res.exit).toBe(0);

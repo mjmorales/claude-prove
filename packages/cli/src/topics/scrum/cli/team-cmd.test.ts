@@ -37,7 +37,7 @@ interface Captured {
   exit: number;
 }
 
-function withCapture(fn: () => number): Captured {
+async function withCapture(fn: () => number | Promise<number>): Promise<Captured> {
   let stdout = '';
   let stderr = '';
   const origStdout = process.stdout.write.bind(process.stdout);
@@ -51,7 +51,7 @@ function withCapture(fn: () => number): Captured {
     return true;
   }) as typeof process.stderr.write;
   try {
-    const exit = fn();
+    const exit = await fn();
     return { stdout, stderr, exit };
   } finally {
     process.stdout.write = origStdout;
@@ -84,8 +84,8 @@ function agentPath(slug: string, role: TeamRole): string {
 }
 
 /** Seat a team via the CLI, asserting exit 0. */
-function createTeam(slug: string): void {
-  const res = withCapture(() =>
+async function createTeam(slug: string): Promise<void> {
+  const res = await withCapture(() =>
     runTeamCmd('create', [undefined], {
       slug,
       teamType: 'stream_aligned',
@@ -96,8 +96,8 @@ function createTeam(slug: string): void {
 }
 
 describe('runTeamCmd create — agent files', () => {
-  test('writes all three role files with both region markers', () => {
-    createTeam('alpha');
+  test('writes all three role files with both region markers', async () => {
+    await createTeam('alpha');
     for (const role of TEAM_ROLES) {
       const path = agentPath('alpha', role);
       expect(existsSync(path)).toBe(true);
@@ -108,14 +108,14 @@ describe('runTeamCmd create — agent files', () => {
     }
   });
 
-  test('an agent-file write failure does not change the exit code', () => {
+  test('an agent-file write failure does not change the exit code', async () => {
     // Make `.claude/agents` a non-writable directory so the per-role writes
     // throw, proving the failure is reported but non-fatal.
     const agentsDir = join(workspace, '.claude', 'agents');
     mkdirSync(agentsDir, { recursive: true });
     chmodSync(agentsDir, 0o500);
     try {
-      const res = withCapture(() =>
+      const res = await withCapture(() =>
         runTeamCmd('create', [undefined], {
           slug: 'beta',
           teamType: 'stream_aligned',
@@ -131,13 +131,13 @@ describe('runTeamCmd create — agent files', () => {
 });
 
 describe('runTeamCmd rotate — agent files', () => {
-  test('regenerates the role files preserving an authored body', () => {
-    createTeam('gamma');
+  test('regenerates the role files preserving an authored body', async () => {
+    await createTeam('gamma');
     const leadPath = agentPath('gamma', 'tech_lead');
     const authored = `${readFileSync(leadPath, 'utf8')}\n## AUTHORED_SENTINEL\nkeep me\n`;
     writeFileSync(leadPath, authored, 'utf8');
 
-    const res = withCapture(() =>
+    const res = await withCapture(() =>
       runTeamCmd('rotate', ['gamma'], {
         role: 'tech_lead',
         contributor: 'CT-00000000-0000-0000-0000-000000000001',
@@ -155,13 +155,13 @@ describe('runTeamCmd rotate — agent files', () => {
 });
 
 describe('runTeamCmd terminate — agent files', () => {
-  test('deletes all three role files', () => {
-    createTeam('delta');
+  test('deletes all three role files', async () => {
+    await createTeam('delta');
     for (const role of TEAM_ROLES) {
       expect(existsSync(agentPath('delta', role))).toBe(true);
     }
 
-    const res = withCapture(() => runTeamCmd('terminate', ['delta'], { workspaceRoot: workspace }));
+    const res = await withCapture(() => runTeamCmd('terminate', ['delta'], { workspaceRoot: workspace }));
     expect(res.exit).toBe(0);
 
     for (const role of TEAM_ROLES) {
@@ -169,13 +169,13 @@ describe('runTeamCmd terminate — agent files', () => {
     }
   });
 
-  test('tolerates already-absent agent files (no throw, exit 0)', () => {
-    createTeam('epsilon');
+  test('tolerates already-absent agent files (no throw, exit 0)', async () => {
+    await createTeam('epsilon');
     // Remove the agent files out-of-band, then terminate — the rm tolerates ENOENT.
     for (const role of TEAM_ROLES) {
       rmSync(agentPath('epsilon', role), { force: true });
     }
-    const res = withCapture(() =>
+    const res = await withCapture(() =>
       runTeamCmd('terminate', ['epsilon'], { workspaceRoot: workspace }),
     );
     expect(res.exit).toBe(0);
@@ -183,13 +183,13 @@ describe('runTeamCmd terminate — agent files', () => {
 });
 
 describe('runTeamCmd sync-agents', () => {
-  test('regenerates every active team and reports the synced slugs', () => {
-    createTeam('one');
-    createTeam('two');
+  test('regenerates every active team and reports the synced slugs', async () => {
+    await createTeam('one');
+    await createTeam('two');
     // Drop one file so sync-agents has something to rewrite.
     rmSync(agentPath('one', 'engineer'), { force: true });
 
-    const res = withCapture(() =>
+    const res = await withCapture(() =>
       runTeamCmd('sync-agents', [undefined], { workspaceRoot: workspace }),
     );
     expect(res.exit).toBe(0);
@@ -197,42 +197,42 @@ describe('runTeamCmd sync-agents', () => {
     expect(existsSync(agentPath('one', 'engineer'))).toBe(true);
   });
 
-  test('a named slug syncs only that team', () => {
-    createTeam('solo');
-    const res = withCapture(() =>
+  test('a named slug syncs only that team', async () => {
+    await createTeam('solo');
+    const res = await withCapture(() =>
       runTeamCmd('sync-agents', ['solo'], { workspaceRoot: workspace }),
     );
     expect(res.exit).toBe(0);
     expect(JSON.parse(res.stdout)).toEqual(['solo']);
   });
 
-  test('an unknown slug exits 1', () => {
-    const res = withCapture(() =>
+  test('an unknown slug exits 1', async () => {
+    const res = await withCapture(() =>
       runTeamCmd('sync-agents', ['ghost'], { workspaceRoot: workspace }),
     );
     expect(res.exit).toBe(1);
     expect(res.stdout.trim()).toBe('null');
   });
 
-  test('a terminated team is skipped by the all-teams sync', () => {
-    createTeam('live');
-    createTeam('dead');
-    withCapture(() => runTeamCmd('terminate', ['dead'], { workspaceRoot: workspace }));
+  test('a terminated team is skipped by the all-teams sync', async () => {
+    await createTeam('live');
+    await createTeam('dead');
+    await withCapture(() => runTeamCmd('terminate', ['dead'], { workspaceRoot: workspace }));
 
-    const res = withCapture(() =>
+    const res = await withCapture(() =>
       runTeamCmd('sync-agents', [undefined], { workspaceRoot: workspace }),
     );
     expect(res.exit).toBe(0);
     expect(JSON.parse(res.stdout)).toEqual(['live']);
   });
 
-  test('preserves an authored body across a backfill', () => {
-    createTeam('keep');
+  test('preserves an authored body across a backfill', async () => {
+    await createTeam('keep');
     const leadPath = agentPath('keep', 'tech_lead');
     const authored = `${readFileSync(leadPath, 'utf8')}\n## AUTHORED_SENTINEL\nkeep me\n`;
     writeFileSync(leadPath, authored, 'utf8');
 
-    const res = withCapture(() =>
+    const res = await withCapture(() =>
       runTeamCmd('sync-agents', ['keep'], { workspaceRoot: workspace }),
     );
     expect(res.exit).toBe(0);
@@ -244,12 +244,12 @@ describe('runTeamCmd sync-agents', () => {
     expect(after).toContain(END_MARKER);
   });
 
-  test('is byte-stable on a second run', () => {
-    createTeam('stable');
-    withCapture(() => runTeamCmd('sync-agents', [undefined], { workspaceRoot: workspace }));
+  test('is byte-stable on a second run', async () => {
+    await createTeam('stable');
+    await withCapture(() => runTeamCmd('sync-agents', [undefined], { workspaceRoot: workspace }));
     const firstPass = TEAM_ROLES.map((role) => readFileSync(agentPath('stable', role), 'utf8'));
 
-    const res = withCapture(() =>
+    const res = await withCapture(() =>
       runTeamCmd('sync-agents', [undefined], { workspaceRoot: workspace }),
     );
     expect(res.exit).toBe(0);
