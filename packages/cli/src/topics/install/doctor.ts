@@ -106,13 +106,13 @@ const INTERPOLATION_MARKER = `\${${PLUGIN_DIR_ENV_VAR}:-`;
  * Handler for the `doctor` action under the `install <action>` command.
  * Exported so the parent `install/index.ts` can dispatch on action.
  */
-export function handleDoctorAction(): number {
-  const results = runDoctor({ cwd: process.cwd() });
+export async function handleDoctorAction(): Promise<number> {
+  const results = await runDoctor({ cwd: process.cwd() });
   return printResults(results);
 }
 
 /** Run all checks and return their structured results in execution order. */
-export function runDoctor(opts: DoctorOptions = {}): CheckResult[] {
+export async function runDoctor(opts: DoctorOptions = {}): Promise<CheckResult[]> {
   const cwd = opts.cwd ?? process.cwd();
   const results: CheckResult[] = [];
 
@@ -145,7 +145,7 @@ export function runDoctor(opts: DoctorOptions = {}): CheckResult[] {
 
   const markerCheck = checkTeamAgentMarkers(cwd);
   if (markerCheck) results.push(markerCheck);
-  const driftCheck = checkTeamAgentRegistryDrift(cwd);
+  const driftCheck = await checkTeamAgentRegistryDrift(cwd);
   if (driftCheck) results.push(driftCheck);
 
   results.push(checkClaudeCli());
@@ -352,7 +352,7 @@ function countOccurrences(haystack: string, needle: string): number {
  * it. The store is opened against `cwd` (the real project root doctor runs in),
  * never a worktree sharing the live db.
  */
-function checkTeamAgentRegistryDrift(cwd: string): CheckResult | undefined {
+async function checkTeamAgentRegistryDrift(cwd: string): Promise<CheckResult | undefined> {
   const files = discoverTeamAgentFiles(cwd);
   const storePath = join(cwd, PROVE_DB_REL);
   // No store means no registry to reconcile against. When agent files exist
@@ -372,8 +372,14 @@ function checkTeamAgentRegistryDrift(cwd: string): CheckResult | undefined {
 
   let teams: Team[];
   try {
-    const store = openScrumStore({ override: storePath });
-    teams = store.listTeams();
+    const store = await openScrumStore({ override: storePath });
+    try {
+      // Await the read before the sync close so no pending prepared statement
+      // runs after the connection finalizes.
+      teams = await store.listTeams();
+    } finally {
+      store.close();
+    }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {

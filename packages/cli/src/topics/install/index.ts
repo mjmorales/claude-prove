@@ -159,7 +159,7 @@ async function dispatch(action: InstallAction, flags: InstallFlags): Promise<num
           json: flags.json ?? false,
         });
       case 'doctor':
-        return handleDoctorAction();
+        return await handleDoctorAction();
       case 'upgrade':
         return await runUpgrade({ prefix: flags.prefix });
       case 'latest':

@@ -157,7 +157,7 @@ export function register(cli: CAC): void {
     // migrate
     .option('--dry-run', 'Plan migration without writing files (migrate)')
     .action(
-      (
+      async (
         action: string,
         arg1: string | undefined,
         arg2: string | undefined,
@@ -171,7 +171,7 @@ export function register(cli: CAC): void {
           );
           process.exit(1);
         }
-        const code = dispatch(action, arg1, arg2, arg3, arg4, flags);
+        const code = await dispatch(action, arg1, arg2, arg3, arg4, flags);
         process.exit(code);
       },
     );
@@ -206,7 +206,7 @@ function dispatch(
   arg3: string | undefined,
   arg4: string | undefined,
   flags: RunStateFlags,
-): number {
+): number | Promise<number> {
   const pos: Positionals = { arg1, arg2, arg3, arg4 };
   switch (action) {
     case 'validate':
@@ -485,7 +485,7 @@ function dispatchReport(
 
 // run-state hook <event>  — reads Claude Code hook payload from stdin,
 // dispatches to the TS hook module, writes stdout/stderr, returns exit.
-function dispatchHook({ arg1: event }: Positionals): number {
+function dispatchHook({ arg1: event }: Positionals): number | Promise<number> {
   if (!event) {
     return usageError(
       'run-state',
