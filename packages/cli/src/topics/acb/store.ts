@@ -27,13 +27,13 @@ import {
   type Store,
   type StoreOptions,
   VERDICT_VALUES,
+  appendGroupVerdict,
   assertStoreSchemaCompatible,
   listDomains,
   openStore,
   registerSchema,
   runMigrations,
   ulid,
-  upsertGroupVerdict,
 } from '@claude-prove/store';
 
 // Re-export the canonical verdict vocabulary so existing
@@ -52,13 +52,34 @@ export {
 
 /**
  * ACB v1 schema — one fresh, sync-safe DDL. Every table the acb domain owns,
- * with NO AUTOINCREMENT: the three branch-keyed tables mint a ULID TEXT id at
- * insert (the manifest log is append-only; documents/review_state are keyed by
- * a UNIQUE branch and upserted), and `acb_group_verdicts` keeps its natural
- * composite PK `(slug, group_id)`. Distinct ULID/natural keys both survive
- * whole-transaction sync replay where a shared rowid sequence would lose a row.
+ * with NO AUTOINCREMENT.
  *
- * Verdict values are written canonical at the source (the `upsertGroupVerdict`
+ * Every contended document is an APPEND-ONLY revision log read through a head
+ * VIEW, never an in-place row that a second writer overwrites. A save APPENDS a
+ * new ULID-keyed revision; the head view returns the latest revision per key as
+ * `MAX(id)` — a ULID id is monotonic, so the lexically-greatest id is the
+ * most-recently appended, with no separate sequence or timestamp tiebreak. Two
+ * writers each append a distinct ULID-keyed row and BOTH survive whole-
+ * transaction sync replay (REBASE_LOCAL picks a single winning transaction);
+ * an in-place UPDATE or a UNIQUE-keyed upsert would let one writer clobber the
+ * other, and a shared rowid sequence would lose a row outright.
+ *
+ *   acb_manifests        — append-only manifest log; ULID PK. One row per save.
+ *   acb_acb_documents    — append-only ACB-document revisions; ULID PK, branch
+ *                          key (NOT unique). The latest revision per branch is
+ *                          the head, surfaced by acb_acb_documents_head.
+ *   acb_review_state     — append-only review-state revisions; ULID PK, branch
+ *                          key (NOT unique). Head: acb_review_state_head.
+ *   acb_group_verdicts   — append-only verdict revisions; ULID PK, natural
+ *                          `(slug, group_id)` key (NOT unique). Head:
+ *                          acb_group_verdicts_head (latest per key).
+ *
+ * Each head view re-derives the ORIGINAL `created_at` as the MIN created_at
+ * across a key's revisions and the LATEST write time as the head revision's
+ * `created_at` (exposed as `updated_at`), so a reader sees the same
+ * `{created_at, updated_at}` pair the old in-place row carried.
+ *
+ * Verdict values are written canonical at the source (the `appendGroupVerdict`
  * write-service), and `coerceLegacyVerdict` normalizes any legacy string read
  * from a hand-edited row — so no in-chain UPDATE migration is needed.
  */
@@ -75,35 +96,73 @@ CREATE TABLE acb_manifests (
 
 CREATE TABLE acb_acb_documents (
     id TEXT PRIMARY KEY,
-    branch TEXT NOT NULL UNIQUE,
+    branch TEXT NOT NULL,
     data TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    created_at TEXT NOT NULL
 );
 
 CREATE TABLE acb_review_state (
     id TEXT PRIMARY KEY,
-    branch TEXT NOT NULL UNIQUE,
+    branch TEXT NOT NULL,
     acb_hash TEXT NOT NULL,
     data TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    created_at TEXT NOT NULL
 );
 
 CREATE TABLE acb_group_verdicts (
+    id          TEXT PRIMARY KEY,
     slug        TEXT NOT NULL,
     group_id    TEXT NOT NULL,
     verdict     TEXT NOT NULL,
     note        TEXT,
     fix_prompt  TEXT,
-    updated_at  TEXT NOT NULL,
-    PRIMARY KEY (slug, group_id)
+    created_at  TEXT NOT NULL
+);
+
+CREATE VIEW acb_acb_documents_head AS
+SELECT
+    h.branch,
+    h.data,
+    (SELECT MIN(d.created_at) FROM acb_acb_documents d WHERE d.branch = h.branch) AS created_at,
+    h.created_at AS updated_at
+FROM acb_acb_documents h
+WHERE h.id = (
+    SELECT MAX(d2.id) FROM acb_acb_documents d2 WHERE d2.branch = h.branch
+);
+
+CREATE VIEW acb_review_state_head AS
+SELECT
+    h.branch,
+    h.acb_hash,
+    h.data,
+    (SELECT MIN(r.created_at) FROM acb_review_state r WHERE r.branch = h.branch) AS created_at,
+    h.created_at AS updated_at
+FROM acb_review_state h
+WHERE h.id = (
+    SELECT MAX(r2.id) FROM acb_review_state r2 WHERE r2.branch = h.branch
+);
+
+CREATE VIEW acb_group_verdicts_head AS
+SELECT
+    h.slug,
+    h.group_id,
+    h.verdict,
+    h.note,
+    h.fix_prompt,
+    h.created_at AS updated_at
+FROM acb_group_verdicts h
+WHERE h.id = (
+    SELECT MAX(v2.id) FROM acb_group_verdicts v2
+    WHERE v2.slug = h.slug AND v2.group_id = h.group_id
 );
 
 CREATE INDEX idx_acb_manifests_branch ON acb_manifests(branch);
 CREATE INDEX idx_acb_manifests_branch_sha ON acb_manifests(branch, commit_sha);
 CREATE INDEX idx_acb_manifests_run_slug ON acb_manifests(run_slug, branch);
+CREATE INDEX idx_acb_acb_documents_branch ON acb_acb_documents(branch);
+CREATE INDEX idx_acb_review_state_branch ON acb_review_state(branch);
 CREATE INDEX idx_acb_group_verdicts_slug ON acb_group_verdicts(slug);
+CREATE INDEX idx_acb_group_verdicts_key ON acb_group_verdicts(slug, group_id);
 `;
 
 /**
@@ -336,21 +395,24 @@ export class AcbStore {
 
   // -- ACB Documents ------------------------------------------------------
 
-  /** Upsert an ACB document keyed on `branch` (UNIQUE). Bumps `updated_at`. */
+  /**
+   * Append a new ACB-document revision for `branch`. Every save adds a row; the
+   * latest revision per branch is the head (read through `loadAcb`). A ULID id
+   * keyed by branch (NOT unique) lets two concurrent writers each land a
+   * distinct row that both survive whole-transaction sync replay, where an
+   * in-place UPDATE would clobber one.
+   */
   async saveAcb(branch: string, data: unknown): Promise<void> {
-    const now = isoNow();
-    // The ULID id is consumed only on the INSERT arm — an UPDATE-arm conflict
-    // keeps the existing row's id (the branch is the stable identity).
     await this.store.run(
-      'INSERT INTO acb_acb_documents (id, branch, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(branch) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at',
-      [ulid(), branch, JSON.stringify(data), now, now],
+      'INSERT INTO acb_acb_documents (id, branch, data, created_at) VALUES (?, ?, ?, ?)',
+      [ulid(), branch, JSON.stringify(data), isoNow()],
     );
   }
 
-  /** Load the ACB document for `branch`, or null. */
+  /** Load the latest ACB-document revision for `branch` via the head view, or null. */
   async loadAcb(branch: string): Promise<unknown | null> {
     const rows = await this.store.all<{ data: string }>(
-      'SELECT data FROM acb_acb_documents WHERE branch = ?',
+      'SELECT data FROM acb_acb_documents_head WHERE branch = ?',
       [branch],
     );
     const [row] = rows;
@@ -358,10 +420,14 @@ export class AcbStore {
     return JSON.parse(row.data) as unknown;
   }
 
-  /** Branch with the most-recently updated ACB document, or null. */
+  /**
+   * Branch whose latest ACB-document revision was written most recently, or
+   * null. Reads the head view (one row per branch) and orders by that head
+   * revision's write time.
+   */
   async latestAcbBranch(): Promise<string | null> {
     const rows = await this.store.all<{ branch: string }>(
-      'SELECT branch FROM acb_acb_documents ORDER BY updated_at DESC LIMIT 1',
+      'SELECT branch FROM acb_acb_documents_head ORDER BY updated_at DESC LIMIT 1',
     );
     const [row] = rows;
     return row ? row.branch : null;
@@ -369,21 +435,23 @@ export class AcbStore {
 
   // -- Review State -------------------------------------------------------
 
-  /** Upsert review state keyed on `branch` (UNIQUE). Bumps `updated_at`. */
+  /**
+   * Append a new review-state revision for `branch`. Every save adds a row; the
+   * latest revision per branch is the head (read through `loadReview`). Same
+   * append-only rationale as `saveAcb`: a ULID id keyed by branch (NOT unique)
+   * keeps two concurrent writers' rows from clobbering under sync replay.
+   */
   async saveReview(branch: string, acbHash: string, data: unknown): Promise<void> {
-    const now = isoNow();
-    // The ULID id is consumed only on the INSERT arm — an UPDATE-arm conflict
-    // keeps the existing row's id (the branch is the stable identity).
     await this.store.run(
-      'INSERT INTO acb_review_state (id, branch, acb_hash, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(branch) DO UPDATE SET acb_hash = excluded.acb_hash, data = excluded.data, updated_at = excluded.updated_at',
-      [ulid(), branch, acbHash, JSON.stringify(data), now, now],
+      'INSERT INTO acb_review_state (id, branch, acb_hash, data, created_at) VALUES (?, ?, ?, ?, ?)',
+      [ulid(), branch, acbHash, JSON.stringify(data), isoNow()],
     );
   }
 
-  /** Load review state for `branch`, or null. */
+  /** Load the latest review-state revision for `branch` via the head view, or null. */
   async loadReview(branch: string): Promise<unknown | null> {
     const rows = await this.store.all<{ data: string }>(
-      'SELECT data FROM acb_review_state WHERE branch = ?',
+      'SELECT data FROM acb_review_state_head WHERE branch = ?',
       [branch],
     );
     const [row] = rows;
@@ -393,7 +461,11 @@ export class AcbStore {
 
   // -- Group Verdicts -----------------------------------------------------
 
-  /** List every verdict recorded for `slug`. Order is insertion-defined. */
+  /**
+   * List the latest verdict per `(slug, groupId)` for `slug` via the head view.
+   * One row per group; superseded earlier revisions stay in the base table for
+   * audit but never surface here. Order is the head view's row order.
+   */
   async listGroupVerdicts(slug: string): Promise<GroupVerdictRecord[]> {
     const rows = await this.store.all<{
       slug: string;
@@ -403,7 +475,7 @@ export class AcbStore {
       fix_prompt: string | null;
       updated_at: string;
     }>(
-      'SELECT slug, group_id, verdict, note, fix_prompt, updated_at FROM acb_group_verdicts WHERE slug = ?',
+      'SELECT slug, group_id, verdict, note, fix_prompt, updated_at FROM acb_group_verdicts_head WHERE slug = ?',
       [slug],
     );
     return rows.map((r) => ({
@@ -417,10 +489,11 @@ export class AcbStore {
   }
 
   /**
-   * Upsert a verdict on `(slug, groupId)`. Bumps `updated_at` to now().
+   * Append a new verdict revision for `(slug, groupId)`. Every call adds a row;
+   * the latest revision per key is the head (read through `listGroupVerdicts`).
    *
-   * Thin delegate to the `@claude-prove/store` write-service so the upsert SQL
-   * and the `updated_at` stamp live in exactly one place across every caller.
+   * Thin delegate to the `@claude-prove/store` write-service so the append SQL
+   * and the `created_at` stamp live in exactly one place across every caller.
    */
   async upsertGroupVerdict(
     slug: string,
@@ -429,10 +502,15 @@ export class AcbStore {
     note: string | null,
     fixPrompt: string | null,
   ): Promise<GroupVerdictRecord> {
-    return upsertGroupVerdict(this.store, slug, groupId, verdict, note, fixPrompt);
+    return appendGroupVerdict(this.store, slug, groupId, verdict, note, fixPrompt);
   }
 
-  /** Delete the `(slug, groupId)` verdict row. No-op if absent. */
+  /**
+   * Retire the `(slug, groupId)` verdict: delete EVERY revision for that key.
+   * No-op if absent. This is key retirement (the group's whole verdict history
+   * is dropped), distinct from the append-only save path — `upsertGroupVerdict`
+   * never deletes.
+   */
   async clearGroupVerdict(slug: string, groupId: string): Promise<void> {
     await this.store.run('DELETE FROM acb_group_verdicts WHERE slug = ? AND group_id = ?', [
       slug,
@@ -441,11 +519,11 @@ export class AcbStore {
   }
 
   /**
-   * Delete all verdict rows for `slug`. Call this from the slug-retirement
+   * Retire every verdict revision for `slug`. Call this from the slug-retirement
    * path (wave cleanup, run teardown) rather than relying on branch cleanup —
    * `acb_group_verdicts` has no `branch` column (it is keyed by `(slug,
    * group_id)`), so branch-scoped deletion is structurally inapplicable.
-   * Returns the number of rows deleted.
+   * Returns the number of rows deleted (across all revisions).
    */
   async clearVerdictsForSlug(slug: string): Promise<number> {
     const stmt = await this.store.getDb().prepare('DELETE FROM acb_group_verdicts WHERE slug = ?');
