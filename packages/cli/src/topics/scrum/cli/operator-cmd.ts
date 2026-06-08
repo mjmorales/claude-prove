@@ -48,7 +48,7 @@ export type OperatorAction = 'set' | 'resolve' | 'history';
 
 const OPERATOR_ACTIONS: OperatorAction[] = ['set', 'resolve', 'history'];
 
-export function runOperatorCmd(action: string, flags: OperatorCmdFlags): number {
+export async function runOperatorCmd(action: string, flags: OperatorCmdFlags): Promise<number> {
   if (!isOperatorAction(action)) {
     process.stderr.write(
       `error: unknown operator action '${action}'. expected one of: ${OPERATOR_ACTIONS.join(', ')}\n`,
@@ -60,15 +60,15 @@ export function runOperatorCmd(action: string, flags: OperatorCmdFlags): number 
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'set':
-        return doSet(store, workspaceRoot, flags);
+        return await doSet(store, workspaceRoot, flags);
       case 'resolve':
-        return doResolve(store, flags);
+        return await doResolve(store, flags);
       case 'history':
-        return doHistory(store, flags);
+        return await doHistory(store, flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -87,13 +87,17 @@ function isOperatorAction(value: string): value is OperatorAction {
 // set — transfer the role + sync the charter frontmatter
 // ---------------------------------------------------------------------------
 
-function doSet(store: ScrumStore, workspaceRoot: string, flags: OperatorCmdFlags): number {
+async function doSet(
+  store: ScrumStore,
+  workspaceRoot: string,
+  flags: OperatorCmdFlags,
+): Promise<number> {
   if (flags.contributor === undefined || flags.contributor.length === 0) {
     process.stderr.write('scrum operator set: --contributor <CT-UUID> is required\n');
     return 1;
   }
 
-  const row = store.setOperatorOfRecord({
+  const row = await store.setOperatorOfRecord({
     contributorId: flags.contributor,
     fromTs: emptyToUndef(flags.fromTs),
   });
@@ -136,13 +140,13 @@ function syncCharterOperator(workspaceRoot: string, contributorId: string): bool
 // resolve — point-in-time holder, NOT the current holder
 // ---------------------------------------------------------------------------
 
-function doResolve(store: ScrumStore, flags: OperatorCmdFlags): number {
+async function doResolve(store: ScrumStore, flags: OperatorCmdFlags): Promise<number> {
   if (flags.at === undefined || flags.at.length === 0) {
     process.stderr.write('scrum operator resolve: --at <ISO-8601 instant> is required\n');
     return 1;
   }
 
-  const row = store.operatorOfRecordAt(flags.at);
+  const row = await store.operatorOfRecordAt(flags.at);
   if (row === null) {
     process.stdout.write('null\n');
     process.stderr.write(`scrum operator resolve: no holder in effect at ${flags.at}\n`);
@@ -158,8 +162,8 @@ function doResolve(store: ScrumStore, flags: OperatorCmdFlags): number {
 // history
 // ---------------------------------------------------------------------------
 
-function doHistory(store: ScrumStore, flags: OperatorCmdFlags): number {
-  const rows = store.operatorHistory();
+async function doHistory(store: ScrumStore, flags: OperatorCmdFlags): Promise<number> {
+  const rows = await store.operatorHistory();
   if (flags.human === true) {
     process.stdout.write(renderHumanTable(rows));
   } else {
