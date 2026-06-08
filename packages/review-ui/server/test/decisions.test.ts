@@ -35,20 +35,20 @@ const DISK_CONTENT_DISK_ONLY = '# Disk only\n\nbody persisted only on disk';
 
 let repoRoot: string;
 
-beforeEach(() => {
+beforeEach(async () => {
   repoRoot = mkdtempSync(join(tmpdir(), 'prove-decisions-'));
   mkdirSync(join(repoRoot, '.prove/decisions'), { recursive: true });
 
   // Seed DB rows for DB-only and both-sources cases.
   const dbFile = join(repoRoot, '.prove/prove.db');
-  const store = openScrumStore({ override: dbFile });
+  const store = await openScrumStore({ override: dbFile });
   try {
-    store.recordDecision({
+    await store.recordDecision({
       id: DECISION_ID_DB_ONLY,
       title: 'DB only',
       content: DB_CONTENT_DB_ONLY,
     });
-    store.recordDecision({
+    await store.recordDecision({
       id: DECISION_ID_BOTH,
       title: 'Both sources',
       content: DB_CONTENT_BOTH,
