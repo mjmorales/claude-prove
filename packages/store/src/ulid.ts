@@ -72,14 +72,15 @@ function randomChars(): string {
  */
 function incrementRandom(random: string): string | null {
   const chars = random.split('');
+  const lowest = ENCODING[0] as string;
   for (let i = chars.length - 1; i >= 0; i--) {
-    const index = ENCODING.indexOf(chars[i]);
+    const index = ENCODING.indexOf(chars[i] as string);
     if (index < ENCODING_LEN - 1) {
-      chars[i] = ENCODING[index + 1];
+      chars[i] = ENCODING[index + 1] as string;
       return chars.join('');
     }
     // This position overflowed — set it to the lowest char and carry left.
-    chars[i] = ENCODING[0];
+    chars[i] = lowest;
   }
   return null;
 }
