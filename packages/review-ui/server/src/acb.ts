@@ -214,13 +214,17 @@ export async function getAcbDocument(
   const acb = await openStoreIfExists(repoRoot);
   if (!acb) return null;
   try {
+    // Read the head view, not the base table: `acb_acb_documents` is an
+    // append-only revision log, so the view returns the single latest revision
+    // per branch (with `created_at` = the branch's first revision and
+    // `updated_at` = the latest), preserving this function's return shape.
     const rows = await acb.getStore().all<{
       branch: string;
       data: string;
       created_at: string;
       updated_at: string;
     }>(
-      'SELECT branch, data, created_at, updated_at FROM acb_acb_documents WHERE branch = ?',
+      'SELECT branch, data, created_at, updated_at FROM acb_acb_documents_head WHERE branch = ?',
       [branch],
     );
     const row = rows[0];
