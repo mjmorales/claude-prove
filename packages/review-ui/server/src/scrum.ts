@@ -63,7 +63,7 @@ function dbPath(repoRoot: string): string {
  * short-circuit when the file is absent rather than auto-creating it — keeps
  * GET handlers idempotent and matches acb's `openStoreIfExists` semantics.
  */
-function openStoreIfExists(repoRoot: string): ScrumStore | null {
+async function openStoreIfExists(repoRoot: string): Promise<ScrumStore | null> {
   const p = dbPath(repoRoot);
   if (!fs.existsSync(p)) return null;
   return openScrumStore({ override: p });
@@ -75,7 +75,7 @@ function openStoreIfExists(repoRoot: string): ScrumStore | null {
  * runs every pending scrum migration on open, so a fail-open uninitialized project
  * is brought to the current shape the transition service assumes before it writes.
  */
-function openWritableStore(repoRoot: string): ScrumStore {
+async function openWritableStore(repoRoot: string): Promise<ScrumStore> {
   const p = dbPath(repoRoot);
   const dir = path.dirname(p);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -90,8 +90,8 @@ function openWritableStore(repoRoot: string): ScrumStore {
  * routes through here first so the listing's "needs migration" badge and the
  * write refusal can never disagree.
  */
-function refuseIfBehindSchema(repoRoot: string, reply: FastifyReply): boolean {
-  const behind = storeBehindSchema(repoRoot);
+async function refuseIfBehindSchema(repoRoot: string, reply: FastifyReply): Promise<boolean> {
+  const behind = await storeBehindSchema(repoRoot);
   if (behind === null) return false;
   reply.code(409).send(behind);
   return true;
@@ -131,16 +131,20 @@ type StoreOrElse<T> =
  *   - the `orElse` fallback when the db file is absent
  *   - the Fastify `reply` (already 500'd) when opening throws — the caller
  *     forwards this verbatim so Fastify doesn't double-serialize
+ *
+ * The async driver finalizes prepared statements on `close()`, so `fn` is
+ * awaited to completion BEFORE the store closes — otherwise a query resolving
+ * after the close throws "statement has been finalized".
  */
-function withStore<T>(
+async function withStore<T>(
   repoRoot: string,
   reply: FastifyReply,
   orElse: StoreOrElse<T>,
-  fn: (store: ScrumStore) => T | FastifyReply,
-): T | FastifyReply {
+  fn: (store: ScrumStore) => Promise<T | FastifyReply>,
+): Promise<T | FastifyReply> {
   let store: ScrumStore | null;
   try {
-    store = openStoreIfExists(repoRoot);
+    store = await openStoreIfExists(repoRoot);
   } catch {
     return reply.code(500).send({ error: 'scrum store unavailable' });
   }
@@ -150,7 +154,7 @@ function withStore<T>(
       : reply.code(404).send({ error: orElse.message });
   }
   try {
-    return fn(store);
+    return await fn(store);
   } finally {
     store.close();
   }
@@ -172,14 +176,14 @@ export function registerScrumRoutes(app: FastifyInstance, resolveProject: Projec
       repoRoot,
       reply,
       { kind: 'default', value: { tasks: [] } },
-      (store) => {
+      async (store) => {
         let tasks: ScrumTask[];
         if (tag) {
-          tasks = store.listTasksForTag(tag);
+          tasks = await store.listTasksForTag(tag);
           if (status) tasks = tasks.filter((t) => t.status === (status as TaskStatus));
           if (milestone) tasks = tasks.filter((t) => t.milestone_id === milestone);
         } else {
-          tasks = store.listTasks({
+          tasks = await store.listTasks({
             status: status as TaskStatus | undefined,
             milestoneId: milestone,
           });
@@ -218,8 +222,8 @@ export function registerScrumRoutes(app: FastifyInstance, resolveProject: Projec
       repoRoot,
       reply,
       { kind: 'default', value: { milestones: [] } },
-      (store) => ({
-        milestones: store.listMilestones(status as MilestoneStatus | undefined),
+      async (store) => ({
+        milestones: await store.listMilestones(status as MilestoneStatus | undefined),
       }),
     );
   });
@@ -263,8 +267,8 @@ export function registerScrumRoutes(app: FastifyInstance, resolveProject: Projec
         repoRoot,
         reply,
         { kind: 'not-found', message: 'context bundle not found' },
-        (store) => {
-          const bundle = store.loadContextBundle(taskId);
+        async (store) => {
+          const bundle = await store.loadContextBundle(taskId);
           if (!bundle) return reply.code(404).send({ error: 'context bundle not found' });
           return bundle;
         },
@@ -281,7 +285,7 @@ export function registerScrumRoutes(app: FastifyInstance, resolveProject: Projec
       repoRoot,
       reply,
       { kind: 'default', value: { events: [] } },
-      (store) => ({ events: store.listRecentEvents(limit) }),
+      async (store) => ({ events: await store.listRecentEvents(limit) }),
     );
   });
 
@@ -294,7 +298,7 @@ export function registerScrumRoutes(app: FastifyInstance, resolveProject: Projec
     async (req, reply) => {
       const repoRoot = resolveProject(req, reply);
       if (repoRoot === null) return reply;
-      if (refuseIfBehindSchema(repoRoot, reply)) return reply;
+      if (await refuseIfBehindSchema(repoRoot, reply)) return reply;
 
       const { id } = req.params;
       const status = req.body?.status;
@@ -302,12 +306,14 @@ export function registerScrumRoutes(app: FastifyInstance, resolveProject: Projec
         return reply.code(400).send({ error: 'bad status' });
       }
 
-      const store = openWritableStore(repoRoot);
+      const store = await openWritableStore(repoRoot);
       try {
         // Delegate to the canonical write service (NOT a reimplementation):
         // closed transition table, story-layer floors, one `status_changed`
         // event. Pass the raw Store handle the read routes' wrapper exposes.
-        const task = updateTaskStatus(store.getStore(), id, status as TaskStatus);
+        // Await BEFORE close so the async write isn't cut off by statement
+        // finalization on `store.close()`.
+        const task = await updateTaskStatus(store.getStore(), id, status as TaskStatus);
         return { task };
       } catch (err) {
         // Service throws on unknown id, illegal transition, and unmet story
@@ -326,30 +332,30 @@ export function registerScrumRoutes(app: FastifyInstance, resolveProject: Projec
 // Per-route assemblers
 // ---------------------------------------------------------------------------
 
-function buildTaskDetail(store: ScrumStore, id: string, reply: FastifyReply) {
-  const task = store.getTask(id);
+async function buildTaskDetail(store: ScrumStore, id: string, reply: FastifyReply) {
+  const task = await store.getTask(id);
   if (!task) return reply.code(404).send({ error: 'task not found' });
-  const events = store.listEventsForTask(id);
-  const runs = store.listRunsForTask(id);
-  const tags = store.listTagsForTask(id).map((row) => row.tag);
-  const blockedBy = store.getBlockedBy(id);
-  const blocking = store.getBlocking(id);
+  const events = await store.listEventsForTask(id);
+  const runs = await store.listRunsForTask(id);
+  const tags = (await store.listTagsForTask(id)).map((row) => row.tag);
+  const blockedBy = await store.getBlockedBy(id);
+  const blocking = await store.getBlocking(id);
   const decisions = events
     .filter((e) => e.kind === 'decision_linked')
     .map((e) => ({ id: e.id, ts: e.ts, payload: e.payload }));
   return { task, tags, events, runs, decisions, blocked_by: blockedBy, blocking };
 }
 
-function buildTaskEvents(store: ScrumStore, id: string, reply: FastifyReply) {
-  const task = store.getTask(id);
+async function buildTaskEvents(store: ScrumStore, id: string, reply: FastifyReply) {
+  const task = await store.getTask(id);
   if (!task) return reply.code(404).send({ error: 'task not found' });
-  return { task_id: id, events: store.listEventsForTask(id) };
+  return { task_id: id, events: await store.listEventsForTask(id) };
 }
 
-function buildMilestoneRollup(store: ScrumStore, id: string, reply: FastifyReply) {
-  const milestone = store.getMilestone(id);
+async function buildMilestoneRollup(store: ScrumStore, id: string, reply: FastifyReply) {
+  const milestone = await store.getMilestone(id);
   if (!milestone) return reply.code(404).send({ error: 'milestone not found' });
-  const tasks = store.listTasks({ milestoneId: id });
+  const tasks = await store.listTasks({ milestoneId: id });
   const rollup = computeStatusRollup(tasks);
   return { milestone, tasks, rollup };
 }
@@ -361,23 +367,28 @@ interface AlertsPayload {
   orphaned_runs: ScrumEvent[];
 }
 
-function buildAlerts(store: ScrumStore): AlertsPayload {
+async function buildAlerts(store: ScrumStore): Promise<AlertsPayload> {
   // Fetch the full task set once and derive both views in-memory — avoids a
   // second round-trip through `listTasks` just to filter by status.
-  const allTasks = store.listTasks({});
+  const allTasks = await store.listTasks({});
   const inProgress = allTasks.filter((t) => t.status === 'in_progress');
 
   const stalledCutoff = Date.now() - STALL_MS;
   const stalledWip = inProgress.filter((t) => isStalled(t, stalledCutoff));
 
   const knownIds = new Set(allTasks.map((t) => t.id));
-  const brokenDeps = collectBrokenDeps(store, allTasks, knownIds);
+  const brokenDeps = await collectBrokenDeps(store, allTasks, knownIds);
 
-  const missingContext = inProgress.filter((t) => store.loadContextBundle(t.id) === null);
+  // Each in-progress task's bundle is an independent read; resolve concurrently
+  // then filter out the ones that have a bundle.
+  const bundlePresence = await Promise.all(
+    inProgress.map(async (t) => ({ task: t, bundle: await store.loadContextBundle(t.id) })),
+  );
+  const missingContext = bundlePresence.filter((p) => p.bundle === null).map((p) => p.task);
 
   const orphanCutoff = Date.now() - ORPHAN_RUN_LOOKBACK_MS;
-  const orphanedRuns = store
-    .listRecentEvents(RECENT_EVENTS_MAX_LIMIT)
+  const recentEvents = await store.listRecentEvents(RECENT_EVENTS_MAX_LIMIT);
+  const orphanedRuns = recentEvents
     .filter((e) => e.kind === 'unlinked_run_detected')
     .filter((e) => Date.parse(e.ts) >= orphanCutoff);
 
@@ -428,14 +439,14 @@ interface BrokenDep {
  * edges; the reverse direction is implied by referential symmetry on the
  * deps table.
  */
-function collectBrokenDeps(
+async function collectBrokenDeps(
   store: ScrumStore,
   tasks: ScrumTask[],
   knownIds: Set<string>,
-): BrokenDep[] {
+): Promise<BrokenDep[]> {
   const broken: BrokenDep[] = [];
   for (const t of tasks) {
-    const out = store.getBlocking(t.id);
+    const out = await store.getBlocking(t.id);
     for (const dep of out) {
       if (!knownIds.has(dep.to_task_id)) {
         broken.push({

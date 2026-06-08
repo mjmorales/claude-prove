@@ -15,7 +15,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
+import { openStore } from '@claude-prove/store';
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -42,8 +42,8 @@ afterEach(() => {
 });
 
 describe('verdict round-trip on a fresh db', () => {
-  test('upsert → list returns the written record', () => {
-    const rec = upsertVerdict(repoRoot, 'my-slug', 'g1', 'accepted', 'lgtm', null);
+  test('upsert → list returns the written record', async () => {
+    const rec = await upsertVerdict(repoRoot, 'my-slug', 'g1', 'accepted', 'lgtm', null);
     expect(rec).toMatchObject({
       slug: 'my-slug',
       groupId: 'g1',
@@ -53,14 +53,14 @@ describe('verdict round-trip on a fresh db', () => {
     });
     expect(typeof rec.updatedAt).toBe('string');
 
-    const rows = listVerdicts(repoRoot, 'my-slug');
+    const rows = await listVerdicts(repoRoot, 'my-slug');
     expect(rows).toHaveLength(1);
     expect(rows[0]).toEqual(rec);
   });
 
-  test('upsert twice on the same (slug, groupId) overwrites', () => {
-    upsertVerdict(repoRoot, 'my-slug', 'g1', 'accepted', null, null);
-    const updated = upsertVerdict(
+  test('upsert twice on the same (slug, groupId) overwrites', async () => {
+    await upsertVerdict(repoRoot, 'my-slug', 'g1', 'accepted', null, null);
+    const updated = await upsertVerdict(
       repoRoot,
       'my-slug',
       'g1',
@@ -71,47 +71,47 @@ describe('verdict round-trip on a fresh db', () => {
     expect(updated.verdict).toBe('rework');
     expect(updated.fixPrompt).toBe('Please add a test');
 
-    const rows = listVerdicts(repoRoot, 'my-slug');
+    const rows = await listVerdicts(repoRoot, 'my-slug');
     expect(rows).toHaveLength(1);
     expect(rows[0].verdict).toBe('rework');
   });
 
-  test('clearVerdict removes the row; subsequent clear is a no-op', () => {
-    upsertVerdict(repoRoot, 'my-slug', 'g1', 'accepted', null, null);
-    clearVerdict(repoRoot, 'my-slug', 'g1');
-    expect(listVerdicts(repoRoot, 'my-slug')).toEqual([]);
+  test('clearVerdict removes the row; subsequent clear is a no-op', async () => {
+    await upsertVerdict(repoRoot, 'my-slug', 'g1', 'accepted', null, null);
+    await clearVerdict(repoRoot, 'my-slug', 'g1');
+    expect(await listVerdicts(repoRoot, 'my-slug')).toEqual([]);
     // Idempotent: no throw on a fresh slate.
-    clearVerdict(repoRoot, 'my-slug', 'g1');
+    await clearVerdict(repoRoot, 'my-slug', 'g1');
   });
 
-  test('verdicts are scoped by slug', () => {
-    upsertVerdict(repoRoot, 'slug-a', 'g1', 'accepted', null, null);
-    upsertVerdict(repoRoot, 'slug-b', 'g1', 'rejected', null, null);
-    const a = listVerdicts(repoRoot, 'slug-a');
-    const b = listVerdicts(repoRoot, 'slug-b');
+  test('verdicts are scoped by slug', async () => {
+    await upsertVerdict(repoRoot, 'slug-a', 'g1', 'accepted', null, null);
+    await upsertVerdict(repoRoot, 'slug-b', 'g1', 'rejected', null, null);
+    const a = await listVerdicts(repoRoot, 'slug-a');
+    const b = await listVerdicts(repoRoot, 'slug-b');
     expect(a).toHaveLength(1);
     expect(a[0].verdict).toBe('accepted');
     expect(b).toHaveLength(1);
     expect(b[0].verdict).toBe('rejected');
   });
 
-  test('first verdict write auto-creates .prove/prove.db', () => {
+  test('first verdict write auto-creates .prove/prove.db', async () => {
     expect(existsSync(join(repoRoot, '.prove/prove.db'))).toBe(false);
-    upsertVerdict(repoRoot, 'my-slug', 'g1', 'accepted', null, null);
+    await upsertVerdict(repoRoot, 'my-slug', 'g1', 'accepted', null, null);
     expect(existsSync(join(repoRoot, '.prove/prove.db'))).toBe(true);
   });
 });
 
 describe('legacy group_verdicts backfill', () => {
-  test('v2 migration absorbs a pre-phase-11 bare group_verdicts table', () => {
+  test('v2 migration absorbs a pre-phase-11 bare group_verdicts table', async () => {
     // Fabricate a legacy .prove/prove.db: v1 acb schema applied, then the
     // old review-ui server created a bare `group_verdicts` table and
     // inserted a row. Simulate both.
     const dbDir = join(repoRoot, '.prove');
     mkdirSync(dbDir, { recursive: true });
     const dbFile = join(dbDir, 'prove.db');
-    const db = new Database(dbFile, { create: true });
-    db.exec(`
+    const db = await openStore({ path: dbFile });
+    await db.exec(`
       CREATE TABLE _migrations_log (
         domain TEXT NOT NULL,
         version INTEGER NOT NULL,
@@ -165,7 +165,7 @@ describe('legacy group_verdicts backfill', () => {
     // `group_verdicts` → `acb_group_verdicts`) and the v3 normalization
     // (`'approved'` → canonical `'accepted'`). The legacy row should
     // appear in the listing under the new table with the canonical verdict.
-    const rows = listVerdicts(repoRoot, 'pre-phase-11');
+    const rows = await listVerdicts(repoRoot, 'pre-phase-11');
     expect(rows).toHaveLength(1);
     expect(rows[0]).toEqual({
       slug: 'pre-phase-11',
@@ -177,13 +177,11 @@ describe('legacy group_verdicts backfill', () => {
     });
 
     // Legacy table is gone.
-    const check = new Database(dbFile, { readonly: true });
+    const check = await openStore({ path: dbFile, readonly: true });
     try {
-      const legacy = check
-        .prepare<{ name: string }, []>(
-          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'group_verdicts'",
-        )
-        .all();
+      const legacy = await check.all<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'group_verdicts'",
+      );
       expect(legacy).toHaveLength(0);
     } finally {
       check.close();
@@ -192,13 +190,13 @@ describe('legacy group_verdicts backfill', () => {
 });
 
 describe('read-only manifest queries', () => {
-  test('all read paths return empty/null when .prove/prove.db is absent', () => {
-    expect(getManifestForCommit(repoRoot, 'deadbeef')).toBeNull();
-    expect(listManifestsForBranches(repoRoot, ['feat/x'])).toEqual([]);
-    expect(listManifestsForCommits(repoRoot, ['deadbeef'])).toEqual([]);
-    expect(listManifestsForSlug(repoRoot, 'slug-x')).toEqual([]);
-    expect(listManifestsForBranch(repoRoot, 'feat/x')).toEqual([]);
-    expect(getAcbDocument(repoRoot, 'feat/x')).toBeNull();
+  test('all read paths return empty/null when .prove/prove.db is absent', async () => {
+    expect(await getManifestForCommit(repoRoot, 'deadbeef')).toBeNull();
+    expect(await listManifestsForBranches(repoRoot, ['feat/x'])).toEqual([]);
+    expect(await listManifestsForCommits(repoRoot, ['deadbeef'])).toEqual([]);
+    expect(await listManifestsForSlug(repoRoot, 'slug-x')).toEqual([]);
+    expect(await listManifestsForBranch(repoRoot, 'feat/x')).toEqual([]);
+    expect(await getAcbDocument(repoRoot, 'feat/x')).toBeNull();
     // Verifies the read paths don't auto-create the file.
     expect(existsSync(join(repoRoot, '.prove/prove.db'))).toBe(false);
   });
