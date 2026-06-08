@@ -49,7 +49,7 @@ import {
 } from './schemas';
 
 describe('scrum domain registration', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     // Registry is process-wide and shared across every test file in the run. A
     // sibling file can leave `'scrum'` registered with a PARTIAL migration
     // ladder (the migration-fixture tests register v1-only / v1+v2 defs), in
@@ -60,11 +60,11 @@ describe('scrum domain registration', () => {
     ensureScrumSchemaRegistered();
   });
 
-  test("listDomains() includes 'scrum' after module import", () => {
+  test("listDomains() includes 'scrum' after module import", async () => {
     expect(listDomains()).toContain('scrum');
   });
 
-  test('SCRUM_MIGRATION_V1_SQL is a non-empty DDL string', () => {
+  test('SCRUM_MIGRATION_V1_SQL is a non-empty DDL string', async () => {
     expect(SCRUM_MIGRATION_V1_SQL).toContain('CREATE TABLE scrum_tasks');
     expect(SCRUM_MIGRATION_V1_SQL).toContain('CREATE TABLE scrum_milestones');
     expect(SCRUM_MIGRATION_V1_SQL).toContain('CREATE TABLE scrum_tags');
@@ -74,7 +74,7 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V1_SQL).toContain('CREATE TABLE scrum_context_bundles');
   });
 
-  test('SCRUM_MIGRATION_V2_SQL creates scrum_decisions + both indexes', () => {
+  test('SCRUM_MIGRATION_V2_SQL creates scrum_decisions + both indexes', async () => {
     expect(SCRUM_MIGRATION_V2_SQL).toContain('CREATE TABLE scrum_decisions');
     expect(SCRUM_MIGRATION_V2_SQL).toContain('CREATE INDEX idx_scrum_decisions_topic');
     expect(SCRUM_MIGRATION_V2_SQL).toContain('CREATE INDEX idx_scrum_decisions_status');
@@ -82,12 +82,11 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V2_SQL).toContain("DEFAULT 'accepted'");
   });
 
-  test('migration creates all 19 scrum_* tables (v1 + v2 + v12 + v13 + v14 + v15 + v16 + v17 + v19 + v20 + v23 + v24)', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('migration creates all 19 scrum_* tables (v1 + v2 + v12 + v13 + v14 + v15 + v16 + v17 + v19 + v20 + v23 + v24)', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      const tables = raw
-        .all<{ name: string }>(
+      await runMigrations(raw);
+      const tables = await raw.all<{ name: string }>(
           "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'scrum_%' ORDER BY name",
         )
         .map((r) => r.name);
@@ -117,7 +116,7 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V3_SQL adds parent_id + layer + idx_scrum_tasks_parent', () => {
+  test('SCRUM_MIGRATION_V3_SQL adds parent_id + layer + idx_scrum_tasks_parent', async () => {
     expect(SCRUM_MIGRATION_V3_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN parent_id');
     expect(SCRUM_MIGRATION_V3_SQL).toContain('REFERENCES scrum_tasks(id)');
     expect(SCRUM_MIGRATION_V3_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN layer');
@@ -126,12 +125,11 @@ describe('scrum domain registration', () => {
     );
   });
 
-  test('migration creates all 22 scrum indexes (v1 + v2 + v3 + v12 + v13 + v14 + v15 + v16 + v17 + v19 + v20 + v23 + v24)', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('migration creates all 22 scrum indexes (v1 + v2 + v3 + v12 + v13 + v14 + v15 + v16 + v17 + v19 + v20 + v23 + v24)', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      const indexes = raw
-        .all<{ name: string }>(
+      await runMigrations(raw);
+      const indexes = await raw.all<{ name: string }>(
           "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_scrum_%' ORDER BY name",
         )
         .map((r) => r.name);
@@ -164,12 +162,11 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('scrum_tasks column shape matches spec (v3 adds parent_id + layer)', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('scrum_tasks column shape matches spec (v3 adds parent_id + layer)', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      const cols = raw
-        .all<{ name: string; type: string; notnull: number }>(
+      await runMigrations(raw);
+      const cols = await raw.all<{ name: string; type: string; notnull: number }>(
           "SELECT name, type, [notnull] FROM pragma_table_info('scrum_tasks') ORDER BY cid",
         )
         .map((c) => `${c.name}:${c.type}:${c.notnull}`);
@@ -207,14 +204,14 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('v3 ADD COLUMN defaults parent_id + layer to NULL on existing rows', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v3 ADD COLUMN defaults parent_id + layer to NULL on existing rows', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{ parent_id: string | null; layer: string | null }>(
+      const row = await raw.all<{ parent_id: string | null; layer: string | null }>(
         'SELECT parent_id, layer FROM scrum_tasks WHERE id = ?',
         ['t1'],
       );
@@ -224,19 +221,19 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('scrum_events is AUTOINCREMENT', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('scrum_events is AUTOINCREMENT', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
+      await runMigrations(raw);
       // Verify via sqlite_sequence — it only exists when an AUTOINCREMENT
       // column has been inserted against. Insert a milestone + task + event
       // so the sequence table materializes.
-      raw.exec(`
+      await await raw.exec(`
         INSERT INTO scrum_milestones (id, title, status, created_at) VALUES ('m1', 'M1', 'active', '2026-01-01T00:00:00Z');
         INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z');
         INSERT INTO scrum_events (task_id, ts, kind, payload_json) VALUES ('t1', '2026-01-01T00:00:00Z', 'note', '{}');
       `);
-      const seq = raw.all<{ name: string }>(
+      const seq = await raw.all<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence'",
       );
       expect(seq).toHaveLength(1);
@@ -245,21 +242,21 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('scrum_deps CHECK constraint rejects invalid kind', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('scrum_deps CHECK constraint rejects invalid kind', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(`
+      await runMigrations(raw);
+      await await raw.exec(`
         INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('a', 'A', 'backlog', '2026-01-01T00:00:00Z');
         INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('b', 'B', 'backlog', '2026-01-01T00:00:00Z');
       `);
-      expect(() => {
-        raw.exec(
+      await expect(
+        await raw.exec(
           "INSERT INTO scrum_deps (from_task_id, to_task_id, kind) VALUES ('a', 'b', 'bogus')",
-        );
-      }).toThrow();
+        ),
+      ).rejects.toThrow();
       // Legal kinds succeed.
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_deps (from_task_id, to_task_id, kind) VALUES ('a', 'b', 'blocks')",
       );
     } finally {
@@ -267,7 +264,7 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V4_SQL adds superseded_by (self-FK) + reason', () => {
+  test('SCRUM_MIGRATION_V4_SQL adds superseded_by (self-FK) + reason', async () => {
     expect(SCRUM_MIGRATION_V4_SQL).toContain(
       'ALTER TABLE scrum_decisions ADD COLUMN superseded_by',
     );
@@ -275,12 +272,11 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V4_SQL).toContain('ALTER TABLE scrum_decisions ADD COLUMN reason');
   });
 
-  test('scrum_decisions column shape gains v4 superseded_by + reason + v8 kind + v21 gate cols + v22 source_lore_id', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('scrum_decisions column shape gains v4 superseded_by + reason + v8 kind + v21 gate cols + v22 source_lore_id', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      const cols = raw
-        .all<{ name: string; type: string; notnull: number }>(
+      await runMigrations(raw);
+      const cols = await raw.all<{ name: string; type: string; notnull: number }>(
           "SELECT name, type, [notnull] FROM pragma_table_info('scrum_decisions') ORDER BY cid",
         )
         .map((c) => `${c.name}:${c.type}:${c.notnull}`);
@@ -311,14 +307,14 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('v4 ADD COLUMN defaults superseded_by + reason to NULL on existing rows', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v4 ADD COLUMN defaults superseded_by + reason to NULL on existing rows', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_decisions (id, title, status, content, content_sha, recorded_at) VALUES ('d1', 'D1', 'accepted', 'body', 'deadbeef', '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{ superseded_by: string | null; reason: string | null }>(
+      const row = await raw.all<{ superseded_by: string | null; reason: string | null }>(
         'SELECT superseded_by, reason FROM scrum_decisions WHERE id = ?',
         ['d1'],
       );
@@ -328,7 +324,7 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V24_SQL creates scrum_escalations + both walk-up indexes', () => {
+  test('SCRUM_MIGRATION_V24_SQL creates scrum_escalations + both walk-up indexes', async () => {
     expect(SCRUM_MIGRATION_V24_SQL).toContain('CREATE TABLE scrum_escalations');
     expect(SCRUM_MIGRATION_V24_SQL).toContain(
       'walked_up_from INTEGER REFERENCES scrum_escalations',
@@ -343,12 +339,11 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V24_SQL).toContain("DEFAULT 'open'");
   });
 
-  test('scrum_escalations column shape matches the v24+v26 spec (attributes appended by v26)', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('scrum_escalations column shape matches the v24+v26 spec (attributes appended by v26)', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      const cols = raw
-        .all<{ name: string; type: string; notnull: number }>(
+      await runMigrations(raw);
+      const cols = await raw.all<{ name: string; type: string; notnull: number }>(
           "SELECT name, type, [notnull] FROM pragma_table_info('scrum_escalations') ORDER BY cid",
         )
         .map((c) => `${c.name}:${c.type}:${c.notnull}`);
@@ -374,14 +369,14 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('scrum_escalations is AUTOINCREMENT and defaults a fresh row to open', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('scrum_escalations is AUTOINCREMENT and defaults a fresh row to open', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_escalations (task_id, escalation_type, layer, summary, created_at) VALUES ('t1', 'blocked', 'implementer', 's', '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{ id: number; state: string; walked_up_from: number | null }>(
+      const row = await raw.all<{ id: number; state: string; walked_up_from: number | null }>(
         'SELECT id, state, walked_up_from FROM scrum_escalations',
       );
       expect(row).toEqual([{ id: 1, state: 'open', walked_up_from: null }]);
@@ -390,22 +385,22 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V26_SQL adds the nullable scrum_escalations.attributes column', () => {
+  test('SCRUM_MIGRATION_V26_SQL adds the nullable scrum_escalations.attributes column', async () => {
     expect(SCRUM_MIGRATION_V26_SQL).toContain(
       'ALTER TABLE scrum_escalations ADD COLUMN attributes',
     );
   });
 
-  test('v26 ADD COLUMN defaults attributes to NULL on existing escalation rows', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v26 ADD COLUMN defaults attributes to NULL on existing escalation rows', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
+      await runMigrations(raw);
       // Row inserted without the v26 column — simulates a pre-v26 escalation
       // carried through the upgrade. The new column must read NULL.
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_escalations (task_id, escalation_type, layer, summary, created_at) VALUES ('t1', 'blocked', 'implementer', 's', '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{ attributes: string | null }>(
+      const row = await raw.all<{ attributes: string | null }>(
         'SELECT attributes FROM scrum_escalations WHERE task_id = ?',
         ['t1'],
       );
@@ -415,16 +410,15 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V5_SQL adds scrum_tasks.acceptance_json', () => {
+  test('SCRUM_MIGRATION_V5_SQL adds scrum_tasks.acceptance_json', async () => {
     expect(SCRUM_MIGRATION_V5_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN acceptance_json');
   });
 
-  test('scrum_tasks column shape gains v5 acceptance_json + v6 bounds_json + v7 terminal provenance', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('scrum_tasks column shape gains v5 acceptance_json + v6 bounds_json + v7 terminal provenance', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      const cols = raw
-        .all<{ name: string; type: string; notnull: number }>(
+      await runMigrations(raw);
+      const cols = await raw.all<{ name: string; type: string; notnull: number }>(
           "SELECT name, type, [notnull] FROM pragma_table_info('scrum_tasks') ORDER BY cid",
         )
         .map((c) => `${c.name}:${c.type}:${c.notnull}`);
@@ -462,18 +456,18 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V6_SQL adds scrum_tasks.bounds_json', () => {
+  test('SCRUM_MIGRATION_V6_SQL adds scrum_tasks.bounds_json', async () => {
     expect(SCRUM_MIGRATION_V6_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN bounds_json');
   });
 
-  test('v6 ADD COLUMN defaults bounds_json to NULL on existing rows', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v6 ADD COLUMN defaults bounds_json to NULL on existing rows', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{ bounds_json: string | null }>(
+      const row = await raw.all<{ bounds_json: string | null }>(
         'SELECT bounds_json FROM scrum_tasks WHERE id = ?',
         ['t1'],
       );
@@ -483,19 +477,19 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V7_SQL adds scrum_tasks terminal provenance columns', () => {
+  test('SCRUM_MIGRATION_V7_SQL adds scrum_tasks terminal provenance columns', async () => {
     expect(SCRUM_MIGRATION_V7_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN terminal_reason');
     expect(SCRUM_MIGRATION_V7_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN terminal_detail');
   });
 
-  test('v7 ADD COLUMN defaults terminal_reason/terminal_detail to NULL on existing rows', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v7 ADD COLUMN defaults terminal_reason/terminal_detail to NULL on existing rows', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{ terminal_reason: string | null; terminal_detail: string | null }>(
+      const row = await raw.all<{ terminal_reason: string | null; terminal_detail: string | null }>(
         'SELECT terminal_reason, terminal_detail FROM scrum_tasks WHERE id = ?',
         ['t1'],
       );
@@ -505,18 +499,18 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V8_SQL adds scrum_decisions.kind', () => {
+  test('SCRUM_MIGRATION_V8_SQL adds scrum_decisions.kind', async () => {
     expect(SCRUM_MIGRATION_V8_SQL).toContain('ALTER TABLE scrum_decisions ADD COLUMN kind');
   });
 
-  test('v8 ADD COLUMN defaults kind to NULL on existing rows', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v8 ADD COLUMN defaults kind to NULL on existing rows', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_decisions (id, title, status, content, content_sha, recorded_at) VALUES ('d1', 'D1', 'accepted', 'body', 'deadbeef', '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{ kind: string | null }>(
+      const row = await raw.all<{ kind: string | null }>(
         'SELECT kind FROM scrum_decisions WHERE id = ?',
         ['d1'],
       );
@@ -526,19 +520,19 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V9_SQL adds scrum_tasks last-touch provenance columns', () => {
+  test('SCRUM_MIGRATION_V9_SQL adds scrum_tasks last-touch provenance columns', async () => {
     expect(SCRUM_MIGRATION_V9_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN last_modified_by');
     expect(SCRUM_MIGRATION_V9_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN last_modified_at');
   });
 
-  test('v9 ADD COLUMN defaults last_modified_by/last_modified_at to NULL on existing rows', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v9 ADD COLUMN defaults last_modified_by/last_modified_at to NULL on existing rows', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{ last_modified_by: string | null; last_modified_at: string | null }>(
+      const row = await raw.all<{ last_modified_by: string | null; last_modified_at: string | null }>(
         'SELECT last_modified_by, last_modified_at FROM scrum_tasks WHERE id = ?',
         ['t1'],
       );
@@ -548,14 +542,14 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('v5 ADD COLUMN defaults acceptance_json to NULL on existing rows', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v5 ADD COLUMN defaults acceptance_json to NULL on existing rows', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{ acceptance_json: string | null }>(
+      const row = await raw.all<{ acceptance_json: string | null }>(
         'SELECT acceptance_json FROM scrum_tasks WHERE id = ?',
         ['t1'],
       );
@@ -565,10 +559,10 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('full migration chain from v0 applies v1..v28 in order', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('full migration chain from v0 applies v1..v28 in order', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      const result = runMigrations(raw);
+      const result = await runMigrations(raw);
       expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
         26, 27, 28,
@@ -578,19 +572,19 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('migration is idempotent — rerunning does not duplicate log rows', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('migration is idempotent — rerunning does not duplicate log rows', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      const first = runMigrations(raw);
+      const first = await runMigrations(raw);
       expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
         1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
         26, 27, 28,
       ]);
 
-      const second = runMigrations(raw);
+      const second = await runMigrations(raw);
       expect(second.applied.filter((a) => a.domain === 'scrum')).toEqual([]);
 
-      const versions = raw.all<{ version: number }>(
+      const versions = await raw.all<{ version: number }>(
         'SELECT version FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
@@ -629,7 +623,7 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('duplicate migration version within scrum domain throws at register time', () => {
+  test('duplicate migration version within scrum domain throws at register time', async () => {
     // Registry throws when the same (domain, version) pair is registered twice.
     clearRegistry();
     const def: SchemaDef = {
@@ -645,11 +639,11 @@ describe('scrum domain registration', () => {
     ensureScrumSchemaRegistered();
   });
 
-  test('_migrations_log entry description matches registered description', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('_migrations_log entry description matches registered description', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      const log = raw.all<{ domain: string; version: number; description: string }>(
+      await runMigrations(raw);
+      const log = await raw.all<{ domain: string; version: number; description: string }>(
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
@@ -806,18 +800,18 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V10_SQL adds scrum_milestones.initiative', () => {
+  test('SCRUM_MIGRATION_V10_SQL adds scrum_milestones.initiative', async () => {
     expect(SCRUM_MIGRATION_V10_SQL).toContain('ALTER TABLE scrum_milestones ADD COLUMN initiative');
   });
 
-  test('v10 ADD COLUMN defaults initiative to NULL on existing milestones', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v10 ADD COLUMN defaults initiative to NULL on existing milestones', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_milestones (id, title, status, created_at) VALUES ('m1', 'M1', 'planned', '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{ initiative: string | null }>(
+      const row = await raw.all<{ initiative: string | null }>(
         'SELECT initiative FROM scrum_milestones WHERE id = ?',
         ['m1'],
       );
@@ -827,23 +821,23 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V11_SQL adds scrum_tasks worker_id + run_id', () => {
+  test('SCRUM_MIGRATION_V11_SQL adds scrum_tasks worker_id + run_id', async () => {
     expect(SCRUM_MIGRATION_V11_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN worker_id');
     expect(SCRUM_MIGRATION_V11_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN run_id');
   });
 
-  test('SCRUM_MIGRATION_V27_SQL adds scrum_tasks.team_slug', () => {
+  test('SCRUM_MIGRATION_V27_SQL adds scrum_tasks.team_slug', async () => {
     expect(SCRUM_MIGRATION_V27_SQL).toContain('ALTER TABLE scrum_tasks ADD COLUMN team_slug');
   });
 
-  test('v27 ADD COLUMN defaults team_slug to NULL on existing rows', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v27 ADD COLUMN defaults team_slug to NULL on existing rows', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{ team_slug: string | null }>(
+      const row = await raw.all<{ team_slug: string | null }>(
         'SELECT team_slug FROM scrum_tasks WHERE id = ?',
         ['t1'],
       );
@@ -853,22 +847,22 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V28_SQL adds scrum_lores superseded_by + reason', () => {
+  test('SCRUM_MIGRATION_V28_SQL adds scrum_lores superseded_by + reason', async () => {
     expect(SCRUM_MIGRATION_V28_SQL).toContain('ALTER TABLE scrum_lores ADD COLUMN superseded_by');
     expect(SCRUM_MIGRATION_V28_SQL).toContain('ALTER TABLE scrum_lores ADD COLUMN reason');
   });
 
-  test('v28 ADD COLUMN defaults supersession columns to NULL on existing Lore (live)', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v28 ADD COLUMN defaults supersession columns to NULL on existing Lore (live)', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, created_at) VALUES ('payments', 'stream_aligned', '2026-01-01T00:00:00Z')",
       );
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_lores (team_slug, body, author_contributor_id, created_at) VALUES ('payments', 'prefer idempotent migrations', 'CT-lead', '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{ superseded_by: string | null; reason: string | null }>(
+      const row = await raw.all<{ superseded_by: string | null; reason: string | null }>(
         'SELECT superseded_by, reason FROM scrum_lores WHERE team_slug = ?',
         ['payments'],
       );
@@ -878,20 +872,20 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_SCHEMA_VERSION tracks the top migration version (28)', () => {
+  test('SCRUM_SCHEMA_VERSION tracks the top migration version (28)', async () => {
     expect(SCRUM_SCHEMA_VERSION).toBe(28);
   });
 
-  test('v11 ADD COLUMN defaults worker_id/run_id to NULL on existing rows', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v11 ADD COLUMN defaults worker_id/run_id to NULL on existing rows', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
+      await runMigrations(raw);
       // Row inserted without the v11 columns — simulates a pre-v11 row carried
       // through the upgrade. The new columns must read NULL.
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{ worker_id: string | null; run_id: string | null }>(
+      const row = await raw.all<{ worker_id: string | null; run_id: string | null }>(
         'SELECT worker_id, run_id FROM scrum_tasks WHERE id = ?',
         ['t1'],
       );
@@ -901,25 +895,24 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V12_SQL creates scrum_contributors + resolution indexes', () => {
+  test('SCRUM_MIGRATION_V12_SQL creates scrum_contributors + resolution indexes', async () => {
     expect(SCRUM_MIGRATION_V12_SQL).toContain('CREATE TABLE scrum_contributors');
     expect(SCRUM_MIGRATION_V12_SQL).toContain('idx_scrum_contributors_github');
     expect(SCRUM_MIGRATION_V12_SQL).toContain('idx_scrum_contributors_email');
   });
 
-  test('a fresh store has scrum_contributors with the v12 column shape', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('a fresh store has scrum_contributors with the v12 column shape', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
+      await runMigrations(raw);
 
-      const tables = raw.all<{ name: string }>(
+      const tables = await raw.all<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_contributors'",
       );
       expect(tables).toEqual([{ name: 'scrum_contributors' }]);
 
       // Column shape matches the on-disk contributor.md schema + provenance.
-      const cols = raw
-        .all<{ name: string }>('PRAGMA table_info(scrum_contributors)')
+      const cols = await raw.all<{ name: string }>('PRAGMA table_info(scrum_contributors)')
         .map((c) => c.name);
       expect(cols).toEqual([
         'id',
@@ -938,41 +931,40 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('v12 enforces slug uniqueness on scrum_contributors', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v12 enforces slug uniqueness on scrum_contributors', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_contributors (id, slug, status, created_at) VALUES ('ct-a', 'jane', 'active', '2026-01-01T00:00:00Z')",
       );
-      expect(() =>
-        raw.exec(
+      await expect(
+        await raw.exec(
           "INSERT INTO scrum_contributors (id, slug, status, created_at) VALUES ('ct-b', 'jane', 'active', '2026-01-02T00:00:00Z')",
         ),
-      ).toThrow();
+      ).rejects.toThrow();
     } finally {
       raw.close();
     }
   });
 
-  test('SCRUM_MIGRATION_V13_SQL creates scrum_operator_history + interval index', () => {
+  test('SCRUM_MIGRATION_V13_SQL creates scrum_operator_history + interval index', async () => {
     expect(SCRUM_MIGRATION_V13_SQL).toContain('CREATE TABLE scrum_operator_history');
     expect(SCRUM_MIGRATION_V13_SQL).toContain('idx_scrum_operator_history_interval');
     expect(SCRUM_MIGRATION_V13_SQL).toContain('REFERENCES scrum_contributors(id)');
   });
 
-  test('a fresh store with scrum_operator_history present', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('a fresh store with scrum_operator_history present', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
+      await runMigrations(raw);
 
-      const tables = raw.all<{ name: string }>(
+      const tables = await raw.all<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_operator_history'",
       );
       expect(tables).toEqual([{ name: 'scrum_operator_history' }]);
 
-      const cols = raw
-        .all<{ name: string }>('PRAGMA table_info(scrum_operator_history)')
+      const cols = await raw.all<{ name: string }>('PRAGMA table_info(scrum_operator_history)')
         .map((c) => c.name);
       expect(cols).toEqual([
         'id',
@@ -987,17 +979,17 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('v13 to_ts is nullable — an open interval (current holder) is valid', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v13 to_ts is nullable — an open interval (current holder) is valid', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_contributors (id, slug, status, created_at) VALUES ('ct-jane', 'jane', 'active', '2026-01-01T00:00:00Z')",
       );
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_operator_history (contributor_id, from_ts, to_ts, created_at) VALUES ('ct-jane', '2026-01-01T00:00:00Z', NULL, '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{ to_ts: string | null }>(
+      const row = await raw.all<{ to_ts: string | null }>(
         'SELECT to_ts FROM scrum_operator_history WHERE contributor_id = ?',
         ['ct-jane'],
       );
@@ -1007,30 +999,30 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V14_SQL creates scrum_teams + type index', () => {
+  test('SCRUM_MIGRATION_V14_SQL creates scrum_teams + type index', async () => {
     expect(SCRUM_MIGRATION_V14_SQL).toContain('CREATE TABLE scrum_teams');
     expect(SCRUM_MIGRATION_V14_SQL).toContain('idx_scrum_teams_type');
   });
 
-  test('a fresh store ends at version 28 with scrum_teams present', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('a fresh store ends at version 28 with scrum_teams present', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
+      await runMigrations(raw);
 
-      const top = raw.all<{ version: number }>(
+      const top = await raw.all<{ version: number }>(
         'SELECT MAX(version) AS version FROM _migrations_log WHERE domain = ?',
         ['scrum'],
       );
       expect(top).toEqual([{ version: 28 }]);
 
-      const tables = raw.all<{ name: string }>(
+      const tables = await raw.all<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_teams'",
       );
       expect(tables).toEqual([{ name: 'scrum_teams' }]);
 
       // v18 appends terminates_on_milestone + status after the v14 base columns
       // (ADD COLUMN lands them at the end), NULL/'active' defaults respectively.
-      const cols = raw.all<{ name: string }>('PRAGMA table_info(scrum_teams)').map((c) => c.name);
+      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_teams)')).map((c) => c.name);
       expect(cols).toEqual([
         'slug',
         'team_type',
@@ -1045,31 +1037,31 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('v14 enforces slug uniqueness (primary key) on scrum_teams', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v14 enforces slug uniqueness (primary key) on scrum_teams', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, lifetime, created_at) VALUES ('payments', 'stream_aligned', 'persistent', '2026-01-01T00:00:00Z')",
       );
-      expect(() =>
-        raw.exec(
+      await expect(
+        await raw.exec(
           "INSERT INTO scrum_teams (slug, team_type, lifetime, created_at) VALUES ('payments', 'platform', 'persistent', '2026-01-02T00:00:00Z')",
         ),
-      ).toThrow();
+      ).rejects.toThrow();
     } finally {
       raw.close();
     }
   });
 
-  test('v14 lifetime defaults to persistent on insert', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v14 lifetime defaults to persistent on insert', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, created_at) VALUES ('platform-core', 'platform', '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{ lifetime: string; charter: string | null }>(
+      const row = await raw.all<{ lifetime: string; charter: string | null }>(
         'SELECT lifetime, charter FROM scrum_teams WHERE slug = ?',
         ['platform-core'],
       );
@@ -1079,24 +1071,23 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V15_SQL creates scrum_team_scopes + team index', () => {
+  test('SCRUM_MIGRATION_V15_SQL creates scrum_team_scopes + team index', async () => {
     expect(SCRUM_MIGRATION_V15_SQL).toContain('CREATE TABLE scrum_team_scopes');
     expect(SCRUM_MIGRATION_V15_SQL).toContain('idx_scrum_team_scopes_team');
     expect(SCRUM_MIGRATION_V15_SQL).toContain('REFERENCES scrum_teams(slug)');
   });
 
-  test('a fresh store has scrum_team_scopes with the v15 column shape', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('a fresh store has scrum_team_scopes with the v15 column shape', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
+      await runMigrations(raw);
 
-      const tables = raw.all<{ name: string }>(
+      const tables = await raw.all<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_team_scopes'",
       );
       expect(tables).toEqual([{ name: 'scrum_team_scopes' }]);
 
-      const cols = raw
-        .all<{ name: string }>('PRAGMA table_info(scrum_team_scopes)')
+      const cols = await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_scopes)')
         .map((c) => c.name);
       expect(cols).toEqual(['team_slug', 'kind', 'glob']);
     } finally {
@@ -1104,20 +1095,20 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('v15 scope rows round-trip against an existing team', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v15 scope rows round-trip against an existing team', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, created_at) VALUES ('payments', 'stream_aligned', '2026-01-01T00:00:00Z')",
       );
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_team_scopes (team_slug, kind, glob) VALUES ('payments', 'write', 'src/payments/**')",
       );
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_team_scopes (team_slug, kind, glob) VALUES ('payments', 'read', 'src/shared/**')",
       );
-      const rows = raw.all<{ kind: string; glob: string }>(
+      const rows = await raw.all<{ kind: string; glob: string }>(
         'SELECT kind, glob FROM scrum_team_scopes WHERE team_slug = ? ORDER BY kind, glob',
         ['payments'],
       );
@@ -1130,24 +1121,23 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V16_SQL creates scrum_team_members + (team, role) index', () => {
+  test('SCRUM_MIGRATION_V16_SQL creates scrum_team_members + (team, role) index', async () => {
     expect(SCRUM_MIGRATION_V16_SQL).toContain('CREATE TABLE scrum_team_members');
     expect(SCRUM_MIGRATION_V16_SQL).toContain('idx_scrum_team_members_team_role');
     expect(SCRUM_MIGRATION_V16_SQL).toContain('REFERENCES scrum_teams(slug)');
   });
 
-  test('a fresh store has scrum_team_members with the v16 column shape', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('a fresh store has scrum_team_members with the v16 column shape', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
+      await runMigrations(raw);
 
-      const tables = raw.all<{ name: string }>(
+      const tables = await raw.all<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_team_members'",
       );
       expect(tables).toEqual([{ name: 'scrum_team_members' }]);
 
-      const cols = raw
-        .all<{ name: string }>('PRAGMA table_info(scrum_team_members)')
+      const cols = await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_members)')
         .map((c) => c.name);
       expect(cols).toEqual([
         'id',
@@ -1164,17 +1154,17 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('v16 member rows round-trip against an existing team', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v16 member rows round-trip against an existing team', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, created_at) VALUES ('payments', 'stream_aligned', '2026-01-01T00:00:00Z')",
       );
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_team_members (team_slug, role, contributor_id, from_ts, to_ts, reason, created_at) VALUES ('payments', 'tech_lead', 'ct-jane', '2026-01-01T00:00:00Z', NULL, 'founding lead', '2026-01-01T00:00:00Z')",
       );
-      const rows = raw.all<{ role: string; contributor_id: string; to_ts: string | null }>(
+      const rows = await raw.all<{ role: string; contributor_id: string; to_ts: string | null }>(
         'SELECT role, contributor_id, to_ts FROM scrum_team_members WHERE team_slug = ?',
         ['payments'],
       );
@@ -1184,7 +1174,7 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V17_SQL creates both interface tables + per-team indexes', () => {
+  test('SCRUM_MIGRATION_V17_SQL creates both interface tables + per-team indexes', async () => {
     expect(SCRUM_MIGRATION_V17_SQL).toContain('CREATE TABLE scrum_team_accepts');
     expect(SCRUM_MIGRATION_V17_SQL).toContain('CREATE TABLE scrum_team_exposes');
     expect(SCRUM_MIGRATION_V17_SQL).toContain('idx_scrum_team_accepts_team');
@@ -1194,13 +1184,12 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V17_SQL).toContain("DEFAULT 'active'");
   });
 
-  test('a fresh store has scrum_team_accepts + scrum_team_exposes with the v17 column shape', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('a fresh store has scrum_team_accepts + scrum_team_exposes with the v17 column shape', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
+      await runMigrations(raw);
 
-      const acceptCols = raw
-        .all<{ name: string }>('PRAGMA table_info(scrum_team_accepts)')
+      const acceptCols = await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_accepts)')
         .map((c) => c.name);
       expect(acceptCols).toEqual([
         'id',
@@ -1212,8 +1201,7 @@ describe('scrum domain registration', () => {
         'created_at',
       ]);
 
-      const exposeCols = raw
-        .all<{ name: string }>('PRAGMA table_info(scrum_team_exposes)')
+      const exposeCols = await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_exposes)')
         .map((c) => c.name);
       expect(exposeCols).toEqual([
         'id',
@@ -1230,27 +1218,27 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('v17 interface rows round-trip against an existing team and default status active', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v17 interface rows round-trip against an existing team and default status active', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, created_at) VALUES ('payments', 'stream_aligned', '2026-01-01T00:00:00Z')",
       );
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_team_accepts (team_slug, ask_type, created_at) VALUES ('payments', 'schema-change', '2026-01-01T00:00:00Z')",
       );
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_team_exposes (team_slug, name, schema_ref, created_at) VALUES ('payments', 'PaymentEvent', 'schemas/payment-event.json', '2026-01-01T00:00:00Z')",
       );
-      const accepts = raw.all<{ ask_type: string; status: string; superseded_by: number | null }>(
+      const accepts = await raw.all<{ ask_type: string; status: string; superseded_by: number | null }>(
         'SELECT ask_type, status, superseded_by FROM scrum_team_accepts WHERE team_slug = ?',
         ['payments'],
       );
       expect(accepts).toEqual([
         { ask_type: 'schema-change', status: 'active', superseded_by: null },
       ]);
-      const exposes = raw.all<{ name: string; schema_ref: string; status: string }>(
+      const exposes = await raw.all<{ name: string; schema_ref: string; status: string }>(
         'SELECT name, schema_ref, status FROM scrum_team_exposes WHERE team_slug = ?',
         ['payments'],
       );
@@ -1262,7 +1250,7 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V18_SQL adds scrum_teams.terminates_on_milestone + status', () => {
+  test('SCRUM_MIGRATION_V18_SQL adds scrum_teams.terminates_on_milestone + status', async () => {
     expect(SCRUM_MIGRATION_V18_SQL).toContain(
       'ALTER TABLE scrum_teams ADD COLUMN terminates_on_milestone',
     );
@@ -1270,16 +1258,16 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V18_SQL).toContain("DEFAULT 'active'");
   });
 
-  test('v18 ADD COLUMN defaults terminates_on_milestone NULL + status active on existing teams', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v18 ADD COLUMN defaults terminates_on_milestone NULL + status active on existing teams', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
+      await runMigrations(raw);
       // Insert without the v18 columns — simulates a pre-v18 team carried through
       // the upgrade. terminates_on_milestone reads NULL, status reads 'active'.
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, lifetime, created_at) VALUES ('legacy', 'platform', 'persistent', '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{ terminates_on_milestone: string | null; status: string }>(
+      const row = await raw.all<{ terminates_on_milestone: string | null; status: string }>(
         'SELECT terminates_on_milestone, status FROM scrum_teams WHERE slug = ?',
         ['legacy'],
       );
@@ -1289,21 +1277,21 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V19_SQL creates scrum_lores + team index, FK to scrum_teams', () => {
+  test('SCRUM_MIGRATION_V19_SQL creates scrum_lores + team index, FK to scrum_teams', async () => {
     expect(SCRUM_MIGRATION_V19_SQL).toContain('CREATE TABLE scrum_lores');
     expect(SCRUM_MIGRATION_V19_SQL).toContain('idx_scrum_lores_team');
     expect(SCRUM_MIGRATION_V19_SQL).toContain('REFERENCES scrum_teams(slug)');
   });
 
-  test('a fresh store has scrum_lores with the v19 column shape + v28 supersession columns', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('a fresh store has scrum_lores with the v19 column shape + v28 supersession columns', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      const tables = raw.all<{ name: string }>(
+      await runMigrations(raw);
+      const tables = await raw.all<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_lores'",
       );
       expect(tables).toEqual([{ name: 'scrum_lores' }]);
-      const cols = raw.all<{ name: string }>('PRAGMA table_info(scrum_lores)').map((c) => c.name);
+      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_lores)')).map((c) => c.name);
       // v28 appends the supersession pointer + reason after the v19 base
       // columns (ADD COLUMN lands them at the end), NULL defaults.
       expect(cols).toEqual([
@@ -1320,20 +1308,20 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('v19 Lore rows round-trip against an existing team, oldest-first by id', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v19 Lore rows round-trip against an existing team, oldest-first by id', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, created_at) VALUES ('payments', 'stream_aligned', '2026-01-01T00:00:00Z')",
       );
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_lores (team_slug, body, author_contributor_id, created_at) VALUES ('payments', 'prefer idempotent migrations', 'CT-lead', '2026-01-01T00:00:00Z')",
       );
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_lores (team_slug, body, author_contributor_id, created_at) VALUES ('payments', 'pin the schema version', 'CT-lead', '2026-01-02T00:00:00Z')",
       );
-      const rows = raw.all<{ id: number; body: string; author_contributor_id: string }>(
+      const rows = await raw.all<{ id: number; body: string; author_contributor_id: string }>(
         'SELECT id, body, author_contributor_id FROM scrum_lores WHERE team_slug = ? ORDER BY id ASC',
         ['payments'],
       );
@@ -1346,7 +1334,7 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V20_SQL creates scrum_annotations + a (target_kind, target_ref) index', () => {
+  test('SCRUM_MIGRATION_V20_SQL creates scrum_annotations + a (target_kind, target_ref) index', async () => {
     expect(SCRUM_MIGRATION_V20_SQL).toContain('CREATE TABLE scrum_annotations');
     expect(SCRUM_MIGRATION_V20_SQL).toContain('idx_scrum_annotations_target');
     // target_ref is a SOFT reference — it spans multiple tables by target_kind,
@@ -1354,16 +1342,15 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V20_SQL).not.toContain('REFERENCES');
   });
 
-  test('a fresh store has scrum_annotations with the v20 column shape', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('a fresh store has scrum_annotations with the v20 column shape', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      const tables = raw.all<{ name: string }>(
+      await runMigrations(raw);
+      const tables = await raw.all<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_annotations'",
       );
       expect(tables).toEqual([{ name: 'scrum_annotations' }]);
-      const cols = raw
-        .all<{ name: string }>('PRAGMA table_info(scrum_annotations)')
+      const cols = await raw.all<{ name: string }>('PRAGMA table_info(scrum_annotations)')
         .map((c) => c.name);
       expect(cols).toEqual(['id', 'target_kind', 'target_ref', 'body', 'author', 'created_at']);
     } finally {
@@ -1371,23 +1358,23 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('v20 Annotation rows round-trip per (target_kind, target_ref), oldest-first by id', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v20 Annotation rows round-trip per (target_kind, target_ref), oldest-first by id', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
+      await runMigrations(raw);
       // No team/task/decision row exists — target_ref is a soft reference, so a
       // note attaches without the target's presence.
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_annotations (target_kind, target_ref, body, author, created_at) VALUES ('task', 't1', 'watch the off-by-one', 'CT-a', '2026-01-01T00:00:00Z')",
       );
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_annotations (target_kind, target_ref, body, author, created_at) VALUES ('task', 't1', 'fixed in follow-up', 'CT-b', '2026-01-02T00:00:00Z')",
       );
       // A different target_kind sharing the same ref does NOT collide.
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_annotations (target_kind, target_ref, body, author, created_at) VALUES ('team', 't1', 'team note', 'CT-c', '2026-01-03T00:00:00Z')",
       );
-      const rows = raw.all<{ id: number; body: string; author: string }>(
+      const rows = await raw.all<{ id: number; body: string; author: string }>(
         'SELECT id, body, author FROM scrum_annotations WHERE target_kind = ? AND target_ref = ? ORDER BY id ASC',
         ['task', 't1'],
       );
@@ -1400,7 +1387,7 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V21_SQL adds the three gated-write columns to scrum_decisions', () => {
+  test('SCRUM_MIGRATION_V21_SQL adds the three gated-write columns to scrum_decisions', async () => {
     expect(SCRUM_MIGRATION_V21_SQL).toContain(
       'ALTER TABLE scrum_decisions ADD COLUMN write_status',
     );
@@ -1412,12 +1399,11 @@ describe('scrum domain registration', () => {
     );
   });
 
-  test('a fresh store has scrum_decisions with the v21 column shape appended', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('a fresh store has scrum_decisions with the v21 column shape appended', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      const cols = raw
-        .all<{ name: string; type: string; notnull: number }>(
+      await runMigrations(raw);
+      const cols = await raw.all<{ name: string; type: string; notnull: number }>(
           "SELECT name, type, [notnull] FROM pragma_table_info('scrum_decisions') ORDER BY cid",
         )
         .map((c) => `${c.name}:${c.type}:${c.notnull}`);
@@ -1446,16 +1432,16 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('v21 ADD COLUMN defaults the gated-write columns to NULL on existing rows', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v21 ADD COLUMN defaults the gated-write columns to NULL on existing rows', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
+      await runMigrations(raw);
       // A decision inserted without the v21 columns — simulates a pre-v21 row
       // carried through the upgrade. The new columns must read NULL.
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_decisions (id, title, status, content, content_sha, recorded_at) VALUES ('d1', 'D1', 'accepted', 'body', 'sha', '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{
+      const row = await raw.all<{
         write_status: string | null;
         gate_responder: string | null;
         gate_responded_at: string | null;
@@ -1469,23 +1455,23 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V22_SQL adds source_lore_id referencing scrum_lores', () => {
+  test('SCRUM_MIGRATION_V22_SQL adds source_lore_id referencing scrum_lores', async () => {
     expect(SCRUM_MIGRATION_V22_SQL).toContain(
       'ALTER TABLE scrum_decisions ADD COLUMN source_lore_id',
     );
     expect(SCRUM_MIGRATION_V22_SQL).toContain('REFERENCES scrum_lores(id)');
   });
 
-  test('v22 ADD COLUMN defaults source_lore_id to NULL on existing rows', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v22 ADD COLUMN defaults source_lore_id to NULL on existing rows', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
+      await runMigrations(raw);
       // A decision inserted without the v22 column — simulates a pre-v22 row
       // carried through the upgrade. The new column must read NULL.
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_decisions (id, title, status, content, content_sha, recorded_at) VALUES ('d1', 'D1', 'accepted', 'body', 'sha', '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{ source_lore_id: number | null }>(
+      const row = await raw.all<{ source_lore_id: number | null }>(
         'SELECT source_lore_id FROM scrum_decisions WHERE id = ?',
         ['d1'],
       );
@@ -1495,7 +1481,7 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V23_SQL creates scrum_asks + both indexes with the two team FKs + artifact FK', () => {
+  test('SCRUM_MIGRATION_V23_SQL creates scrum_asks + both indexes with the two team FKs + artifact FK', async () => {
     expect(SCRUM_MIGRATION_V23_SQL).toContain('CREATE TABLE scrum_asks');
     expect(SCRUM_MIGRATION_V23_SQL).toContain(
       'from_team TEXT NOT NULL REFERENCES scrum_teams(slug)',
@@ -1509,24 +1495,24 @@ describe('scrum domain registration', () => {
     expect(SCRUM_MIGRATION_V23_SQL).toContain('idx_scrum_asks_blocking_artifact');
   });
 
-  test('v23 scrum_asks persists a filed row and defaults state to filed', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v23 scrum_asks persists a filed row and defaults state to filed', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, lifetime, created_at) VALUES ('payments', 'stream_aligned', 'persistent', '2026-01-01T00:00:00Z')",
       );
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, lifetime, created_at) VALUES ('identity', 'platform', 'persistent', '2026-01-01T00:00:00Z')",
       );
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('blocked-1', 'B', 'todo', '2026-01-01T00:00:00Z')",
       );
       // No explicit state column — the DEFAULT 'filed' must apply.
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_asks (from_team, to_team, ask_type, blocking_artifact, created_at) VALUES ('payments', 'identity', 'schema-change', 'blocked-1', '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{ state: string; to_team: string }>(
+      const row = await raw.all<{ state: string; to_team: string }>(
         'SELECT state, to_team FROM scrum_asks',
       );
       expect(row).toEqual([{ state: 'filed', to_team: 'identity' }]);
@@ -1535,29 +1521,29 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_MIGRATION_V25_SQL adds the three ask-response columns', () => {
+  test('SCRUM_MIGRATION_V25_SQL adds the three ask-response columns', async () => {
     expect(SCRUM_MIGRATION_V25_SQL).toContain('ALTER TABLE scrum_asks ADD COLUMN mapped_artifact');
     expect(SCRUM_MIGRATION_V25_SQL).toContain('ALTER TABLE scrum_asks ADD COLUMN rejected_reason');
     expect(SCRUM_MIGRATION_V25_SQL).toContain('ALTER TABLE scrum_asks ADD COLUMN counter_proposal');
   });
 
-  test('v25 ADD COLUMN defaults the three response columns to NULL on a filed row', () => {
-    const raw = openStore({ path: ':memory:' });
+  test('v25 ADD COLUMN defaults the three response columns to NULL on a filed row', async () => {
+    const raw = await openStore({ path: ':memory:' });
     try {
-      runMigrations(raw);
-      raw.exec(
+      await runMigrations(raw);
+      await await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, lifetime, created_at) VALUES ('payments', 'stream_aligned', 'persistent', '2026-01-01T00:00:00Z')",
       );
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, lifetime, created_at) VALUES ('identity', 'platform', 'persistent', '2026-01-01T00:00:00Z')",
       );
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('blocked-1', 'B', 'todo', '2026-01-01T00:00:00Z')",
       );
-      raw.exec(
+      await await raw.exec(
         "INSERT INTO scrum_asks (from_team, to_team, ask_type, blocking_artifact, created_at) VALUES ('payments', 'identity', 'schema-change', 'blocked-1', '2026-01-01T00:00:00Z')",
       );
-      const row = raw.all<{
+      const row = await raw.all<{
         mapped_artifact: string | null;
         rejected_reason: string | null;
         counter_proposal: string | null;
