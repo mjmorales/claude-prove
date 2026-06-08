@@ -91,14 +91,14 @@ export function register(cli: CAC): void {
     .option('--file <f>', 'Entry JSON file path (log append) / brief markdown (brief validate)')
     .option('--token-budget <n>', 'Episode-chunk token budget (brief chunk; default: 6000)')
     .option('--milestone <m>', 'Milestone id (milestone-brief)')
-    .action((action: string, arg: string | undefined, flags: AcbFlags) => {
+    .action(async (action: string, arg: string | undefined, flags: AcbFlags) => {
       if (!isAcbAction(action)) {
         console.error(
           `error: unknown acb action '${action}'. expected one of: ${ACB_ACTIONS.join(', ')}`,
         );
         process.exit(1);
       }
-      const code = dispatch(action, arg, flags);
+      const code = await dispatch(action, arg, flags);
       process.exit(code);
     });
 }
@@ -111,7 +111,11 @@ function isHookEvent(value: string): value is HookEvent {
   return (HOOK_EVENTS as readonly string[]).includes(value);
 }
 
-function dispatch(action: AcbAction, arg: string | undefined, flags: AcbFlags): number {
+async function dispatch(
+  action: AcbAction,
+  arg: string | undefined,
+  flags: AcbFlags,
+): Promise<number> {
   switch (action) {
     case 'save-manifest':
       return runSaveManifest({

@@ -21,9 +21,9 @@ export interface MigrateLegacyFlags {
   workspaceRoot?: string;
 }
 
-export function runMigrateLegacy(flags: MigrateLegacyFlags): number {
+export async function runMigrateLegacy(flags: MigrateLegacyFlags): Promise<number> {
   const root = flags.workspaceRoot ?? mainWorktreeRoot() ?? process.cwd();
-  const result = importLegacyDb(root);
+  const result = await importLegacyDb(root);
   return reportResult(result);
 }
 

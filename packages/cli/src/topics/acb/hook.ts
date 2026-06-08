@@ -110,10 +110,10 @@ const CD_RE = /(?:^|[;&|()\n])\s*cd\s+(?<path>"[^"]*"|'[^']*'|[^\s;&|()]+)/g;
  * Process a PostToolUse payload. Pure — no stdout/stdin side effects so the
  * CLI handler can drive I/O and tests can assert return shape.
  */
-export function runHookPostCommit(opts: {
+export async function runHookPostCommit(opts: {
   workspaceRoot: string;
   payload: ClaudeCodeHookPayload;
-}): HookOutput {
+}): Promise<HookOutput> {
   const { workspaceRoot, payload } = opts;
 
   // Filter 1: only Bash tool invocations carry git commands.
@@ -152,7 +152,7 @@ export function runHookPostCommit(opts: {
 
   // Check store for an existing manifest. When `runSlug` is non-null, only
   // manifests tagged with that slug count.
-  if (manifestExists(workspaceRoot, sha, runSlug)) return silent();
+  if (await manifestExists(workspaceRoot, sha, runSlug)) return silent();
 
   const diffStat = headDiffStat(sha, cwd);
   const nowIso = isoSeconds();
@@ -319,12 +319,16 @@ function block(reason: string): HookOutput {
  * manifest from a corrupt/inaccessible store when every commit is being
  * intercepted.
  */
-function manifestExists(workspaceRoot: string, commitSha: string, runSlug: string | null): boolean {
+async function manifestExists(
+  workspaceRoot: string,
+  commitSha: string,
+  runSlug: string | null,
+): Promise<boolean> {
   try {
     const dbPath = join(workspaceRoot, '.prove', 'prove.db');
-    const store = openAcbStore({ override: dbPath });
+    const store = await openAcbStore({ override: dbPath });
     try {
-      return store.hasManifestForSha(commitSha, runSlug ?? undefined);
+      return await store.hasManifestForSha(commitSha, runSlug ?? undefined);
     } finally {
       store.close();
     }
