@@ -80,47 +80,47 @@ function makeGroup(gid: string, files: string[], overrides: GroupOverrides = {})
 describe('loadManifestsFromStore', () => {
   let store: AcbStore;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     ensureAcbSchemaRegistered();
-    store = openAcbStore({ path: ':memory:' });
+    store = await openAcbStore({ path: ':memory:' });
   });
 
   afterEach(() => {
     store.close();
   });
 
-  test('loads valid manifests', () => {
+  test('loads valid manifests', async () => {
     const m = makeManifest('0', [makeGroup('g1', ['a.py'])]);
-    store.saveManifest('feat/x', 'abc', m);
-    const result = loadManifestsFromStore(store, 'feat/x');
+    await store.saveManifest('feat/x', 'abc', m);
+    const result = await loadManifestsFromStore(store, 'feat/x');
     expect(result.length).toBe(1);
   });
 
-  test('skips invalid manifest (empty intent_groups)', () => {
-    store.saveManifest('feat/x', 'abc', {
+  test('skips invalid manifest (empty intent_groups)', async () => {
+    await store.saveManifest('feat/x', 'abc', {
       acb_manifest_version: '0.2',
       commit_sha: 'abc',
       timestamp: '2026-01-01T00:00:00Z',
       intent_groups: [],
     });
-    const result = loadManifestsFromStore(store, 'feat/x');
+    const result = await loadManifestsFromStore(store, 'feat/x');
     expect(result).toEqual([]);
   });
 
-  test('sorts manifests by timestamp (store-level ORDER BY)', () => {
+  test('sorts manifests by timestamp (store-level ORDER BY)', async () => {
     const m1 = makeManifest('2', [makeGroup('g1', ['a.py'])]);
     const m2 = makeManifest('1', [makeGroup('g2', ['b.py'])]);
-    store.saveManifest('feat/x', 'sha2', m1);
-    store.saveManifest('feat/x', 'sha1', m2);
-    const result = loadManifestsFromStore(store, 'feat/x');
+    await store.saveManifest('feat/x', 'sha2', m1);
+    await store.saveManifest('feat/x', 'sha1', m2);
+    const result = await loadManifestsFromStore(store, 'feat/x');
     expect(result[0]?.commit_sha).toBe('1');
     expect(result[1]?.commit_sha).toBe('2');
   });
 
-  test('branch isolation — only requested branch is returned', () => {
-    store.saveManifest('feat/x', 'abc', makeManifest('0', [makeGroup('g1', ['a.py'])]));
-    store.saveManifest('feat/y', 'def', makeManifest('1', [makeGroup('g2', ['b.py'])]));
-    const result = loadManifestsFromStore(store, 'feat/x');
+  test('branch isolation — only requested branch is returned', async () => {
+    await store.saveManifest('feat/x', 'abc', makeManifest('0', [makeGroup('g1', ['a.py'])]));
+    await store.saveManifest('feat/y', 'def', makeManifest('1', [makeGroup('g2', ['b.py'])]));
+    const result = await loadManifestsFromStore(store, 'feat/x');
     expect(result.length).toBe(1);
     expect(result[0]?.commit_sha).toBe('0');
   });
@@ -321,28 +321,28 @@ describe('computeAcbHash', () => {
 describe('assemble', () => {
   let store: AcbStore;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     ensureAcbSchemaRegistered();
-    store = openAcbStore({ path: ':memory:' });
+    store = await openAcbStore({ path: ':memory:' });
   });
 
   afterEach(() => {
     store.close();
   });
 
-  test('produces a full ACB document with every expected field', () => {
-    store.saveManifest(
+  test('produces a full ACB document with every expected field', async () => {
+    await store.saveManifest(
       'feat/x',
       'sha1',
       makeManifest('0', [makeGroup('g1', ['a.py'], { ranges: { 'a.py': ['1-10'] } })]),
     );
-    store.saveManifest(
+    await store.saveManifest(
       'feat/x',
       'sha2',
       makeManifest('1', [makeGroup('g1', ['a.py'], { ranges: { 'a.py': ['20-30'] } })]),
     );
 
-    const doc: AcbDocument = assemble({ store, branch: 'feat/x', baseRef: 'main' });
+    const doc: AcbDocument = await assemble({ store, branch: 'feat/x', baseRef: 'main' });
 
     expect(doc.acb_version).toBe('0.2');
     expect(typeof doc.id).toBe('string');
@@ -359,23 +359,23 @@ describe('assemble', () => {
     expect(doc.manifest_count).toBe(2);
   });
 
-  test('manifest_count excludes invalid manifests', () => {
+  test('manifest_count excludes invalid manifests', async () => {
     // One valid, one invalid (empty intent_groups).
-    store.saveManifest('feat/x', 'sha1', makeManifest('0', [makeGroup('g1', ['a.py'])]));
-    store.saveManifest('feat/x', 'sha2', {
+    await store.saveManifest('feat/x', 'sha1', makeManifest('0', [makeGroup('g1', ['a.py'])]));
+    await store.saveManifest('feat/x', 'sha2', {
       acb_manifest_version: '0.2',
       commit_sha: 'sha2',
       timestamp: '2026-03-29T12:01:00Z',
       intent_groups: [],
     });
 
-    const doc = assemble({ store, branch: 'feat/x', baseRef: 'main' });
+    const doc = await assemble({ store, branch: 'feat/x', baseRef: 'main' });
     expect(doc.manifest_count).toBe(1);
   });
 
-  test('passes through taskStatement and headRef overrides', () => {
-    store.saveManifest('feat/x', 'sha1', makeManifest('0', [makeGroup('g1', ['a.py'])]));
-    const doc = assemble({
+  test('passes through taskStatement and headRef overrides', async () => {
+    await store.saveManifest('feat/x', 'sha1', makeManifest('0', [makeGroup('g1', ['a.py'])]));
+    const doc = await assemble({
       store,
       branch: 'feat/x',
       baseRef: 'main',
@@ -386,15 +386,15 @@ describe('assemble', () => {
     expect(doc.task_statement).toEqual({ turns: [{ role: 'user', content: 'hi' }] });
   });
 
-  test('zero manifests → empty doc with manifest_count=0', () => {
-    const doc = assemble({ store, branch: 'empty', baseRef: 'main' });
+  test('zero manifests → empty doc with manifest_count=0', async () => {
+    const doc = await assemble({ store, branch: 'empty', baseRef: 'main' });
     expect(doc.manifest_count).toBe(0);
     expect(doc.intent_groups).toEqual([]);
     expect(doc.negative_space).toEqual([]);
     expect(doc.open_questions).toEqual([]);
   });
 
-  test('explicit cwd binds the diff (uncovered_files) to that worktree', () => {
+  test('explicit cwd binds the diff (uncovered_files) to that worktree', async () => {
     // Build a throwaway git repo with a known committed change, then assert
     // assemble() runs `git diff` in opts.cwd — not process.cwd() — so an
     // uncovered file from THAT tree surfaces. Guards F-1-002.
@@ -416,7 +416,7 @@ describe('assemble', () => {
       run(['git', 'commit', '--quiet', '-m', 'add changed']);
 
       // No manifests → every diffed file is uncovered.
-      const doc = assemble({ store, branch: 'feat/x', baseRef: 'HEAD~1', cwd: repo });
+      const doc = await assemble({ store, branch: 'feat/x', baseRef: 'HEAD~1', cwd: repo });
       expect(doc.uncovered_files).toContain('changed.txt');
     } finally {
       rmSync(repo, { recursive: true, force: true });

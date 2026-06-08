@@ -118,9 +118,12 @@ export interface AssembleOpts {
  * Load every manifest stored against `branch`, validate it, and return only
  * the valid ones. Invalid manifests are skipped with a `warn` log line.
  */
-export function loadManifestsFromStore(store: AcbStore, branch: string): Record<string, unknown>[] {
+export async function loadManifestsFromStore(
+  store: AcbStore,
+  branch: string,
+): Promise<Record<string, unknown>[]> {
   const manifests: Record<string, unknown>[] = [];
-  for (const raw of store.listManifests(branch)) {
+  for (const raw of await store.listManifests(branch)) {
     const errors = validateManifest(raw);
     if (errors.length > 0) {
       logger.warn(`Skipping invalid manifest: ${errors.join('; ')}`);
@@ -428,9 +431,9 @@ function encodeJsonString(s: string): string {
  * Assemble manifests for `branch` into a single ACB document. Top-level
  * orchestrator over load → merge → collect → diff.
  */
-export function assemble(opts: AssembleOpts): AcbDocument {
+export async function assemble(opts: AssembleOpts): Promise<AcbDocument> {
   const { store, branch, baseRef, headRef, taskStatement, cwd } = opts;
-  const manifests = loadManifestsFromStore(store, branch);
+  const manifests = await loadManifestsFromStore(store, branch);
   const intentGroups = mergeIntentGroups(manifests);
   const negativeSpace = collectNegativeSpace(manifests);
   const openQuestions = collectOpenQuestions(manifests);

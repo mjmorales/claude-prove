@@ -1,4 +1,4 @@
-export { openStore, Store, type StoreOptions } from './connection';
+export { openStore, type SqlParam, Store, type StoreOptions, withTx } from './connection';
 export {
   dropAllDomainTables,
   runMigrations,

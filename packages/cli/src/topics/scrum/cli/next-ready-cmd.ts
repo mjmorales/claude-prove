@@ -28,7 +28,7 @@ export interface NextReadyCmdFlags {
 
 const DEFAULT_LIMIT = 10;
 
-export function runNextReadyCmd(flags: NextReadyCmdFlags): number {
+export async function runNextReadyCmd(flags: NextReadyCmdFlags): Promise<number> {
   const limit = coerceInt(flags.limit, DEFAULT_LIMIT);
   const milestoneId =
     flags.milestone !== undefined && flags.milestone.length > 0 ? flags.milestone : undefined;
@@ -37,9 +37,9 @@ export function runNextReadyCmd(flags: NextReadyCmdFlags): number {
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
-    const rows = store.nextReady({ limit, milestoneId });
+    const rows = await store.nextReady({ limit, milestoneId });
     if (flags.human === true) {
       process.stdout.write(renderHumanTable(rows));
     } else {

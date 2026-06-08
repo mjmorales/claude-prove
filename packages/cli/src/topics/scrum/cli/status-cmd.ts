@@ -47,14 +47,14 @@ const ACTIVE_STATUSES: TaskStatus[] = [
   'blocked',
 ];
 
-export function runStatusCmd(flags: StatusCmdFlags): number {
+export async function runStatusCmd(flags: StatusCmdFlags): Promise<number> {
   const workspaceRoot =
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
-    const snapshot = buildSnapshot(store);
+    const snapshot = await buildSnapshot(store);
     if (flags.human === true) {
       process.stdout.write(renderHumanTable(snapshot));
     } else {
@@ -84,19 +84,19 @@ export interface TreeNode {
 }
 
 export interface Snapshot {
-  active_tasks: ReturnType<ScrumStore['listTasks']>;
+  active_tasks: Awaited<ReturnType<ScrumStore['listTasks']>>;
   task_tree: TreeNode[];
-  milestones: ReturnType<ScrumStore['listMilestones']>;
+  milestones: Awaited<ReturnType<ScrumStore['listMilestones']>>;
   total_milestones: number;
-  recent_events: ReturnType<ScrumStore['listRecentEvents']>;
+  recent_events: Awaited<ReturnType<ScrumStore['listRecentEvents']>>;
 }
 
-export function buildSnapshot(store: ScrumStore): Snapshot {
-  const allTasks = store.listTasks();
+export async function buildSnapshot(store: ScrumStore): Promise<Snapshot> {
+  const allTasks = await store.listTasks();
   const active = allTasks.filter((t) => ACTIVE_STATUSES.includes(t.status));
-  const allMilestones = store.listMilestones();
+  const allMilestones = await store.listMilestones();
   const milestones = allMilestones.filter((m) => m.status !== 'closed');
-  const recent = store.listRecentEvents(RECENT_EVENT_LIMIT);
+  const recent = await store.listRecentEvents(RECENT_EVENT_LIMIT);
   return {
     active_tasks: active,
     task_tree: buildTaskTree(allTasks),

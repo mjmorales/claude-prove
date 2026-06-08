@@ -183,11 +183,11 @@ const TEAM_ACTIONS: TeamAction[] = [
   'sync-agents',
 ];
 
-export function runTeamCmd(
+export async function runTeamCmd(
   action: string,
   args: (string | undefined)[],
   flags: TeamCmdFlags,
-): number {
+): Promise<number> {
   if (!isTeamAction(action)) {
     process.stderr.write(
       `error: unknown team action '${action}'. expected one of: ${TEAM_ACTIONS.join(', ')}\n`,
@@ -199,37 +199,37 @@ export function runTeamCmd(
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'create':
-        return doCreate(store, workspaceRoot, flags);
+        return await doCreate(store, workspaceRoot, flags);
       case 'show':
-        return doShow(store, args[0]);
+        return await doShow(store, args[0]);
       case 'list':
-        return doList(store, flags);
+        return await doList(store, flags);
       case 'scope-set':
-        return doScopeSet(store, workspaceRoot, args[0], flags);
+        return await doScopeSet(store, workspaceRoot, args[0], flags);
       case 'scope-show':
-        return doScopeShow(store, args[0]);
+        return await doScopeShow(store, args[0]);
       case 'rotate':
-        return doRotate(store, workspaceRoot, args[0], flags);
+        return await doRotate(store, workspaceRoot, args[0], flags);
       case 'roster':
-        return doRoster(store, args[0]);
+        return await doRoster(store, args[0]);
       case 'accept-add':
-        return doAcceptAdd(store, workspaceRoot, args[0], flags);
+        return await doAcceptAdd(store, workspaceRoot, args[0], flags);
       case 'accept-supersede':
-        return doAcceptSupersede(store, workspaceRoot, args[0], flags);
+        return await doAcceptSupersede(store, workspaceRoot, args[0], flags);
       case 'expose-add':
-        return doExposeAdd(store, workspaceRoot, args[0], flags);
+        return await doExposeAdd(store, workspaceRoot, args[0], flags);
       case 'expose-supersede':
-        return doExposeSupersede(store, workspaceRoot, args[0], flags);
+        return await doExposeSupersede(store, workspaceRoot, args[0], flags);
       case 'interface':
-        return doInterface(store, args[0]);
+        return await doInterface(store, args[0]);
       case 'terminate':
-        return doTerminate(store, workspaceRoot, args[0], flags);
+        return await doTerminate(store, workspaceRoot, args[0], flags);
       case 'sync-agents':
-        return doSyncAgents(store, workspaceRoot, args[0]);
+        return await doSyncAgents(store, workspaceRoot, args[0]);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -248,7 +248,11 @@ function isTeamAction(value: string): value is TeamAction {
 // create
 // ---------------------------------------------------------------------------
 
-function doCreate(store: ScrumStore, workspaceRoot: string, flags: TeamCmdFlags): number {
+async function doCreate(
+  store: ScrumStore,
+  workspaceRoot: string,
+  flags: TeamCmdFlags,
+): Promise<number> {
   if (flags.slug === undefined || flags.slug.length === 0) {
     process.stderr.write('scrum team create: --slug <slug> is required\n');
     return 1;
@@ -267,7 +271,7 @@ function doCreate(store: ScrumStore, workspaceRoot: string, flags: TeamCmdFlags)
   // createTeam enforces the lifetime↔target consistency rule (a
   // terminates_on_milestone team requires --terminates-on; a persistent team
   // forbids it); a violation throws and surfaces as exit 1 via the catch.
-  const row = store.createTeam({
+  const row = await store.createTeam({
     slug: flags.slug,
     teamType,
     charter: emptyToNull(flags.charter),
@@ -278,7 +282,7 @@ function doCreate(store: ScrumStore, workspaceRoot: string, flags: TeamCmdFlags)
   process.stdout.write(`${JSON.stringify(row)}\n`);
   let createWhere = '';
   try {
-    const artifactPath = reconcileTeamArtifact(store, workspaceRoot, row);
+    const artifactPath = await reconcileTeamArtifact(store, workspaceRoot, row);
     createWhere = ` -> ${artifactPath}`;
   } catch (artifactErr) {
     const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
@@ -345,11 +349,15 @@ function emptyToNull(raw: string | undefined): string | null {
  * `lore record` action (a sibling memory-layer command) can reflect a new Lore
  * entry into the same artifact. Returns the written path.
  */
-export function reconcileTeamArtifact(store: ScrumStore, workspaceRoot: string, row: Team): string {
-  const scopes = store.getTeamScopes(row.slug);
-  const roster = store.getTeamRoster(row.slug);
-  const iface = store.getTeamInterface(row.slug);
-  const lores = store.listLores(row.slug);
+export async function reconcileTeamArtifact(
+  store: ScrumStore,
+  workspaceRoot: string,
+  row: Team,
+): Promise<string> {
+  const scopes = await store.getTeamScopes(row.slug);
+  const roster = await store.getTeamRoster(row.slug);
+  const iface = await store.getTeamInterface(row.slug);
+  const lores = await store.listLores(row.slug);
   const dir = join(workspaceRoot, 'teams');
   const path = join(dir, `${row.slug}.md`);
   // The artifact is a mirror of the store row; a write failure is a cosmetic
@@ -545,12 +553,12 @@ function yamlGlobList(globs: string[]): string {
 // show
 // ---------------------------------------------------------------------------
 
-function doShow(store: ScrumStore, slug: string | undefined): number {
+async function doShow(store: ScrumStore, slug: string | undefined): Promise<number> {
   if (slug === undefined || slug.length === 0) {
     process.stderr.write('scrum team show: <slug> is required\n');
     return 1;
   }
-  const row = store.getTeam(slug);
+  const row = await store.getTeam(slug);
   if (row === null) {
     process.stdout.write('null\n');
     process.stderr.write(`scrum team show: no team '${slug}'\n`);
@@ -565,8 +573,8 @@ function doShow(store: ScrumStore, slug: string | undefined): number {
 // list
 // ---------------------------------------------------------------------------
 
-function doList(store: ScrumStore, flags: TeamCmdFlags): number {
-  const rows = store.listTeams();
+async function doList(store: ScrumStore, flags: TeamCmdFlags): Promise<number> {
+  const rows = await store.listTeams();
   if (flags.human === true) {
     process.stdout.write(renderHumanTable(rows));
   } else {
@@ -592,12 +600,12 @@ function renderHumanTable(rows: Team[]): string {
 // scope-set / scope-show
 // ---------------------------------------------------------------------------
 
-function doScopeSet(
+async function doScopeSet(
   store: ScrumStore,
   workspaceRoot: string,
   slug: string | undefined,
   flags: TeamCmdFlags,
-): number {
+): Promise<number> {
   if (slug === undefined || slug.length === 0) {
     process.stderr.write('scrum team scope-set: <slug> is required\n');
     return 1;
@@ -610,9 +618,9 @@ function doScopeSet(
   // setTeamScopes throws on an unknown slug AND on a cross-team write overlap;
   // both surface as exit 1 via the runTeamCmd catch. The overlap message names
   // both teams and the offending glob(s).
-  const saved = store.setTeamScopes(slug, scopes);
+  const saved = await store.setTeamScopes(slug, scopes);
 
-  const row = store.getTeam(slug);
+  const row = await store.getTeam(slug);
   if (row === null) {
     process.stderr.write(`scrum team scope-set: no team '${slug}'\n`);
     return 1;
@@ -620,7 +628,7 @@ function doScopeSet(
   process.stdout.write(`${JSON.stringify(saved)}\n`);
   let scopeWhere = '';
   try {
-    const artifactPath = reconcileTeamArtifact(store, workspaceRoot, row);
+    const artifactPath = await reconcileTeamArtifact(store, workspaceRoot, row);
     scopeWhere = ` -> ${artifactPath}`;
   } catch (artifactErr) {
     const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
@@ -632,17 +640,17 @@ function doScopeSet(
   return 0;
 }
 
-function doScopeShow(store: ScrumStore, slug: string | undefined): number {
+async function doScopeShow(store: ScrumStore, slug: string | undefined): Promise<number> {
   if (slug === undefined || slug.length === 0) {
     process.stderr.write('scrum team scope-show: <slug> is required\n');
     return 1;
   }
-  if (store.getTeam(slug) === null) {
+  if ((await store.getTeam(slug)) === null) {
     process.stdout.write('null\n');
     process.stderr.write(`scrum team scope-show: no team '${slug}'\n`);
     return 1;
   }
-  const scopes = store.getTeamScopes(slug);
+  const scopes = await store.getTeamScopes(slug);
   process.stdout.write(`${JSON.stringify(scopes)}\n`);
   process.stderr.write(
     `scrum team scope-show: ${slug} read=${scopes.read.length} write=${scopes.write.length}\n`,
@@ -666,12 +674,12 @@ function parseCsvGlobs(raw: string | undefined): string[] {
 // rotate / roster
 // ---------------------------------------------------------------------------
 
-function doRotate(
+async function doRotate(
   store: ScrumStore,
   workspaceRoot: string,
   slug: string | undefined,
   flags: TeamCmdFlags,
-): number {
+): Promise<number> {
   if (slug === undefined || slug.length === 0) {
     process.stderr.write('scrum team rotate: <slug> is required\n');
     return 1;
@@ -691,7 +699,7 @@ function doRotate(
 
   // rotateTeamMember throws on an unknown team (and on an invalid role, already
   // guarded above); both surface as exit 1 via the runTeamCmd catch.
-  const { row, warning } = store.rotateTeamMember({
+  const { row, warning } = await store.rotateTeamMember({
     teamSlug: slug,
     role,
     contributorId: flags.contributor,
@@ -703,11 +711,11 @@ function doRotate(
     process.stderr.write(`scrum team rotate: WARNING: ${warning}\n`);
   }
   let rotateWhere = '';
-  const rotatedTeam = store.getTeam(slug);
+  const rotatedTeam = await store.getTeam(slug);
   try {
     // The team exists — rotateTeamMember already guarded it — so this is total.
     const artifactPath =
-      rotatedTeam !== null ? reconcileTeamArtifact(store, workspaceRoot, rotatedTeam) : null;
+      rotatedTeam !== null ? await reconcileTeamArtifact(store, workspaceRoot, rotatedTeam) : null;
     rotateWhere = artifactPath !== null ? ` -> ${artifactPath}` : '';
   } catch (artifactErr) {
     const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
@@ -722,17 +730,17 @@ function doRotate(
   return 0;
 }
 
-function doRoster(store: ScrumStore, slug: string | undefined): number {
+async function doRoster(store: ScrumStore, slug: string | undefined): Promise<number> {
   if (slug === undefined || slug.length === 0) {
     process.stderr.write('scrum team roster: <slug> is required\n');
     return 1;
   }
-  if (store.getTeam(slug) === null) {
+  if ((await store.getTeam(slug)) === null) {
     process.stdout.write('null\n');
     process.stderr.write(`scrum team roster: no team '${slug}'\n`);
     return 1;
   }
-  const roster = store.getTeamRoster(slug);
+  const roster = await store.getTeamRoster(slug);
   const filled = TEAM_ROLES.filter((role) => roster.current[role] !== null).length;
   process.stdout.write(`${JSON.stringify(roster)}\n`);
   process.stderr.write(`scrum team roster: ${slug} ${filled}/${TEAM_ROLES.length} slots filled\n`);
@@ -760,12 +768,12 @@ function normalizeRole(raw: string | undefined): TeamRole | undefined | typeof I
 // accept-add / accept-supersede / expose-add / expose-supersede / interface (v17)
 // ---------------------------------------------------------------------------
 
-function doAcceptAdd(
+async function doAcceptAdd(
   store: ScrumStore,
   workspaceRoot: string,
   slug: string | undefined,
   flags: TeamCmdFlags,
-): number {
+): Promise<number> {
   if (slug === undefined || slug.length === 0) {
     process.stderr.write('scrum team accept-add: <slug> is required\n');
     return 1;
@@ -777,13 +785,14 @@ function doAcceptAdd(
 
   // addTeamAccept throws on an unknown team AND on a non-kebab ask type; both
   // surface as exit 1 via the runTeamCmd catch.
-  const accept = store.addTeamAccept(slug, flags.askType);
+  const accept = await store.addTeamAccept(slug, flags.askType);
 
   process.stdout.write(`${JSON.stringify(accept)}\n`);
   let acceptAddWhere = '';
   try {
-    const team = store.getTeam(slug);
-    const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+    const team = await store.getTeam(slug);
+    const artifactPath =
+      team !== null ? await reconcileTeamArtifact(store, workspaceRoot, team) : null;
     acceptAddWhere = artifactPath !== null ? ` -> ${artifactPath}` : '';
   } catch (artifactErr) {
     const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
@@ -797,12 +806,12 @@ function doAcceptAdd(
   return 0;
 }
 
-function doAcceptSupersede(
+async function doAcceptSupersede(
   store: ScrumStore,
   workspaceRoot: string,
   slug: string | undefined,
   flags: TeamCmdFlags,
-): number {
+): Promise<number> {
   if (slug === undefined || slug.length === 0) {
     process.stderr.write('scrum team accept-supersede: <slug> is required\n');
     return 1;
@@ -818,13 +827,14 @@ function doAcceptSupersede(
 
   // supersedeTeamAccept throws on an unknown id and an already-superseded
   // target; both surface as exit 1 via the runTeamCmd catch.
-  const accept = store.supersedeTeamAccept(id, flags.reason, by);
+  const accept = await store.supersedeTeamAccept(id, flags.reason, by);
 
   process.stdout.write(`${JSON.stringify(accept)}\n`);
   let acceptSupWhere = '';
   try {
-    const team = store.getTeam(slug);
-    const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+    const team = await store.getTeam(slug);
+    const artifactPath =
+      team !== null ? await reconcileTeamArtifact(store, workspaceRoot, team) : null;
     acceptSupWhere = artifactPath !== null ? ` -> ${artifactPath}` : '';
   } catch (artifactErr) {
     const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
@@ -838,12 +848,12 @@ function doAcceptSupersede(
   return 0;
 }
 
-function doExposeAdd(
+async function doExposeAdd(
   store: ScrumStore,
   workspaceRoot: string,
   slug: string | undefined,
   flags: TeamCmdFlags,
-): number {
+): Promise<number> {
   if (slug === undefined || slug.length === 0) {
     process.stderr.write('scrum team expose-add: <slug> is required\n');
     return 1;
@@ -857,13 +867,14 @@ function doExposeAdd(
     return 1;
   }
 
-  const expose = store.addTeamExpose(slug, { name: flags.name, schemaRef: flags.schemaRef });
+  const expose = await store.addTeamExpose(slug, { name: flags.name, schemaRef: flags.schemaRef });
 
   process.stdout.write(`${JSON.stringify(expose)}\n`);
   let exposeAddWhere = '';
   try {
-    const team = store.getTeam(slug);
-    const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+    const team = await store.getTeam(slug);
+    const artifactPath =
+      team !== null ? await reconcileTeamArtifact(store, workspaceRoot, team) : null;
     exposeAddWhere = artifactPath !== null ? ` -> ${artifactPath}` : '';
   } catch (artifactErr) {
     const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
@@ -877,12 +888,12 @@ function doExposeAdd(
   return 0;
 }
 
-function doExposeSupersede(
+async function doExposeSupersede(
   store: ScrumStore,
   workspaceRoot: string,
   slug: string | undefined,
   flags: TeamCmdFlags,
-): number {
+): Promise<number> {
   if (slug === undefined || slug.length === 0) {
     process.stderr.write('scrum team expose-supersede: <slug> is required\n');
     return 1;
@@ -896,13 +907,14 @@ function doExposeSupersede(
   const by = parseOptionalId(flags.by, 'expose-supersede');
   if (by === INVALID_ENUM) return 1;
 
-  const expose = store.supersedeTeamExpose(id, flags.reason, by);
+  const expose = await store.supersedeTeamExpose(id, flags.reason, by);
 
   process.stdout.write(`${JSON.stringify(expose)}\n`);
   let exposeSupWhere = '';
   try {
-    const team = store.getTeam(slug);
-    const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+    const team = await store.getTeam(slug);
+    const artifactPath =
+      team !== null ? await reconcileTeamArtifact(store, workspaceRoot, team) : null;
     exposeSupWhere = artifactPath !== null ? ` -> ${artifactPath}` : '';
   } catch (artifactErr) {
     const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
@@ -916,17 +928,17 @@ function doExposeSupersede(
   return 0;
 }
 
-function doInterface(store: ScrumStore, slug: string | undefined): number {
+async function doInterface(store: ScrumStore, slug: string | undefined): Promise<number> {
   if (slug === undefined || slug.length === 0) {
     process.stderr.write('scrum team interface: <slug> is required\n');
     return 1;
   }
-  if (store.getTeam(slug) === null) {
+  if ((await store.getTeam(slug)) === null) {
     process.stdout.write('null\n');
     process.stderr.write(`scrum team interface: no team '${slug}'\n`);
     return 1;
   }
-  const iface = store.getTeamInterface(slug);
+  const iface = await store.getTeamInterface(slug);
   process.stdout.write(`${JSON.stringify(iface)}\n`);
   process.stderr.write(
     `scrum team interface: ${slug} accepts=${iface.accepts.length} exposes=${iface.exposes.length}\n`,
@@ -941,12 +953,12 @@ function doInterface(store: ScrumStore, slug: string | undefined): number {
 /** Default disband rationale recorded on a manual `terminate` with no --reason. */
 const DEFAULT_TERMINATE_REASON = 'team disbanded';
 
-function doTerminate(
+async function doTerminate(
   store: ScrumStore,
   workspaceRoot: string,
   slug: string | undefined,
   flags: TeamCmdFlags,
-): number {
+): Promise<number> {
   if (slug === undefined || slug.length === 0) {
     process.stderr.write('scrum team terminate: <slug> is required\n');
     return 1;
@@ -955,13 +967,14 @@ function doTerminate(
 
   // teamTerminate throws on an unknown team and on an already-inactive team;
   // both surface as exit 1 via the runTeamCmd catch.
-  const result = store.teamTerminate(slug, reason);
+  const result = await store.teamTerminate(slug, reason);
 
   process.stdout.write(`${JSON.stringify(result)}\n`);
   let terminateWhere = '';
   try {
-    const team = store.getTeam(slug);
-    const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+    const team = await store.getTeam(slug);
+    const artifactPath =
+      team !== null ? await reconcileTeamArtifact(store, workspaceRoot, team) : null;
     terminateWhere = artifactPath !== null ? ` -> ${artifactPath}` : '';
   } catch (artifactErr) {
     const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
@@ -987,10 +1000,14 @@ function doTerminate(
  * on stderr. Idempotent — a re-run marker-merges each file, preserving any
  * authored body.
  */
-function doSyncAgents(store: ScrumStore, workspaceRoot: string, slug: string | undefined): number {
+async function doSyncAgents(
+  store: ScrumStore,
+  workspaceRoot: string,
+  slug: string | undefined,
+): Promise<number> {
   let targets: Team[];
   if (slug !== undefined && slug.length > 0) {
-    const team = store.getTeam(slug);
+    const team = await store.getTeam(slug);
     if (team === null) {
       process.stdout.write('null\n');
       process.stderr.write(`scrum team sync-agents: no team '${slug}'\n`);
@@ -1005,7 +1022,7 @@ function doSyncAgents(store: ScrumStore, workspaceRoot: string, slug: string | u
     }
     targets = [team];
   } else {
-    targets = store.listTeams().filter((team) => team.status === 'active');
+    targets = (await store.listTeams()).filter((team) => team.status === 'active');
   }
 
   for (const team of targets) {

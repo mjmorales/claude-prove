@@ -10,11 +10,11 @@
  * joins `<root>/.prove/prove.db`.
  */
 
-import { Database } from 'bun:sqlite';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { connect } from '@tursodatabase/database';
 import { ensureLegacyImported, importLegacyDb, resetLegacyImportMemo } from './importer';
 
 // ---------------------------------------------------------------------------
@@ -108,64 +108,71 @@ function cleanup(root: string): void {
   rmSync(root, { recursive: true, force: true });
 }
 
-function createPostMigrateLegacy(
+async function createPostMigrateLegacy(
   root: string,
   opts: {
     manifests?: ManifestFixture[];
     documents?: DocumentFixture[];
     reviews?: ReviewFixture[];
   },
-): string {
+): Promise<string> {
   const path = join(root, '.prove', 'acb.db');
-  const db = new Database(path, { create: true });
+  const db = await connect(path);
   try {
-    db.exec(LEGACY_POST_MIGRATE_SCHEMA);
+    await db.exec(LEGACY_POST_MIGRATE_SCHEMA);
     for (const m of opts.manifests ?? []) {
-      db.prepare(
+      const stmt = await db.prepare(
         'INSERT INTO manifests (branch, commit_sha, timestamp, data, created_at, run_slug) VALUES (?, ?, ?, ?, ?, ?)',
-      ).run(m.branch, m.commit_sha, m.timestamp, m.data, m.created_at, m.run_slug);
+      );
+      await stmt.run(m.branch, m.commit_sha, m.timestamp, m.data, m.created_at, m.run_slug);
     }
     for (const d of opts.documents ?? []) {
-      db.prepare(
+      const stmt = await db.prepare(
         'INSERT INTO acb_documents (branch, data, created_at, updated_at) VALUES (?, ?, ?, ?)',
-      ).run(d.branch, d.data, d.created_at, d.updated_at);
+      );
+      await stmt.run(d.branch, d.data, d.created_at, d.updated_at);
     }
     for (const r of opts.reviews ?? []) {
-      db.prepare(
+      const stmt = await db.prepare(
         'INSERT INTO review_state (branch, acb_hash, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
-      ).run(r.branch, r.acb_hash, r.data, r.created_at, r.updated_at);
+      );
+      await stmt.run(r.branch, r.acb_hash, r.data, r.created_at, r.updated_at);
     }
   } finally {
-    db.close();
+    // Await every write above before closing so no pending statement runs
+    // after the connection finalizes.
+    await db.close();
   }
   return path;
 }
 
-function createPreMigrateLegacy(
+async function createPreMigrateLegacy(
   root: string,
   opts: { manifests?: Omit<ManifestFixture, 'run_slug'>[] },
-): string {
+): Promise<string> {
   const path = join(root, '.prove', 'acb.db');
-  const db = new Database(path, { create: true });
+  const db = await connect(path);
   try {
-    db.exec(LEGACY_PRE_MIGRATE_SCHEMA);
+    await db.exec(LEGACY_PRE_MIGRATE_SCHEMA);
     for (const m of opts.manifests ?? []) {
-      db.prepare(
+      const stmt = await db.prepare(
         'INSERT INTO manifests (branch, commit_sha, timestamp, data, created_at) VALUES (?, ?, ?, ?, ?)',
-      ).run(m.branch, m.commit_sha, m.timestamp, m.data, m.created_at);
+      );
+      await stmt.run(m.branch, m.commit_sha, m.timestamp, m.data, m.created_at);
     }
   } finally {
-    db.close();
+    await db.close();
   }
   return path;
 }
 
-function readProveDb<T>(root: string, sql: string): T[] {
-  const db = new Database(join(root, '.prove', 'prove.db'), { readonly: true });
+async function readProveDb<T>(root: string, sql: string): Promise<T[]> {
+  const db = await connect(join(root, '.prove', 'prove.db'), { readonly: true });
   try {
-    return db.prepare<T, []>(sql).all();
+    const stmt = await db.prepare(sql);
+    return (await stmt.all()) as T[];
   } finally {
-    db.close();
+    await db.close();
   }
 }
 
@@ -181,8 +188,8 @@ describe('importLegacyDb: detection short-circuits', () => {
   });
   afterEach(() => cleanup(root));
 
-  test('legacy-absent: no .prove/acb.db → reason=legacy-absent, no-op', () => {
-    const result = importLegacyDb(root);
+  test('legacy-absent: no .prove/acb.db → reason=legacy-absent, no-op', async () => {
+    const result = await importLegacyDb(root);
     expect(result).toEqual({ imported: false, reason: 'legacy-absent' });
     // prove.db is not forced into existence on this path.
     expect(existsSync(join(root, '.prove', 'prove.db'))).toBe(false);
@@ -197,8 +204,8 @@ describe('importLegacyDb: populated legacy', () => {
   });
   afterEach(() => cleanup(root));
 
-  test('imports all three tables, deletes legacy db, preserves content', () => {
-    const legacyPath = createPostMigrateLegacy(root, {
+  test('imports all three tables, deletes legacy db, preserves content', async () => {
+    const legacyPath = await createPostMigrateLegacy(root, {
       manifests: [
         {
           branch: 'feat/x',
@@ -236,14 +243,14 @@ describe('importLegacyDb: populated legacy', () => {
       ],
     });
 
-    const result = importLegacyDb(root);
+    const result = await importLegacyDb(root);
     expect(result).toEqual({
       imported: true,
       counts: { manifests: 2, acb_documents: 1, review_state: 1 },
     });
     expect(existsSync(legacyPath)).toBe(false);
 
-    const manifests = readProveDb<{
+    const manifests = await readProveDb<{
       branch: string;
       commit_sha: string;
       timestamp: string;
@@ -273,7 +280,7 @@ describe('importLegacyDb: populated legacy', () => {
       },
     ]);
 
-    const docs = readProveDb<{ branch: string; data: string }>(
+    const docs = await readProveDb<{ branch: string; data: string }>(
       root,
       'SELECT branch, data FROM acb_acb_documents',
     );
@@ -281,7 +288,7 @@ describe('importLegacyDb: populated legacy', () => {
       { branch: 'feat/x', data: JSON.stringify({ acb_version: '0.2', id: 'doc-x' }) },
     ]);
 
-    const reviews = readProveDb<{ branch: string; acb_hash: string; data: string }>(
+    const reviews = await readProveDb<{ branch: string; acb_hash: string; data: string }>(
       root,
       'SELECT branch, acb_hash, data FROM acb_review_state',
     );
@@ -294,8 +301,8 @@ describe('importLegacyDb: populated legacy', () => {
     ]);
   });
 
-  test('pre-migrate legacy (no run_slug column): all manifests import with run_slug=NULL', () => {
-    createPreMigrateLegacy(root, {
+  test('pre-migrate legacy (no run_slug column): all manifests import with run_slug=NULL', async () => {
+    await createPreMigrateLegacy(root, {
       manifests: [
         {
           branch: 'feat/x',
@@ -314,11 +321,11 @@ describe('importLegacyDb: populated legacy', () => {
       ],
     });
 
-    const result = importLegacyDb(root);
+    const result = await importLegacyDb(root);
     expect(result.imported).toBe(true);
     expect(result.counts?.manifests).toBe(2);
 
-    const rows = readProveDb<{ branch: string; run_slug: string | null }>(
+    const rows = await readProveDb<{ branch: string; run_slug: string | null }>(
       root,
       'SELECT branch, run_slug FROM acb_manifests ORDER BY branch',
     );
@@ -328,8 +335,8 @@ describe('importLegacyDb: populated legacy', () => {
     ]);
   });
 
-  test('post-migrate legacy preserves non-null run_slug values', () => {
-    createPostMigrateLegacy(root, {
+  test('post-migrate legacy preserves non-null run_slug values', async () => {
+    await createPostMigrateLegacy(root, {
       manifests: [
         {
           branch: 'feat/x',
@@ -342,18 +349,18 @@ describe('importLegacyDb: populated legacy', () => {
       ],
     });
 
-    const result = importLegacyDb(root);
+    const result = await importLegacyDb(root);
     expect(result.imported).toBe(true);
 
-    const rows = readProveDb<{ run_slug: string | null }>(
+    const rows = await readProveDb<{ run_slug: string | null }>(
       root,
       'SELECT run_slug FROM acb_manifests',
     );
     expect(rows).toEqual([{ run_slug: 'run-preserve' }]);
   });
 
-  test('idempotent: already-migrated prove.db leaves legacy untouched', () => {
-    const legacyPath = createPostMigrateLegacy(root, {
+  test('idempotent: already-migrated prove.db leaves legacy untouched', async () => {
+    const legacyPath = await createPostMigrateLegacy(root, {
       manifests: [
         {
           branch: 'feat/x',
@@ -366,14 +373,14 @@ describe('importLegacyDb: populated legacy', () => {
       ],
     });
 
-    const first = importLegacyDb(root);
+    const first = await importLegacyDb(root);
     expect(first.imported).toBe(true);
     expect(existsSync(legacyPath)).toBe(false);
 
     // Simulate a second run where someone restores the legacy file on
     // disk (e.g., rolled back a backup). prove.db already has the rows,
     // so the second call must no-op and leave the restored file alone.
-    createPostMigrateLegacy(root, {
+    await createPostMigrateLegacy(root, {
       manifests: [
         {
           branch: 'feat/z',
@@ -387,7 +394,7 @@ describe('importLegacyDb: populated legacy', () => {
     });
     expect(existsSync(legacyPath)).toBe(true);
 
-    const second = importLegacyDb(root);
+    const second = await importLegacyDb(root);
     expect(second).toEqual({ imported: false, reason: 'already-migrated' });
     expect(existsSync(legacyPath)).toBe(true);
   });
@@ -401,18 +408,19 @@ describe('importLegacyDb: transactional rollback', () => {
   });
   afterEach(() => cleanup(root));
 
-  test('malformed legacy column type (non-string data) aborts the transaction; prove.db stays empty; legacy stays intact', () => {
+  test('malformed legacy column type (non-string data) aborts the transaction; prove.db stays empty; legacy stays intact', async () => {
     // Create a legacy db whose `data` column in `manifests` is BLOB-ish
     // (a real bytes buffer) rather than TEXT. Our `asString` narrowing
     // will throw, which fires the rollback path.
     const legacyPath = join(root, '.prove', 'acb.db');
-    const db = new Database(legacyPath, { create: true });
+    const db = await connect(legacyPath);
     try {
-      db.exec(LEGACY_POST_MIGRATE_SCHEMA);
+      await db.exec(LEGACY_POST_MIGRATE_SCHEMA);
       // Force a typed BLOB into `data` by binding a Uint8Array.
-      db.prepare(
+      const stmt = await db.prepare(
         'INSERT INTO manifests (branch, commit_sha, timestamp, data, created_at, run_slug) VALUES (?, ?, ?, ?, ?, ?)',
-      ).run(
+      );
+      await stmt.run(
         'feat/x',
         'abc',
         '2026-01-01T00:00:00Z',
@@ -421,10 +429,10 @@ describe('importLegacyDb: transactional rollback', () => {
         null,
       );
     } finally {
-      db.close();
+      await db.close();
     }
 
-    const result = importLegacyDb(root);
+    const result = await importLegacyDb(root);
     expect(result.imported).toBe(false);
     expect(result.reason).toBe('error');
     expect(result.error).toContain('manifests.data');
@@ -435,7 +443,10 @@ describe('importLegacyDb: transactional rollback', () => {
     // prove.db may or may not have been created (openStore creates the
     // file on open), but acb_manifests must be empty after rollback.
     if (existsSync(join(root, '.prove', 'prove.db'))) {
-      const rows = readProveDb<{ n: number }>(root, 'SELECT COUNT(*) AS n FROM acb_manifests');
+      const rows = await readProveDb<{ n: number }>(
+        root,
+        'SELECT COUNT(*) AS n FROM acb_manifests',
+      );
       expect(rows[0]?.n).toBe(0);
     }
   });
@@ -461,7 +472,7 @@ describe('importLegacyDb: concurrency', () => {
     // retry loop in `importLegacyDb`; asserting that deterministically
     // in-test is impractical because the OS scheduler decides the
     // winner.
-    createPostMigrateLegacy(root, {
+    await createPostMigrateLegacy(root, {
       manifests: [
         {
           branch: 'feat/a',
@@ -493,7 +504,7 @@ describe('importLegacyDb: concurrency', () => {
     const importerPath = join(import.meta.dir, 'importer.ts');
     const script = `
       import { importLegacyDb } from ${JSON.stringify(importerPath)};
-      const res = importLegacyDb(${JSON.stringify(root)});
+      const res = await importLegacyDb(${JSON.stringify(root)});
       process.stdout.write(JSON.stringify(res));
     `;
 
@@ -520,7 +531,7 @@ describe('importLegacyDb: concurrency', () => {
 
     // Restore a legacy file with different contents so we can detect a
     // double-import (extra rows would appear in acb_manifests).
-    createPostMigrateLegacy(root, {
+    await createPostMigrateLegacy(root, {
       manifests: [
         {
           branch: 'feat/ghost',
@@ -547,7 +558,7 @@ describe('importLegacyDb: concurrency', () => {
     expect(r2).toEqual({ imported: false, reason: 'already-migrated' });
 
     // Exactly 3 rows in acb_manifests — no double-insert, no ghost row.
-    const rows = readProveDb<{ n: number; branches: string }>(
+    const rows = await readProveDb<{ n: number; branches: string }>(
       root,
       "SELECT COUNT(*) AS n, GROUP_CONCAT(branch, ',') AS branches FROM (SELECT branch FROM acb_manifests ORDER BY branch)",
     );
@@ -568,11 +579,11 @@ describe('ensureLegacyImported: auto-invoke wrapper', () => {
   });
   afterEach(() => cleanup(root));
 
-  test('memoizes per-workspaceRoot: second call returns cached result without a second import attempt', () => {
+  test('memoizes per-workspaceRoot: second call returns cached result without a second import attempt', async () => {
     // Create + import; then delete prove.db to force a repeat import
     // *if* the wrapper did not memoize. The memoized second call must
     // return the cached success result.
-    createPostMigrateLegacy(root, {
+    await createPostMigrateLegacy(root, {
       manifests: [
         {
           branch: 'feat/x',
@@ -585,7 +596,7 @@ describe('ensureLegacyImported: auto-invoke wrapper', () => {
       ],
     });
 
-    const first = ensureLegacyImported(root);
+    const first = await ensureLegacyImported(root);
     expect(first.imported).toBe(true);
     expect(first.counts).toEqual({ manifests: 1, acb_documents: 0, review_state: 0 });
 
@@ -594,12 +605,12 @@ describe('ensureLegacyImported: auto-invoke wrapper', () => {
     // return a different shape. Memoization keeps `imported: true`.
     rmSync(join(root, '.prove', 'prove.db'), { force: true });
 
-    const second = ensureLegacyImported(root);
+    const second = await ensureLegacyImported(root);
     expect(second).toBe(first);
   });
 
-  test('stderr format matches the imported-success spec', () => {
-    createPostMigrateLegacy(root, {
+  test('stderr format matches the imported-success spec', async () => {
+    await createPostMigrateLegacy(root, {
       manifests: [
         {
           branch: 'feat/x',
@@ -644,7 +655,7 @@ describe('ensureLegacyImported: auto-invoke wrapper', () => {
       return true;
     }) as typeof process.stderr.write;
     try {
-      const result = ensureLegacyImported(root);
+      const result = await ensureLegacyImported(root);
       expect(result.imported).toBe(true);
     } finally {
       process.stderr.write = originalWrite;
@@ -656,7 +667,7 @@ describe('ensureLegacyImported: auto-invoke wrapper', () => {
     );
   });
 
-  test('legacy-absent is silent on stderr', () => {
+  test('legacy-absent is silent on stderr', async () => {
     const captured: string[] = [];
     const originalWrite = process.stderr.write.bind(process.stderr);
     process.stderr.write = ((chunk: string | Uint8Array): boolean => {
@@ -664,7 +675,7 @@ describe('ensureLegacyImported: auto-invoke wrapper', () => {
       return true;
     }) as typeof process.stderr.write;
     try {
-      const result = ensureLegacyImported(root);
+      const result = await ensureLegacyImported(root);
       expect(result).toEqual({ imported: false, reason: 'legacy-absent' });
     } finally {
       process.stderr.write = originalWrite;
@@ -672,9 +683,9 @@ describe('ensureLegacyImported: auto-invoke wrapper', () => {
     expect(captured.join('')).toBe('');
   });
 
-  test('already-migrated is silent on stderr', () => {
+  test('already-migrated is silent on stderr', async () => {
     // Populate prove.db with acb row directly, then place a legacy db.
-    createPostMigrateLegacy(root, {
+    await createPostMigrateLegacy(root, {
       manifests: [
         {
           branch: 'feat/x',
@@ -687,11 +698,11 @@ describe('ensureLegacyImported: auto-invoke wrapper', () => {
       ],
     });
     // First import populates prove.db and deletes legacy.
-    const first = importLegacyDb(root);
+    const first = await importLegacyDb(root);
     expect(first.imported).toBe(true);
     resetLegacyImportMemo();
     // Restore a legacy file with unrelated content.
-    createPostMigrateLegacy(root, {
+    await createPostMigrateLegacy(root, {
       manifests: [
         {
           branch: 'feat/z',
@@ -711,7 +722,7 @@ describe('ensureLegacyImported: auto-invoke wrapper', () => {
       return true;
     }) as typeof process.stderr.write;
     try {
-      const result = ensureLegacyImported(root);
+      const result = await ensureLegacyImported(root);
       expect(result).toEqual({ imported: false, reason: 'already-migrated' });
     } finally {
       process.stderr.write = originalWrite;

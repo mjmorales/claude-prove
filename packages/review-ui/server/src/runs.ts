@@ -58,7 +58,7 @@ export async function listRuns(repoRoot: string): Promise<RunSummary[]> {
       // runs stay reviewable as long as their manifests survive.
       const orchName = `orchestrator/${slug}`;
       const live = branchNames.has(orchName) || worktreeBranches.has(orchName);
-      const hasManifests = live || slugHasManifests(repoRoot, slug);
+      const hasManifests = live || (await slugHasManifests(repoRoot, slug));
       if (!live && !hasManifests) continue;
 
       const summary = await readRunSummary(repoRoot, branchNs, slug);
@@ -136,9 +136,9 @@ export async function readRunSummary(
  * committed manifests? Used to keep merged/cleaned runs reviewable after
  * their git branches are gone.
  */
-function slugHasManifests(repoRoot: string, slug: string): boolean {
+async function slugHasManifests(repoRoot: string, slug: string): Promise<boolean> {
   try {
-    return listManifestsForSlug(repoRoot, slug).length > 0;
+    return (await listManifestsForSlug(repoRoot, slug)).length > 0;
   } catch {
     return false;
   }

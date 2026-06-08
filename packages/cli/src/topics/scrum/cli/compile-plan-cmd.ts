@@ -128,7 +128,7 @@ interface Plan {
   tasks: PlanTask[];
 }
 
-export function runCompilePlanCmd(flags: CompilePlanCmdFlags): number {
+export async function runCompilePlanCmd(flags: CompilePlanCmdFlags): Promise<number> {
   const milestoneId =
     flags.milestone !== undefined && flags.milestone.length > 0 ? flags.milestone : undefined;
   if (milestoneId === undefined) {
@@ -140,16 +140,16 @@ export function runCompilePlanCmd(flags: CompilePlanCmdFlags): number {
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
-    if (store.getMilestone(milestoneId) === null) {
+    if ((await store.getMilestone(milestoneId)) === null) {
       process.stderr.write(`scrum compile-plan: unknown milestone '${milestoneId}'\n`);
       return 1;
     }
 
-    const actionable = store
-      .listTasks({ milestoneId })
-      .filter((t) => t.status !== 'done' && t.status !== 'cancelled');
+    const actionable = (await store.listTasks({ milestoneId })).filter(
+      (t) => t.status !== 'done' && t.status !== 'cancelled',
+    );
     if (actionable.length === 0) {
       process.stderr.write(
         `scrum compile-plan: milestone '${milestoneId}' has no actionable tasks (all done/cancelled or none assigned)\n`,
@@ -157,7 +157,7 @@ export function runCompilePlanCmd(flags: CompilePlanCmdFlags): number {
       return 1;
     }
 
-    const { plan, scrumMap, teamMap } = compile(store, actionable);
+    const { plan, scrumMap, teamMap } = await compile(store, actionable);
     // The leaf-filter inside compile() preserves the deepest work units of any
     // containment tree (a node with no in-plan child always survives), so a
     // non-empty actionable set normally yields a non-empty plan. An empty plan
@@ -212,10 +212,10 @@ export function runCompilePlanCmd(flags: CompilePlanCmdFlags): number {
  * remaining `tasks` are the executable LEAF set — the plan, scrum-map, team-map,
  * and wave arithmetic all run over leaves only.
  */
-function compile(
+async function compile(
   store: ScrumStore,
   actionable: ScrumTask[],
-): { plan: Plan; scrumMap: Record<string, string>; teamMap: Record<string, string> } {
+): Promise<{ plan: Plan; scrumMap: Record<string, string>; teamMap: Record<string, string> }> {
   const actionableIds = new Set(actionable.map((t) => t.id));
 
   // A parent_id referenced by some actionable task = a container WITH an in-plan
@@ -278,7 +278,7 @@ function compile(
   const deps = new Map<string, string[]>();
   for (const task of tasks) {
     const resolved = new Set<string>();
-    for (const dep of store.getBlockedBy(task.id)) {
+    for (const dep of await store.getBlockedBy(task.id)) {
       const from = dep.from_task_id;
       if (inScope.has(from)) {
         resolved.add(from);

@@ -45,7 +45,10 @@ export interface MilestoneBriefOpts {
   workspaceRoot?: string;
 }
 
-export function runMilestoneBrief(sub: string | undefined, opts: MilestoneBriefOpts): number {
+export async function runMilestoneBrief(
+  sub: string | undefined,
+  opts: MilestoneBriefOpts,
+): Promise<number> {
   if (!sub) {
     process.stderr.write(
       `Error: the following arguments are required: milestone-brief sub-action (one of: ${SUB_ACTIONS.join(', ')})\n`,
@@ -67,13 +70,13 @@ export function runMilestoneBrief(sub: string | undefined, opts: MilestoneBriefO
     opts.workspaceRoot && opts.workspaceRoot.length > 0
       ? opts.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
+  const store = await openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
   try {
-    if (!store.getMilestone(opts.milestone)) {
+    if (!(await store.getMilestone(opts.milestone))) {
       process.stderr.write(`Error: milestone '${opts.milestone}' not found\n`);
       return 1;
     }
-    const stories = gatherMilestoneStories(opts.milestone, store, workspaceRoot);
+    const stories = await gatherMilestoneStories(opts.milestone, store, workspaceRoot);
     return sub === 'render' ? runRender(opts.milestone, stories) : runValidate(stories, opts);
   } finally {
     store.close();
@@ -82,7 +85,7 @@ export function runMilestoneBrief(sub: string | undefined, opts: MilestoneBriefO
 
 function runRender(
   milestoneId: string,
-  stories: ReturnType<typeof gatherMilestoneStories>,
+  stories: Awaited<ReturnType<typeof gatherMilestoneStories>>,
 ): number {
   const brief = buildMilestoneBrief(milestoneId, stories);
   process.stdout.write(`${renderMilestoneBrief(brief)}\n`);
@@ -93,7 +96,7 @@ function runRender(
 }
 
 function runValidate(
-  stories: ReturnType<typeof gatherMilestoneStories>,
+  stories: Awaited<ReturnType<typeof gatherMilestoneStories>>,
   opts: MilestoneBriefOpts,
 ): number {
   let briefText: string;

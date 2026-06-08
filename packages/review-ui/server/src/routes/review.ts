@@ -47,8 +47,8 @@ type FixBody = {
  * `GET .../review` stays available on a behind project so the operator can
  * still inspect it and see the "needs migration" badge.
  */
-function refuseIfBehindSchema(repoRoot: string, reply: FastifyReply): boolean {
-  const behind = storeBehindSchema(repoRoot);
+async function refuseIfBehindSchema(repoRoot: string, reply: FastifyReply): Promise<boolean> {
+  const behind = await storeBehindSchema(repoRoot);
   if (behind === null) return false;
   reply.code(409).send(behind);
   return true;
@@ -62,7 +62,7 @@ export function registerReviewRoutes(app: FastifyInstance, resolveProject: Proje
       if (repoRoot === null) return reply;
       const key = parseRunKey(req.params.slug);
       if (!key) return reply.code(400).send({ error: "bad slug" });
-      const verdicts = listVerdicts(repoRoot, key.composite);
+      const verdicts = await listVerdicts(repoRoot, key.composite);
       return { slug: key.composite, verdicts };
     },
   );
@@ -72,7 +72,7 @@ export function registerReviewRoutes(app: FastifyInstance, resolveProject: Proje
     async (req, reply) => {
       const repoRoot = resolveProject(req, reply);
       if (repoRoot === null) return reply;
-      if (refuseIfBehindSchema(repoRoot, reply)) return reply;
+      if (await refuseIfBehindSchema(repoRoot, reply)) return reply;
       const key = parseRunKey(req.params.slug);
       if (!key) return reply.code(400).send({ error: "bad slug" });
       const groupId = req.params.groupId;
@@ -86,11 +86,11 @@ export function registerReviewRoutes(app: FastifyInstance, resolveProject: Proje
       const note = typeof req.body?.note === "string" ? req.body.note.trim() : null;
 
       if (verdict === "pending") {
-        clearVerdict(repoRoot, key.composite, groupId);
+        await clearVerdict(repoRoot, key.composite, groupId);
         return { slug: key.composite, groupId, cleared: true };
       }
 
-      const rec = upsertVerdict(
+      const rec = await upsertVerdict(
         repoRoot,
         key.composite,
         groupId,
@@ -107,7 +107,7 @@ export function registerReviewRoutes(app: FastifyInstance, resolveProject: Proje
     async (req, reply) => {
       const repoRoot = resolveProject(req, reply);
       if (repoRoot === null) return reply;
-      if (refuseIfBehindSchema(repoRoot, reply)) return reply;
+      if (await refuseIfBehindSchema(repoRoot, reply)) return reply;
       const key = parseRunKey(req.params.slug);
       if (!key) return reply.code(400).send({ error: "bad slug" });
       const groupId = req.params.groupId;
@@ -130,7 +130,7 @@ export function registerReviewRoutes(app: FastifyInstance, resolveProject: Proje
         commits,
       });
 
-      const rec = upsertVerdict(
+      const rec = await upsertVerdict(
         repoRoot,
         key.composite,
         groupId,
@@ -147,7 +147,7 @@ export function registerReviewRoutes(app: FastifyInstance, resolveProject: Proje
     async (req, reply) => {
       const repoRoot = resolveProject(req, reply);
       if (repoRoot === null) return reply;
-      if (refuseIfBehindSchema(repoRoot, reply)) return reply;
+      if (await refuseIfBehindSchema(repoRoot, reply)) return reply;
       const key = parseRunKey(req.params.slug);
       if (!key) return reply.code(400).send({ error: "bad slug" });
       const groupId = req.params.groupId;
@@ -156,7 +156,7 @@ export function registerReviewRoutes(app: FastifyInstance, resolveProject: Proje
       const note = typeof req.body?.note === "string" ? req.body.note.trim() : "";
       if (note.length === 0) return reply.code(400).send({ error: "note required" });
 
-      const rec = upsertVerdict(
+      const rec = await upsertVerdict(
         repoRoot,
         key.composite,
         groupId,

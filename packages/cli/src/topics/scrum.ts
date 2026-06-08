@@ -443,7 +443,7 @@ export function register(cli: CAC): void {
       'Main worktree root; pins store to <root>/.prove/prove.db (default: git common-dir)',
     )
     .action(
-      (
+      async (
         action: string,
         arg1: string | undefined,
         arg2: string | undefined,
@@ -456,7 +456,7 @@ export function register(cli: CAC): void {
           );
           process.exit(1);
         }
-        const code = dispatch(action, arg1, arg2, arg3, flags);
+        const code = await dispatch(action, arg1, arg2, arg3, flags);
         process.exit(code);
       },
     );
@@ -466,13 +466,13 @@ function isScrumAction(value: string): value is ScrumAction {
   return (SCRUM_ACTIONS as string[]).includes(value);
 }
 
-function dispatch(
+async function dispatch(
   action: ScrumAction,
   arg1: string | undefined,
   arg2: string | undefined,
   arg3: string | undefined,
   flags: ScrumFlags,
-): number {
+): Promise<number> {
   switch (action) {
     case 'init':
       return runInitCmd({ workspaceRoot: flags.workspaceRoot });

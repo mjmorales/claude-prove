@@ -100,7 +100,7 @@ export function registerProveRoutes(app: FastifyInstance, resolveProject: Projec
   app.get<{ Params: { sha: string } }>("/api/commits/:sha/intent", async (req, reply) => {
     const repoRoot = resolveProject(req, reply);
     if (repoRoot === null) return reply;
-    return { sha: req.params.sha, manifest: getManifestForCommit(repoRoot, req.params.sha) };
+    return { sha: req.params.sha, manifest: await getManifestForCommit(repoRoot, req.params.sha) };
   });
 
   // All manifests for a branch.
@@ -109,7 +109,7 @@ export function registerProveRoutes(app: FastifyInstance, resolveProject: Projec
     if (repoRoot === null) return reply;
     return {
       branch: req.params.branch,
-      manifests: listManifestsForBranch(repoRoot, req.params.branch),
+      manifests: await listManifestsForBranch(repoRoot, req.params.branch),
     };
   });
 
@@ -143,7 +143,7 @@ export function registerProveRoutes(app: FastifyInstance, resolveProject: Projec
     // orchestrator branch already merged into main → empty base..head
     // range) still surface their review content.
     const manifestByCommit = new Map<string, IntentManifest>();
-    const slugManifests = listManifestsForSlug(repoRoot, key.slug);
+    const slugManifests = await listManifestsForSlug(repoRoot, key.slug);
     for (const m of slugManifests) {
       if (!manifestByCommit.has(m.commitSha)) manifestByCommit.set(m.commitSha, m);
     }
@@ -284,7 +284,7 @@ export function registerProveRoutes(app: FastifyInstance, resolveProject: Projec
   app.get<{ Params: { branch: string } }>("/api/branches/:branch/acb", async (req, reply) => {
     const repoRoot = resolveProject(req, reply);
     if (repoRoot === null) return reply;
-    return { branch: req.params.branch, doc: getAcbDocument(repoRoot, req.params.branch) };
+    return { branch: req.params.branch, doc: await getAcbDocument(repoRoot, req.params.branch) };
   });
 
   // Decisions referenced by this run's docs (prd.json/plan.json body text).

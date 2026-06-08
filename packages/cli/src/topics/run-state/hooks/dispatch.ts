@@ -42,10 +42,10 @@ export function isHookEvent(value: string): value is HookEvent {
 
 /** Dispatch to a single hook. Pure (no I/O) — caller provides the payload
  *  and writes the result. */
-export function dispatchHook(
+export async function dispatchHook(
   event: HookEvent,
   payload: Record<string, unknown> | null,
-): HookResult {
+): Promise<HookResult> {
   switch (event) {
     case 'guard':
       return runGuard(payload);
@@ -66,10 +66,10 @@ export function dispatchHook(
 
 /** CLI entry point. Reads stdin, parses, dispatches, writes stdout/stderr,
  *  returns the exit code (the caller invokes `process.exit`). */
-export function runHookFromStdin(event: HookEvent): number {
+export async function runHookFromStdin(event: HookEvent): Promise<number> {
   const raw = readStdinSync();
   const payload = parseHookPayload(raw);
-  const result = dispatchHook(event, payload);
+  const result = await dispatchHook(event, payload);
   if (result.stdout) process.stdout.write(result.stdout);
   if (result.stderr) process.stderr.write(result.stderr);
   return result.exitCode;

@@ -36,11 +36,11 @@ export interface LinkRunCmdFlags {
   workspaceRoot?: string;
 }
 
-export function runLinkRunCmd(
+export async function runLinkRunCmd(
   taskId: string | undefined,
   runPath: string | undefined,
   flags: LinkRunCmdFlags,
-): number {
+): Promise<number> {
   // Both positionals are reported together via the full usage line, so the
   // operator sees <task-id> and <run-path> at once rather than discovering the
   // second only after supplying the first.
@@ -61,9 +61,9 @@ export function runLinkRunCmd(
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
-    store.linkRun({
+    await store.linkRun({
       taskId,
       runPath,
       branch: flags.branch ?? null,

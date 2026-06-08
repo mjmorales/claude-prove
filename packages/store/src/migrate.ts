@@ -1,4 +1,4 @@
-import type { Store } from './connection';
+import { type Store, withTx } from './connection';
 import { getMigrations, listDomains } from './registry';
 
 export interface AppliedMigration {
@@ -59,14 +59,13 @@ const MIGRATIONS_LOG_SQL = `
  * throws a `MigrationError` whose `partial` field reports the migrations that
  * already committed (the local `result` is otherwise lost with the throw).
  */
-export function runMigrations(store: Store): MigrationResult {
-  const db = store.getDb();
-  db.run(MIGRATIONS_LOG_SQL);
+export async function runMigrations(store: Store): Promise<MigrationResult> {
+  await store.run(MIGRATIONS_LOG_SQL);
 
   const result: MigrationResult = { applied: [], alreadyUpToDate: [] };
 
   for (const domain of listDomains()) {
-    const rows = store.all<{ version: number }>(
+    const rows = await store.all<{ version: number }>(
       'SELECT version FROM _migrations_log WHERE domain = ?',
       [domain],
     );
@@ -82,18 +81,17 @@ export function runMigrations(store: Store): MigrationResult {
     // Snapshot the applied count before this domain's batch so a rolled-back
     // batch leaves no phantom entries in the reported partial result.
     const appliedBeforeDomain = result.applied.length;
-    const tx = db.transaction(() => {
-      for (const m of pending) {
-        m.up(db);
-        store.run(
-          'INSERT INTO _migrations_log (domain, version, description, applied_at) VALUES (?, ?, ?, ?)',
-          [domain, m.version, m.description, new Date().toISOString()],
-        );
-        result.applied.push({ domain, version: m.version, description: m.description });
-      }
-    });
     try {
-      tx();
+      await withTx(store, async () => {
+        for (const m of pending) {
+          await m.up(store);
+          await store.run(
+            'INSERT INTO _migrations_log (domain, version, description, applied_at) VALUES (?, ?, ?, ?)',
+            [domain, m.version, m.description, new Date().toISOString()],
+          );
+          result.applied.push({ domain, version: m.version, description: m.description });
+        }
+      });
     } catch (err) {
       // The failing batch rolled back; drop its phantom entries, then surface
       // the migrations that earlier domains durably committed.
@@ -114,20 +112,18 @@ export function runMigrations(store: Store): MigrationResult {
  * itself. Intended for `claude-prove store reset --confirm`; production code
  * should never call this implicitly.
  */
-export function dropAllDomainTables(store: Store): void {
-  const db = store.getDb();
+export async function dropAllDomainTables(store: Store): Promise<void> {
   // Log might not exist if reset runs on a never-migrated db.
-  db.run(MIGRATIONS_LOG_SQL);
-  const tables = store.all<{ name: string }>(
+  await store.run(MIGRATIONS_LOG_SQL);
+  const tables = await store.all<{ name: string }>(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != '_migrations_log'",
   );
-  const tx = db.transaction(() => {
+  await withTx(store, async () => {
     for (const row of tables) {
-      db.run(`DROP TABLE IF EXISTS ${escapeIdent(row.name)}`);
+      await store.run(`DROP TABLE IF EXISTS ${escapeIdent(row.name)}`);
     }
-    db.run('DROP TABLE IF EXISTS _migrations_log');
+    await store.run('DROP TABLE IF EXISTS _migrations_log');
   });
-  tx();
 }
 
 function escapeIdent(name: string): string {

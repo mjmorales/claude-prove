@@ -35,7 +35,7 @@ export interface AssembleOpts {
   workspaceRoot?: string;
 }
 
-export function runAssemble(opts: AssembleOpts): number {
+export async function runAssemble(opts: AssembleOpts): Promise<number> {
   const branch = opts.branch ?? currentBranch() ?? 'unknown';
   const base = opts.base ?? 'main';
 
@@ -56,13 +56,13 @@ export function runAssemble(opts: AssembleOpts): number {
       ? opts.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
 
-  ensureLegacyImported(workspaceRoot);
+  await ensureLegacyImported(workspaceRoot);
 
-  const store = openAcbStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
+  const store = await openAcbStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
   try {
-    const acb = assemble({ store, branch, baseRef: baseSha, headRef: head });
-    store.saveAcb(branch, acb);
-    const cleared = store.clearManifests(branch);
+    const acb = await assemble({ store, branch, baseRef: baseSha, headRef: head });
+    await store.saveAcb(branch, acb);
+    const cleared = await store.clearManifests(branch);
     const manifestCount = acb.manifest_count;
     const groups = acb.intent_groups.length;
     const uncovered = acb.uncovered_files.length;

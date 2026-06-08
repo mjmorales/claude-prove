@@ -24,6 +24,7 @@ import {
   openStore,
   registerSchema,
   runMigrations,
+  type Store,
 } from "@claude-prove/store";
 import { buildApp } from "../src/index";
 import { buildProjectListing, projectStoreInfo } from "../src/routes/projects";
@@ -36,7 +37,9 @@ const TEST_DOMAIN = "widgets";
 const MIGRATION_V1 = {
   version: 1,
   description: "create widgets",
-  up: (db: { run(sql: string): void }) => db.run("CREATE TABLE widgets (id INTEGER PRIMARY KEY)"),
+  up: async (store: Store) => {
+    await store.run("CREATE TABLE widgets (id INTEGER PRIMARY KEY)");
+  },
 };
 
 /**
@@ -44,12 +47,12 @@ const MIGRATION_V1 = {
  * `.prove/prove.db` by migrating it to the registered domain head. Returns the
  * root path.
  */
-function makeProject(name: string): string {
+async function makeProject(name: string): Promise<string> {
   const root = join(workspace, name);
   mkdirSync(join(root, ".prove"), { recursive: true });
-  const store = openStore({ path: join(root, ".prove", "prove.db") });
+  const store = await openStore({ path: join(root, ".prove", "prove.db") });
   try {
-    runMigrations(store);
+    await runMigrations(store);
   } finally {
     store.close();
   }
@@ -70,54 +73,54 @@ afterEach(() => {
 });
 
 describe("buildProjectListing", () => {
-  test("reports one behind project and one current project", () => {
+  test("reports one behind project and one current project", async () => {
     // Register only v1, migrate both dbs to v1 (their applied head).
     registerSchema({ domain: TEST_DOMAIN, migrations: [MIGRATION_V1] });
-    const behindRoot = makeProject("behind");
-    const currentRoot = makeProject("current");
+    const behindRoot = await makeProject("behind");
+    const currentRoot = await makeProject("current");
 
     // Behind: expected head is v2 but the db only applied v1.
     const behindExpected = new Map([[TEST_DOMAIN, 2]]);
-    const behindRow = byPath(buildProjectListing(baseDir, behindExpected), behindRoot);
+    const behindRow = byPath(await buildProjectListing(baseDir, behindExpected), behindRoot);
     expect(behindRow.store).toEqual({ schema_version: 1, behind: true });
 
     // Current: expected head equals the applied v1.
     const currentExpected = new Map([[TEST_DOMAIN, 1]]);
-    const currentRow = byPath(buildProjectListing(baseDir, currentExpected), currentRoot);
+    const currentRow = byPath(await buildProjectListing(baseDir, currentExpected), currentRoot);
     expect(currentRow.store).toEqual({ schema_version: 1, behind: false });
   });
 
-  test("drops a dead path from the response via prune-on-read", () => {
+  test("drops a dead path from the response via prune-on-read", async () => {
     registerSchema({ domain: TEST_DOMAIN, migrations: [MIGRATION_V1] });
-    const live = makeProject("live");
-    const dead = makeProject("dead");
+    const live = await makeProject("live");
+    const dead = await makeProject("dead");
     // Remove the dead root from disk; prune-on-read inside listProjects evicts it.
     rmSync(dead, { recursive: true, force: true });
 
-    const rows = buildProjectListing(baseDir, new Map([[TEST_DOMAIN, 1]]));
+    const rows = await buildProjectListing(baseDir, new Map([[TEST_DOMAIN, 1]]));
     const paths = rows.map((r) => r.path);
     expect(paths).toContain(live);
     expect(paths).not.toContain(dead);
   });
 
-  test("reports null version for a project with no prove.db", () => {
+  test("reports null version for a project with no prove.db", async () => {
     // The registry's prune-on-read evicts any root missing `.prove/prove.db`,
     // so a db-less project never reaches the listing — but `projectStoreInfo`
     // owns the contract that such a root reports null/null, which is exercised
     // directly here on a root that exists but has no prove.db.
     const root = join(workspace, "uninitialized");
     mkdirSync(root, { recursive: true });
-    expect(projectStoreInfo(root, new Map([[TEST_DOMAIN, 2]]))).toEqual({
+    expect(await projectStoreInfo(root, new Map([[TEST_DOMAIN, 2]]))).toEqual({
       schema_version: null,
       behind: null,
     });
   });
 
-  test("carries id, name, and last_seen for each row", () => {
+  test("carries id, name, and last_seen for each row", async () => {
     registerSchema({ domain: TEST_DOMAIN, migrations: [MIGRATION_V1] });
-    const root = makeProject("alpha");
+    const root = await makeProject("alpha");
 
-    const row = byPath(buildProjectListing(baseDir, new Map([[TEST_DOMAIN, 1]])), root);
+    const row = byPath(await buildProjectListing(baseDir, new Map([[TEST_DOMAIN, 1]])), root);
     expect(row.id).toBe(encodeURIComponent(root));
     expect(row.name).toBe("alpha");
     expect(typeof row.last_seen).toBe("string");
@@ -138,7 +141,7 @@ describe("GET /api/projects", () => {
     // expected-version computation run end-to-end.
     process.env.CLAUDE_PROVE_HOME = baseDir;
     registerSchema({ domain: TEST_DOMAIN, migrations: [MIGRATION_V1] });
-    const root = makeProjectAtHome("alpha");
+    const root = await makeProjectAtHome("alpha");
 
     const app = await buildApp({ repoRoot: "/nonexistent-repo-root", webRoot: null });
     await app.ready();
@@ -162,7 +165,7 @@ describe("GET /api/projects", () => {
   test("degrades one unreadable-db project to null/null and still lists the healthy sibling", async () => {
     process.env.CLAUDE_PROVE_HOME = baseDir;
     registerSchema({ domain: TEST_DOMAIN, migrations: [MIGRATION_V1] });
-    const healthyRoot = makeProjectAtHome("healthy");
+    const healthyRoot = await makeProjectAtHome("healthy");
     const brokenRoot = makeProjectWithUnreadableDb("broken");
 
     const app = await buildApp({ repoRoot: "/nonexistent-repo-root", webRoot: null });
@@ -191,12 +194,12 @@ describe("GET /api/projects", () => {
 });
 
 /** Seed a project whose registry home is the env-pointed tmp base (no override). */
-function makeProjectAtHome(name: string): string {
+async function makeProjectAtHome(name: string): Promise<string> {
   const root = join(workspace, name);
   mkdirSync(join(root, ".prove"), { recursive: true });
-  const store = openStore({ path: join(root, ".prove", "prove.db") });
+  const store = await openStore({ path: join(root, ".prove", "prove.db") });
   try {
-    runMigrations(store);
+    await runMigrations(store);
   } finally {
     store.close();
   }
@@ -219,9 +222,9 @@ function makeProjectWithUnreadableDb(name: string): string {
 
 /** Find the row for an exact project path, asserting it exists. */
 function byPath(
-  rows: ReturnType<typeof buildProjectListing>,
+  rows: Awaited<ReturnType<typeof buildProjectListing>>,
   projectPath: string,
-): ReturnType<typeof buildProjectListing>[number] {
+): Awaited<ReturnType<typeof buildProjectListing>>[number] {
   const row = rows.find((r) => r.path === projectPath);
   if (!row) throw new Error(`no project row for ${projectPath}`);
   return row;

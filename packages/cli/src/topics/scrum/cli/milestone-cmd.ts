@@ -45,11 +45,11 @@ const MILESTONE_ACTIONS: MilestoneAction[] = [
 ];
 const VALID_STATUSES: MilestoneStatus[] = ['planned', 'active', 'closed'];
 
-export function runMilestoneCmd(
+export async function runMilestoneCmd(
   action: string,
   positional: (string | undefined)[],
   flags: MilestoneCmdFlags,
-): number {
+): Promise<number> {
   if (!isMilestoneAction(action)) {
     process.stderr.write(
       `error: unknown milestone action '${action}'. expected one of: ${MILESTONE_ACTIONS.join(', ')}\n`,
@@ -61,21 +61,21 @@ export function runMilestoneCmd(
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'create':
-        return doCreate(store, flags);
+        return await doCreate(store, flags);
       case 'list':
-        return doList(store, flags);
+        return await doList(store, flags);
       case 'show':
-        return doShow(store, positional[0]);
+        return await doShow(store, positional[0]);
       case 'close':
-        return doClose(store, positional[0], workspaceRoot);
+        return await doClose(store, positional[0], workspaceRoot);
       case 'activate':
-        return doActivate(store, positional[0]);
+        return await doActivate(store, positional[0]);
       case 'reopen':
-        return doReopen(store, positional[0]);
+        return await doReopen(store, positional[0]);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -90,14 +90,14 @@ function isMilestoneAction(value: string): value is MilestoneAction {
   return (MILESTONE_ACTIONS as string[]).includes(value);
 }
 
-function doCreate(store: ScrumStore, flags: MilestoneCmdFlags): number {
+async function doCreate(store: ScrumStore, flags: MilestoneCmdFlags): Promise<number> {
   if (flags.title === undefined || flags.title.length === 0) {
     process.stderr.write('scrum milestone create: --title is required\n');
     return 1;
   }
   const id =
     flags.id !== undefined && flags.id.length > 0 ? flags.id : generateId(flags.title, 'milestone');
-  const milestone = store.createMilestone({
+  const milestone = await store.createMilestone({
     id,
     title: flags.title,
     description: flags.description ?? null,
@@ -109,7 +109,7 @@ function doCreate(store: ScrumStore, flags: MilestoneCmdFlags): number {
   return 0;
 }
 
-function doList(store: ScrumStore, flags: MilestoneCmdFlags): number {
+async function doList(store: ScrumStore, flags: MilestoneCmdFlags): Promise<number> {
   let status: MilestoneStatus | undefined;
   if (flags.status !== undefined && flags.status.length > 0) {
     if (!VALID_STATUSES.includes(flags.status as MilestoneStatus)) {
@@ -120,23 +120,23 @@ function doList(store: ScrumStore, flags: MilestoneCmdFlags): number {
     }
     status = flags.status as MilestoneStatus;
   }
-  const rows = store.listMilestones(status, flags.initiative);
+  const rows = await store.listMilestones(status, flags.initiative);
   process.stdout.write(`${JSON.stringify(rows)}\n`);
   process.stderr.write(`scrum milestone list: ${rows.length} milestones\n`);
   return 0;
 }
 
-function doShow(store: ScrumStore, id: string | undefined): number {
+async function doShow(store: ScrumStore, id: string | undefined): Promise<number> {
   if (id === undefined || id.length === 0) {
     process.stderr.write('scrum milestone show: <id> positional argument required\n');
     return 1;
   }
-  const milestone = store.getMilestone(id);
+  const milestone = await store.getMilestone(id);
   if (milestone === null) {
     process.stderr.write(`scrum milestone show: milestone '${id}' not found\n`);
     return 1;
   }
-  const tasks = store.listTasks({ milestoneId: id });
+  const tasks = await store.listTasks({ milestoneId: id });
   process.stdout.write(`${JSON.stringify({ milestone, tasks })}\n`);
   process.stderr.write(
     `scrum milestone show: ${id} (${milestone.status}, ${tasks.length} tasks)\n`,
@@ -144,7 +144,11 @@ function doShow(store: ScrumStore, id: string | undefined): number {
   return 0;
 }
 
-function doClose(store: ScrumStore, id: string | undefined, workspaceRoot: string): number {
+async function doClose(
+  store: ScrumStore,
+  id: string | undefined,
+  workspaceRoot: string,
+): Promise<number> {
   if (id === undefined || id.length === 0) {
     process.stderr.write('scrum milestone close: <id> positional argument required\n');
     return 1;
@@ -153,8 +157,8 @@ function doClose(store: ScrumStore, id: string | undefined, workspaceRoot: strin
   // only on a real planned/active → closed transition. Re-closing an
   // already-closed milestone must not re-emit curation_proposed events — the
   // forced bubble-up fires once per close transition.
-  const prior = store.getMilestone(id);
-  const milestone = store.closeMilestone(id);
+  const prior = await store.getMilestone(id);
+  const milestone = await store.closeMilestone(id);
 
   // Emit the close result immediately after the durable store mutation so
   // callers always receive the closed milestone JSON, regardless of whether
@@ -167,12 +171,12 @@ function doClose(store: ScrumStore, id: string | undefined, workspaceRoot: strin
     // already closed in the store, so a failure here should warn but not
     // change the exit code or suppress the close result already on stdout.
     try {
-      const curation = reconcileMilestoneClosed(id, store, workspaceRoot);
+      const curation = await reconcileMilestoneClosed(id, store, workspaceRoot);
       // The same close transition surfaces the stakeholder milestone brief.
       // The brief is rendered on demand via `acb milestone-brief render
       // --milestone <id>`; here we just report how many constituent stories
       // it will roll up so the operator knows the rollup is available.
-      const stories = gatherMilestoneStories(id, store, workspaceRoot);
+      const stories = await gatherMilestoneStories(id, store, workspaceRoot);
       const compactNote =
         curation.compactedTeams.length > 0
           ? `; journal compaction: ${curation.compactedTeams.length} terminating team(s) summarized`
@@ -188,23 +192,23 @@ function doClose(store: ScrumStore, id: string | undefined, workspaceRoot: strin
   return 0;
 }
 
-function doActivate(store: ScrumStore, id: string | undefined): number {
+async function doActivate(store: ScrumStore, id: string | undefined): Promise<number> {
   if (id === undefined || id.length === 0) {
     process.stderr.write('scrum milestone activate: <id> positional argument required\n');
     return 1;
   }
-  const milestone = store.setMilestoneStatus(id, 'active');
+  const milestone = await store.setMilestoneStatus(id, 'active');
   process.stdout.write(`${JSON.stringify(milestone)}\n`);
   process.stderr.write(`scrum milestone activate: ${id}\n`);
   return 0;
 }
 
-function doReopen(store: ScrumStore, id: string | undefined): number {
+async function doReopen(store: ScrumStore, id: string | undefined): Promise<number> {
   if (id === undefined || id.length === 0) {
     process.stderr.write('scrum milestone reopen: <id> positional argument required\n');
     return 1;
   }
-  const milestone = store.setMilestoneStatus(id, 'planned');
+  const milestone = await store.setMilestoneStatus(id, 'planned');
   process.stdout.write(`${JSON.stringify(milestone)}\n`);
   process.stderr.write(`scrum milestone reopen: ${id}\n`);
   return 0;

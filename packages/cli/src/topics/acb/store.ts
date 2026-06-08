@@ -20,7 +20,6 @@
  *     returns per-table deletion counts keyed by the acb-prefixed table names.
  */
 
-import type { Database } from 'bun:sqlite';
 import {
   type GroupVerdict,
   type GroupVerdictRecord,
@@ -138,25 +137,23 @@ export function ensureAcbSchemaRegistered(): void {
       {
         version: 1,
         description: 'create acb_manifests + acb_acb_documents + acb_review_state',
-        up: (db: Database) => {
-          db.exec(ACB_MIGRATION_V1_SQL);
+        up: async (store) => {
+          await store.exec(ACB_MIGRATION_V1_SQL);
         },
       },
       {
         version: 2,
         description: 'create acb_group_verdicts (absorb review-ui group_verdicts)',
-        up: (db: Database) => {
-          db.exec(ACB_MIGRATION_V2_SQL);
+        up: async (store) => {
+          await store.exec(ACB_MIGRATION_V2_SQL);
           // Legacy backfill: the review-ui server used to create a bare
           // `group_verdicts` table at boot. Copy any existing rows into
           // the acb-prefixed table, then drop the legacy source.
-          const legacy = db
-            .prepare<{ name: string }, []>(
-              "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'group_verdicts'",
-            )
-            .get();
+          const legacy = await store.get<{ name: string }>(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'group_verdicts'",
+          );
           if (legacy) {
-            db.exec(`
+            await store.exec(`
               INSERT OR IGNORE INTO acb_group_verdicts (slug, group_id, verdict, note, fix_prompt, updated_at)
               SELECT slug, group_id, verdict, note, fix_prompt, updated_at FROM group_verdicts;
               DROP TABLE group_verdicts;
@@ -167,8 +164,8 @@ export function ensureAcbSchemaRegistered(): void {
       {
         version: 3,
         description: 'normalize acb_group_verdicts.verdict to canonical VerdictValue vocabulary',
-        up: (db: Database) => {
-          db.exec(ACB_MIGRATION_V3_SQL);
+        up: async (store) => {
+          await store.exec(ACB_MIGRATION_V3_SQL);
         },
       },
     ],
@@ -242,10 +239,10 @@ export function coerceLegacyVerdict(raw: string): GroupVerdict {
  * Pass `{ path: ':memory:' }` in tests for isolation; this skips WAL
  * pragmas but still honors the migration registry.
  */
-export function openAcbStore(opts: StoreOptions = {}): AcbStore {
+export async function openAcbStore(opts: StoreOptions = {}): Promise<AcbStore> {
   ensureAcbSchemaRegistered();
-  const store = openStore(opts);
-  runMigrations(store);
+  const store = await openStore(opts);
+  await runMigrations(store);
   return new AcbStore(store);
 }
 
@@ -287,19 +284,32 @@ export class AcbStore {
    * falls back to now(), so manifests order deterministically in
    * `listManifests`.
    */
-  saveManifest(branch: string, commitSha: string, data: unknown, runSlug?: string): number {
+  async saveManifest(
+    branch: string,
+    commitSha: string,
+    data: unknown,
+    runSlug?: string,
+  ): Promise<number> {
     const ts = extractTimestamp(data) ?? isoNow();
-    const db = this.store.getDb();
-    const stmt = db.prepare<unknown, [string, string, string, string, string, string | null]>(
-      'INSERT INTO acb_manifests (branch, commit_sha, timestamp, data, created_at, run_slug) VALUES (?, ?, ?, ?, ?, ?)',
+    const stmt = await this.store
+      .getDb()
+      .prepare(
+        'INSERT INTO acb_manifests (branch, commit_sha, timestamp, data, created_at, run_slug) VALUES (?, ?, ?, ?, ?, ?)',
+      );
+    const result = await stmt.run(
+      branch,
+      commitSha,
+      ts,
+      JSON.stringify(data),
+      isoNow(),
+      runSlug ?? null,
     );
-    const result = stmt.run(branch, commitSha, ts, JSON.stringify(data), isoNow(), runSlug ?? null);
     return Number(result.lastInsertRowid);
   }
 
   /** Any manifest row for `branch`? */
-  hasManifest(branch: string): boolean {
-    const rows = this.store.all<{ one: number }>(
+  async hasManifest(branch: string): Promise<boolean> {
+    const rows = await this.store.all<{ one: number }>(
       'SELECT 1 AS one FROM acb_manifests WHERE branch = ? LIMIT 1',
       [branch],
     );
@@ -312,15 +322,15 @@ export class AcbStore {
    * `run_slug` rows are excluded by the filter — matches the Python
    * reference's test_has_manifest_for_sha_null_slug_row_excluded_by_filter).
    */
-  hasManifestForSha(commitSha: string, runSlug?: string): boolean {
+  async hasManifestForSha(commitSha: string, runSlug?: string): Promise<boolean> {
     if (runSlug === undefined) {
-      const rows = this.store.all<{ one: number }>(
+      const rows = await this.store.all<{ one: number }>(
         "SELECT 1 AS one FROM acb_manifests WHERE commit_sha LIKE ? || '%' LIMIT 1",
         [commitSha],
       );
       return rows.length > 0;
     }
-    const rows = this.store.all<{ one: number }>(
+    const rows = await this.store.all<{ one: number }>(
       "SELECT 1 AS one FROM acb_manifests WHERE commit_sha LIKE ? || '%' AND run_slug = ? LIMIT 1",
       [commitSha, runSlug],
     );
@@ -328,8 +338,8 @@ export class AcbStore {
   }
 
   /** Manifests tagged with `runSlug`, ordered by timestamp ASC. */
-  listManifestsByRun(runSlug: string): unknown[] {
-    const rows = this.store.all<{ data: string }>(
+  async listManifestsByRun(runSlug: string): Promise<unknown[]> {
+    const rows = await this.store.all<{ data: string }>(
       'SELECT data FROM acb_manifests WHERE run_slug = ? ORDER BY timestamp ASC',
       [runSlug],
     );
@@ -337,8 +347,8 @@ export class AcbStore {
   }
 
   /** Manifests for `branch`, ordered by timestamp ASC. */
-  listManifests(branch: string): unknown[] {
-    const rows = this.store.all<{ data: string }>(
+  async listManifests(branch: string): Promise<unknown[]> {
+    const rows = await this.store.all<{ data: string }>(
       'SELECT data FROM acb_manifests WHERE branch = ? ORDER BY timestamp ASC',
       [branch],
     );
@@ -346,10 +356,9 @@ export class AcbStore {
   }
 
   /** Delete every manifest for `branch`; returns the deletion count. */
-  clearManifests(branch: string): number {
-    const db = this.store.getDb();
-    const stmt = db.prepare<unknown, [string]>('DELETE FROM acb_manifests WHERE branch = ?');
-    const result = stmt.run(branch);
+  async clearManifests(branch: string): Promise<number> {
+    const stmt = await this.store.getDb().prepare('DELETE FROM acb_manifests WHERE branch = ?');
+    const result = await stmt.run(branch);
     return Number(result.changes);
   }
 
@@ -358,27 +367,26 @@ export class AcbStore {
    * negation is load-bearing for wave cleanup — pinned by an explicit
    * regression test.
    */
-  clearStaleManifests(keepBranch: string): number {
-    const db = this.store.getDb();
-    const stmt = db.prepare<unknown, [string]>('DELETE FROM acb_manifests WHERE branch != ?');
-    const result = stmt.run(keepBranch);
+  async clearStaleManifests(keepBranch: string): Promise<number> {
+    const stmt = await this.store.getDb().prepare('DELETE FROM acb_manifests WHERE branch != ?');
+    const result = await stmt.run(keepBranch);
     return Number(result.changes);
   }
 
   // -- ACB Documents ------------------------------------------------------
 
   /** Upsert an ACB document on `branch` (PK). Bumps `updated_at`. */
-  saveAcb(branch: string, data: unknown): void {
+  async saveAcb(branch: string, data: unknown): Promise<void> {
     const now = isoNow();
-    this.store.run(
+    await this.store.run(
       'INSERT INTO acb_acb_documents (branch, data, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(branch) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at',
       [branch, JSON.stringify(data), now, now],
     );
   }
 
   /** Load the ACB document for `branch`, or null. */
-  loadAcb(branch: string): unknown | null {
-    const rows = this.store.all<{ data: string }>(
+  async loadAcb(branch: string): Promise<unknown | null> {
+    const rows = await this.store.all<{ data: string }>(
       'SELECT data FROM acb_acb_documents WHERE branch = ?',
       [branch],
     );
@@ -388,8 +396,8 @@ export class AcbStore {
   }
 
   /** Branch with the most-recently updated ACB document, or null. */
-  latestAcbBranch(): string | null {
-    const rows = this.store.all<{ branch: string }>(
+  async latestAcbBranch(): Promise<string | null> {
+    const rows = await this.store.all<{ branch: string }>(
       'SELECT branch FROM acb_acb_documents ORDER BY updated_at DESC LIMIT 1',
     );
     const [row] = rows;
@@ -399,17 +407,17 @@ export class AcbStore {
   // -- Review State -------------------------------------------------------
 
   /** Upsert review state on `branch` (PK). Bumps `updated_at`. */
-  saveReview(branch: string, acbHash: string, data: unknown): void {
+  async saveReview(branch: string, acbHash: string, data: unknown): Promise<void> {
     const now = isoNow();
-    this.store.run(
+    await this.store.run(
       'INSERT INTO acb_review_state (branch, acb_hash, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(branch) DO UPDATE SET acb_hash = excluded.acb_hash, data = excluded.data, updated_at = excluded.updated_at',
       [branch, acbHash, JSON.stringify(data), now, now],
     );
   }
 
   /** Load review state for `branch`, or null. */
-  loadReview(branch: string): unknown | null {
-    const rows = this.store.all<{ data: string }>(
+  async loadReview(branch: string): Promise<unknown | null> {
+    const rows = await this.store.all<{ data: string }>(
       'SELECT data FROM acb_review_state WHERE branch = ?',
       [branch],
     );
@@ -421,8 +429,8 @@ export class AcbStore {
   // -- Group Verdicts -----------------------------------------------------
 
   /** List every verdict recorded for `slug`. Order is insertion-defined. */
-  listGroupVerdicts(slug: string): GroupVerdictRecord[] {
-    const rows = this.store.all<{
+  async listGroupVerdicts(slug: string): Promise<GroupVerdictRecord[]> {
+    const rows = await this.store.all<{
       slug: string;
       group_id: string;
       verdict: string;
@@ -449,19 +457,19 @@ export class AcbStore {
    * Thin delegate to the `@claude-prove/store` write-service so the upsert SQL
    * and the `updated_at` stamp live in exactly one place across every caller.
    */
-  upsertGroupVerdict(
+  async upsertGroupVerdict(
     slug: string,
     groupId: string,
     verdict: GroupVerdict,
     note: string | null,
     fixPrompt: string | null,
-  ): GroupVerdictRecord {
+  ): Promise<GroupVerdictRecord> {
     return upsertGroupVerdict(this.store, slug, groupId, verdict, note, fixPrompt);
   }
 
   /** Delete the `(slug, groupId)` verdict row. No-op if absent. */
-  clearGroupVerdict(slug: string, groupId: string): void {
-    this.store.run('DELETE FROM acb_group_verdicts WHERE slug = ? AND group_id = ?', [
+  async clearGroupVerdict(slug: string, groupId: string): Promise<void> {
+    await this.store.run('DELETE FROM acb_group_verdicts WHERE slug = ? AND group_id = ?', [
       slug,
       groupId,
     ]);
@@ -474,10 +482,9 @@ export class AcbStore {
    * group_id)`), so branch-scoped deletion is structurally inapplicable.
    * Returns the number of rows deleted.
    */
-  clearVerdictsForSlug(slug: string): number {
-    const db = this.store.getDb();
-    const stmt = db.prepare<unknown, [string]>('DELETE FROM acb_group_verdicts WHERE slug = ?');
-    const result = stmt.run(slug);
+  async clearVerdictsForSlug(slug: string): Promise<number> {
+    const stmt = await this.store.getDb().prepare('DELETE FROM acb_group_verdicts WHERE slug = ?');
+    const result = await stmt.run(slug);
     return Number(result.changes);
   }
 
@@ -493,11 +500,11 @@ export class AcbStore {
    * `clearVerdictsForSlug`, which the caller must invoke separately when
    * retiring a slug.
    */
-  cleanBranch(branch: string): CleanBranchCounts {
+  async cleanBranch(branch: string): Promise<CleanBranchCounts> {
     return {
-      acb_manifests: this.deleteBranchRows('acb_manifests', branch),
-      acb_acb_documents: this.deleteBranchRows('acb_acb_documents', branch),
-      acb_review_state: this.deleteBranchRows('acb_review_state', branch),
+      acb_manifests: await this.deleteBranchRows('acb_manifests', branch),
+      acb_acb_documents: await this.deleteBranchRows('acb_acb_documents', branch),
+      acb_review_state: await this.deleteBranchRows('acb_review_state', branch),
     };
   }
 
@@ -508,11 +515,11 @@ export class AcbStore {
    * `acb_group_verdicts` is intentionally excluded: it has no `branch` column
    * and cannot contribute a branch-based enumeration.
    */
-  branches(): string[] {
+  async branches(): Promise<string[]> {
     const tables = ['acb_manifests', 'acb_acb_documents', 'acb_review_state'] as const;
     const seen = new Set<string>();
     for (const table of tables) {
-      const rows = this.store.all<{ branch: string }>(`SELECT DISTINCT branch FROM ${table}`);
+      const rows = await this.store.all<{ branch: string }>(`SELECT DISTINCT branch FROM ${table}`);
       for (const r of rows) seen.add(r.branch);
     }
     return [...seen].sort();
@@ -527,13 +534,12 @@ export class AcbStore {
    * (SQLite does not allow parameterizing table identifiers, so the name
    * has to be interpolated).
    */
-  private deleteBranchRows(table: string, branch: string): number {
+  private async deleteBranchRows(table: string, branch: string): Promise<number> {
     if (!ACB_TABLES.has(table)) {
       throw new Error(`deleteBranchRows: unknown acb table "${table}"`);
     }
-    const db = this.store.getDb();
-    const stmt = db.prepare<unknown, [string]>(`DELETE FROM ${table} WHERE branch = ?`);
-    const result = stmt.run(branch);
+    const stmt = await this.store.getDb().prepare(`DELETE FROM ${table} WHERE branch = ?`);
+    const result = await stmt.run(branch);
     return Number(result.changes);
   }
 }
