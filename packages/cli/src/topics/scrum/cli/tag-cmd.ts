@@ -26,11 +26,11 @@ export type TagAction = 'add' | 'remove' | 'list';
 
 const TAG_ACTIONS: TagAction[] = ['add', 'remove', 'list'];
 
-export function runTagCmd(
+export async function runTagCmd(
   action: string,
   positional: (string | undefined)[],
   flags: TagCmdFlags,
-): number {
+): Promise<number> {
   if (!isTagAction(action)) {
     process.stderr.write(
       `error: unknown tag action '${action}'. expected one of: ${TAG_ACTIONS.join(', ')}\n`,
@@ -42,15 +42,15 @@ export function runTagCmd(
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'add':
-        return doAdd(store, positional[0], positional[1]);
+        return await doAdd(store, positional[0], positional[1]);
       case 'remove':
-        return doRemove(store, positional[0], positional[1]);
+        return await doRemove(store, positional[0], positional[1]);
       case 'list':
-        return doList(store, flags);
+        return await doList(store, flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -65,37 +65,45 @@ function isTagAction(value: string): value is TagAction {
   return (TAG_ACTIONS as string[]).includes(value);
 }
 
-function doAdd(store: ScrumStore, taskId: string | undefined, tag: string | undefined): number {
+async function doAdd(
+  store: ScrumStore,
+  taskId: string | undefined,
+  tag: string | undefined,
+): Promise<number> {
   if (taskId === undefined || taskId.length === 0 || tag === undefined || tag.length === 0) {
     process.stderr.write('scrum tag add: <task-id> and <tag> positional arguments required\n');
     return 1;
   }
-  store.addTag(taskId, tag);
+  await store.addTag(taskId, tag);
   process.stdout.write(`${JSON.stringify({ added: true, task_id: taskId, tag })}\n`);
   process.stderr.write(`scrum tag add: ${taskId} += ${tag}\n`);
   return 0;
 }
 
-function doRemove(store: ScrumStore, taskId: string | undefined, tag: string | undefined): number {
+async function doRemove(
+  store: ScrumStore,
+  taskId: string | undefined,
+  tag: string | undefined,
+): Promise<number> {
   if (taskId === undefined || taskId.length === 0 || tag === undefined || tag.length === 0) {
     process.stderr.write('scrum tag remove: <task-id> and <tag> positional arguments required\n');
     return 1;
   }
-  store.removeTag(taskId, tag);
+  await store.removeTag(taskId, tag);
   process.stdout.write(`${JSON.stringify({ removed: true, task_id: taskId, tag })}\n`);
   process.stderr.write(`scrum tag remove: ${taskId} -= ${tag}\n`);
   return 0;
 }
 
-function doList(store: ScrumStore, flags: TagCmdFlags): number {
+async function doList(store: ScrumStore, flags: TagCmdFlags): Promise<number> {
   if (flags.task !== undefined && flags.task.length > 0) {
-    const rows = store.listTagsForTask(flags.task);
+    const rows = await store.listTagsForTask(flags.task);
     process.stdout.write(`${JSON.stringify(rows)}\n`);
     process.stderr.write(`scrum tag list: ${rows.length} tags on ${flags.task}\n`);
     return 0;
   }
   if (flags.tag !== undefined && flags.tag.length > 0) {
-    const rows = store.listTasksForTag(flags.tag);
+    const rows = await store.listTasksForTag(flags.tag);
     process.stdout.write(`${JSON.stringify(rows)}\n`);
     process.stderr.write(`scrum tag list: ${rows.length} tasks for tag '${flags.tag}'\n`);
     return 0;

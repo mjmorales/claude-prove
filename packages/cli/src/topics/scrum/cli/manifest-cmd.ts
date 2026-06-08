@@ -43,7 +43,7 @@ export type ManifestAction = 'show';
 
 const MANIFEST_ACTIONS: ManifestAction[] = ['show'];
 
-export function runManifestCmd(action: string, flags: ManifestCmdFlags): number {
+export async function runManifestCmd(action: string, flags: ManifestCmdFlags): Promise<number> {
   if (!isManifestAction(action)) {
     process.stderr.write(
       `error: unknown manifest action '${action}'. expected one of: ${MANIFEST_ACTIONS.join(', ')}\n`,
@@ -55,11 +55,11 @@ export function runManifestCmd(action: string, flags: ManifestCmdFlags): number 
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'show':
-        return doShow(store, flags);
+        return await doShow(store, flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -78,8 +78,8 @@ function isManifestAction(value: string): value is ManifestAction {
 // show
 // ---------------------------------------------------------------------------
 
-function doShow(store: ScrumStore, flags: ManifestCmdFlags): number {
-  const manifest = store.getManifest();
+async function doShow(store: ScrumStore, flags: ManifestCmdFlags): Promise<number> {
+  const manifest = await store.getManifest();
   if (flags.human === true) {
     process.stdout.write(renderHumanTable(manifest));
   } else {
