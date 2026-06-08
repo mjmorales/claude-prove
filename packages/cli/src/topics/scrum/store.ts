@@ -353,7 +353,7 @@ export interface ResolveContributorKey {
  * `ScrumTask.acceptance` object and assembles the `provenance` block.
  */
 const TASK_COLUMNS =
-  'id, title, description, status, milestone_id, team_slug, parent_id, layer, acceptance_policy_json, bounds_json, terminal_reason, terminal_detail, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, deleted_at';
+  'id, title, description, status, milestone_id, team_slug, parent_id, layer, acceptance_policy_json, bounds_json, terminal_reason, terminal_detail, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, status_event_id, deleted_at';
 
 /** Canonical `scrum_milestones` SELECT column list; includes the v10 `initiative` grouping. */
 const MILESTONE_COLUMNS =
@@ -695,6 +695,10 @@ export class ScrumStore {
       last_modified_at: createdAt,
       worker_id: workerId,
       run_id: runId,
+      // No transition has fired yet — the authored status is the creation status,
+      // not one set by a status_changed event. The pointer is stamped on the
+      // first transition (see updateTaskStatus), so a fresh task reads NULL.
+      status_event_id: null,
       deleted_at: null,
       provenance: {
         created_by: createdBy,
@@ -1183,21 +1187,14 @@ export class ScrumStore {
 
     const ts = isoNow();
     const { workerId, runId } = resolveRunContext();
-    await this.exec(
-      'UPDATE scrum_tasks SET status = ?, terminal_reason = ?, terminal_detail = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
-      'cancelled',
-      reason,
-      detail,
-      ts,
-      agent,
-      ts,
-      workerId,
-      runId,
-      id,
-    );
+    // Cancel is a status transition, so it stamps `status_event_id` with the id
+    // of the status_changed event it appends — same provenance invariant the
+    // service-level transition enforces. The event INSERT runs first so the
+    // pointer's FK target onto scrum_events(id) already exists at UPDATE time.
+    const statusEventId = ulid();
     await this.exec(
       'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
-      ulid(),
+      statusEventId,
       id,
       ts,
       'status_changed',
@@ -1208,6 +1205,19 @@ export class ScrumStore {
         terminal_reason: reason,
         terminal_detail: detail,
       }),
+    );
+    await this.exec(
+      'UPDATE scrum_tasks SET status = ?, status_event_id = ?, terminal_reason = ?, terminal_detail = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+      'cancelled',
+      statusEventId,
+      reason,
+      detail,
+      ts,
+      agent,
+      ts,
+      workerId,
+      runId,
+      id,
     );
     return true;
   }
@@ -2184,7 +2194,7 @@ export class ScrumStore {
   async listTasksForTag(tag: string): Promise<ScrumTask[]> {
     return await this.hydrateRows(
       (await this.many(
-        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.team_slug, t.parent_id, t.layer, t.acceptance_policy_json, t.bounds_json, t.terminal_reason, t.terminal_detail, t.created_by_agent, t.created_at, t.last_event_at, t.last_modified_by, t.last_modified_at, t.worker_id, t.run_id, t.deleted_at
+        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.team_slug, t.parent_id, t.layer, t.acceptance_policy_json, t.bounds_json, t.terminal_reason, t.terminal_detail, t.created_by_agent, t.created_at, t.last_event_at, t.last_modified_by, t.last_modified_at, t.worker_id, t.run_id, t.status_event_id, t.deleted_at
        FROM scrum_tasks t
        INNER JOIN scrum_tags g ON g.task_id = t.id
        WHERE g.tag = ? AND t.deleted_at IS NULL

@@ -230,6 +230,7 @@ describe('scrum domain registration', () => {
         'worker_id:TEXT:0',
         'run_id:TEXT:0',
         'team_slug:TEXT:0',
+        'status_event_id:TEXT:0',
       ]);
     } finally {
       raw.close();
@@ -244,7 +245,7 @@ describe('scrum domain registration', () => {
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<Record<string, unknown>>(
-        'SELECT parent_id, layer, acceptance_policy_json, bounds_json, terminal_reason, terminal_detail, last_modified_by, last_modified_at, worker_id, run_id, team_slug FROM scrum_tasks WHERE id = ?',
+        'SELECT parent_id, layer, acceptance_policy_json, bounds_json, terminal_reason, terminal_detail, last_modified_by, last_modified_at, worker_id, run_id, team_slug, status_event_id FROM scrum_tasks WHERE id = ?',
         ['t1'],
       );
       expect(row).toEqual([
@@ -260,6 +261,7 @@ describe('scrum domain registration', () => {
           worker_id: null,
           run_id: null,
           team_slug: null,
+          status_event_id: null,
         },
       ]);
     } finally {
