@@ -100,11 +100,11 @@ const CANONICAL_DECISION_KINDS = ['adr', 'glossary', 'pattern'] as const;
 /** Default staleness threshold for `review-stale`. */
 const DEFAULT_STALE_DAYS = 90;
 
-export function runDecisionCmd(
+export async function runDecisionCmd(
   action: string,
   positional: (string | undefined)[],
   flags: DecisionCmdFlags,
-): number {
+): Promise<number> {
   if (!isDecisionAction(action)) {
     process.stderr.write(
       `error: unknown decision action '${action}'. expected one of: ${DECISION_ACTIONS.join(', ')}\n`,
@@ -116,25 +116,25 @@ export function runDecisionCmd(
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'record':
-        return doRecord(store, positional[0], flags);
+        return await doRecord(store, positional[0], flags);
       case 'approve':
-        return doApprove(store, positional[0], flags);
+        return await doApprove(store, positional[0], flags);
       case 'reject':
-        return doReject(store, positional[0], flags);
+        return await doReject(store, positional[0], flags);
       case 'get':
-        return doGet(store, positional[0]);
+        return await doGet(store, positional[0]);
       case 'list':
-        return doList(store, flags);
+        return await doList(store, flags);
       case 'recover':
-        return doRecover(store, workspaceRoot, flags);
+        return await doRecover(store, workspaceRoot, flags);
       case 'supersede':
-        return doSupersede(store, positional[0], flags);
+        return await doSupersede(store, positional[0], flags);
       case 'review-stale':
-        return doReviewStale(store, flags);
+        return await doReviewStale(store, flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -153,7 +153,11 @@ function isDecisionAction(value: string): value is DecisionAction {
 // record
 // ---------------------------------------------------------------------------
 
-function doRecord(store: ScrumStore, path: string | undefined, flags: DecisionCmdFlags): number {
+async function doRecord(
+  store: ScrumStore,
+  path: string | undefined,
+  flags: DecisionCmdFlags,
+): Promise<number> {
   if (path === undefined || path.length === 0) {
     process.stderr.write('scrum decision record: <path> positional argument required\n');
     return 1;
@@ -172,7 +176,7 @@ function doRecord(store: ScrumStore, path: string | undefined, flags: DecisionCm
   const content = readFileSync(abs, 'utf8');
   const input = parseDecisionFile(content, path);
   if (kind !== undefined) input.kind = kind;
-  const row = store.recordDecision(input);
+  const row = await store.recordDecision(input);
   const bytes = Buffer.byteLength(content, 'utf8');
   process.stdout.write(`${JSON.stringify(row)}\n`);
   // A gated-kind record lands as a DRAFT (write_status='draft', not accepted)
@@ -195,7 +199,11 @@ function doRecord(store: ScrumStore, path: string | undefined, flags: DecisionCm
  * (unknown id, non-gated decision, already-resolved gate, non-tech_lead
  * glossary responder) surface as exit 1 via the caller's catch.
  */
-function doApprove(store: ScrumStore, id: string | undefined, flags: DecisionCmdFlags): number {
+async function doApprove(
+  store: ScrumStore,
+  id: string | undefined,
+  flags: DecisionCmdFlags,
+): Promise<number> {
   if (id === undefined || id.length === 0) {
     process.stderr.write('scrum decision approve: <id> positional argument required\n');
     return 1;
@@ -205,7 +213,7 @@ function doApprove(store: ScrumStore, id: string | undefined, flags: DecisionCmd
     process.stderr.write('scrum decision approve: --by <responder> is required\n');
     return 1;
   }
-  const row = store.approveDecision(id, responder);
+  const row = await store.approveDecision(id, responder);
   process.stdout.write(`${JSON.stringify(row)}\n`);
   process.stderr.write(`scrum decision approve: ${row.id} -> accepted (by ${responder})\n`);
   return 0;
@@ -217,7 +225,11 @@ function doApprove(store: ScrumStore, id: string | undefined, flags: DecisionCmd
  * rejected; status stays 'draft' — never accepted). Store-level rejections
  * (unknown id, non-gated decision, already-resolved gate) surface as exit 1.
  */
-function doReject(store: ScrumStore, id: string | undefined, flags: DecisionCmdFlags): number {
+async function doReject(
+  store: ScrumStore,
+  id: string | undefined,
+  flags: DecisionCmdFlags,
+): Promise<number> {
   if (id === undefined || id.length === 0) {
     process.stderr.write('scrum decision reject: <id> positional argument required\n');
     return 1;
@@ -228,7 +240,7 @@ function doReject(store: ScrumStore, id: string | undefined, flags: DecisionCmdF
     return 1;
   }
   const reason = flags.reason && flags.reason.length > 0 ? flags.reason : null;
-  const row = store.rejectDecision(id, responder, reason);
+  const row = await store.rejectDecision(id, responder, reason);
   process.stdout.write(`${JSON.stringify(row)}\n`);
   process.stderr.write(`scrum decision reject: ${row.id} -> blocked (by ${responder})\n`);
   return 0;
@@ -270,12 +282,12 @@ function normalizeKind(raw: string | undefined): string | undefined | typeof INV
 // get
 // ---------------------------------------------------------------------------
 
-function doGet(store: ScrumStore, id: string | undefined): number {
+async function doGet(store: ScrumStore, id: string | undefined): Promise<number> {
   if (id === undefined || id.length === 0) {
     process.stderr.write('scrum decision get: <id> positional argument required\n');
     return 1;
   }
-  const row = store.getDecision(id);
+  const row = await store.getDecision(id);
   if (row === null) {
     process.stderr.write(`scrum decision get: unknown decision '${id}'\n`);
     return 1;
@@ -289,13 +301,13 @@ function doGet(store: ScrumStore, id: string | undefined): number {
 // list
 // ---------------------------------------------------------------------------
 
-function doList(store: ScrumStore, flags: DecisionCmdFlags): number {
+async function doList(store: ScrumStore, flags: DecisionCmdFlags): Promise<number> {
   const filter: ListDecisionsFilter = {};
   if (flags.topic !== undefined && flags.topic.length > 0) filter.topic = flags.topic;
   if (flags.status !== undefined && flags.status.length > 0) filter.status = flags.status;
   if (flags.kind !== undefined && flags.kind.length > 0) filter.kind = flags.kind;
 
-  const rows = store.listDecisions(filter);
+  const rows = await store.listDecisions(filter);
   if (flags.human === true) {
     process.stdout.write(renderHumanTable(rows));
   } else {
@@ -331,7 +343,11 @@ function renderHumanTable(rows: DecisionRow[]): string {
  * the updated old row as JSON. Store-level rejections (unknown id, missing
  * replacement, already terminal) surface as exit 1 via the caller's catch.
  */
-function doSupersede(store: ScrumStore, id: string | undefined, flags: DecisionCmdFlags): number {
+async function doSupersede(
+  store: ScrumStore,
+  id: string | undefined,
+  flags: DecisionCmdFlags,
+): Promise<number> {
   if (id === undefined || id.length === 0) {
     process.stderr.write('scrum decision supersede: <id> positional argument required\n');
     return 1;
@@ -345,7 +361,7 @@ function doSupersede(store: ScrumStore, id: string | undefined, flags: DecisionC
     return 1;
   }
 
-  const row = store.supersedeDecision(id, flags.by, flags.reason);
+  const row = await store.supersedeDecision(id, flags.by, flags.reason);
   process.stdout.write(`${JSON.stringify(row)}\n`);
   process.stderr.write(`scrum decision supersede: ${row.id} -> ${flags.by}\n`);
   return 0;
@@ -376,13 +392,13 @@ interface StaleDecision {
  * Default threshold is hard-coded to 90 here; the `memory.stale_threshold_days`
  * config knob that overrides it lands in the phase-1 config-consolidation task.
  */
-function doReviewStale(store: ScrumStore, flags: DecisionCmdFlags): number {
+async function doReviewStale(store: ScrumStore, flags: DecisionCmdFlags): Promise<number> {
   const days = resolveStaleDays(flags.days);
   if (days === null) return 1;
 
   const cutoffMs = Date.now() - days * 24 * 60 * 60 * 1000;
   const stale: StaleDecision[] = [];
-  for (const row of store.listDecisions()) {
+  for (const row of await store.listDecisions()) {
     if (row.status === 'superseded') continue;
     const recordedMs = Date.parse(row.recorded_at);
     if (Number.isNaN(recordedMs) || recordedMs >= cutoffMs) continue;
@@ -468,7 +484,11 @@ class GitFailureError extends Error {
  *   - Non-repo is a usage error (exit 1); empty history is a clean no-op.
  *   - Blobs that lack an H1 or are empty are skipped; they cannot be decision records.
  */
-function doRecover(store: ScrumStore, workspaceRoot: string, flags: DecisionCmdFlags): number {
+async function doRecover(
+  store: ScrumStore,
+  workspaceRoot: string,
+  flags: DecisionCmdFlags,
+): Promise<number> {
   if (flags.fromGit !== true) {
     process.stderr.write(
       'scrum decision recover: --from-git flag is required (no other source is implemented)\n',
@@ -502,7 +522,7 @@ function doRecover(store: ScrumStore, workspaceRoot: string, flags: DecisionCmdF
   // leaves scrum_decisions untouched — all-or-nothing matches operator expectations
   // on retry (mirrors the seed-atomically pattern used in init-cmd).
   try {
-    store.transaction(() => {
+    await store.transaction(async () => {
       for (const sha of shas) {
         const paths = listDecisionPathsAtCommit(workspaceRoot, sha);
         if (paths === null) {
@@ -515,7 +535,7 @@ function doRecover(store: ScrumStore, workspaceRoot: string, flags: DecisionCmdF
           if (!isAdrBlob(content)) continue;
 
           const input = parseDecisionFile(content, path);
-          store.recordDecision(input);
+          await store.recordDecision(input);
           recoveredIds.add(input.id);
           pendingMessages.push(
             `scrum decision recover: recovered ${input.id} from ${sha.slice(0, 8)}\n`,
