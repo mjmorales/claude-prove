@@ -88,11 +88,11 @@ export type EscalationAction = 'raise' | 'show' | 'list' | 'resolve' | 'chain';
 
 const ESCALATION_ACTIONS: EscalationAction[] = ['raise', 'show', 'list', 'resolve', 'chain'];
 
-export function runEscalationCmd(
+export async function runEscalationCmd(
   action: string,
   args: Array<string | undefined>,
   flags: EscalationCmdFlags,
-): number {
+): Promise<number> {
   if (!isEscalationAction(action)) {
     process.stderr.write(
       `error: unknown escalation action '${action}'. expected one of: ${ESCALATION_ACTIONS.join(', ')}\n`,
@@ -104,19 +104,19 @@ export function runEscalationCmd(
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'raise':
-        return doRaise(store, flags);
+        return await doRaise(store, flags);
       case 'show':
-        return doShow(store, args[0]);
+        return await doShow(store, args[0]);
       case 'list':
-        return doList(store, flags);
+        return await doList(store, flags);
       case 'resolve':
-        return doResolve(store, args[0], flags);
+        return await doResolve(store, args[0], flags);
       case 'chain':
-        return doChain(store, args[0], flags);
+        return await doChain(store, args[0], flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -166,7 +166,7 @@ function asId(raw: string | undefined): number | null {
 // raise
 // ---------------------------------------------------------------------------
 
-function doRaise(store: ScrumStore, flags: EscalationCmdFlags): number {
+async function doRaise(store: ScrumStore, flags: EscalationCmdFlags): Promise<number> {
   if (flags.task === undefined || flags.task.length === 0) {
     process.stderr.write('scrum escalation raise: --task <id> is required\n');
     return 1;
@@ -195,7 +195,7 @@ function doRaise(store: ScrumStore, flags: EscalationCmdFlags): number {
     layer = parsed;
   }
 
-  const row = store.raiseEscalation({
+  const row = await store.raiseEscalation({
     taskId: flags.task,
     escalationType,
     summary: flags.summary,
@@ -214,13 +214,13 @@ function doRaise(store: ScrumStore, flags: EscalationCmdFlags): number {
 // show
 // ---------------------------------------------------------------------------
 
-function doShow(store: ScrumStore, idArg: string | undefined): number {
+async function doShow(store: ScrumStore, idArg: string | undefined): Promise<number> {
   const id = asId(idArg);
   if (id === null) {
     process.stderr.write('scrum escalation show: a positive integer <id> is required\n');
     return 1;
   }
-  const row = store.getEscalation(id);
+  const row = await store.getEscalation(id);
   if (row === null) {
     process.stdout.write('null\n');
     process.stderr.write(`scrum escalation show: unknown escalation id '${id}'\n`);
@@ -237,11 +237,11 @@ function doShow(store: ScrumStore, idArg: string | undefined): number {
 // list
 // ---------------------------------------------------------------------------
 
-function doList(store: ScrumStore, flags: EscalationCmdFlags): number {
+async function doList(store: ScrumStore, flags: EscalationCmdFlags): Promise<number> {
   const scopedToTask = flags.task !== undefined && flags.task.length > 0;
   const rows = scopedToTask
-    ? store.listEscalationsForTask(flags.task as string)
-    : store.listOpenEscalationRows();
+    ? await store.listEscalationsForTask(flags.task as string)
+    : await store.listOpenEscalationRows();
   if (flags.human === true) {
     process.stdout.write(renderHumanTable(rows));
   } else {
@@ -256,11 +256,11 @@ function doList(store: ScrumStore, flags: EscalationCmdFlags): number {
 // resolve
 // ---------------------------------------------------------------------------
 
-function doResolve(
+async function doResolve(
   store: ScrumStore,
   idArg: string | undefined,
   flags: EscalationCmdFlags,
-): number {
+): Promise<number> {
   const id = asId(idArg);
   if (id === null) {
     process.stderr.write('scrum escalation resolve: a positive integer <id> is required\n');
@@ -274,7 +274,7 @@ function doResolve(
     return 1;
   }
 
-  const result = store.resolveEscalation({
+  const result = await store.resolveEscalation({
     id,
     mode,
     note: flags.note ?? null,
@@ -295,18 +295,22 @@ function doResolve(
 // chain
 // ---------------------------------------------------------------------------
 
-function doChain(store: ScrumStore, idArg: string | undefined, flags: EscalationCmdFlags): number {
+async function doChain(
+  store: ScrumStore,
+  idArg: string | undefined,
+  flags: EscalationCmdFlags,
+): Promise<number> {
   const id = asId(idArg);
   if (id === null) {
     process.stderr.write('scrum escalation chain: a positive integer <id> is required\n');
     return 1;
   }
-  if (store.getEscalation(id) === null) {
+  if ((await store.getEscalation(id)) === null) {
     process.stdout.write('[]\n');
     process.stderr.write(`scrum escalation chain: unknown escalation id '${id}'\n`);
     return 1;
   }
-  const rows = store.getEscalationChain(id);
+  const rows = await store.getEscalationChain(id);
   if (flags.human === true) {
     process.stdout.write(renderHumanTable(rows));
   } else {

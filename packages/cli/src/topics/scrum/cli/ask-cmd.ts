@@ -81,11 +81,11 @@ export type AskAction = 'file' | 'respond' | 'await';
 
 const ASK_ACTIONS: AskAction[] = ['file', 'respond', 'await'];
 
-export function runAskCmd(
+export async function runAskCmd(
   action: string,
   args: Array<string | undefined>,
   flags: AskCmdFlags,
-): number {
+): Promise<number> {
   if (!isAskAction(action)) {
     process.stderr.write(
       `error: unknown ask action '${action}'. expected one of: ${ASK_ACTIONS.join(', ')}\n`,
@@ -97,15 +97,15 @@ export function runAskCmd(
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'file':
-        return doFile(store, flags);
+        return await doFile(store, flags);
       case 'respond':
-        return doRespond(store, args[0], flags);
+        return await doRespond(store, args[0], flags);
       case 'await':
-        return doAwait(store, args[0]);
+        return await doAwait(store, args[0]);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -141,7 +141,7 @@ function asAskId(raw: string | undefined): number | null {
 // file
 // ---------------------------------------------------------------------------
 
-function doFile(store: ScrumStore, flags: AskCmdFlags): number {
+async function doFile(store: ScrumStore, flags: AskCmdFlags): Promise<number> {
   if (flags.fromTeam === undefined || flags.fromTeam.length === 0) {
     process.stderr.write('scrum ask file: --from-team <slug> is required\n');
     return 1;
@@ -162,7 +162,7 @@ function doFile(store: ScrumStore, flags: AskCmdFlags): number {
   // fileAsk throws on an unknown to_team / from_team, a non-accepted ask_type,
   // and a missing blocking_artifact; each surfaces as exit 1 via the runAskCmd
   // catch with the store's domain message.
-  const ask = store.fileAsk({
+  const ask = await store.fileAsk({
     fromTeam: flags.fromTeam,
     toTeam: flags.toTeam,
     askType: flags.askType,
@@ -181,7 +181,11 @@ function doFile(store: ScrumStore, flags: AskCmdFlags): number {
 // respond
 // ---------------------------------------------------------------------------
 
-function doRespond(store: ScrumStore, idArg: string | undefined, flags: AskCmdFlags): number {
+async function doRespond(
+  store: ScrumStore,
+  idArg: string | undefined,
+  flags: AskCmdFlags,
+): Promise<number> {
   const id = asAskId(idArg);
   if (id === null) {
     process.stderr.write('scrum ask respond: a positive integer <ask-id> is required\n');
@@ -197,7 +201,7 @@ function doRespond(store: ScrumStore, idArg: string | undefined, flags: AskCmdFl
   // non-`filed` ask; each surfaces as exit 1 via the runAskCmd catch with the
   // store's domain message. The CLI performs no judgment — it forwards the
   // driver's verdict for mechanical application.
-  const ask = store.respondAsk({
+  const ask = await store.respondAsk({
     id,
     verdict,
     comment: flags.comment ?? null,
@@ -219,7 +223,7 @@ function doRespond(store: ScrumStore, idArg: string | undefined, flags: AskCmdFl
 // await — mechanical poll for the team-as-workflow-kind sugar
 // ---------------------------------------------------------------------------
 
-function doAwait(store: ScrumStore, idArg: string | undefined): number {
+async function doAwait(store: ScrumStore, idArg: string | undefined): Promise<number> {
   const id = asAskId(idArg);
   if (id === null) {
     process.stderr.write('scrum ask await: a positive integer <ask-id> is required\n');
@@ -229,7 +233,7 @@ function doAwait(store: ScrumStore, idArg: string | undefined): number {
   // awaitAsk throws only on an unknown id; every existing ask yields a report,
   // so a terminal reject/counter SURFACES as a phase in the JSON (the calling
   // script never hangs) rather than as a non-zero exit.
-  const report = store.awaitAsk(id);
+  const report = await store.awaitAsk(id);
 
   process.stdout.write(`${JSON.stringify(report)}\n`);
   const detail =
