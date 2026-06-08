@@ -1811,6 +1811,11 @@ export class ScrumStore {
         runId,
         taskId,
       );
+      // Replace-the-whole-object semantics: drop this task's criterion rows and
+      // re-insert fresh surrogates. The verdict rows of the dropped surrogates are
+      // intentionally left in scrum_criterion_verdicts (the append-only log is never
+      // pruned); the criterion-head view's INNER JOIN hides them once their
+      // definition row is gone, so they are inert history, not live state.
       await this.exec('DELETE FROM scrum_acceptance_criteria WHERE task_id = ?', taskId);
       const criteria = acceptance?.criteria ?? [];
       for (const criterion of criteria) {
@@ -1864,13 +1869,17 @@ export class ScrumStore {
   }
 
   /**
-   * Seed the first verdict row for a criterion-row (by SURROGATE id) that
-   * arrived with a resolved verdict on its input shape — but only when that
-   * criterion row has NO verdict row yet (so a read-modify-write rewrite of an
-   * already-verdicted criterion does not double-append; the rewrite mints a NEW
-   * surrogate, so the guard checks the prior surrogate carried over by external
-   * id). A pending gate seeds nothing (`gate_pending` is the absent-verdict
-   * default the head reconstruction supplies).
+   * Seed the first verdict row for a freshly-inserted criterion-row (by SURROGATE
+   * id) that arrived with a resolved verdict on its input shape. This appends
+   * unconditionally — there is NO in-method existence guard. Safety against a
+   * double-append derives entirely from the call shape: every caller reaches a
+   * fresh, verdict-less surrogate (`createTask` builds new rows; `writeAcceptance`
+   * DELETEs the task's criteria and re-inserts new surrogates; `addCriterion`
+   * inserts a duplicate-id-guarded new criterion). A future read-modify-write
+   * caller that feeds an already-persisted verdict back through `insertCriterionRow`
+   * would double-append — do not wire one without adding a guard here. A pending
+   * gate seeds nothing (`gate_pending` is the absent-verdict default the head
+   * reconstruction supplies).
    */
   private async seedInputVerdict(
     taskId: string,
