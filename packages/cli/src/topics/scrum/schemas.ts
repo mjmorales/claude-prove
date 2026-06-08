@@ -84,6 +84,21 @@ import { listDomains, registerSchema } from '@claude-prove/store';
  *                           lexically-greatest id is the most-recently appended).
  *                           The story-close floor and the task-detail read
  *                           consult this for each criterion's current verdict.
+ *   scrum_ready_eligible  — VIEW: the base actionable task set — every non-deleted
+ *                           task in `ready` or `backlog`. This is the candidate
+ *                           floor `nextReady` ranks on top of; the multi-factor
+ *                           SCORING (unblock-depth, hotness, tag/escalation boosts)
+ *                           stays in TS and is intentionally NOT pushed into SQL.
+ *                           Defining the eligible predicate once here keeps every
+ *                           reader (the CLI ranking and the review-ui boundary)
+ *                           on a single shared definition.
+ *   scrum_current_operator— VIEW: the operator-of-record's CURRENT open interval
+ *                           (the single `to_ts IS NULL` row, of which the
+ *                           set-then-append invariant guarantees at most one).
+ *                           Resolution AT an arbitrary past instant stays a
+ *                           parameterized interval scan (`operatorOfRecordAt`);
+ *                           only the shared "who holds it now" derivation lives in
+ *                           this view.
  *   scrum_tags            — composite PK (task_id, tag).
  *   scrum_deps            — composite PK (from_task_id, to_task_id, kind).
  *   scrum_events          — append-only audit log; ULID TEXT PK.
@@ -92,6 +107,13 @@ import { listDomains, registerSchema } from '@claude-prove/store';
  *   scrum_decisions       — Codex records; TEXT PK (filename slug). Append-only
  *                           with supersession; gated write protocol; Lore→Codex
  *                           promotion provenance (`source_lore_id` → scrum_lores).
+ *                           Carries a nullable `embedding F32_BLOB(32)` — a
+ *                           fixed-32-dim float vector the engine can populate
+ *                           with `vector32(...)` and search with
+ *                           `vector_distance_cos(...)`. The column ships unpopulated
+ *                           (every row NULL); a later phase backfills it and adds
+ *                           semantic search. Nullable so a write that has no
+ *                           embedding to attach simply leaves it NULL.
  *   scrum_contributors    — CT-UUID registry; TEXT PK.
  *   scrum_operator_history— operator-of-record position history; ULID TEXT PK.
  *   scrum_teams           — team registry; TEXT slug PK.
@@ -104,7 +126,9 @@ import { listDomains, registerSchema } from '@claude-prove/store';
  *   scrum_team_exposes    — per-team exposed outputs; ULID TEXT PK,
  *                           self-superseding.
  *   scrum_lores           — per-team append-only Lore; ULID TEXT PK; compaction
- *                           supersession pointer.
+ *                           supersession pointer. Carries the same nullable
+ *                           `embedding F32_BLOB(32)` as scrum_decisions, unpopulated
+ *                           at this layer for a later semantic-search phase.
  *   scrum_annotations     — per-artifact append-only notes; ULID TEXT PK.
  *   scrum_asks            — cross-team ask protocol; ULID TEXT PK.
  *   scrum_escalations     — typed escalation walk-up chain; ULID TEXT PK,
@@ -231,7 +255,8 @@ CREATE TABLE scrum_decisions (
     write_status TEXT,
     gate_responder TEXT,
     gate_responded_at TEXT,
-    source_lore_id TEXT REFERENCES scrum_lores(id)
+    source_lore_id TEXT REFERENCES scrum_lores(id),
+    embedding F32_BLOB(32)
 );
 
 CREATE TABLE scrum_contributors (
@@ -312,7 +337,8 @@ CREATE TABLE scrum_lores (
     author_contributor_id TEXT NOT NULL,
     created_at TEXT NOT NULL,
     superseded_by TEXT,
-    reason TEXT
+    reason TEXT,
+    embedding F32_BLOB(32)
 );
 
 CREATE TABLE scrum_annotations (
@@ -360,6 +386,14 @@ FROM scrum_criterion_verdicts v
 WHERE v.id = (
     SELECT MAX(v2.id) FROM scrum_criterion_verdicts v2 WHERE v2.criterion_id = v.criterion_id
 );
+
+CREATE VIEW scrum_ready_eligible AS
+SELECT id FROM scrum_tasks WHERE deleted_at IS NULL AND status IN ('ready', 'backlog');
+
+CREATE VIEW scrum_current_operator AS
+SELECT contributor_id, from_ts, to_ts, created_at, created_by
+FROM scrum_operator_history
+WHERE to_ts IS NULL;
 
 CREATE INDEX idx_scrum_acceptance_criteria_task ON scrum_acceptance_criteria(task_id);
 CREATE INDEX idx_scrum_criterion_verdicts_criterion ON scrum_criterion_verdicts(criterion_id);
