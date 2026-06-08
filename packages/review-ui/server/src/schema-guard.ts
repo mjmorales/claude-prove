@@ -84,16 +84,19 @@ export function registeredExpectedVersions(): Map<string, number> {
  * A db with no `_migrations_log` table (never migrated) yields an empty map,
  * which the caller treats as version 0 for every domain.
  */
-export function appliedVersions(dbPath: string): Map<string, number> {
+export async function appliedVersions(dbPath: string): Promise<Map<string, number>> {
   const opts: StoreOptions = { path: dbPath, readonly: true };
-  const store = openStore(opts);
+  const store = await openStore(opts);
   try {
-    const hasLog = store.all<{ name: string }>(
+    // Each `all` is awaited BEFORE `close()`: the async driver finalizes
+    // prepared statements on close, so an un-awaited query resolving afterward
+    // throws "statement has been finalized".
+    const hasLog = await store.all<{ name: string }>(
       "SELECT name FROM sqlite_master WHERE type = 'table' AND name = '_migrations_log'",
     );
     if (hasLog.length === 0) return new Map();
 
-    const rows = store.all<{ domain: string; version: number }>(
+    const rows = await store.all<{ domain: string; version: number }>(
       "SELECT domain, MAX(version) AS version FROM _migrations_log GROUP BY domain",
     );
     const applied = new Map<string, number>();
@@ -112,10 +115,10 @@ export function appliedVersions(dbPath: string): Map<string, number> {
  * `expected` is injectable so tests drive a controlled domain→version map;
  * production passes the live registry via `registeredExpectedVersions()`.
  */
-export function projectStoreInfo(
+export async function projectStoreInfo(
   projectRoot: string,
   expected: Map<string, number>,
-): ProjectStoreInfo {
+): Promise<ProjectStoreInfo> {
   const dbPath = path.join(projectRoot, ".prove", "prove.db");
   if (!fs.existsSync(dbPath)) return { schema_version: null, behind: null };
 
@@ -126,7 +129,7 @@ export function projectStoreInfo(
   // reports and let every other project resolve.
   let applied: Map<string, number>;
   try {
-    applied = appliedVersions(dbPath);
+    applied = await appliedVersions(dbPath);
   } catch {
     return { schema_version: null, behind: null };
   }
@@ -178,11 +181,11 @@ export interface SchemaGuardError {
  *
  * `expected` is injectable for tests; production passes the live registry.
  */
-export function storeBehindSchema(
+export async function storeBehindSchema(
   projectRoot: string,
   expected: Map<string, number> = registeredExpectedVersions(),
-): SchemaGuardError | null {
-  const info = projectStoreInfo(projectRoot, expected);
+): Promise<SchemaGuardError | null> {
+  const info = await projectStoreInfo(projectRoot, expected);
   if (info.behind !== true) return null;
   return {
     error: "store schema behind",

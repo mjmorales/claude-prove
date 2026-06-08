@@ -44,10 +44,10 @@ export interface ProjectListing {
  * map (defaults to the live registry). Prune-on-read happens inside
  * `listProjects` — there is NO second prune here.
  */
-export function buildProjectListing(
+export async function buildProjectListing(
   baseOverride?: string,
   expectedOverride?: Map<string, number>,
-): ProjectListing[] {
+): Promise<ProjectListing[]> {
   const expected = expectedOverride ?? registeredExpectedVersions();
   // Prune-on-read + survivors as ProjectRefs (id/path/name).
   const refs = listProjects(baseOverride);
@@ -56,13 +56,16 @@ export function buildProjectListing(
   const lastSeenByPath = new Map<string, string>();
   for (const entry of listRegistry(baseOverride)) lastSeenByPath.set(entry.path, entry.last_seen);
 
-  return refs.map((ref) => ({
-    id: ref.id,
-    path: ref.path,
-    name: ref.name,
-    last_seen: lastSeenByPath.get(ref.path) ?? null,
-    store: projectStoreInfo(ref.path, expected),
-  }));
+  // Each project's store read is independent, so resolve them concurrently.
+  return Promise.all(
+    refs.map(async (ref) => ({
+      id: ref.id,
+      path: ref.path,
+      name: ref.name,
+      last_seen: lastSeenByPath.get(ref.path) ?? null,
+      store: await projectStoreInfo(ref.path, expected),
+    })),
+  );
 }
 
 /**
@@ -72,5 +75,5 @@ export function buildProjectListing(
  * spans every registered project, not the single repo the server booted in).
  */
 export function registerProjectsRoute(app: FastifyInstance): void {
-  app.get("/api/projects", async () => ({ projects: buildProjectListing() }));
+  app.get("/api/projects", async () => ({ projects: await buildProjectListing() }));
 }

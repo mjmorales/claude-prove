@@ -16,9 +16,9 @@
  *
  * Registry seam: the project registry's `baseOverride`/`registryBaseOverride`
  * points every read at a tmp dir, so no test touches the real
- * `~/.claude-prove/`. Behind dbs are fabricated with raw `bun:sqlite` (mirroring
- * the legacy-db fabrication in `acb.test.ts`) and never invoke a `claude-prove`
- * CLI.
+ * `~/.claude-prove/`. Behind dbs are fabricated with the raw async
+ * `@claude-prove/store` `openStore` (mirroring the legacy-db fabrication in
+ * `acb.test.ts`) and never invoke a `claude-prove` CLI.
  *
  * Cross-file registry hazard: other server test files call `clearRegistry()`,
  * which wipes the shared in-memory schema registry the live `acb`/`scrum`
@@ -28,11 +28,10 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { add as registryAdd } from "@claude-prove/store";
+import { add as registryAdd, openStore } from "@claude-prove/store";
 import { ensureAcbSchemaRegistered } from "@claude-prove/cli/acb/store";
 import type { FastifyInstance } from "fastify";
 import { buildApp } from "../src/index";
@@ -60,10 +59,10 @@ function registerRoot(name: string): string {
  * the read path's auto-migrating store open advances it cleanly rather than
  * erroring on missing tables.
  */
-function seedBehindAcbV1Db(root: string): void {
+async function seedBehindAcbV1Db(root: string): Promise<void> {
   const dbFile = join(root, ".prove", "prove.db");
-  const db = new Database(dbFile, { create: true });
-  db.exec(`
+  const db = await openStore({ path: dbFile });
+  await db.exec(`
     CREATE TABLE _migrations_log (
       domain TEXT NOT NULL,
       version INTEGER NOT NULL,
@@ -116,11 +115,11 @@ afterEach(() => {
 });
 
 describe("storeBehindSchema (injected expected map)", () => {
-  test("returns the 409 body when a registered domain is behind", () => {
+  test("returns the 409 body when a registered domain is behind", async () => {
     const root = registerRoot("behind");
-    seedBehindAcbV1Db(root);
+    await seedBehindAcbV1Db(root);
     // Expected acb head is 2 but the seeded db only applied acb@1 → behind.
-    const body = storeBehindSchema(root, new Map([["acb", 2]]));
+    const body = await storeBehindSchema(root, new Map([["acb", 2]]));
     expect(body).toEqual({
       error: "store schema behind",
       project: root,
@@ -128,16 +127,16 @@ describe("storeBehindSchema (injected expected map)", () => {
     });
   });
 
-  test("returns null when every domain is level (write may proceed)", () => {
+  test("returns null when every domain is level (write may proceed)", async () => {
     const root = registerRoot("current");
-    seedBehindAcbV1Db(root);
+    await seedBehindAcbV1Db(root);
     // Expected head equals the applied version → not behind.
-    expect(storeBehindSchema(root, new Map([["acb", 1]]))).toBeNull();
+    expect(await storeBehindSchema(root, new Map([["acb", 1]]))).toBeNull();
   });
 
-  test("returns null for an absent db (fail-open, write service owns creation)", () => {
+  test("returns null for an absent db (fail-open, write service owns creation)", async () => {
     const root = registerRoot("uninitialized"); // no prove.db seeded
-    expect(storeBehindSchema(root, new Map([["acb", 99]]))).toBeNull();
+    expect(await storeBehindSchema(root, new Map([["acb", 99]]))).toBeNull();
   });
 });
 
@@ -152,21 +151,18 @@ async function build(startupRoot: string): Promise<FastifyInstance> {
 }
 
 /** Count verdict rows for a slug, opening the db read-only so the read never migrates it. */
-function verdictRowCount(root: string, slug: string): number {
+async function verdictRowCount(root: string, slug: string): Promise<number> {
   const dbFile = join(root, ".prove", "prove.db");
-  const db = new Database(dbFile, { readonly: true });
+  const db = await openStore({ path: dbFile, readonly: true });
   try {
-    const tbl = db
-      .prepare<{ name: string }, []>(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'acb_group_verdicts'",
-      )
-      .all();
+    const tbl = await db.all<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'acb_group_verdicts'",
+    );
     if (tbl.length === 0) return 0;
-    const rows = db
-      .prepare<{ n: number }, [string]>(
-        "SELECT COUNT(*) AS n FROM acb_group_verdicts WHERE slug = ?",
-      )
-      .all(slug);
+    const rows = await db.all<{ n: number }>(
+      "SELECT COUNT(*) AS n FROM acb_group_verdicts WHERE slug = ?",
+      [slug],
+    );
     return rows[0]?.n ?? 0;
   } finally {
     db.close();
@@ -176,7 +172,7 @@ function verdictRowCount(root: string, slug: string): number {
 describe("behind-schema write guard over HTTP", () => {
   test("a verdict write to a behind-schema project → 409 with the structured body, no mutation", async () => {
     const behind = registerRoot("behind");
-    seedBehindAcbV1Db(behind);
+    await seedBehindAcbV1Db(behind);
 
     const app = await build(behind);
     try {
@@ -193,7 +189,7 @@ describe("behind-schema write guard over HTTP", () => {
 
       // The refusal never opened the writable (migrating) store, so the acb
       // verdict table was never created and no row landed.
-      expect(verdictRowCount(behind, "main/add-login")).toBe(0);
+      expect(await verdictRowCount(behind, "main/add-login")).toBe(0);
     } finally {
       await app.close();
     }
@@ -215,7 +211,7 @@ describe("behind-schema write guard over HTTP", () => {
       expect(res.statusCode).toBe(200);
       const body = res.json() as { record: { verdict: string } };
       expect(body.record.verdict).toBe("accepted");
-      expect(verdictRowCount(current, "main/add-login")).toBe(1);
+      expect(await verdictRowCount(current, "main/add-login")).toBe(1);
     } finally {
       await app.close();
     }
@@ -223,7 +219,7 @@ describe("behind-schema write guard over HTTP", () => {
 
   test("a read on a behind-schema project still returns 200 (reads are unguarded)", async () => {
     const behind = registerRoot("behind");
-    seedBehindAcbV1Db(behind);
+    await seedBehindAcbV1Db(behind);
 
     const app = await build(behind);
     try {
