@@ -238,18 +238,23 @@ describe('ScrumStore — tasks', () => {
     expect((await store.getTask('t1'))?.id).toBe('t1');
   });
 
-  test('decodeTask degrades a corrupt acceptance_json column to null instead of throwing', async () => {
-    await seedTask('t1');
+  test('hydrate degrades a corrupt acceptance_policy_json column to a null policy instead of throwing', async () => {
+    // One criterion + a poisoned policy column: the criteria rows must still
+    // hydrate while the unparseable policy degrades to absent — a single corrupt
+    // column cannot brick the task read.
+    await seedTask('t1', { acceptance: { criteria: [ac('c1')] } });
     // Simulate a poisoned column (manual DB edit / aborted migration) by
     // writing invalid JSON through raw SQL, bypassing the store's write guards.
-    (await store.getStore())
+    const stmt = await store
+      .getStore()
       .getDb()
-      .prepare('UPDATE scrum_tasks SET acceptance_json = ? WHERE id = ?')
-      .run('{not json', 't1');
+      .prepare('UPDATE scrum_tasks SET acceptance_policy_json = ? WHERE id = ?');
+    await stmt.run('{not json', 't1');
 
     const task = await store.getTask('t1');
     expect(task?.id).toBe('t1');
-    expect(task?.acceptance).toBeNull();
+    expect(task?.acceptance?.criteria.map((c) => c.id)).toEqual(['c1']);
+    expect(task?.acceptance?.policy).toBeUndefined();
   });
 
   test('transaction rolls back every write when the body throws', async () => {

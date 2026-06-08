@@ -42,17 +42,22 @@ import { listDomains, registerSchema } from '@claude-prove/store';
  *                           `scrum_acceptance_criteria`), declared bounds
  *                           (`bounds_json`), terminal/last-touch/executing
  *                           provenance, and an optional `team_slug` binding.
- *   scrum_acceptance_criteria — one row per acceptance criterion. PK is the
- *                           criterion's own stable external id (NOT a minted
- *                           ULID — the id is author-supplied and already unique
- *                           per task). Carries the criterion DEFINITION; the
- *                           gate/verification VERDICT is NOT stored here — it
- *                           lives append-only in scrum_criterion_verdicts.
+ *   scrum_acceptance_criteria — one row per acceptance criterion. PK is a minted
+ *                           ULID surrogate (`id`); the criterion's author-given
+ *                           external id rides as `criterion_id`, unique only
+ *                           WITHIN a task — an inherited copy reuses the same
+ *                           external id on a different task, so the external id
+ *                           cannot be the global PK. Carries the criterion
+ *                           DEFINITION; the gate/verification VERDICT is NOT
+ *                           stored here — it lives append-only in
+ *                           scrum_criterion_verdicts (whose `criterion_id`
+ *                           references THIS surrogate, not the external id).
  *                           Supersession is an append+flip (status='superseded'
- *                           + superseded_by pointer), never a delete. `ord` is a
- *                           per-row minted ULID preserving authored array order
- *                           (the criterion id is an external slug, not lexically
- *                           insert-ordered, so it cannot carry the ordering).
+ *                           + superseded_by pointer to a replacement external
+ *                           id), never a delete. `ord` is a per-row minted ULID
+ *                           preserving authored array order (the external id is
+ *                           a slug, not lexically insert-ordered, so it cannot
+ *                           carry the ordering).
  *   scrum_criterion_verdicts — APPEND-ONLY verdict log; ULID TEXT PK. One new
  *                           row per gate response AND per bash/agent/assert
  *                           verification — a re-verify APPENDS, it never updates.
@@ -136,6 +141,7 @@ CREATE TABLE scrum_tasks (
 CREATE TABLE scrum_acceptance_criteria (
     id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL REFERENCES scrum_tasks(id),
+    criterion_id TEXT NOT NULL,
     ord TEXT NOT NULL,
     text TEXT NOT NULL,
     verifies_by TEXT NOT NULL CHECK (verifies_by IN ('bash', 'assert', 'gate', 'agent')),
@@ -147,7 +153,8 @@ CREATE TABLE scrum_acceptance_criteria (
     superseded_by TEXT,
     reason TEXT,
     inherited_from TEXT,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    UNIQUE (task_id, criterion_id)
 );
 
 CREATE TABLE scrum_criterion_verdicts (
