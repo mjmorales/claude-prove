@@ -46,8 +46,8 @@ let store: ScrumStore;
 let project: string;
 let prevCwd: string;
 
-beforeEach(() => {
-  store = openScrumStore({ path: ':memory:' });
+beforeEach(async () => {
+  store = await openScrumStore({ path: ':memory:' });
   project = mkdtempSync(join(tmpdir(), 'scrum-reconcile-'));
   prevCwd = process.cwd();
   process.chdir(project);
@@ -142,56 +142,56 @@ function writeRun(opts: RunFixtureOptions = {}): string {
 // ===========================================================================
 
 describe('reconcileRunCompleted — tracked run', () => {
-  test('appends run_completed event and links run to task', () => {
-    store.createTask({ id: 'scrum-10', title: 'Demo task' });
+  test('appends run_completed event and links run to task', async () => {
+    await store.createTask({ id: 'scrum-10', title: 'Demo task' });
     const statePath = writeRun({ taskId: 'scrum-10' });
 
-    const result = reconcileRunCompleted(statePath, store);
+    const result = await reconcileRunCompleted(statePath, store);
     expect(result.kind).toBe('reconciled');
     expect(result.taskId).toBe('scrum-10');
 
-    const events = store.listEventsForTask('scrum-10');
+    const events = await store.listEventsForTask('scrum-10');
     const kinds = events.map((e) => e.kind);
     // newest-first: status_changed (from done transition) + run_completed + task_created
     expect(kinds).toContain('run_completed');
 
-    const runs = store.listRunsForTask('scrum-10');
+    const runs = await store.listRunsForTask('scrum-10');
     expect(runs).toHaveLength(1);
     expect(runs[0]?.branch).toBe('feature');
     expect(runs[0]?.slug).toBe('demo');
   });
 
-  test('transitions task to done when run_status === completed', () => {
-    store.createTask({ id: 'scrum-11', title: 'Demo', status: 'in_progress' });
+  test('transitions task to done when run_status === completed', async () => {
+    await store.createTask({ id: 'scrum-11', title: 'Demo', status: 'in_progress' });
     const statePath = writeRun({ taskId: 'scrum-11', runStatus: 'completed' });
 
-    reconcileRunCompleted(statePath, store);
-    expect(store.getTask('scrum-11')?.status).toBe('done');
+    await reconcileRunCompleted(statePath, store);
+    expect((await store.getTask('scrum-11'))?.status).toBe('done');
   });
 
-  test('does NOT transition task on halted or failed runs', () => {
-    store.createTask({ id: 'scrum-12', title: 'Demo', status: 'in_progress' });
+  test('does NOT transition task on halted or failed runs', async () => {
+    await store.createTask({ id: 'scrum-12', title: 'Demo', status: 'in_progress' });
     const statePath = writeRun({ taskId: 'scrum-12', runStatus: 'halted' });
 
-    reconcileRunCompleted(statePath, store);
-    expect(store.getTask('scrum-12')?.status).toBe('in_progress');
+    await reconcileRunCompleted(statePath, store);
+    expect((await store.getTask('scrum-12'))?.status).toBe('in_progress');
   });
 
-  test('appends steward_verdict event when present in state.json', () => {
-    store.createTask({ id: 'scrum-13', title: 'Demo' });
+  test('appends steward_verdict event when present in state.json', async () => {
+    await store.createTask({ id: 'scrum-13', title: 'Demo' });
     const statePath = writeRun({ taskId: 'scrum-13', stewardVerdict: 'approved' });
 
-    reconcileRunCompleted(statePath, store);
-    const events = store.listEventsForTask('scrum-13');
+    await reconcileRunCompleted(statePath, store);
+    const events = await store.listEventsForTask('scrum-13');
     expect(events.some((e) => e.kind === 'steward_verdict')).toBe(true);
   });
 
-  test('rebuilds context bundle after reconcile', () => {
-    store.createTask({ id: 'scrum-14', title: 'Demo' });
+  test('rebuilds context bundle after reconcile', async () => {
+    await store.createTask({ id: 'scrum-14', title: 'Demo' });
     const statePath = writeRun({ taskId: 'scrum-14', commitShas: ['sha-a', 'sha-b'] });
 
-    reconcileRunCompleted(statePath, store);
-    const bundle = store.loadContextBundle('scrum-14');
+    await reconcileRunCompleted(statePath, store);
+    const bundle = await store.loadContextBundle('scrum-14');
     expect(bundle).not.toBeNull();
     const payload = bundle?.bundle as { files: string[]; runs: unknown[] };
     expect(payload.files).toContain('commit:sha-a');
@@ -205,67 +205,67 @@ describe('reconcileRunCompleted — tracked run', () => {
 // ===========================================================================
 
 describe('reconcileRunCompleted — orphan run', () => {
-  test('emits unlinked_run_detected under sentinel when task_id missing', () => {
+  test('emits unlinked_run_detected under sentinel when task_id missing', async () => {
     const statePath = writeRun({ taskId: null });
 
-    const result = reconcileRunCompleted(statePath, store);
+    const result = await reconcileRunCompleted(statePath, store);
     expect(result.kind).toBe('orphan');
     expect(result.taskId).toBeNull();
 
-    const sentinel = store.getTask(ORPHAN_TASK_ID);
+    const sentinel = await store.getTask(ORPHAN_TASK_ID);
     expect(sentinel).not.toBeNull();
     expect(sentinel?.title).toBe('Unlinked run detections');
 
-    const events = store.listEventsForTask(ORPHAN_TASK_ID);
+    const events = await store.listEventsForTask(ORPHAN_TASK_ID);
     expect(events.some((e) => e.kind === 'unlinked_run_detected')).toBe(true);
   });
 
-  test('emits orphan event when plan.json references a missing task_id', () => {
+  test('emits orphan event when plan.json references a missing task_id', async () => {
     const statePath = writeRun({ taskId: 'does-not-exist' });
 
-    const result = reconcileRunCompleted(statePath, store);
+    const result = await reconcileRunCompleted(statePath, store);
     expect(result.kind).toBe('orphan');
     expect(result.taskId).toBe('does-not-exist');
     expect(
-      store.listEventsForTask(ORPHAN_TASK_ID).some((e) => e.kind === 'unlinked_run_detected'),
+      (await store.listEventsForTask(ORPHAN_TASK_ID)).some((e) => e.kind === 'unlinked_run_detected'),
     ).toBe(true);
   });
 
-  test('returns skipped on malformed state.json without throwing', () => {
+  test('returns skipped on malformed state.json without throwing', async () => {
     const runDir = join(project, '.prove', 'runs', 'feat-bad', 'run-1');
     mkdirSync(runDir, { recursive: true });
     writeFileSync(join(runDir, 'state.json'), '{ not json');
-    const result = reconcileRunCompleted(join(runDir, 'state.json'), store);
+    const result = await reconcileRunCompleted(join(runDir, 'state.json'), store);
     expect(result.kind).toBe('skipped');
   });
 
-  test('reuses existing orphan sentinel task across multiple calls', () => {
+  test('reuses existing orphan sentinel task across multiple calls', async () => {
     const s1 = writeRun({ branch: 'feat-a', slug: 'one', taskId: null });
     const s2 = writeRun({ branch: 'feat-b', slug: 'two', taskId: null });
 
-    reconcileRunCompleted(s1, store);
-    reconcileRunCompleted(s2, store);
+    await reconcileRunCompleted(s1, store);
+    await reconcileRunCompleted(s2, store);
 
-    const events = store.listEventsForTask(ORPHAN_TASK_ID);
+    const events = await store.listEventsForTask(ORPHAN_TASK_ID);
     const orphanEvents = events.filter((e) => e.kind === 'unlinked_run_detected');
     expect(orphanEvents).toHaveLength(2);
   });
 
-  test('revives a soft-deleted orphan sentinel instead of hitting a PK conflict', () => {
+  test('revives a soft-deleted orphan sentinel instead of hitting a PK conflict', async () => {
     // First orphan run creates the sentinel; an operator then soft-deletes it.
-    reconcileRunCompleted(writeRun({ branch: 'feat-a', slug: 'one', taskId: null }), store);
-    store.softDeleteTask(ORPHAN_TASK_ID);
-    expect(store.getTask(ORPHAN_TASK_ID)).toBeNull();
+    await reconcileRunCompleted(writeRun({ branch: 'feat-a', slug: 'one', taskId: null }), store);
+    await store.softDeleteTask(ORPHAN_TASK_ID);
+    expect(await store.getTask(ORPHAN_TASK_ID)).toBeNull();
 
     // A later orphan run must revive the sentinel, not throw a UNIQUE conflict.
-    const result = reconcileRunCompleted(
+    const result = await reconcileRunCompleted(
       writeRun({ branch: 'feat-b', slug: 'two', taskId: null }),
       store,
     );
     expect(result.kind).toBe('orphan');
-    expect(store.getTask(ORPHAN_TASK_ID)).not.toBeNull();
+    expect(await store.getTask(ORPHAN_TASK_ID)).not.toBeNull();
     expect(
-      store.listEventsForTask(ORPHAN_TASK_ID).some((e) => e.kind === 'unlinked_run_detected'),
+      (await store.listEventsForTask(ORPHAN_TASK_ID)).some((e) => e.kind === 'unlinked_run_detected'),
     ).toBe(true);
   });
 });
@@ -275,54 +275,54 @@ describe('reconcileRunCompleted — orphan run', () => {
 // ===========================================================================
 
 describe('reconcileRunCompleted — unlinked_run_detected dedup', () => {
-  test('repeated reconcile calls for the same orphan run emit exactly one event', () => {
+  test('repeated reconcile calls for the same orphan run emit exactly one event', async () => {
     const statePath = writeRun({ branch: 'feat', slug: 'orphan-once', taskId: null });
 
-    reconcileRunCompleted(statePath, store);
-    reconcileRunCompleted(statePath, store);
-    reconcileRunCompleted(statePath, store);
+    await reconcileRunCompleted(statePath, store);
+    await reconcileRunCompleted(statePath, store);
+    await reconcileRunCompleted(statePath, store);
 
-    const events = store.listEventsForTask(ORPHAN_TASK_ID, 1000);
+    const events = await store.listEventsForTask(ORPHAN_TASK_ID, 1000);
     const orphanEvents = events.filter((e) => e.kind === 'unlinked_run_detected');
     expect(orphanEvents).toHaveLength(1);
   });
 
-  test('two distinct orphan runs each emit exactly one event (dedup is per run_path)', () => {
+  test('two distinct orphan runs each emit exactly one event (dedup is per run_path)', async () => {
     const s1 = writeRun({ branch: 'feat-a', slug: 'dup-one', taskId: null });
     const s2 = writeRun({ branch: 'feat-b', slug: 'dup-two', taskId: null });
 
     // Two sweeps over both runs.
-    reconcileRunCompleted(s1, store);
-    reconcileRunCompleted(s2, store);
-    reconcileRunCompleted(s1, store);
-    reconcileRunCompleted(s2, store);
+    await reconcileRunCompleted(s1, store);
+    await reconcileRunCompleted(s2, store);
+    await reconcileRunCompleted(s1, store);
+    await reconcileRunCompleted(s2, store);
 
-    const events = store.listEventsForTask(ORPHAN_TASK_ID, 1000);
+    const events = await store.listEventsForTask(ORPHAN_TASK_ID, 1000);
     const orphanEvents = events.filter((e) => e.kind === 'unlinked_run_detected');
     expect(orphanEvents).toHaveLength(2);
   });
 
-  test('sweepUnreconciled repeated over an unchanged orphan emits one event total', () => {
+  test('sweepUnreconciled repeated over an unchanged orphan emits one event total', async () => {
     writeRun({ branch: 'feat', slug: 'sweep-orphan', taskId: null });
 
-    sweepUnreconciled(store, 0);
-    sweepUnreconciled(store, 0);
-    sweepUnreconciled(store, 0);
+    await sweepUnreconciled(store, 0);
+    await sweepUnreconciled(store, 0);
+    await sweepUnreconciled(store, 0);
 
-    const events = store.listEventsForTask(ORPHAN_TASK_ID, 1000);
+    const events = await store.listEventsForTask(ORPHAN_TASK_ID, 1000);
     const orphanEvents = events.filter((e) => e.kind === 'unlinked_run_detected');
     expect(orphanEvents).toHaveLength(1);
   });
 
-  test('dedup is not window-bounded — suppresses after >1000 prior orphan events', () => {
+  test('dedup is not window-bounded — suppresses after >1000 prior orphan events', async () => {
     // After first reconcile the target event is in the store.
     const statePath = writeRun({ branch: 'feat', slug: 'many-orphans', taskId: null });
-    reconcileRunCompleted(statePath, store);
+    await reconcileRunCompleted(statePath, store);
 
     // Push 1001 noise events for unrelated paths so the old scan-based
     // listEventsForTask(…, 1000) window would push the target off the bottom.
     for (let i = 0; i < 1001; i++) {
-      store.appendEvent({
+      await store.appendEvent({
         taskId: ORPHAN_TASK_ID,
         kind: 'unlinked_run_detected',
         payload: { run_path: `noise/runs/branch/slug-${i}`, reason: 'plan.json missing task_id' },
@@ -330,32 +330,30 @@ describe('reconcileRunCompleted — unlinked_run_detected dedup', () => {
     }
 
     // The targeted SQL query must still suppress the second emit.
-    reconcileRunCompleted(statePath, store);
+    await reconcileRunCompleted(statePath, store);
 
     // Exactly one event for the target run_path regardless of ordering.
     const targetPath = '.prove/runs/feat/many-orphans';
-    expect(store.hasOrphanEventForRunPath(targetPath, 'plan.json missing task_id')).toBe(true);
-    const events = store
-      .listEventsForTask(ORPHAN_TASK_ID, 2000)
-      .filter(
-        (e) =>
-          e.kind === 'unlinked_run_detected' &&
-          (e.payload as Record<string, unknown>)?.run_path === targetPath,
-      );
+    expect(await store.hasOrphanEventForRunPath(targetPath, 'plan.json missing task_id')).toBe(true);
+    const events = (await store.listEventsForTask(ORPHAN_TASK_ID, 2000)).filter(
+      (e) =>
+        e.kind === 'unlinked_run_detected' &&
+        (e.payload as Record<string, unknown>)?.run_path === targetPath,
+    );
     expect(events).toHaveLength(1);
   });
 
-  test('same run path with a different reason emits a second event', () => {
+  test('same run path with a different reason emits a second event', async () => {
     // First reconcile: default reason 'plan.json missing task_id'.
     const statePath = writeRun({ branch: 'feat', slug: 'two-reasons', taskId: null });
-    reconcileRunCompleted(statePath, store);
+    await reconcileRunCompleted(statePath, store);
 
     const runPath = '.prove/runs/feat/two-reasons';
     const secondReason = "task 'some-id' not found in scrum store";
 
     // Directly append a second orphan event for the same path but a different reason,
     // matching the second callsite in reconcileRunCompleted.
-    store.appendEvent({
+    await store.appendEvent({
       taskId: ORPHAN_TASK_ID,
       kind: 'unlinked_run_detected',
       payload: {
@@ -368,24 +366,24 @@ describe('reconcileRunCompleted — unlinked_run_detected dedup', () => {
     });
 
     // Both (run_path, reason) pairs must be present.
-    expect(store.hasOrphanEventForRunPath(runPath, 'plan.json missing task_id')).toBe(true);
-    expect(store.hasOrphanEventForRunPath(runPath, secondReason)).toBe(true);
+    expect(await store.hasOrphanEventForRunPath(runPath, 'plan.json missing task_id')).toBe(true);
+    expect(await store.hasOrphanEventForRunPath(runPath, secondReason)).toBe(true);
 
-    const events = store
-      .listEventsForTask(ORPHAN_TASK_ID, 1000)
-      .filter((e) => e.kind === 'unlinked_run_detected');
+    const events = (await store.listEventsForTask(ORPHAN_TASK_ID, 1000)).filter(
+      (e) => e.kind === 'unlinked_run_detected',
+    );
     expect(events).toHaveLength(2);
   });
 
-  test('same run path same reason is still suppressed on repeat reconcile', () => {
+  test('same run path same reason is still suppressed on repeat reconcile', async () => {
     const statePath = writeRun({ branch: 'feat', slug: 'same-reason', taskId: null });
 
-    reconcileRunCompleted(statePath, store);
-    reconcileRunCompleted(statePath, store);
+    await reconcileRunCompleted(statePath, store);
+    await reconcileRunCompleted(statePath, store);
 
-    const events = store
-      .listEventsForTask(ORPHAN_TASK_ID, 1000)
-      .filter((e) => e.kind === 'unlinked_run_detected');
+    const events = (await store.listEventsForTask(ORPHAN_TASK_ID, 1000)).filter(
+      (e) => e.kind === 'unlinked_run_detected',
+    );
     expect(events).toHaveLength(1);
   });
 });
@@ -395,21 +393,21 @@ describe('reconcileRunCompleted — unlinked_run_detected dedup', () => {
 // ===========================================================================
 
 describe('isRunOrphan', () => {
-  test('returns true when no layer knows the link', () => {
+  test('returns true when no layer knows the link', async () => {
     const statePath = writeRun({ branch: 'feat', slug: 'truly-orphan', taskId: null });
     const runDir = statePath.replace('/state.json', '');
-    expect(isRunOrphan(runDir, store)).toBe(true);
+    expect(await isRunOrphan(runDir, store)).toBe(true);
   });
 
-  test('returns false when plan.task_id is set and the task exists', () => {
-    store.createTask({ id: 'scrum-iso-1', title: 'Linked' });
+  test('returns false when plan.task_id is set and the task exists', async () => {
+    await store.createTask({ id: 'scrum-iso-1', title: 'Linked' });
     const statePath = writeRun({ branch: 'feat', slug: 'iso-linked', taskId: 'scrum-iso-1' });
     const runDir = statePath.replace('/state.json', '');
-    expect(isRunOrphan(runDir, store)).toBe(false);
+    expect(await isRunOrphan(runDir, store)).toBe(false);
   });
 
-  test('returns false when nested tasks[n].task_id provides the link', () => {
-    store.createTask({ id: 'scrum-iso-2', title: 'Nested link' });
+  test('returns false when nested tasks[n].task_id provides the link', async () => {
+    await store.createTask({ id: 'scrum-iso-2', title: 'Nested link' });
     const statePath = writeRun({
       branch: 'feat',
       slug: 'iso-nested',
@@ -417,15 +415,15 @@ describe('isRunOrphan', () => {
       nestedTaskId: 'scrum-iso-2',
     });
     const runDir = statePath.replace('/state.json', '');
-    expect(isRunOrphan(runDir, store)).toBe(false);
+    expect(await isRunOrphan(runDir, store)).toBe(false);
   });
 
-  test('returns false when store run-link resolves the run (no plan.task_id)', () => {
-    store.createTask({ id: 'scrum-iso-3', title: 'Store-linked' });
+  test('returns false when store run-link resolves the run (no plan.task_id)', async () => {
+    await store.createTask({ id: 'scrum-iso-3', title: 'Store-linked' });
     const statePath = writeRun({ branch: 'feat', slug: 'iso-store', taskId: null });
     const runDir = statePath.replace('/state.json', '');
-    store.linkRun({ taskId: 'scrum-iso-3', runPath: join('.prove', 'runs', 'feat', 'iso-store') });
-    expect(isRunOrphan(runDir, store)).toBe(false);
+    await store.linkRun({ taskId: 'scrum-iso-3', runPath: join('.prove', 'runs', 'feat', 'iso-store') });
+    expect(await isRunOrphan(runDir, store)).toBe(false);
   });
 });
 
@@ -434,45 +432,45 @@ describe('isRunOrphan', () => {
 // ===========================================================================
 
 describe('reconcileRunCompleted — link resolution beyond top-level plan.task_id', () => {
-  test('store run-link is authoritative when plan.json carries no task_id', () => {
+  test('store run-link is authoritative when plan.json carries no task_id', async () => {
     // The split-brain case: a run linked in the store (e.g. via `scrum
     // link-run`) whose plan.json was never updated must reconcile instead of
     // re-emitting unlinked_run_detected on every sweep.
-    store.createTask({ id: 'scrum-40', title: 'Store-linked' });
+    await store.createTask({ id: 'scrum-40', title: 'Store-linked' });
     const statePath = writeRun({ branch: 'feat', slug: 'linked', taskId: null });
-    store.linkRun({ taskId: 'scrum-40', runPath: join('.prove', 'runs', 'feat', 'linked') });
+    await store.linkRun({ taskId: 'scrum-40', runPath: join('.prove', 'runs', 'feat', 'linked') });
 
-    const result = reconcileRunCompleted(statePath, store);
+    const result = await reconcileRunCompleted(statePath, store);
     expect(result.kind).toBe('reconciled');
     expect(result.taskId).toBe('scrum-40');
 
     // No orphan event was emitted under the sentinel.
-    const sentinel = store.getTask(ORPHAN_TASK_ID);
+    const sentinel = await store.getTask(ORPHAN_TASK_ID);
     if (sentinel) {
       expect(
-        store.listEventsForTask(ORPHAN_TASK_ID).some((e) => e.kind === 'unlinked_run_detected'),
+        (await store.listEventsForTask(ORPHAN_TASK_ID)).some((e) => e.kind === 'unlinked_run_detected'),
       ).toBe(false);
     }
-    expect(store.listEventsForTask('scrum-40').some((e) => e.kind === 'run_completed')).toBe(true);
+    expect((await store.listEventsForTask('scrum-40')).some((e) => e.kind === 'run_completed')).toBe(true);
   });
 
-  test('a store-linked run sweeps clean — no unlinked_run_detected on repeated sweeps', () => {
-    store.createTask({ id: 'scrum-41', title: 'Swept' });
+  test('a store-linked run sweeps clean — no unlinked_run_detected on repeated sweeps', async () => {
+    await store.createTask({ id: 'scrum-41', title: 'Swept' });
     writeRun({ branch: 'feat', slug: 'swept', taskId: null });
-    store.linkRun({ taskId: 'scrum-41', runPath: join('.prove', 'runs', 'feat', 'swept') });
+    await store.linkRun({ taskId: 'scrum-41', runPath: join('.prove', 'runs', 'feat', 'swept') });
 
-    const r1 = sweepUnreconciled(store, 0);
+    const r1 = await sweepUnreconciled(store, 0);
     expect(r1.reconciled).toBe(1);
     expect(r1.errors).toHaveLength(0);
 
-    const orphanEvents = store
-      .listEventsForTask(ORPHAN_TASK_ID)
-      .filter((e) => e.kind === 'unlinked_run_detected');
+    const orphanEvents = (await store.listEventsForTask(ORPHAN_TASK_ID)).filter(
+      (e) => e.kind === 'unlinked_run_detected',
+    );
     expect(orphanEvents).toHaveLength(0);
   });
 
-  test('nested tasks[n].task_id is recognized as the link', () => {
-    store.createTask({ id: 'scrum-42', title: 'Nested' });
+  test('nested tasks[n].task_id is recognized as the link', async () => {
+    await store.createTask({ id: 'scrum-42', title: 'Nested' });
     const statePath = writeRun({
       branch: 'feat',
       slug: 'nested',
@@ -480,24 +478,24 @@ describe('reconcileRunCompleted — link resolution beyond top-level plan.task_i
       nestedTaskId: 'scrum-42',
     });
 
-    const result = reconcileRunCompleted(statePath, store);
+    const result = await reconcileRunCompleted(statePath, store);
     expect(result.kind).toBe('reconciled');
     expect(result.taskId).toBe('scrum-42');
   });
 
-  test('top-level plan.task_id wins over a store link to a different task', () => {
-    store.createTask({ id: 'scrum-43', title: 'Plan-side' });
-    store.createTask({ id: 'scrum-44', title: 'Store-side' });
+  test('top-level plan.task_id wins over a store link to a different task', async () => {
+    await store.createTask({ id: 'scrum-43', title: 'Plan-side' });
+    await store.createTask({ id: 'scrum-44', title: 'Store-side' });
     const statePath = writeRun({ branch: 'feat', slug: 'precedence', taskId: 'scrum-43' });
-    store.linkRun({ taskId: 'scrum-44', runPath: join('.prove', 'runs', 'feat', 'precedence') });
+    await store.linkRun({ taskId: 'scrum-44', runPath: join('.prove', 'runs', 'feat', 'precedence') });
 
-    const result = reconcileRunCompleted(statePath, store);
+    const result = await reconcileRunCompleted(statePath, store);
     expect(result.taskId).toBe('scrum-43');
   });
 
-  test('still orphans when no layer knows the link', () => {
+  test('still orphans when no layer knows the link', async () => {
     const statePath = writeRun({ branch: 'feat', slug: 'truly-orphan', taskId: null });
-    const result = reconcileRunCompleted(statePath, store);
+    const result = await reconcileRunCompleted(statePath, store);
     expect(result.kind).toBe('orphan');
   });
 });
@@ -507,33 +505,33 @@ describe('reconcileRunCompleted — link resolution beyond top-level plan.task_i
 // ===========================================================================
 
 describe('buildContextBundle', () => {
-  test('aggregates decisions from decision_linked events (legacy {path, title} payload)', () => {
-    store.createTask({ id: 'scrum-20', title: 'Demo' });
-    store.appendEvent({
+  test('aggregates decisions from decision_linked events (legacy {path, title} payload)', async () => {
+    await store.createTask({ id: 'scrum-20', title: 'Demo' });
+    await store.appendEvent({
       taskId: 'scrum-20',
       kind: 'decision_linked',
       payload: { path: '.prove/decisions/x.md', title: 'Use SQLite' },
     });
-    store.appendEvent({
+    await store.appendEvent({
       taskId: 'scrum-20',
       kind: 'decision_linked',
       payload: { path: '.prove/decisions/y.md', title: 'Use Bun' },
     });
 
-    const bundle = buildContextBundle('scrum-20', store);
+    const bundle = await buildContextBundle('scrum-20', store);
     expect(bundle.decisions).toHaveLength(2);
     expect(bundle.decisions.map((d) => d.title).sort()).toEqual(['Use Bun', 'Use SQLite']);
   });
 
-  test('aggregates decisions from new-shape payload {decision_id, decision_path}', () => {
-    store.createTask({ id: 'scrum-20b', title: 'Demo' });
+  test('aggregates decisions from new-shape payload {decision_id, decision_path}', async () => {
+    await store.createTask({ id: 'scrum-20b', title: 'Demo' });
     // Seed a scrum_decisions row so the title can be looked up by id.
-    store.recordDecision({
+    await store.recordDecision({
       id: '2026-04-24-adr',
       title: 'Adopt ACB',
       content: '# Adopt ACB\n',
     });
-    store.appendEvent({
+    await store.appendEvent({
       taskId: 'scrum-20b',
       kind: 'decision_linked',
       payload: {
@@ -542,27 +540,27 @@ describe('buildContextBundle', () => {
       },
     });
 
-    const bundle = buildContextBundle('scrum-20b', store);
+    const bundle = await buildContextBundle('scrum-20b', store);
     expect(bundle.decisions).toHaveLength(1);
     expect(bundle.decisions[0]?.path).toBe('.prove/decisions/2026-04-24-adr.md');
     expect(bundle.decisions[0]?.title).toBe('Adopt ACB');
   });
 
-  test('mixed fixture: legacy and new-shape payloads coexist on one task', () => {
-    store.createTask({ id: 'scrum-20c', title: 'Demo' });
-    store.recordDecision({
+  test('mixed fixture: legacy and new-shape payloads coexist on one task', async () => {
+    await store.createTask({ id: 'scrum-20c', title: 'Demo' });
+    await store.recordDecision({
       id: '2026-04-24-mixed',
       title: 'Mixed decision',
       content: '# Mixed decision\n',
     });
     // Legacy payload.
-    store.appendEvent({
+    await store.appendEvent({
       taskId: 'scrum-20c',
       kind: 'decision_linked',
       payload: { path: '.prove/decisions/legacy.md', title: 'Legacy title' },
     });
     // New-shape payload.
-    store.appendEvent({
+    await store.appendEvent({
       taskId: 'scrum-20c',
       kind: 'decision_linked',
       payload: {
@@ -571,7 +569,7 @@ describe('buildContextBundle', () => {
       },
     });
 
-    const bundle = buildContextBundle('scrum-20c', store);
+    const bundle = await buildContextBundle('scrum-20c', store);
     expect(bundle.decisions).toHaveLength(2);
     const paths = bundle.decisions.map((d) => d.path).sort();
     expect(paths).toEqual(['.prove/decisions/2026-04-24-mixed.md', '.prove/decisions/legacy.md']);
@@ -579,10 +577,10 @@ describe('buildContextBundle', () => {
     expect(titles).toEqual(['Legacy title', 'Mixed decision']);
   });
 
-  test('caps run summaries at 5 (last-5 most recent)', () => {
-    store.createTask({ id: 'scrum-21', title: 'Demo' });
+  test('caps run summaries at 5 (last-5 most recent)', async () => {
+    await store.createTask({ id: 'scrum-21', title: 'Demo' });
     for (let i = 0; i < 7; i++) {
-      store.linkRun({
+      await store.linkRun({
         taskId: 'scrum-21',
         runPath: `.prove/runs/feat/x/run-${i}`,
         branch: 'feat/x',
@@ -590,23 +588,23 @@ describe('buildContextBundle', () => {
         linkedAt: `2026-04-${String(10 + i).padStart(2, '0')}T00:00:00Z`,
       });
     }
-    const bundle = buildContextBundle('scrum-21', store);
+    const bundle = await buildContextBundle('scrum-21', store);
     expect(bundle.runs).toHaveLength(5);
   });
 
-  test('summary_text concatenates recent event titles', () => {
-    store.createTask({ id: 'scrum-22', title: 'Demo' });
-    store.appendEvent({ taskId: 'scrum-22', kind: 'note', payload: { text: 'a' } });
-    store.appendEvent({ taskId: 'scrum-22', kind: 'note', payload: { text: 'b' } });
+  test('summary_text concatenates recent event titles', async () => {
+    await store.createTask({ id: 'scrum-22', title: 'Demo' });
+    await store.appendEvent({ taskId: 'scrum-22', kind: 'note', payload: { text: 'a' } });
+    await store.appendEvent({ taskId: 'scrum-22', kind: 'note', payload: { text: 'b' } });
 
-    const bundle = buildContextBundle('scrum-22', store);
+    const bundle = await buildContextBundle('scrum-22', store);
     expect(bundle.summary_text).toContain('note');
     expect(bundle.summary_text.split('\n').length).toBeGreaterThanOrEqual(2);
   });
 
-  test('returns empty arrays for a task with no events or runs', () => {
-    store.createTask({ id: 'scrum-23', title: 'Demo' });
-    const bundle = buildContextBundle('scrum-23', store);
+  test('returns empty arrays for a task with no events or runs', async () => {
+    await store.createTask({ id: 'scrum-23', title: 'Demo' });
+    const bundle = await buildContextBundle('scrum-23', store);
     expect(bundle.decisions).toEqual([]);
     expect(bundle.runs).toEqual([]);
     expect(bundle.files).toEqual([]);
@@ -618,35 +616,35 @@ describe('buildContextBundle', () => {
 // ===========================================================================
 
 describe('sweepUnreconciled', () => {
-  test('scans runs and reconciles each one', () => {
-    store.createTask({ id: 'scrum-30', title: 'A' });
-    store.createTask({ id: 'scrum-31', title: 'B' });
+  test('scans runs and reconciles each one', async () => {
+    await store.createTask({ id: 'scrum-30', title: 'A' });
+    await store.createTask({ id: 'scrum-31', title: 'B' });
     writeRun({ branch: 'feat-a', slug: 'one', taskId: 'scrum-30' });
     writeRun({ branch: 'feat-b', slug: 'two', taskId: 'scrum-31' });
 
-    const result = sweepUnreconciled(store, 0);
+    const result = await sweepUnreconciled(store, 0);
     expect(result.scanned).toBe(2);
     expect(result.reconciled).toBe(2);
     expect(result.errors).toHaveLength(0);
   });
 
-  test('is idempotent when called with a cursor newer than every mtime', () => {
-    store.createTask({ id: 'scrum-32', title: 'A' });
+  test('is idempotent when called with a cursor newer than every mtime', async () => {
+    await store.createTask({ id: 'scrum-32', title: 'A' });
     writeRun({ branch: 'feat-a', slug: 'one', taskId: 'scrum-32' });
 
     // First sweep processes it.
-    const r1 = sweepUnreconciled(store, 0);
+    const r1 = await sweepUnreconciled(store, 0);
     expect(r1.reconciled).toBe(1);
 
     // Second sweep with cursor in the future sees 0 reconciles.
     const future = Date.now() + 60_000;
-    const r2 = sweepUnreconciled(store, future);
+    const r2 = await sweepUnreconciled(store, future);
     expect(r2.scanned).toBe(1);
     expect(r2.reconciled).toBe(0);
   });
 
-  test('skips state.json files with mtime below the cursor', () => {
-    store.createTask({ id: 'scrum-33', title: 'A' });
+  test('skips state.json files with mtime below the cursor', async () => {
+    await store.createTask({ id: 'scrum-33', title: 'A' });
     const statePath = writeRun({ branch: 'feat-c', slug: 'old', taskId: 'scrum-33' });
 
     // Backdate the file by 1 hour.
@@ -655,13 +653,13 @@ describe('sweepUnreconciled', () => {
     utimesSync(statePath, asSec, asSec);
 
     // Cursor is "now" — file is older, must be skipped.
-    const result = sweepUnreconciled(store, Date.now());
+    const result = await sweepUnreconciled(store, Date.now());
     expect(result.scanned).toBe(1);
     expect(result.reconciled).toBe(0);
   });
 
-  test('returns empty result when .prove/runs is absent', () => {
-    const result = sweepUnreconciled(store, 0);
+  test('returns empty result when .prove/runs is absent', async () => {
+    const result = await sweepUnreconciled(store, 0);
     expect(result).toEqual({ scanned: 0, reconciled: 0, errors: [] });
   });
 });
@@ -698,24 +696,24 @@ function writeLogEntry(runDir: string, id: string, type: string, agent = 'engine
 }
 
 /** Link `taskId` to a run dir under `project` and return the absolute run dir. */
-function linkRunDir(taskId: string, slug: string, branch = 'feat'): string {
+async function linkRunDir(taskId: string, slug: string, branch = 'feat'): Promise<string> {
   const runRel = join('.prove', 'runs', branch, slug);
-  store.linkRun({ taskId, runPath: runRel, branch, slug });
+  await store.linkRun({ taskId, runPath: runRel, branch, slug });
   return join(project, runRel);
 }
 
 /** The decoded payload of the single curation_proposed event on `taskId`. */
-function curationPayload(taskId: string): CurationProposedPayload | null {
-  const event = store.listEventsForTask(taskId).find((e) => e.kind === 'curation_proposed');
+async function curationPayload(taskId: string): Promise<CurationProposedPayload | null> {
+  const event = (await store.listEventsForTask(taskId)).find((e) => e.kind === 'curation_proposed');
   return event ? (event.payload as CurationProposedPayload) : null;
 }
 
 describe('reconcileMilestoneClosed', () => {
-  test('emits one curation_proposed per task with findings, keeping only the four curation types', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
-    store.createTask({ id: 'task-a', title: 'A', milestoneId: 'm1' });
+  test('emits one curation_proposed per task with findings, keeping only the four curation types', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
+    await store.createTask({ id: 'task-a', title: 'A', milestoneId: 'm1' });
 
-    const runDir = linkRunDir('task-a', 'a');
+    const runDir = await linkRunDir('task-a', 'a');
     writeLogEntry(runDir, 'd1', 'decision');
     writeLogEntry(runDir, 'h1', 'hack');
     writeLogEntry(runDir, 'r1', 'risk');
@@ -725,10 +723,10 @@ describe('reconcileMilestoneClosed', () => {
     writeLogEntry(runDir, 'syn1', 'synthesis');
     writeLogEntry(runDir, 'bail1', 'bailout');
 
-    const result = reconcileMilestoneClosed('m1', store);
+    const result = await reconcileMilestoneClosed('m1', store);
 
     expect(result.emitted).toEqual([{ taskId: 'task-a', candidateCount: 4 }]);
-    const payload = curationPayload('task-a');
+    const payload = await curationPayload('task-a');
     expect(payload?.milestone_id).toBe('m1');
     expect(payload?.candidates.map((c) => c.type).sort()).toEqual([
       'assumption',
@@ -741,96 +739,96 @@ describe('reconcileMilestoneClosed', () => {
     ).toBe(true);
   });
 
-  test('no-op for a task whose runs carry no curation-relevant findings', () => {
-    store.createMilestone({ id: 'm2', title: 'M2' });
-    store.createTask({ id: 'task-clean', title: 'Clean', milestoneId: 'm2' });
-    const runDir = linkRunDir('task-clean', 'clean');
+  test('no-op for a task whose runs carry no curation-relevant findings', async () => {
+    await store.createMilestone({ id: 'm2', title: 'M2' });
+    await store.createTask({ id: 'task-clean', title: 'Clean', milestoneId: 'm2' });
+    const runDir = await linkRunDir('task-clean', 'clean');
     writeLogEntry(runDir, 'disc', 'discovery');
     writeLogEntry(runDir, 'syn', 'synthesis');
 
-    const result = reconcileMilestoneClosed('m2', store);
+    const result = await reconcileMilestoneClosed('m2', store);
 
     expect(result.emitted).toHaveLength(0);
     expect(result.skippedNoFindings).toBe(1);
-    expect(curationPayload('task-clean')).toBeNull();
+    expect(await curationPayload('task-clean')).toBeNull();
   });
 
-  test('no-op for a task with no linked runs at all', () => {
-    store.createMilestone({ id: 'm3', title: 'M3' });
-    store.createTask({ id: 'task-norun', title: 'NoRun', milestoneId: 'm3' });
+  test('no-op for a task with no linked runs at all', async () => {
+    await store.createMilestone({ id: 'm3', title: 'M3' });
+    await store.createTask({ id: 'task-norun', title: 'NoRun', milestoneId: 'm3' });
 
-    const result = reconcileMilestoneClosed('m3', store);
+    const result = await reconcileMilestoneClosed('m3', store);
     expect(result.emitted).toHaveLength(0);
     expect(result.skippedNoFindings).toBe(1);
   });
 
-  test('idempotent: a second close does not re-emit and reports already-emitted', () => {
-    store.createMilestone({ id: 'm4', title: 'M4' });
-    store.createTask({ id: 'task-i', title: 'I', milestoneId: 'm4' });
-    const runDir = linkRunDir('task-i', 'i');
+  test('idempotent: a second close does not re-emit and reports already-emitted', async () => {
+    await store.createMilestone({ id: 'm4', title: 'M4' });
+    await store.createTask({ id: 'task-i', title: 'I', milestoneId: 'm4' });
+    const runDir = await linkRunDir('task-i', 'i');
     writeLogEntry(runDir, 'h', 'hack');
 
-    const first = reconcileMilestoneClosed('m4', store);
+    const first = await reconcileMilestoneClosed('m4', store);
     expect(first.emitted).toHaveLength(1);
 
-    const second = reconcileMilestoneClosed('m4', store);
+    const second = await reconcileMilestoneClosed('m4', store);
     expect(second.emitted).toHaveLength(0);
     expect(second.skippedAlreadyEmitted).toBe(1);
 
-    const count = store
-      .listEventsForTask('task-i')
-      .filter((e) => e.kind === 'curation_proposed').length;
+    const count = (await store.listEventsForTask('task-i')).filter(
+      (e) => e.kind === 'curation_proposed',
+    ).length;
     expect(count).toBe(1);
   });
 
-  test('aggregates and dedupes candidates across multiple linked runs', () => {
-    store.createMilestone({ id: 'm5', title: 'M5' });
-    store.createTask({ id: 'task-multi', title: 'Multi', milestoneId: 'm5' });
-    const run1 = linkRunDir('task-multi', 'one');
-    const run2 = linkRunDir('task-multi', 'two');
+  test('aggregates and dedupes candidates across multiple linked runs', async () => {
+    await store.createMilestone({ id: 'm5', title: 'M5' });
+    await store.createTask({ id: 'task-multi', title: 'Multi', milestoneId: 'm5' });
+    const run1 = await linkRunDir('task-multi', 'one');
+    const run2 = await linkRunDir('task-multi', 'two');
     writeLogEntry(run1, 'h-one', 'hack');
     writeLogEntry(run2, 'r-two', 'risk');
     // Same entry id surfacing through both runs is collapsed to one candidate.
     writeLogEntry(run1, 'dup', 'decision');
     writeLogEntry(run2, 'dup', 'decision');
 
-    const result = reconcileMilestoneClosed('m5', store);
+    const result = await reconcileMilestoneClosed('m5', store);
     expect(result.emitted[0]?.candidateCount).toBe(3);
-    const ids = curationPayload('task-multi')
-      ?.candidates.map((c) => c.entry_id)
+    const ids = (await curationPayload('task-multi'))?.candidates
+      .map((c) => c.entry_id)
       .sort();
     expect(ids).toEqual(['dup', 'h-one', 'r-two']);
   });
 
-  test('emits per-task: only milestone members with findings get an event', () => {
-    store.createMilestone({ id: 'm6', title: 'M6' });
-    store.createTask({ id: 'm6-a', title: 'A', milestoneId: 'm6' });
-    store.createTask({ id: 'm6-b', title: 'B', milestoneId: 'm6' });
+  test('emits per-task: only milestone members with findings get an event', async () => {
+    await store.createMilestone({ id: 'm6', title: 'M6' });
+    await store.createTask({ id: 'm6-a', title: 'A', milestoneId: 'm6' });
+    await store.createTask({ id: 'm6-b', title: 'B', milestoneId: 'm6' });
     // A task in a different milestone must be untouched.
-    store.createMilestone({ id: 'other', title: 'Other' });
-    store.createTask({ id: 'other-a', title: 'Other A', milestoneId: 'other' });
+    await store.createMilestone({ id: 'other', title: 'Other' });
+    await store.createTask({ id: 'other-a', title: 'Other A', milestoneId: 'other' });
 
-    writeLogEntry(linkRunDir('m6-a', 'a6'), 'h', 'hack');
-    writeLogEntry(linkRunDir('other-a', 'oa'), 'h', 'hack');
+    writeLogEntry(await linkRunDir('m6-a', 'a6'), 'h', 'hack');
+    writeLogEntry(await linkRunDir('other-a', 'oa'), 'h', 'hack');
 
-    const result = reconcileMilestoneClosed('m6', store);
+    const result = await reconcileMilestoneClosed('m6', store);
     expect(result.emitted.map((e) => e.taskId)).toEqual(['m6-a']);
     expect(result.skippedNoFindings).toBe(1); // m6-b
-    expect(curationPayload('other-a')).toBeNull();
+    expect(await curationPayload('other-a')).toBeNull();
   });
 
-  test('skips a malformed log dir without aborting the milestone curation', () => {
-    store.createMilestone({ id: 'm7', title: 'M7' });
-    store.createTask({ id: 'm7-bad', title: 'Bad', milestoneId: 'm7' });
-    store.createTask({ id: 'm7-ok', title: 'Ok', milestoneId: 'm7' });
+  test('skips a malformed log dir without aborting the milestone curation', async () => {
+    await store.createMilestone({ id: 'm7', title: 'M7' });
+    await store.createTask({ id: 'm7-bad', title: 'Bad', milestoneId: 'm7' });
+    await store.createTask({ id: 'm7-ok', title: 'Ok', milestoneId: 'm7' });
 
-    const badDir = linkRunDir('m7-bad', 'bad');
+    const badDir = await linkRunDir('m7-bad', 'bad');
     mkdirSync(join(badDir, 'log', 'engineer'), { recursive: true });
     writeFileSync(join(badDir, 'log', 'engineer', 'broken.json'), '{ not json');
 
-    writeLogEntry(linkRunDir('m7-ok', 'ok'), 'h', 'hack');
+    writeLogEntry(await linkRunDir('m7-ok', 'ok'), 'h', 'hack');
 
-    const result = reconcileMilestoneClosed('m7', store);
+    const result = await reconcileMilestoneClosed('m7', store);
     // The corrupt run contributes nothing; the good task still curates.
     expect(result.emitted.map((e) => e.taskId)).toEqual(['m7-ok']);
     expect(result.skippedNoFindings).toBe(1); // m7-bad yielded zero candidates
@@ -848,26 +846,26 @@ describe('reconcileMilestoneClosed', () => {
 // ===========================================================================
 
 describe('reconcileMilestoneClosed — journal compaction', () => {
-  test('rolls the journal into one Lore per terminating team', () => {
-    store.createMilestone({ id: 'm1', title: 'M1' });
-    store.createTeam({
+  test('rolls the journal into one Lore per terminating team', async () => {
+    await store.createMilestone({ id: 'm1', title: 'M1' });
+    await store.createTeam({
       slug: 'squad',
       teamType: 'enabling',
       lifetime: 'terminates_on_milestone',
       terminatesOnMilestone: 'm1',
     });
-    store.createTask({ id: 'task-a', title: 'A', milestoneId: 'm1' });
-    const runDir = linkRunDir('task-a', 'a');
+    await store.createTask({ id: 'task-a', title: 'A', milestoneId: 'm1' });
+    const runDir = await linkRunDir('task-a', 'a');
     writeLogEntry(runDir, 'h1', 'hack');
     writeLogEntry(runDir, 'r1', 'risk');
 
-    const result = reconcileMilestoneClosed('m1', store);
+    const result = await reconcileMilestoneClosed('m1', store);
 
     expect(result.compactedTeams).toHaveLength(1);
     expect(result.compactedTeams[0]?.teamSlug).toBe('squad');
     expect(result.compactedTeams[0]?.candidateCount).toBe(2);
 
-    const lores = store.listLores('squad');
+    const lores = await store.listLores('squad');
     expect(lores).toHaveLength(1);
     // The summary opens with the idempotency marker and folds in each finding.
     expect(lores[0]?.body).toContain('[milestone-close-summary:m1]');
@@ -875,88 +873,88 @@ describe('reconcileMilestoneClosed — journal compaction', () => {
     expect(lores[0]?.body).toContain('[risk]');
   });
 
-  test('no terminating team is a no-op (per-task curation unchanged)', () => {
-    store.createMilestone({ id: 'm2', title: 'M2' });
+  test('no terminating team is a no-op (per-task curation unchanged)', async () => {
+    await store.createMilestone({ id: 'm2', title: 'M2' });
     // A persistent team and a team pinned to a DIFFERENT milestone — neither terminates here.
-    store.createTeam({ slug: 'core', teamType: 'platform' });
-    store.createTeam({
+    await store.createTeam({ slug: 'core', teamType: 'platform' });
+    await store.createTeam({
       slug: 'elsewhere',
       teamType: 'enabling',
       lifetime: 'terminates_on_milestone',
       terminatesOnMilestone: 'other',
     });
-    store.createTask({ id: 'task-b', title: 'B', milestoneId: 'm2' });
-    writeLogEntry(linkRunDir('task-b', 'b'), 'h1', 'hack');
+    await store.createTask({ id: 'task-b', title: 'B', milestoneId: 'm2' });
+    writeLogEntry(await linkRunDir('task-b', 'b'), 'h1', 'hack');
 
-    const result = reconcileMilestoneClosed('m2', store);
+    const result = await reconcileMilestoneClosed('m2', store);
 
     // No compaction; the per-task curation still fired.
     expect(result.compactedTeams).toHaveLength(0);
     expect(result.emitted.map((e) => e.taskId)).toEqual(['task-b']);
-    expect(store.listLores('core')).toHaveLength(0);
-    expect(store.listLores('elsewhere')).toHaveLength(0);
+    expect(await store.listLores('core')).toHaveLength(0);
+    expect(await store.listLores('elsewhere')).toHaveLength(0);
   });
 
-  test('idempotent: a re-close does not double-write the compaction Lore', () => {
-    store.createMilestone({ id: 'm3', title: 'M3' });
-    store.createTeam({
+  test('idempotent: a re-close does not double-write the compaction Lore', async () => {
+    await store.createMilestone({ id: 'm3', title: 'M3' });
+    await store.createTeam({
       slug: 'squad',
       teamType: 'enabling',
       lifetime: 'terminates_on_milestone',
       terminatesOnMilestone: 'm3',
     });
-    store.createTask({ id: 'task-c', title: 'C', milestoneId: 'm3' });
-    writeLogEntry(linkRunDir('task-c', 'c'), 'h1', 'hack');
+    await store.createTask({ id: 'task-c', title: 'C', milestoneId: 'm3' });
+    writeLogEntry(await linkRunDir('task-c', 'c'), 'h1', 'hack');
 
-    const first = reconcileMilestoneClosed('m3', store);
+    const first = await reconcileMilestoneClosed('m3', store);
     expect(first.compactedTeams).toHaveLength(1);
 
-    const second = reconcileMilestoneClosed('m3', store);
+    const second = await reconcileMilestoneClosed('m3', store);
     expect(second.compactedTeams).toHaveLength(0);
     expect(second.skippedAlreadyCompacted).toBe(1);
     // Exactly one compaction Lore exists.
-    expect(store.listLores('squad')).toHaveLength(1);
+    expect(await store.listLores('squad')).toHaveLength(1);
   });
 
-  test('an empty journal still records a compaction Lore for the terminating team', () => {
-    store.createMilestone({ id: 'm4', title: 'M4' });
-    store.createTeam({
+  test('an empty journal still records a compaction Lore for the terminating team', async () => {
+    await store.createMilestone({ id: 'm4', title: 'M4' });
+    await store.createTeam({
       slug: 'squad',
       teamType: 'enabling',
       lifetime: 'terminates_on_milestone',
       terminatesOnMilestone: 'm4',
     });
     // A task with only non-curation findings — the journal is empty.
-    store.createTask({ id: 'task-d', title: 'D', milestoneId: 'm4' });
-    writeLogEntry(linkRunDir('task-d', 'd'), 'disc', 'discovery');
+    await store.createTask({ id: 'task-d', title: 'D', milestoneId: 'm4' });
+    writeLogEntry(await linkRunDir('task-d', 'd'), 'disc', 'discovery');
 
-    const result = reconcileMilestoneClosed('m4', store);
+    const result = await reconcileMilestoneClosed('m4', store);
 
     expect(result.compactedTeams).toHaveLength(1);
-    const lores = store.listLores('squad');
+    const lores = await store.listLores('squad');
     expect(lores).toHaveLength(1);
     expect(lores[0]?.body).toContain('[milestone-close-summary:m4]');
     expect(lores[0]?.body).toContain('no curation-relevant findings');
   });
 
-  test('two terminating teams each get the same milestone journal rolled up', () => {
-    store.createMilestone({ id: 'm5', title: 'M5' });
+  test('two terminating teams each get the same milestone journal rolled up', async () => {
+    await store.createMilestone({ id: 'm5', title: 'M5' });
     for (const slug of ['squad-a', 'squad-b']) {
-      store.createTeam({
+      await store.createTeam({
         slug,
         teamType: 'enabling',
         lifetime: 'terminates_on_milestone',
         terminatesOnMilestone: 'm5',
       });
     }
-    store.createTask({ id: 'task-e', title: 'E', milestoneId: 'm5' });
-    writeLogEntry(linkRunDir('task-e', 'e'), 'd1', 'decision');
+    await store.createTask({ id: 'task-e', title: 'E', milestoneId: 'm5' });
+    writeLogEntry(await linkRunDir('task-e', 'e'), 'd1', 'decision');
 
-    const result = reconcileMilestoneClosed('m5', store);
+    const result = await reconcileMilestoneClosed('m5', store);
 
     expect(result.compactedTeams.map((c) => c.teamSlug).sort()).toEqual(['squad-a', 'squad-b']);
-    expect(store.listLores('squad-a')[0]?.body).toContain('[decision]');
-    expect(store.listLores('squad-b')[0]?.body).toContain('[decision]');
+    expect((await store.listLores('squad-a'))[0]?.body).toContain('[decision]');
+    expect((await store.listLores('squad-b'))[0]?.body).toContain('[decision]');
   });
 });
 
@@ -976,15 +974,15 @@ describe('bubbleStaleEscalations', () => {
     return new Date(NOW_MS - hours * HOUR_MS).toISOString();
   }
 
-  test('auto-bubbles an escalation older than the threshold one rung up and flips the original to auto_bubbled', () => {
-    const stale = store.raiseEscalation({
+  test('auto-bubbles an escalation older than the threshold one rung up and flips the original to auto_bubbled', async () => {
+    const stale = await store.raiseEscalation({
       taskId: 't1',
       escalationType: 'blocked',
       summary: 'aged out, no receiver',
       createdAt: hoursAgo(STALENESS_THRESHOLD_HOURS + 1),
     });
 
-    const result = bubbleStaleEscalations(store, NOW_MS);
+    const result = await bubbleStaleEscalations(store, NOW_MS);
 
     expect(result.threshold_hours).toBe(STALENESS_THRESHOLD_HOURS);
     expect(result.inspected).toBe(1);
@@ -997,52 +995,52 @@ describe('bubbleStaleEscalations', () => {
     });
 
     // The original flips to auto_bubbled with the marker + forward pointer.
-    const closed = store.getEscalation(stale.id);
+    const closed = await store.getEscalation(stale.id);
     expect(closed?.state).toBe('auto_bubbled');
     expect(closed?.attributes?.auto_bubbled).toBe(true);
     expect(closed?.attributes?.linked_escalation).toBe(result.bubbled[0]?.to_id);
 
     // A fresh open row exists exactly one rung up, back-pointing at the original.
-    const fresh = store.getEscalation(result.bubbled[0]?.to_id as number);
+    const fresh = await store.getEscalation(result.bubbled[0]?.to_id as number);
     expect(fresh?.state).toBe('open');
     expect(fresh?.layer).toBe('engineer');
     expect(fresh?.walked_up_from).toBe(stale.id);
   });
 
-  test('leaves an under-threshold escalation untouched', () => {
-    const fresh = store.raiseEscalation({
+  test('leaves an under-threshold escalation untouched', async () => {
+    const fresh = await store.raiseEscalation({
       taskId: 't1',
       escalationType: 'ambiguous',
       summary: 'raised recently',
       createdAt: hoursAgo(STALENESS_THRESHOLD_HOURS - 1),
     });
 
-    const result = bubbleStaleEscalations(store, NOW_MS);
+    const result = await bubbleStaleEscalations(store, NOW_MS);
 
     expect(result.inspected).toBe(1);
     expect(result.bubbled).toHaveLength(0);
-    expect(store.getEscalation(fresh.id)?.state).toBe('open');
-    expect(store.getEscalation(fresh.id)?.attributes).toBeNull();
+    expect((await store.getEscalation(fresh.id))?.state).toBe('open');
+    expect((await store.getEscalation(fresh.id))?.attributes).toBeNull();
     // No successor row was appended.
-    expect(store.listOpenEscalationRows()).toHaveLength(1);
+    expect(await store.listOpenEscalationRows()).toHaveLength(1);
   });
 
-  test('an escalation exactly at the threshold is not yet stale (strict greater-than)', () => {
-    const boundary = store.raiseEscalation({
+  test('an escalation exactly at the threshold is not yet stale (strict greater-than)', async () => {
+    const boundary = await store.raiseEscalation({
       taskId: 't1',
       escalationType: 'conflict',
       summary: 'right at the line',
       createdAt: hoursAgo(STALENESS_THRESHOLD_HOURS),
     });
 
-    const result = bubbleStaleEscalations(store, NOW_MS);
+    const result = await bubbleStaleEscalations(store, NOW_MS);
 
     expect(result.bubbled).toHaveLength(0);
-    expect(store.getEscalation(boundary.id)?.state).toBe('open');
+    expect((await store.getEscalation(boundary.id))?.state).toBe('open');
   });
 
-  test('reports a stale escalation already at the top of the chain (human) without mutating it', () => {
-    const atTop = store.raiseEscalation({
+  test('reports a stale escalation already at the top of the chain (human) without mutating it', async () => {
+    const atTop = await store.raiseEscalation({
       taskId: 't1',
       escalationType: 'blocked',
       summary: 'human-rung, aged',
@@ -1050,41 +1048,41 @@ describe('bubbleStaleEscalations', () => {
       createdAt: hoursAgo(STALENESS_THRESHOLD_HOURS + 100),
     });
 
-    const result = bubbleStaleEscalations(store, NOW_MS);
+    const result = await bubbleStaleEscalations(store, NOW_MS);
 
     expect(result.atTopOfChain).toBe(1);
     expect(result.bubbled).toHaveLength(0);
     // The human-rung row stays open and unmarked — nowhere higher to walk.
-    expect(store.getEscalation(atTop.id)?.state).toBe('open');
-    expect(store.getEscalation(atTop.id)?.attributes).toBeNull();
+    expect((await store.getEscalation(atTop.id))?.state).toBe('open');
+    expect((await store.getEscalation(atTop.id))?.attributes).toBeNull();
   });
 
-  test('advances each stale escalation only one rung in a single pass (does not re-evaluate the fresh successor)', () => {
-    const stale = store.raiseEscalation({
+  test('advances each stale escalation only one rung in a single pass (does not re-evaluate the fresh successor)', async () => {
+    const stale = await store.raiseEscalation({
       taskId: 't1',
       escalationType: 'blocked',
       summary: 'aged out',
       createdAt: hoursAgo(STALENESS_THRESHOLD_HOURS + 48),
     });
 
-    const result = bubbleStaleEscalations(store, NOW_MS);
+    const result = await bubbleStaleEscalations(store, NOW_MS);
 
     // Exactly one bubble: the successor row is created with created_at = NOW_MS,
     // so it is not stale within the same pass and is not re-bubbled.
     expect(result.bubbled).toHaveLength(1);
-    const fresh = store.getEscalation(result.bubbled[0]?.to_id as number);
+    const fresh = await store.getEscalation(result.bubbled[0]?.to_id as number);
     expect(fresh?.layer).toBe('engineer');
     expect(fresh?.state).toBe('open');
     // The chain back-link is intact for a future pass to continue from.
-    expect(store.getEscalationChain(fresh?.id as number).map((e) => e.layer)).toEqual([
+    expect((await store.getEscalationChain(fresh?.id as number)).map((e) => e.layer)).toEqual([
       'implementer',
       'engineer',
     ]);
     void stale;
   });
 
-  test('a custom threshold overrides the default staleness window', () => {
-    const aged = store.raiseEscalation({
+  test('a custom threshold overrides the default staleness window', async () => {
+    const aged = await store.raiseEscalation({
       taskId: 't1',
       escalationType: 'blocked',
       summary: 'three hours old',
@@ -1092,34 +1090,34 @@ describe('bubbleStaleEscalations', () => {
     });
 
     // Default (24h) leaves it alone; a 2h threshold bubbles it.
-    expect(bubbleStaleEscalations(store, NOW_MS).bubbled).toHaveLength(0);
-    const result = bubbleStaleEscalations(store, NOW_MS, 2);
+    expect((await bubbleStaleEscalations(store, NOW_MS)).bubbled).toHaveLength(0);
+    const result = await bubbleStaleEscalations(store, NOW_MS, 2);
     expect(result.threshold_hours).toBe(2);
     expect(result.bubbled).toHaveLength(1);
-    expect(store.getEscalation(aged.id)?.state).toBe('auto_bubbled');
+    expect((await store.getEscalation(aged.id))?.state).toBe('auto_bubbled');
   });
 
-  test('surfaces a stale auto-bubble into next-ready ranking and alerts via the blocker_raised bridge', () => {
+  test('surfaces a stale auto-bubble into next-ready ranking and alerts via the blocker_raised bridge', async () => {
     // The owning task must exist for the event-surface bridge to fire.
-    store.createTask({ id: 'ranked-task', title: 'Ranked', status: 'ready' });
-    store.createTask({ id: 'plain-task', title: 'Plain', status: 'ready' });
-    store.raiseEscalation({
+    await store.createTask({ id: 'ranked-task', title: 'Ranked', status: 'ready' });
+    await store.createTask({ id: 'plain-task', title: 'Plain', status: 'ready' });
+    await store.raiseEscalation({
       taskId: 'ranked-task',
       escalationType: 'blocked',
       summary: 'no receiver acted',
       createdAt: hoursAgo(STALENESS_THRESHOLD_HOURS + 5),
     });
 
-    bubbleStaleEscalations(store, NOW_MS);
+    await bubbleStaleEscalations(store, NOW_MS);
 
     // Alerts surface: listOpenEscalations reads the blocker_raised event the
     // bubble emitted.
-    const alertTaskIds = store.listOpenEscalations().map((e) => e.task_id);
+    const alertTaskIds = (await store.listOpenEscalations()).map((e) => e.task_id);
     expect(alertTaskIds).toContain('ranked-task');
 
     // Next-ready ranking: the escalated task carries a positive escalation_boost
     // and outranks the un-escalated peer.
-    const ranked = store.nextReady({ limit: 10, nowMs: NOW_MS });
+    const ranked = await store.nextReady({ limit: 10, nowMs: NOW_MS });
     const escalated = ranked.find((r) => r.task.id === 'ranked-task');
     const plain = ranked.find((r) => r.task.id === 'plain-task');
     expect(escalated?.rationale.escalation_boost).toBeGreaterThan(0);
@@ -1139,14 +1137,14 @@ describe('triggerBindingsForStatus', () => {
     { on: 'ready', workflow: 'orchestrate' },
   ];
 
-  test('returns every binding whose `on` matches the status', () => {
+  test('returns every binding whose `on` matches the status', async () => {
     expect(triggerBindingsForStatus(triggers, 'accepted').map((t) => t.workflow)).toEqual([
       'decompose',
       'notify',
     ]);
   });
 
-  test('returns [] when no binding fires for the status', () => {
+  test('returns [] when no binding fires for the status', async () => {
     expect(triggerBindingsForStatus(triggers, 'done')).toEqual([]);
     expect(triggerBindingsForStatus([], 'accepted')).toEqual([]);
   });
@@ -1158,12 +1156,12 @@ describe('computeBoundActions', () => {
     { on: 'ready', workflow: 'orchestrate' },
   ];
 
-  test('surfaces one bound action per task sitting in a triggering status', () => {
-    store.createTask({ id: 'a1', title: 'Accepted one', status: 'accepted' });
-    store.createTask({ id: 'r1', title: 'Ready one', status: 'ready' });
-    store.createTask({ id: 'b1', title: 'Backlog one', status: 'backlog' });
+  test('surfaces one bound action per task sitting in a triggering status', async () => {
+    await store.createTask({ id: 'a1', title: 'Accepted one', status: 'accepted' });
+    await store.createTask({ id: 'r1', title: 'Ready one', status: 'ready' });
+    await store.createTask({ id: 'b1', title: 'Backlog one', status: 'backlog' });
 
-    const actions = computeBoundActions(store, triggers, 10);
+    const actions = await computeBoundActions(store, triggers, 10);
     expect(actions).toEqual([
       {
         task_id: 'a1',
@@ -1182,44 +1180,44 @@ describe('computeBoundActions', () => {
     ]);
   });
 
-  test('an empty trigger table yields no actions', () => {
-    store.createTask({ id: 'a1', title: 'Accepted', status: 'accepted' });
-    expect(computeBoundActions(store, [], 10)).toEqual([]);
+  test('an empty trigger table yields no actions', async () => {
+    await store.createTask({ id: 'a1', title: 'Accepted', status: 'accepted' });
+    expect(await computeBoundActions(store, [], 10)).toEqual([]);
   });
 
-  test('honors the cap', () => {
-    store.createTask({ id: 'a1', title: 'A1', status: 'accepted' });
-    store.createTask({ id: 'a2', title: 'A2', status: 'accepted' });
-    store.createTask({ id: 'a3', title: 'A3', status: 'accepted' });
-    expect(computeBoundActions(store, triggers, 2)).toHaveLength(2);
+  test('honors the cap', async () => {
+    await store.createTask({ id: 'a1', title: 'A1', status: 'accepted' });
+    await store.createTask({ id: 'a2', title: 'A2', status: 'accepted' });
+    await store.createTask({ id: 'a3', title: 'A3', status: 'accepted' });
+    expect(await computeBoundActions(store, triggers, 2)).toHaveLength(2);
   });
 });
 
 describe('parseTeamAgentName', () => {
-  test('parses a simple team-role seat', () => {
+  test('parses a simple team-role seat', async () => {
     expect(parseTeamAgentName('team-auth-engineer')).toEqual({
       slug: 'auth',
       role: 'engineer',
     });
   });
 
-  test('anchors on the role suffix so a hyphenated slug survives', () => {
+  test('anchors on the role suffix so a hyphenated slug survives', async () => {
     expect(parseTeamAgentName('team-data-platform-tech_lead')).toEqual({
       slug: 'data-platform',
       role: 'tech_lead',
     });
   });
 
-  test('returns null for a non-team agent name', () => {
+  test('returns null for a non-team agent name', async () => {
     expect(parseTeamAgentName('general-purpose')).toBeNull();
     expect(parseTeamAgentName('task-planner')).toBeNull();
   });
 
-  test('returns null when the name has the prefix but no role suffix', () => {
+  test('returns null when the name has the prefix but no role suffix', async () => {
     expect(parseTeamAgentName('team-auth')).toBeNull();
   });
 
-  test('returns null when the slug is empty', () => {
+  test('returns null when the slug is empty', async () => {
     expect(parseTeamAgentName('team-engineer')).toBeNull();
   });
 });
@@ -1228,9 +1226,9 @@ describe('detectContributionMiss', () => {
   const WINDOW_START = '2024-01-01T00:00:00.000Z';
   const WINDOW_END = '2024-01-01T01:00:00.000Z';
 
-  test('in-window contribution from the seat is not a miss', () => {
-    store.createTask({ id: 'team-task-1', title: 'Work' });
-    store.appendEvent({
+  test('in-window contribution from the seat is not a miss', async () => {
+    await store.createTask({ id: 'team-task-1', title: 'Work' });
+    await store.appendEvent({
       taskId: 'team-task-1',
       kind: 'note',
       agent: 'team-auth-engineer',
@@ -1238,7 +1236,7 @@ describe('detectContributionMiss', () => {
       payload: { text: 'did the work' },
     });
 
-    const result = detectContributionMiss(
+    const result = await detectContributionMiss(
       store,
       'team-auth-engineer',
       'team-task-1',
@@ -1253,10 +1251,10 @@ describe('detectContributionMiss', () => {
     });
   });
 
-  test('seat with no in-window event is a miss', () => {
-    store.createTask({ id: 'team-task-2', title: 'Work' });
+  test('seat with no in-window event is a miss', async () => {
+    await store.createTask({ id: 'team-task-2', title: 'Work' });
 
-    const result = detectContributionMiss(
+    const result = await detectContributionMiss(
       store,
       'team-auth-engineer',
       'team-task-2',
@@ -1271,10 +1269,10 @@ describe('detectContributionMiss', () => {
     });
   });
 
-  test('a non-team agent is a no-op (isTeamRoleAgent false, not missed)', () => {
-    store.createTask({ id: 'team-task-3', title: 'Work' });
+  test('a non-team agent is a no-op (isTeamRoleAgent false, not missed)', async () => {
+    await store.createTask({ id: 'team-task-3', title: 'Work' });
 
-    const result = detectContributionMiss(
+    const result = await detectContributionMiss(
       store,
       'general-purpose',
       'team-task-3',
@@ -1284,10 +1282,10 @@ describe('detectContributionMiss', () => {
     expect(result).toEqual({ isTeamRoleAgent: false, missed: false });
   });
 
-  test('window is half-open: the end instant is out of window, the start instant is in', () => {
-    store.createTask({ id: 'team-task-4', title: 'Work' });
+  test('window is half-open: the end instant is out of window, the start instant is in', async () => {
+    await store.createTask({ id: 'team-task-4', title: 'Work' });
     // Stamped exactly at the end instant — excluded by the half-open `[start, end)`.
-    store.appendEvent({
+    await store.appendEvent({
       taskId: 'team-task-4',
       kind: 'note',
       agent: 'team-auth-engineer',
@@ -1295,7 +1293,7 @@ describe('detectContributionMiss', () => {
       payload: { text: 'too late' },
     });
 
-    const atEnd = detectContributionMiss(
+    const atEnd = await detectContributionMiss(
       store,
       'team-auth-engineer',
       'team-task-4',
@@ -1305,14 +1303,14 @@ describe('detectContributionMiss', () => {
     expect(atEnd.missed).toBe(true);
 
     // Stamped exactly at the start instant — included.
-    store.appendEvent({
+    await store.appendEvent({
       taskId: 'team-task-4',
       kind: 'note',
       agent: 'team-auth-engineer',
       ts: WINDOW_START,
       payload: { text: 'right on time' },
     });
-    const atStart = detectContributionMiss(
+    const atStart = await detectContributionMiss(
       store,
       'team-auth-engineer',
       'team-task-4',
@@ -1322,9 +1320,9 @@ describe('detectContributionMiss', () => {
     expect(atStart.missed).toBe(false);
   });
 
-  test("an event stamped by a different seat does not count as this seat's contribution", () => {
-    store.createTask({ id: 'team-task-5', title: 'Work' });
-    store.appendEvent({
+  test("an event stamped by a different seat does not count as this seat's contribution", async () => {
+    await store.createTask({ id: 'team-task-5', title: 'Work' });
+    await store.appendEvent({
       taskId: 'team-task-5',
       kind: 'note',
       agent: 'team-auth-tech_lead',
@@ -1332,7 +1330,7 @@ describe('detectContributionMiss', () => {
       payload: { text: 'lead stamped it' },
     });
 
-    const result = detectContributionMiss(
+    const result = await detectContributionMiss(
       store,
       'team-auth-engineer',
       'team-task-5',
@@ -1342,13 +1340,13 @@ describe('detectContributionMiss', () => {
     expect(result.missed).toBe(true);
   });
 
-  test('a vacant-slot dispatch is still evaluated — never short-circuited to no-miss', () => {
+  test('a vacant-slot dispatch is still evaluated — never short-circuited to no-miss', async () => {
     // No team is created and no holder is ever seated for the role; the detector
     // reads presence off the event log alone, so a seat name with zero in-window
     // contributions is still a miss rather than an auto-pass.
-    store.createTask({ id: 'team-task-6', title: 'Work' });
+    await store.createTask({ id: 'team-task-6', title: 'Work' });
 
-    const result = detectContributionMiss(
+    const result = await detectContributionMiss(
       store,
       'team-vacant-implementer',
       'team-task-6',
