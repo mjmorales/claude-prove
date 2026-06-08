@@ -4438,7 +4438,7 @@ describe('runLoreCmd', () => {
       kind: string;
       status: string;
       write_status: string;
-      source_lore_id: number;
+      source_lore_id: string;
     };
     expect(decision.id).toBe(`lore-promotion-payments-${id}`);
     expect(decision.kind).toBe('adr');

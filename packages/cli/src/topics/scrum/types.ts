@@ -1301,7 +1301,7 @@ export const TEAM_INTERFACE_STATUSES: TeamInterfaceStatus[] = ['active', 'supers
  * supersession: a retired ask type is never removed; its `status` flips to
  * `superseded` with a `reason` and an optional `superseded_by` pointer.
  *
- *   id            — AUTOINCREMENT surrogate; the replacement target a later
+ *   id            — ULID surrogate; the replacement target a later
  *                   entry's `superseded_by` references.
  *   team_slug     — the owning team, a `scrum_teams.slug`.
  *   ask_type      — the kebab-case ask type. Format `^[a-z0-9]+(-[a-z0-9]+)*$`,
@@ -1328,7 +1328,7 @@ export interface TeamAcceptRow {
  * for other teams to consume. Append-only with supersession, mirroring
  * `TeamAcceptRow`.
  *
- *   id            — AUTOINCREMENT surrogate; the replacement target a later
+ *   id            — ULID surrogate; the replacement target a later
  *                   entry's `superseded_by` references.
  *   team_slug     — the owning team, a `scrum_teams.slug`.
  *   name          — the output's handle (free text).
@@ -1493,7 +1493,7 @@ export const ASK_VERDICT_STATE: Record<AskVerdict, AskState> = {
  * on another team's published interface: `from_team` needs `to_team` to handle
  * `ask_type`, and `blocking_artifact` stays blocked until it does.
  *
- *   id                — AUTOINCREMENT surrogate.
+ *   id                — ULID surrogate.
  *   from_team         — the requesting team's slug, a `scrum_teams.slug`.
  *   to_team           — the target team's slug, a `scrum_teams.slug`. At filing
  *                       time `ask_type` MUST be one of this team's ACTIVE
@@ -1661,7 +1661,7 @@ export interface AskAwaitReport {
  * correction is a NEW entry, never an edit to an existing one, so the full
  * history of what a team believed at each point survives.
  *
- *   id                    — AUTOINCREMENT surrogate.
+ *   id                    — ULID surrogate.
  *   team_slug             — the owning team, a `scrum_teams.slug`.
  *   body                  — the entry's free-text content (a convention, a
  *                           lesson, a standing note).
@@ -1808,7 +1808,7 @@ export const ANNOTATION_TARGET_KINDS: AnnotationTargetKind[] = ['task', 'team', 
  * Lore (team-scoped, tech_lead-gated), an Annotation hangs off a single target
  * artifact and carries no authorship gate beyond recording who wrote it.
  *
- *   id          — AUTOINCREMENT surrogate.
+ *   id          — ULID surrogate.
  *   target_kind — which artifact class the note attaches to (`task` | `team` |
  *                 `decision`). A closed enum, guarded at the store boundary.
  *   target_ref  — the specific target's identifier within that class: a task id,
