@@ -18,8 +18,10 @@ import {
   type SqlParam,
   type Store,
   type StoreOptions,
+  assertStoreSchemaCompatible,
   openStore,
   runMigrations,
+  ulid,
   updateTaskStatus as updateTaskStatusViaService,
   withTx,
 } from '@claude-prove/store';
@@ -35,6 +37,7 @@ import { SCRUM_SCHEMA_VERSION, ensureScrumSchemaRegistered } from './schemas';
 import type {
   Acceptance,
   AcceptanceCriterion,
+  AcceptancePolicy,
   AcceptanceScope,
   AddAnnotationInput,
   AnnotationRow,
@@ -103,7 +106,7 @@ import type {
   TeamTerminateResult,
   TeamType,
   TeamWriteScopeConflict,
-  VerificationRecord,
+  VerificationVerdict,
 } from './types';
 import type { AddTeamExposeInput, CreateTeamInput } from './types';
 import {
@@ -145,6 +148,17 @@ type Statement = Awaited<ReturnType<Database['prepare']>>;
 export async function openScrumStore(opts: StoreOptions = {}): Promise<ScrumStore> {
   ensureScrumSchemaRegistered();
   const store = await openStore(opts);
+  // Refuse a write-open against a legacy (pre-Turso-v1) or ahead store BEFORE
+  // running migrations, so an incompatible store is never silently migrated or
+  // written. A readonly open skips the guard — inspecting an old store is fine.
+  if (!opts.readonly) {
+    try {
+      await assertStoreSchemaCompatible(store);
+    } catch (err) {
+      store.close();
+      throw err;
+    }
+  }
   await runMigrations(store);
   return new ScrumStore(store);
 }
@@ -172,10 +186,10 @@ export interface CreateTaskInput {
   /** Containment tier; NULL = flat. */
   layer?: TaskLayer | null;
   /**
-   * Acceptance criteria authored at create time (v5). Validated for the
-   * idempotent/policy invariant before insert. When omitted, the task's
-   * `acceptance_json` stays NULL unless `parentId` carries inheritable
-   * criteria (see `inheritAcceptance`).
+   * Acceptance criteria authored at create time. Validated for the
+   * idempotent/policy invariant before insert. When omitted, the task gets no
+   * criteria unless `parentId` carries inheritable ones (see
+   * `inheritAcceptance`).
    */
   acceptance?: Acceptance | null;
   /**
@@ -328,15 +342,18 @@ export interface ResolveContributorKey {
 
 /**
  * Canonical `scrum_tasks` column list, in declaration order. Every SELECT
- * routes through this so the v3 `parent_id`/`layer`, v5 `acceptance_json`,
- * v6 `bounds_json`, and v11 `worker_id`/`run_id` columns stay in lockstep with
- * the `ScrumTaskRow` shape. Raw rows carry `acceptance_json`/`bounds_json:
- * string | null`; `decodeTask` turns them into the decoded
- * `ScrumTask.acceptance`/`.bounds` fields and assembles the `provenance` block
- * at the public boundary.
+ * routes through this so the `parent_id`/`layer`, `acceptance_policy_json`,
+ * `bounds_json`, and `worker_id`/`run_id` columns stay in lockstep with the
+ * `ScrumTaskRow` shape. The acceptance CRITERIA are normalized out into
+ * `scrum_acceptance_criteria` (verdicts append-only in
+ * `scrum_criterion_verdicts`); only the task-level acceptance POLICY rides the
+ * task row as `acceptance_policy_json`. Raw rows carry
+ * `acceptance_policy_json`/`bounds_json: string | null`; `decodeTask` joins the
+ * hydrated criteria back onto the policy to rebuild the public
+ * `ScrumTask.acceptance` object and assembles the `provenance` block.
  */
 const TASK_COLUMNS =
-  'id, title, description, status, milestone_id, team_slug, parent_id, layer, acceptance_json, bounds_json, terminal_reason, terminal_detail, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, deleted_at';
+  'id, title, description, status, milestone_id, team_slug, parent_id, layer, acceptance_policy_json, bounds_json, terminal_reason, terminal_detail, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, status_event_id, deleted_at';
 
 /** Canonical `scrum_milestones` SELECT column list; includes the v10 `initiative` grouping. */
 const MILESTONE_COLUMNS =
@@ -405,15 +422,59 @@ const DECISION_COLUMNS =
 const ASK_TYPE_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 /**
- * Raw `scrum_tasks` SELECT shape — identical to `ScrumTask` except the v5
- * acceptance and v6 bounds columns arrive as their on-disk JSON strings and the
- * derived `provenance` block is absent (assembled by `decodeTask`).
- * `decodeTask` is the sole bridge from this to the public `ScrumTask`.
+ * Raw `scrum_tasks` SELECT shape — identical to `ScrumTask` except the bounds
+ * column arrives as its on-disk JSON string, the acceptance CRITERIA are NOT on
+ * the row (they live in `scrum_acceptance_criteria`, hydrated separately) — only
+ * the task-level acceptance POLICY rides as `acceptance_policy_json` — and the
+ * derived `provenance` block is absent (assembled by `decodeTask`). `decodeTask`
+ * is the sole bridge from this (plus the hydrated criteria) to the public
+ * `ScrumTask`.
  */
 type ScrumTaskRow = Omit<ScrumTask, 'acceptance' | 'bounds' | 'provenance'> & {
-  acceptance_json: string | null;
+  acceptance_policy_json: string | null;
   bounds_json: string | null;
 };
+
+/**
+ * Raw `scrum_acceptance_criteria` SELECT shape — the criterion DEFINITION. `id`
+ * is the minted ULID surrogate PK (and the verdict-log FK target);
+ * `criterion_id` is the author-given external id, unique only within a task.
+ */
+interface AcceptanceCriterionRow {
+  id: string;
+  task_id: string;
+  criterion_id: string;
+  ord: string;
+  text: string;
+  verifies_by: AcceptanceCriterion['verifies_by'];
+  check_payload: string;
+  status: AcceptanceCriterion['status'];
+  idempotent: number;
+  scope: string | null;
+  timeout: string | null;
+  superseded_by: string | null;
+  reason: string | null;
+  inherited_from: string | null;
+}
+
+/**
+ * Raw `scrum_criterion_head` view row — the latest verdict per criterion. Its
+ * `criterion_id` is the criterion-row SURROGATE id (`scrum_acceptance_criteria.id`),
+ * not the external author id.
+ */
+interface CriterionHeadRow {
+  criterion_id: string;
+  channel: 'gate' | 'verification';
+  verdict: string;
+  reason: string | null;
+  by_whom: string | null;
+  comment: string | null;
+  at: string;
+}
+
+/** Canonical `scrum_acceptance_criteria` SELECT column list. */
+const ACCEPTANCE_CRITERION_COLUMNS =
+  'id, task_id, criterion_id, ord, text, verifies_by, check_payload, status, idempotent, scope, timeout, superseded_by, reason, inherited_from';
 
 // Tags that boost priority in nextReady ranking.
 const PRIORITY_TAGS = new Set(['p0', 'p1', 'urgent', 'blocker']);
@@ -634,6 +695,10 @@ export class ScrumStore {
       last_modified_at: createdAt,
       worker_id: workerId,
       run_id: runId,
+      // No transition has fired yet — the authored status is the creation status,
+      // not one set by a status_changed event. The pointer is stamped on the
+      // first transition (see updateTaskStatus), so a fresh task reads NULL.
+      status_event_id: null,
       deleted_at: null,
       provenance: {
         created_by: createdBy,
@@ -648,7 +713,7 @@ export class ScrumStore {
 
     const tx = async () => {
       await this.exec(
-        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, team_slug, parent_id, layer, acceptance_json, bounds_json, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
+        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, team_slug, parent_id, layer, acceptance_policy_json, bounds_json, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
         row.id,
         row.title,
         row.description,
@@ -657,7 +722,7 @@ export class ScrumStore {
         row.team_slug,
         row.parent_id,
         row.layer,
-        acceptance === null ? null : JSON.stringify(acceptance),
+        acceptance?.policy ? JSON.stringify(acceptance.policy) : null,
         bounds === null ? null : JSON.stringify(bounds),
         row.created_by_agent,
         row.created_at,
@@ -667,6 +732,14 @@ export class ScrumStore {
         row.worker_id,
         row.run_id,
       );
+
+      // Acceptance CRITERIA are normalized into their own table — insert each
+      // criterion's DEFINITION row in authored array order. A fresh task carries
+      // no verdicts; the gate seed (`gate_pending`) is a decode artifact, not a
+      // verdict row, so nothing lands in scrum_criterion_verdicts here.
+      for (const criterion of acceptance?.criteria ?? []) {
+        await this.insertCriterionRow(row.id, criterion, createdAt);
+      }
 
       if (input.tags && input.tags.length > 0) {
         const stmt = await this.prep(
@@ -678,7 +751,8 @@ export class ScrumStore {
       }
 
       await this.exec(
-        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
+        'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+        ulid(),
         row.id,
         createdAt,
         'task_created',
@@ -691,13 +765,88 @@ export class ScrumStore {
     return row;
   }
 
+  /**
+   * Decode a batch of raw task rows into public `ScrumTask`s, hydrating each
+   * row's `acceptance` from the normalized criteria + head-verdict tables. The
+   * hydration is BATCHED: it loads every criterion and head verdict for the
+   * whole row set in two queries (not one per task), so a `listTasks`/`nextReady`
+   * walk stays query-bounded rather than N+1. The criteria are grouped by
+   * `task_id` and the head verdicts keyed by `criterion_id` in memory, then
+   * `reconstructAcceptance` folds them onto each task's `policy` column.
+   */
+  private async hydrateRows(rows: ScrumTaskRow[]): Promise<ScrumTask[]> {
+    if (rows.length === 0) return [];
+    const taskIds = rows.map((r) => r.id);
+    const criteriaByTask = await this.loadCriteriaByTask(taskIds);
+    const headByCriterion = await this.loadHeadVerdicts(taskIds);
+    return rows.map((row) =>
+      decodeTask(
+        row,
+        reconstructAcceptance(
+          criteriaByTask.get(row.id) ?? [],
+          headByCriterion,
+          row.acceptance_policy_json,
+          row.id,
+        ),
+      ),
+    );
+  }
+
+  /** Hydrate a single raw row (the one-task read path). */
+  private async hydrateRow(row: ScrumTaskRow): Promise<ScrumTask> {
+    const [task] = await this.hydrateRows([row]);
+    if (!task) throw new Error(`hydrateRow: task '${row.id}' vanished mid-hydrate`);
+    return task;
+  }
+
+  /**
+   * Load every criterion DEFINITION row for the given task ids, grouped by
+   * `task_id`. One query over an expanded placeholder list keeps the read
+   * bounded regardless of the task count.
+   */
+  private async loadCriteriaByTask(
+    taskIds: string[],
+  ): Promise<Map<string, AcceptanceCriterionRow[]>> {
+    const placeholders = taskIds.map(() => '?').join(', ');
+    const rows = (await this.many(
+      `SELECT ${ACCEPTANCE_CRITERION_COLUMNS} FROM scrum_acceptance_criteria WHERE task_id IN (${placeholders})`,
+      ...taskIds,
+    )) as AcceptanceCriterionRow[];
+    const byTask = new Map<string, AcceptanceCriterionRow[]>();
+    for (const row of rows) {
+      const bucket = byTask.get(row.task_id);
+      if (bucket) bucket.push(row);
+      else byTask.set(row.task_id, [row]);
+    }
+    return byTask;
+  }
+
+  /**
+   * Load the latest verdict per criterion (the criterion-head view) for every
+   * criterion belonging to the given task ids, keyed by `criterion_id`. The join
+   * to `scrum_acceptance_criteria` scopes the head read to just these tasks.
+   */
+  private async loadHeadVerdicts(taskIds: string[]): Promise<Map<string, CriterionHeadRow>> {
+    const placeholders = taskIds.map(() => '?').join(', ');
+    const rows = (await this.many(
+      `SELECT h.criterion_id, h.channel, h.verdict, h.reason, h.by_whom, h.comment, h.at
+       FROM scrum_criterion_head h
+       INNER JOIN scrum_acceptance_criteria c ON c.id = h.criterion_id
+       WHERE c.task_id IN (${placeholders})`,
+      ...taskIds,
+    )) as CriterionHeadRow[];
+    const byCriterion = new Map<string, CriterionHeadRow>();
+    for (const row of rows) byCriterion.set(row.criterion_id, row);
+    return byCriterion;
+  }
+
   /** Fetch one task by id, or null if missing or soft-deleted. */
   async getTask(id: string): Promise<ScrumTask | null> {
     const row = (await this.one(
       `SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE id = ? AND deleted_at IS NULL`,
       id,
     )) as ScrumTaskRow | null;
-    return row ? decodeTask(row) : null;
+    return row ? await this.hydrateRow(row) : null;
   }
 
   /**
@@ -712,7 +861,7 @@ export class ScrumStore {
       `SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE id = ?`,
       id,
     )) as ScrumTaskRow | null;
-    return row ? decodeTask(row) : null;
+    return row ? await this.hydrateRow(row) : null;
   }
 
   /** Clear `deleted_at`, reviving a soft-deleted task. No-op on a live row. */
@@ -750,7 +899,7 @@ export class ScrumStore {
 
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const sql = `SELECT ${TASK_COLUMNS} FROM scrum_tasks ${where} ORDER BY created_at ASC`;
-    return ((await this.many(sql, ...params)) as ScrumTaskRow[]).map(decodeTask);
+    return await this.hydrateRows((await this.many(sql, ...params)) as ScrumTaskRow[]);
   }
 
   /**
@@ -821,7 +970,8 @@ export class ScrumStore {
         id,
       );
       await this.exec(
-        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
+        'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+        ulid(),
         id,
         ts,
         'milestone_changed',
@@ -888,7 +1038,8 @@ export class ScrumStore {
         id,
       );
       await this.exec(
-        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
+        'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+        ulid(),
         id,
         ts,
         'team_changed',
@@ -929,7 +1080,8 @@ export class ScrumStore {
         id,
       );
       await this.exec(
-        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
+        'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+        ulid(),
         id,
         ts,
         'task_deleted',
@@ -1035,20 +1187,14 @@ export class ScrumStore {
 
     const ts = isoNow();
     const { workerId, runId } = resolveRunContext();
+    // Cancel is a status transition, so it stamps `status_event_id` with the id
+    // of the status_changed event it appends — same provenance invariant the
+    // service-level transition enforces. The event INSERT runs first so the
+    // pointer's FK target onto scrum_events(id) already exists at UPDATE time.
+    const statusEventId = ulid();
     await this.exec(
-      'UPDATE scrum_tasks SET status = ?, terminal_reason = ?, terminal_detail = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
-      'cancelled',
-      reason,
-      detail,
-      ts,
-      agent,
-      ts,
-      workerId,
-      runId,
-      id,
-    );
-    await this.exec(
-      'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+      statusEventId,
       id,
       ts,
       'status_changed',
@@ -1059,6 +1205,19 @@ export class ScrumStore {
         terminal_reason: reason,
         terminal_detail: detail,
       }),
+    );
+    await this.exec(
+      'UPDATE scrum_tasks SET status = ?, status_event_id = ?, terminal_reason = ?, terminal_detail = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+      'cancelled',
+      statusEventId,
+      reason,
+      detail,
+      ts,
+      agent,
+      ts,
+      workerId,
+      runId,
+      id,
     );
     return true;
   }
@@ -1073,12 +1232,12 @@ export class ScrumStore {
    * callers treat both the same.
    */
   async getChildren(taskId: string): Promise<ScrumTask[]> {
-    return (
+    return await this.hydrateRows(
       (await this.many(
         `SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE parent_id = ? AND deleted_at IS NULL ORDER BY created_at ASC`,
         taskId,
-      )) as ScrumTaskRow[]
-    ).map(decodeTask);
+      )) as ScrumTaskRow[],
+    );
   }
 
   /**
@@ -1098,7 +1257,7 @@ export class ScrumStore {
     )) as ScrumTaskRow[];
 
     const byParent = new Map<string, ScrumTask[]>();
-    for (const row of rows.map(decodeTask)) {
+    for (const row of await this.hydrateRows(rows)) {
       const parent = row.parent_id;
       if (parent === null) continue;
       const bucket = byParent.get(parent);
@@ -1200,7 +1359,8 @@ export class ScrumStore {
    * Append one criterion to a task's acceptance list. Creates
    * the acceptance object if the task had none. Rejects a duplicate criterion
    * id and re-validates the idempotent/policy invariant against any existing
-   * policy. Append-only — existing criteria are never mutated or removed.
+   * policy. A TARGETED insert (not a whole-list rewrite) so every existing
+   * criterion keeps its surrogate row and append-only verdict history.
    */
   async addCriterion(taskId: string, criterion: AcceptanceCriterion): Promise<ScrumTask> {
     const task = await this.getTask(taskId);
@@ -1211,22 +1371,29 @@ export class ScrumStore {
     if (criteria.some((c) => c.id === criterion.id)) {
       throw new Error(`addCriterion: duplicate criterion id '${criterion.id}' on task '${taskId}'`);
     }
-    criteria.push(criterion);
-    const next: Acceptance = withGateStatesSeeded(
-      current?.policy ? { criteria, policy: current.policy } : { criteria },
+    // Validate the WHOLE resulting acceptance (the new criterion against any
+    // existing policy / scope-enum guard) before persisting just the new row.
+    const seeded = withGateStatesSeeded(
+      current?.policy
+        ? { criteria: [...criteria, criterion], policy: current.policy }
+        : { criteria: [...criteria, criterion] },
     );
-    validateAcceptance(next);
-    await this.writeAcceptance(taskId, next);
+    validateAcceptance(seeded);
+    const seededCriterion = seeded.criteria[seeded.criteria.length - 1] as AcceptanceCriterion;
+    await this.transaction(async () => {
+      await this.insertCriterionRow(taskId, seededCriterion, isoNow());
+      await this.bumpTaskTouch(taskId);
+    });
     return await this.requireTask(taskId, 'addCriterion');
   }
 
   /**
-   * Supersede a criterion in place (append-only). Flips
-   * its `status` to `'superseded'`, records `reason`, and optionally points
-   * `superseded_by` at a replacement criterion id. Never removes the row —
-   * the retired criterion stays in the array for audit, mirroring
-   * `supersedeDecision`. Rejects unknown task/criterion ids and an
-   * already-superseded criterion.
+   * Supersede a criterion (append-only). Flips its `status` to `'superseded'`,
+   * records `reason`, and optionally points `superseded_by` at a replacement
+   * criterion id. Never removes the row — the retired criterion stays for audit,
+   * mirroring `supersedeDecision`. A TARGETED UPDATE of the one criterion's
+   * definition row, leaving its surrogate and verdict history intact. Rejects
+   * unknown task/criterion ids and an already-superseded criterion.
    */
   async supersedeCriterion(
     taskId: string,
@@ -1248,25 +1415,45 @@ export class ScrumStore {
       throw new Error(`supersedeCriterion: criterion '${criterionId}' is already superseded`);
     }
 
-    const criteria = task.acceptance.criteria.map((c) =>
-      c.id === criterionId
-        ? { ...c, status: 'superseded' as const, reason, superseded_by: supersededBy ?? null }
-        : c,
-    );
-    const next: Acceptance = task.acceptance.policy
-      ? { criteria, policy: task.acceptance.policy }
-      : { criteria };
-    await this.writeAcceptance(taskId, next);
+    await this.transaction(async () => {
+      await this.exec(
+        'UPDATE scrum_acceptance_criteria SET status = ?, reason = ?, superseded_by = ? WHERE task_id = ? AND criterion_id = ?',
+        'superseded',
+        reason,
+        supersededBy ?? null,
+        taskId,
+        criterionId,
+      );
+      await this.bumpTaskTouch(taskId);
+    });
     return await this.requireTask(taskId, 'supersedeCriterion');
   }
 
   /**
-   * Resolve a `gate`-kind criterion's persisted verdict — the mechanical half of
-   * the human approve/reject decision. Transitions the criterion's `gate.verdict`
-   * from `gate_pending` to `approved` or `rejected`, stamps the human `responder`
-   * (the verification contributor of record) and optional `comment`, and appends
-   * a `gate_responded` event so the responder is recorded in the append-only
-   * audit log. The state round-trips through `acceptance_json` — no DB migration.
+   * Bump a task's last-touch provenance (`last_modified_*` + executing
+   * worker/run) after a criterion-table write that does not itself go through
+   * the task-row UPDATE in `writeAcceptance`. Mirrors that write's attribution.
+   */
+  private async bumpTaskTouch(taskId: string): Promise<void> {
+    const { workerId, runId } = resolveRunContext();
+    await this.exec(
+      'UPDATE scrum_tasks SET last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+      this.actor(),
+      isoNow(),
+      workerId,
+      runId,
+      taskId,
+    );
+  }
+
+  /**
+   * Resolve a `gate`-kind criterion's verdict — the mechanical half of the human
+   * approve/reject decision. APPENDS a `gate`-channel verdict row (the criterion
+   * head then reads `approved`/`rejected` with the human `responder` and optional
+   * `comment`) and appends a `gate_responded` event so the responder is recorded
+   * in the append-only audit log. The verdict is an append, not a mutation: a
+   * re-decision would land another row, so the gate is guarded to resolve once
+   * (supersede the criterion to re-decide).
    *
    * This is PULL-based resolution: a session (an interactive `AskUserQuestion`
    * turn, the `scrum gate respond` CLI, or a session-start surfacing of pending
@@ -1314,18 +1501,19 @@ export class ScrumStore {
     const respondedAt = isoNow();
     const responder = opts.responder.length > 0 ? opts.responder : null;
     const comment = opts.comment && opts.comment.length > 0 ? opts.comment : null;
-    const gate = { verdict, responder, comment, responded_at: respondedAt };
-    const criteria = task.acceptance.criteria.map((c) =>
-      c.id === criterionId ? { ...c, gate } : c,
-    );
-    const next: Acceptance = task.acceptance.policy
-      ? { criteria, policy: task.acceptance.policy }
-      : { criteria };
 
-    // Single transaction: persist the verdict AND record the human responder as
-    // the verification contributor in the append-only event log.
+    // Single transaction: APPEND the gate verdict (never mutate the criterion)
+    // AND record the human responder as the verification contributor in the
+    // append-only event log.
     await this.transaction(async () => {
-      await this.writeAcceptance(taskId, next);
+      await this.appendCriterionVerdict(
+        taskId,
+        criterionId,
+        'gate',
+        verdict,
+        { by: responder, comment },
+        respondedAt,
+      );
       await this.appendEvent({
         taskId,
         kind: 'gate_responded',
@@ -1512,19 +1700,18 @@ export class ScrumStore {
     }
 
     const { workerId } = resolveRunContext();
-    const verification: VerificationRecord = {
-      verdict: ok ? 'verified' : 'failed',
-      reason: reason && reason.length > 0 ? reason : null,
-      verified_by: verifiedBy && verifiedBy.length > 0 ? verifiedBy : workerId,
-      verified_at: isoNow(),
-    };
-    const criteria = task.acceptance.criteria.map((c) =>
-      c.id === criterionId ? { ...c, verification } : c,
+    const verifiedByResolved = verifiedBy && verifiedBy.length > 0 ? verifiedBy : workerId;
+    // APPEND a verification verdict (never mutate the criterion). The
+    // criterion-head view reads the latest; a re-verify appends another row and
+    // the prior verdict is retained for audit.
+    await this.appendCriterionVerdict(
+      taskId,
+      criterionId,
+      'verification',
+      ok ? 'verified' : 'failed',
+      { reason: reason && reason.length > 0 ? reason : null, by: verifiedByResolved },
+      isoNow(),
     );
-    const next: Acceptance = task.acceptance.policy
-      ? { criteria, policy: task.acceptance.policy }
-      : { criteria };
-    await this.writeAcceptance(taskId, next);
     return await this.requireTask(taskId, 'recordCriterionVerdict');
   }
 
@@ -1602,21 +1789,220 @@ export class ScrumStore {
   }
 
   /**
-   * Persist an acceptance object (or NULL) to `scrum_tasks.acceptance_json`.
-   * Bumps last-touch provenance (v9): `last_modified_at = now()`,
-   * `last_modified_by` = the ambient actor (`PROVE_AGENT` env / `defaultActor`,
-   * NULL when neither is in scope) — these editors take no per-call agent, so
-   * the ambient resolution is the only attribution available. Still stamps the
-   * executing-worker/run attribution (v11) from the run env so the write's
-   * unit and run are recorded even when the agent is not.
+   * Persist an acceptance object's DEFINITION (criteria rows + the task-level
+   * `policy`), or clear it (NULL). The criteria are the authoring source — the
+   * whole-object setters (`setAcceptance`/`addCriterion`/`supersedeCriterion`/
+   * `createTask`) pass the full intended criteria list, so this replaces the
+   * task's criteria rows wholesale (delete-then-reinsert) inside one
+   * transaction. It does NOT touch `scrum_criterion_verdicts` — a verdict is an
+   * append, owned by `appendCriterionVerdict`; re-writing the definition does
+   * not erase recorded verdicts (their rows survive and the head view still
+   * resolves them onto the re-inserted criterion of the same id).
+   *
+   * The gate/verification fields carried on the in-memory criteria are decode
+   * artifacts (folded in from the head verdict on read), so they are
+   * intentionally ignored here — the verdict log, not the definition write, is
+   * their system of record.
+   *
+   * Bumps last-touch provenance: `last_modified_at = now()`, `last_modified_by`
+   * = the ambient actor (`PROVE_AGENT` env / `defaultActor`, NULL when neither
+   * is in scope), plus the executing-worker/run attribution from the run env.
    */
   private async writeAcceptance(taskId: string, acceptance: Acceptance | null): Promise<void> {
     const { workerId, runId } = resolveRunContext();
+    const at = isoNow();
+    await this.transaction(async () => {
+      await this.exec(
+        'UPDATE scrum_tasks SET acceptance_policy_json = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+        acceptance?.policy ? JSON.stringify(acceptance.policy) : null,
+        this.actor(),
+        at,
+        workerId,
+        runId,
+        taskId,
+      );
+      // Replace-the-whole-object semantics: drop this task's criterion rows and
+      // re-insert fresh surrogates. The verdict rows of the dropped surrogates are
+      // intentionally left in scrum_criterion_verdicts (the append-only log is never
+      // pruned); the criterion-head view's INNER JOIN hides them once their
+      // definition row is gone, so they are inert history, not live state.
+      await this.exec('DELETE FROM scrum_acceptance_criteria WHERE task_id = ?', taskId);
+      const criteria = acceptance?.criteria ?? [];
+      for (const criterion of criteria) {
+        await this.insertCriterionRow(taskId, criterion, at);
+      }
+    });
+  }
+
+  /**
+   * Insert one criterion DEFINITION row. PK is the criterion's own author-given
+   * id (NOT a minted ULID — it is already unique per task). `ord` is a freshly
+   * minted ULID per insert so the authored array order is preserved on read
+   * (the criterion id is an external slug, not lexically insert-ordered, so it
+   * cannot carry the ordering itself).
+   *
+   * If the input criterion arrives carrying a RESOLVED verdict (an approved/
+   * rejected gate, or any recorded verification) AND no verdict row yet exists
+   * for it, seed the first verdict row so a caller establishing criteria from a
+   * pre-decided input (`createTask`/`setAcceptance` with an already-resolved
+   * gate) materializes that decision into the append-only log. The existence
+   * guard keeps this idempotent for the read-modify-write callers
+   * (`addCriterion`/`supersedeCriterion`) whose criteria carry the gate/
+   * verification as a decode artifact from a prior read — their verdict rows
+   * already exist and must NOT be re-appended.
+   */
+  private async insertCriterionRow(
+    taskId: string,
+    criterion: AcceptanceCriterion,
+    at: string,
+  ): Promise<void> {
+    const rowId = ulid();
     await this.exec(
-      'UPDATE scrum_tasks SET acceptance_json = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
-      acceptance === null ? null : JSON.stringify(acceptance),
+      'INSERT INTO scrum_acceptance_criteria (id, task_id, criterion_id, ord, text, verifies_by, check_payload, status, idempotent, scope, timeout, superseded_by, reason, inherited_from, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      rowId,
+      taskId,
+      criterion.id,
+      ulid(),
+      criterion.text,
+      criterion.verifies_by,
+      criterion.check,
+      criterion.status,
+      criterion.idempotent ? 1 : 0,
+      criterion.scope ?? null,
+      criterion.timeout ?? null,
+      criterion.superseded_by ?? null,
+      criterion.reason ?? null,
+      criterion.inherited_from ?? null,
+      at,
+    );
+    await this.seedInputVerdict(taskId, rowId, criterion, at);
+  }
+
+  /**
+   * Seed the first verdict row for a freshly-inserted criterion-row (by SURROGATE
+   * id) that arrived with a resolved verdict on its input shape. This appends
+   * unconditionally — there is NO in-method existence guard. Safety against a
+   * double-append derives entirely from the call shape: every caller reaches a
+   * fresh, verdict-less surrogate (`createTask` builds new rows; `writeAcceptance`
+   * DELETEs the task's criteria and re-inserts new surrogates; `addCriterion`
+   * inserts a duplicate-id-guarded new criterion). A future read-modify-write
+   * caller that feeds an already-persisted verdict back through `insertCriterionRow`
+   * would double-append — do not wire one without adding a guard here. A pending
+   * gate seeds nothing (`gate_pending` is the absent-verdict default the head
+   * reconstruction supplies).
+   */
+  private async seedInputVerdict(
+    taskId: string,
+    rowId: string,
+    criterion: AcceptanceCriterion,
+    at: string,
+  ): Promise<void> {
+    const resolved =
+      criterion.verifies_by === 'gate'
+        ? criterion.gate && criterion.gate.verdict !== 'gate_pending'
+          ? {
+              channel: 'gate' as const,
+              verdict: criterion.gate.verdict,
+              fields: {
+                by: criterion.gate.responder ?? null,
+                comment: criterion.gate.comment ?? null,
+              },
+            }
+          : null
+        : criterion.verification && criterion.verification.verdict !== 'pending'
+          ? {
+              channel: 'verification' as const,
+              verdict: criterion.verification.verdict,
+              fields: {
+                reason: criterion.verification.reason ?? null,
+                by: criterion.verification.verified_by ?? null,
+              },
+            }
+          : null;
+    if (!resolved) return;
+    await this.appendVerdictRow(
+      taskId,
+      rowId,
+      resolved.channel,
+      resolved.verdict,
+      resolved.fields,
+      at,
+    );
+  }
+
+  /**
+   * Resolve a criterion's SURROGATE row id from `(taskId, externalId)`, or null
+   * when the task carries no such criterion. The verdict log keys on the
+   * surrogate, so the external-id-facing callers (`respondGate`/
+   * `recordCriterionVerdict`) resolve it before appending.
+   */
+  private async resolveCriterionRowId(taskId: string, externalId: string): Promise<string | null> {
+    const row = await this.one<{ id: string }>(
+      'SELECT id FROM scrum_acceptance_criteria WHERE task_id = ? AND criterion_id = ?',
+      taskId,
+      externalId,
+    );
+    return row?.id ?? null;
+  }
+
+  /**
+   * Append ONE gate/verification verdict row for the criterion identified by its
+   * EXTERNAL id on `taskId` — never an update. Resolves the criterion-row
+   * surrogate first, then delegates to `appendVerdictRow`. The external-id-facing
+   * public verdict paths (`respondGate`/`recordCriterionVerdict`) call this.
+   */
+  private async appendCriterionVerdict(
+    taskId: string,
+    externalCriterionId: string,
+    channel: 'gate' | 'verification',
+    verdict: string,
+    fields: { reason?: string | null; by?: string | null; comment?: string | null },
+    at: string,
+  ): Promise<void> {
+    const rowId = await this.resolveCriterionRowId(taskId, externalCriterionId);
+    if (rowId === null) {
+      throw new Error(
+        `appendCriterionVerdict: unknown criterion '${externalCriterionId}' on task '${taskId}'`,
+      );
+    }
+    await this.appendVerdictRow(taskId, rowId, channel, verdict, fields, at);
+  }
+
+  /**
+   * Append ONE verdict row to the append-only `scrum_criterion_verdicts` log,
+   * keyed by the criterion-row SURROGATE id — never an update. A `gate`-channel
+   * row records a human gate response; a `verification`-channel row records a
+   * bash/assert/agent verdict. Re-deciding a criterion appends another row; the
+   * criterion-head view (max ULID per surrogate) then reads the latest. The
+   * minted ULID PK makes two concurrent appends commute under whole-transaction
+   * sync replay — both rows survive the rebase, where a single mutable verdict
+   * column would have one writer clobber the other. Bumps the task's last-touch
+   * provenance.
+   */
+  private async appendVerdictRow(
+    taskId: string,
+    criterionRowId: string,
+    channel: 'gate' | 'verification',
+    verdict: string,
+    fields: { reason?: string | null; by?: string | null; comment?: string | null },
+    at: string,
+  ): Promise<void> {
+    const { workerId, runId } = resolveRunContext();
+    await this.exec(
+      'INSERT INTO scrum_criterion_verdicts (id, criterion_id, channel, verdict, reason, by_whom, comment, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      ulid(),
+      criterionRowId,
+      channel,
+      verdict,
+      fields.reason ?? null,
+      fields.by ?? null,
+      fields.comment ?? null,
+      at,
+    );
+    await this.exec(
+      'UPDATE scrum_tasks SET last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
       this.actor(),
-      isoNow(),
+      at,
       workerId,
       runId,
       taskId,
@@ -1806,16 +2192,16 @@ export class ScrumStore {
   }
 
   async listTasksForTag(tag: string): Promise<ScrumTask[]> {
-    return (
+    return await this.hydrateRows(
       (await this.many(
-        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.team_slug, t.parent_id, t.layer, t.acceptance_json, t.bounds_json, t.terminal_reason, t.terminal_detail, t.created_by_agent, t.created_at, t.last_event_at, t.last_modified_by, t.last_modified_at, t.worker_id, t.run_id, t.deleted_at
+        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.team_slug, t.parent_id, t.layer, t.acceptance_policy_json, t.bounds_json, t.terminal_reason, t.terminal_detail, t.created_by_agent, t.created_at, t.last_event_at, t.last_modified_by, t.last_modified_at, t.worker_id, t.run_id, t.status_event_id, t.deleted_at
        FROM scrum_tasks t
        INNER JOIN scrum_tags g ON g.task_id = t.id
        WHERE g.tag = ? AND t.deleted_at IS NULL
        ORDER BY t.created_at ASC`,
         tag,
-      )) as ScrumTaskRow[]
-    ).map(decodeTask);
+      )) as ScrumTaskRow[],
+    );
   }
 
   // ==========================================================================
@@ -1881,9 +2267,9 @@ export class ScrumStore {
   /**
    * Append an event. Rejects unknown task ids up front so the caller sees
    * a domain error rather than an opaque FK violation. Returns the new
-   * row id.
+   * row's ULID id.
    */
-  async appendEvent(input: AppendEventInput): Promise<number> {
+  async appendEvent(input: AppendEventInput): Promise<string> {
     if (!(await this.getTask(input.taskId))) {
       throw new Error(`appendEvent: unknown task '${input.taskId}'`);
     }
@@ -1897,9 +2283,11 @@ export class ScrumStore {
     const ts = input.ts ?? isoNow();
     const payload = input.payload === undefined ? null : input.payload;
 
+    const id = ulid();
     const tx = async () => {
-      const result = await this.run(
-        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
+      await this.exec(
+        'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+        id,
         input.taskId,
         ts,
         input.kind,
@@ -1907,7 +2295,7 @@ export class ScrumStore {
         JSON.stringify(payload),
       );
       await this.exec('UPDATE scrum_tasks SET last_event_at = ? WHERE id = ?', ts, input.taskId);
-      return Number(result.lastInsertRowid);
+      return id;
     };
     return await withTx(this.store, tx);
   }
@@ -1919,7 +2307,7 @@ export class ScrumStore {
       taskId,
       limit,
     )) as Array<{
-      id: number;
+      id: string;
       task_id: string;
       ts: string;
       kind: string;
@@ -1950,7 +2338,7 @@ export class ScrumStore {
       'SELECT id, task_id, ts, kind, agent, payload_json FROM scrum_events ORDER BY ts DESC, id DESC LIMIT ?',
       limit,
     )) as Array<{
-      id: number;
+      id: string;
       task_id: string;
       ts: string;
       kind: string;
@@ -2038,6 +2426,21 @@ export class ScrumStore {
   // ==========================================================================
 
   /**
+   * The base actionable task ids — every non-deleted task in `ready` or
+   * `backlog`, read straight from the shared `scrum_ready_eligible` view. This
+   * is the UNSCORED candidate floor `nextReady` ranks on top of, surfaced as a
+   * standalone reader so a second consumer (the review-ui boundary) shares the
+   * SAME view definition rather than re-deriving the predicate in TS. Ordered
+   * by id for a deterministic, comparable set.
+   */
+  async readyEligibleIds(): Promise<string[]> {
+    const rows = (await this.many('SELECT id FROM scrum_ready_eligible ORDER BY id ASC')) as Array<{
+      id: string;
+    }>;
+    return rows.map((r) => r.id);
+  }
+
+  /**
    * Rank tasks in `ready` or `backlog` by composite priority:
    *   score = unblock_depth * 10 + milestone_boost * 5 + context_hotness * 3 + tag_boost
    *
@@ -2064,23 +2467,27 @@ export class ScrumStore {
     const limit = options.limit ?? 10;
     const nowMs = options.nowMs ?? Date.now();
 
-    // Two SQL shapes (with/without milestone filter) — both routed through
-    // the prep() cache so the plan is parsed once per process.
+    // The base actionable set (`status IN ('ready','backlog') AND deleted_at IS
+    // NULL`) is defined ONCE in the shared `scrum_ready_eligible` view, so the
+    // CLI ranking and the review-ui boundary share a single eligible predicate.
+    // The milestone filter stays a WHERE on top of the view (it is per-call, not
+    // part of the shared base). Two SQL shapes (with/without that filter) — both
+    // routed through the prep() cache so the plan is parsed once per process.
     const candidateRows = (
       options.milestoneId
         ? await this.many(
             `SELECT ${TASK_COLUMNS}
              FROM scrum_tasks
-             WHERE deleted_at IS NULL AND status IN ('ready', 'backlog') AND milestone_id = ?
+             WHERE id IN (SELECT id FROM scrum_ready_eligible) AND milestone_id = ?
              ORDER BY created_at ASC`,
             options.milestoneId,
           )
         : await this.many(`SELECT ${TASK_COLUMNS}
              FROM scrum_tasks
-             WHERE deleted_at IS NULL AND status IN ('ready', 'backlog')
+             WHERE id IN (SELECT id FROM scrum_ready_eligible)
              ORDER BY created_at ASC`)
     ) as ScrumTaskRow[];
-    const candidates = candidateRows.map(decodeTask);
+    const candidates = await this.hydrateRows(candidateRows);
 
     // Snapshot active and closed milestone ids in one pass each — both
     // sets feed `computeMilestoneBoost`. Per-invocation lookup keeps the
@@ -2728,19 +3135,20 @@ export class ScrumStore {
     const fromTs = input.fromTs ?? isoNow();
     const createdBy = this.actor(input.createdBy);
 
+    const id = ulid();
     const append = async () => {
       // Close the current open interval (if any) at the new holder's from_ts.
       await this.exec('UPDATE scrum_operator_history SET to_ts = ? WHERE to_ts IS NULL', fromTs);
-      const result = await this.run(
-        'INSERT INTO scrum_operator_history (contributor_id, from_ts, to_ts, created_at, created_by) VALUES (?, ?, NULL, ?, ?)',
+      await this.exec(
+        'INSERT INTO scrum_operator_history (id, contributor_id, from_ts, to_ts, created_at, created_by) VALUES (?, ?, ?, NULL, ?, ?)',
+        id,
         input.contributorId,
         fromTs,
         isoNow(),
         createdBy,
       );
-      return Number(result.lastInsertRowid);
     };
-    const id = await withTx(this.store, append);
+    await withTx(this.store, append);
 
     const row = (await this.one(
       `SELECT ${OPERATOR_HISTORY_COLUMNS} FROM scrum_operator_history WHERE id = ?`,
@@ -2762,6 +3170,23 @@ export class ScrumStore {
    * Ties on a shared boundary instant resolve to the LATER interval: the upper
    * bound is exclusive (`at < to_ts`), the lower inclusive (`from_ts <= at`).
    */
+  /**
+   * Resolve the contributor who CURRENTLY holds operator-of-record — the single
+   * open interval (`to_ts IS NULL`), of which the set-then-append invariant
+   * guarantees at most one. Returns the `scrum_contributors` row, or null when
+   * the role is unset (no open interval). Reads the shared `scrum_current_operator`
+   * view so the CLI and the review-ui boundary share ONE current-holder
+   * definition; point-in-time-at-an-instant stays the parameterized
+   * `operatorOfRecordAt` scan.
+   */
+  async currentOperator(): Promise<Contributor | null> {
+    const open = (await this.one('SELECT contributor_id FROM scrum_current_operator LIMIT 1')) as {
+      contributor_id: string;
+    } | null;
+    if (open === null) return null;
+    return await this.getContributor(open.contributor_id);
+  }
+
   async operatorOfRecordAt(at: string): Promise<Contributor | null> {
     const interval = (await this.one(
       'SELECT contributor_id FROM scrum_operator_history WHERE from_ts <= ? AND (to_ts IS NULL OR ? < to_ts) ORDER BY from_ts DESC LIMIT 1',
@@ -3048,6 +3473,7 @@ export class ScrumStore {
       (role) => role !== input.role,
     );
 
+    const id = ulid();
     const append = async () => {
       // Close the current open interval for THIS (team, role) at the new
       // holder's from_ts.
@@ -3057,8 +3483,9 @@ export class ScrumStore {
         input.teamSlug,
         input.role,
       );
-      const result = await this.run(
-        'INSERT INTO scrum_team_members (team_slug, role, contributor_id, from_ts, to_ts, reason, created_at) VALUES (?, ?, ?, ?, NULL, ?, ?)',
+      await this.exec(
+        'INSERT INTO scrum_team_members (id, team_slug, role, contributor_id, from_ts, to_ts, reason, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)',
+        id,
         input.teamSlug,
         input.role,
         input.contributorId,
@@ -3066,9 +3493,8 @@ export class ScrumStore {
         reason,
         isoNow(),
       );
-      return Number(result.lastInsertRowid);
     };
-    const id = await withTx(this.store, append);
+    await withTx(this.store, append);
 
     const row = (await this.one(
       `SELECT ${TEAM_MEMBER_COLUMNS} FROM scrum_team_members WHERE id = ?`,
@@ -3168,8 +3594,10 @@ export class ScrumStore {
         `addTeamAccept: invalid ask_type '${askType}'; expected kebab-case (e.g. 'schema-change')`,
       );
     }
-    const result = await this.run(
-      'INSERT INTO scrum_team_accepts (team_slug, ask_type, status, superseded_by, reason, created_at) VALUES (?, ?, ?, NULL, NULL, ?)',
+    const id = ulid();
+    await this.exec(
+      'INSERT INTO scrum_team_accepts (id, team_slug, ask_type, status, superseded_by, reason, created_at) VALUES (?, ?, ?, ?, NULL, NULL, ?)',
+      id,
       teamSlug,
       askType,
       'active' satisfies TeamInterfaceStatus,
@@ -3177,7 +3605,7 @@ export class ScrumStore {
     );
     return (await this.one(
       `SELECT ${TEAM_ACCEPT_COLUMNS} FROM scrum_team_accepts WHERE id = ?`,
-      Number(result.lastInsertRowid),
+      id,
     )) as TeamAcceptRow;
   }
 
@@ -3194,8 +3622,10 @@ export class ScrumStore {
     if ((await this.getTeam(teamSlug)) === null) {
       throw new Error(`addTeamExpose: unknown team '${teamSlug}'`);
     }
-    const result = await this.run(
-      'INSERT INTO scrum_team_exposes (team_slug, name, schema_ref, status, superseded_by, reason, created_at) VALUES (?, ?, ?, ?, NULL, NULL, ?)',
+    const id = ulid();
+    await this.exec(
+      'INSERT INTO scrum_team_exposes (id, team_slug, name, schema_ref, status, superseded_by, reason, created_at) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?)',
+      id,
       teamSlug,
       input.name,
       input.schemaRef,
@@ -3204,7 +3634,7 @@ export class ScrumStore {
     );
     return (await this.one(
       `SELECT ${TEAM_EXPOSE_COLUMNS} FROM scrum_team_exposes WHERE id = ?`,
-      Number(result.lastInsertRowid),
+      id,
     )) as TeamExposeRow;
   }
 
@@ -3216,9 +3646,9 @@ export class ScrumStore {
    * unknown id and an already-superseded target.
    */
   async supersedeTeamAccept(
-    id: number,
+    id: string,
     reason: string,
-    supersededBy?: number | null,
+    supersededBy?: string | null,
   ): Promise<TeamAcceptRow> {
     const target = (await this.one(
       `SELECT ${TEAM_ACCEPT_COLUMNS} FROM scrum_team_accepts WHERE id = ?`,
@@ -3250,9 +3680,9 @@ export class ScrumStore {
    * already-superseded target.
    */
   async supersedeTeamExpose(
-    id: number,
+    id: string,
     reason: string,
-    supersededBy?: number | null,
+    supersededBy?: string | null,
   ): Promise<TeamExposeRow> {
     const target = (await this.one(
       `SELECT ${TEAM_EXPOSE_COLUMNS} FROM scrum_team_exposes WHERE id = ?`,
@@ -3365,9 +3795,11 @@ export class ScrumStore {
     }
 
     const createdAt = input.createdAt ?? isoNow();
+    const id = ulid();
     const tx = async () => {
-      const result = await this.run(
-        'INSERT INTO scrum_asks (from_team, to_team, ask_type, blocking_artifact, state, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      await this.exec(
+        'INSERT INTO scrum_asks (id, from_team, to_team, ask_type, blocking_artifact, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        id,
         input.fromTeam,
         input.toTeam,
         input.askType,
@@ -3375,7 +3807,6 @@ export class ScrumStore {
         'filed' satisfies AskState,
         createdAt,
       );
-      const id = Number(result.lastInsertRowid);
       // Audit the filing against the blocking artifact's event timeline so the
       // task that triggered the ask carries the cross-team request in its history.
       await this.appendEvent({
@@ -3389,14 +3820,13 @@ export class ScrumStore {
           ask_type: input.askType,
         },
       });
-      return id;
     };
-    const askId = await withTx(this.store, tx);
-    return (await this.one(`SELECT ${ASK_COLUMNS} FROM scrum_asks WHERE id = ?`, askId)) as AskRow;
+    await withTx(this.store, tx);
+    return (await this.one(`SELECT ${ASK_COLUMNS} FROM scrum_asks WHERE id = ?`, id)) as AskRow;
   }
 
   /** Fetch one ask by id, or null if missing. */
-  async getAsk(id: number): Promise<AskRow | null> {
+  async getAsk(id: string): Promise<AskRow | null> {
     const row = (await this.one(
       `SELECT ${ASK_COLUMNS} FROM scrum_asks WHERE id = ?`,
       id,
@@ -3546,7 +3976,7 @@ export class ScrumStore {
    * Rejects an unknown ask id (the one error path); every existing ask yields a
    * report.
    */
-  async awaitAsk(id: number): Promise<AskAwaitReport> {
+  async awaitAsk(id: string): Promise<AskAwaitReport> {
     const ask = await this.getAsk(id);
     if (ask === null) {
       throw new Error(`awaitAsk: unknown ask id '${id}'`);
@@ -3804,8 +4234,10 @@ export class ScrumStore {
       );
     }
 
-    const result = await this.run(
-      'INSERT INTO scrum_lores (team_slug, body, author_contributor_id, created_at) VALUES (?, ?, ?, ?)',
+    const id = ulid();
+    await this.exec(
+      'INSERT INTO scrum_lores (id, team_slug, body, author_contributor_id, created_at) VALUES (?, ?, ?, ?, ?)',
+      id,
       input.teamSlug,
       input.body,
       input.authorContributorId,
@@ -3813,7 +4245,7 @@ export class ScrumStore {
     );
     const row = (await this.one(
       `SELECT ${LORE_COLUMNS} FROM scrum_lores WHERE id = ?`,
-      Number(result.lastInsertRowid),
+      id,
     )) as LoreRow;
     return { row, warning };
   }
@@ -3833,7 +4265,7 @@ export class ScrumStore {
   }
 
   /** Fetch a single Lore entry by id, or null when no such entry exists. */
-  async getLore(id: number): Promise<LoreRow | null> {
+  async getLore(id: string): Promise<LoreRow | null> {
     const row = (await this.one(
       `SELECT ${LORE_COLUMNS} FROM scrum_lores WHERE id = ?`,
       id,
@@ -4041,8 +4473,10 @@ export class ScrumStore {
         `addAnnotation: invalid target_kind '${input.targetKind}'; expected one of: ${ANNOTATION_TARGET_KINDS.join(', ')}`,
       );
     }
-    const result = await this.run(
-      'INSERT INTO scrum_annotations (target_kind, target_ref, body, author, created_at) VALUES (?, ?, ?, ?, ?)',
+    const id = ulid();
+    await this.exec(
+      'INSERT INTO scrum_annotations (id, target_kind, target_ref, body, author, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      id,
       input.targetKind,
       input.targetRef,
       input.body,
@@ -4051,7 +4485,7 @@ export class ScrumStore {
     );
     return (await this.one(
       `SELECT ${ANNOTATION_COLUMNS} FROM scrum_annotations WHERE id = ?`,
-      Number(result.lastInsertRowid),
+      id,
     )) as AnnotationRow;
   }
 
@@ -4116,7 +4550,7 @@ export class ScrumStore {
   }
 
   /** Fetch one escalation by id, or null when no such row exists. */
-  async getEscalation(id: number): Promise<EscalationRow | null> {
+  async getEscalation(id: string): Promise<EscalationRow | null> {
     const row = (await this.one(
       `SELECT ${ESCALATION_COLUMNS} FROM scrum_escalations WHERE id = ?`,
       id,
@@ -4157,11 +4591,11 @@ export class ScrumStore {
    * journey up the ladder: each entry is one rung, with its closing state and
    * resolution. A visited-set guards against an accidental self-link cycle.
    */
-  async getEscalationChain(id: number): Promise<EscalationRow[]> {
+  async getEscalationChain(id: string): Promise<EscalationRow[]> {
     // Walk DOWN to the root via walked_up_from, collecting the rung at each hop.
     const chainDown: EscalationRow[] = [];
-    const visited = new Set<number>();
-    let cursor: number | null = id;
+    const visited = new Set<string>();
+    let cursor: string | null = id;
     while (cursor !== null && !visited.has(cursor)) {
       visited.add(cursor);
       const row = await this.getEscalation(cursor);
@@ -4270,7 +4704,7 @@ export class ScrumStore {
    * the store, preserving the escalation's soft-reference semantics (an
    * escalation may name a task the store does not track).
    */
-  async autoBubbleEscalation(id: number, bubbledAt?: string): Promise<EscalationRow> {
+  async autoBubbleEscalation(id: string, bubbledAt?: string): Promise<EscalationRow> {
     const existing = await this.getEscalation(id);
     if (existing === null) {
       throw new Error(`autoBubbleEscalation: unknown escalation id '${id}'`);
@@ -4315,7 +4749,7 @@ export class ScrumStore {
    * to stamp `{ auto_bubbled, linked_escalation }` on the closed row.
    */
   private async setEscalationAttributes(
-    id: number,
+    id: string,
     attributes: EscalationAttributes | null,
   ): Promise<void> {
     await this.exec(
@@ -4354,13 +4788,15 @@ export class ScrumStore {
     layer: EscalationLayer;
     summary: string;
     raisedBy: string | null;
-    walkedUpFrom: number | null;
+    walkedUpFrom: string | null;
     createdAt: string;
   }): Promise<EscalationRow> {
-    const result = await this.run(
+    const id = ulid();
+    await this.exec(
       `INSERT INTO scrum_escalations
-         (task_id, escalation_type, layer, state, summary, raised_by, walked_up_from, created_at)
-       VALUES (?, ?, ?, 'open', ?, ?, ?, ?)`,
+         (id, task_id, escalation_type, layer, state, summary, raised_by, walked_up_from, created_at)
+       VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?)`,
+      id,
       args.taskId,
       args.escalationType,
       args.layer,
@@ -4369,7 +4805,7 @@ export class ScrumStore {
       args.walkedUpFrom,
       args.createdAt,
     );
-    return await this.requireEscalation(Number(result.lastInsertRowid), 'insertEscalation');
+    return await this.requireEscalation(id, 'insertEscalation');
   }
 
   /**
@@ -4378,7 +4814,7 @@ export class ScrumStore {
    * and resolution path.
    */
   private async closeEscalationRow(
-    id: number,
+    id: string,
     state: EscalationState,
     mode: EscalationResolutionMode | null,
     note: string | null,
@@ -4399,7 +4835,7 @@ export class ScrumStore {
   }
 
   /** Fetch an escalation by id or throw — the post-write read-back guard. */
-  private async requireEscalation(id: number, ctx: string): Promise<EscalationRow> {
+  private async requireEscalation(id: string, ctx: string): Promise<EscalationRow> {
     const row = await this.getEscalation(id);
     if (row === null) {
       throw new Error(`${ctx}: escalation ${id} vanished after write`);
@@ -4735,26 +5171,104 @@ function taskProvenance(row: ScrumTaskRow): Provenance {
 }
 
 /**
- * Decode a raw `scrum_tasks` SELECT row into the public `ScrumTask`. The two
- * transforms are `acceptance_json` (TEXT|NULL) → `acceptance` and `bounds_json`
- * (TEXT|NULL) → `bounds`; every other column passes through unchanged. NULL
- * JSON → `null`.
+ * Decode a raw `scrum_tasks` SELECT row into the public `ScrumTask`. The
+ * `acceptance` object is reconstructed UPSTREAM (in `hydrateRows`, from the
+ * normalized criteria + head-verdict tables joined onto the row's
+ * `acceptance_policy_json`) and passed in; this function only transforms
+ * `bounds_json` (TEXT|NULL) → `bounds` and assembles the provenance block, with
+ * every other column passing through unchanged.
  *
- * The JSON columns have no SQL-level guarantee of valid JSON (`validateBounds`/
- * `validateAcceptance` only run on writes through the store API). `decodeTask`
- * is on the hot read path of getTask/listTasks/getChildren/listTasksForTag/
+ * The `bounds_json` column has no SQL-level guarantee of valid JSON
+ * (`validateBounds` only runs on writes through the store API). `decodeTask` is
+ * on the hot read path of getTask/listTasks/getChildren/listTasksForTag/
  * nextReady, so a single corrupt row must NOT throw and brick every task read.
  * `safeParseJson` degrades a poisoned column to `null` (with a stderr warning)
- * instead — the task still reads, just without its acceptance/bounds.
+ * instead — the task still reads, just without its bounds.
  */
-function decodeTask(row: ScrumTaskRow): ScrumTask {
-  const { acceptance_json, bounds_json, ...rest } = row;
+function decodeTask(row: ScrumTaskRow, acceptance: Acceptance | null): ScrumTask {
+  const { acceptance_policy_json: _policy, bounds_json, ...rest } = row;
   return {
     ...rest,
-    acceptance: safeParseJson<Acceptance>(acceptance_json, row.id, 'acceptance_json'),
+    acceptance,
     bounds: safeParseJson<TaskBounds>(bounds_json, row.id, 'bounds_json'),
     provenance: taskProvenance(row),
   };
+}
+
+/**
+ * Reassemble a task's `Acceptance` object from its normalized parts: the
+ * criterion DEFINITION rows (ordered by the minted `ord`), the latest verdict
+ * per criterion (the criterion-head view), and the task-level `policy` (the
+ * `acceptance_policy_json` column). Returns `null` when the task carries no
+ * criteria AND no policy — the "no acceptance" shape every read expects.
+ *
+ * The head verdict folds back into the in-memory criterion the same way the
+ * blob used to carry it: a `gate`-channel head becomes `gate: {verdict,
+ * responder, comment, responded_at}`; a `verification`-channel head becomes
+ * `verification: {verdict, reason, verified_by, verified_at}`. A gate-kind
+ * criterion with no verdict row reads `gate: {verdict: 'gate_pending'}` (a
+ * fresh gate always starts pending and resolvable), exactly as
+ * `withGateStatesSeeded` seeded the blob.
+ */
+function reconstructAcceptance(
+  criterionRows: AcceptanceCriterionRow[],
+  heads: Map<string, CriterionHeadRow>,
+  policyJson: string | null,
+  taskId: string,
+): Acceptance | null {
+  const policy = safeParseJson<AcceptancePolicy>(policyJson, taskId, 'acceptance_policy_json');
+  if (criterionRows.length === 0) return policy ? { criteria: [], policy } : null;
+
+  const criteria = criterionRows
+    .slice()
+    .sort((a, b) => a.ord.localeCompare(b.ord))
+    .map((row) => decodeCriterion(row, heads.get(row.id)));
+  return policy ? { criteria, policy } : { criteria };
+}
+
+/**
+ * Decode one criterion DEFINITION row plus its head verdict (if any) into the
+ * public `AcceptanceCriterion`. Optional fields stay absent (not null/undefined
+ * on the shape) so the reconstructed object round-trips byte-for-byte against
+ * what the authoring path wrote — `scope`/`timeout` are only set when present.
+ */
+function decodeCriterion(
+  row: AcceptanceCriterionRow,
+  head: CriterionHeadRow | undefined,
+): AcceptanceCriterion {
+  const criterion: AcceptanceCriterion = {
+    id: row.criterion_id,
+    text: row.text,
+    verifies_by: row.verifies_by,
+    check: row.check_payload,
+    status: row.status,
+    idempotent: row.idempotent !== 0,
+    superseded_by: row.superseded_by,
+    reason: row.reason,
+    inherited_from: row.inherited_from,
+  };
+  if (row.scope !== null) criterion.scope = row.scope as AcceptanceScope;
+  if (row.timeout !== null) criterion.timeout = row.timeout;
+
+  if (row.verifies_by === 'gate') {
+    criterion.gate =
+      head && head.channel === 'gate'
+        ? {
+            verdict: head.verdict as GateVerdict,
+            responder: head.by_whom,
+            comment: head.comment,
+            responded_at: head.at,
+          }
+        : { verdict: 'gate_pending' };
+  } else if (head && head.channel === 'verification') {
+    criterion.verification = {
+      verdict: head.verdict as VerificationVerdict,
+      reason: head.reason,
+      verified_by: head.by_whom,
+      verified_at: head.at,
+    };
+  }
+  return criterion;
 }
 
 /**
@@ -4793,7 +5307,7 @@ function decodeEscalation(row: EscalationRowRaw): EscalationRow {
 
 function parseEscalationAttributes(
   raw: string | null,
-  escalationId: number,
+  escalationId: string,
 ): EscalationAttributes | null {
   if (raw === null) return null;
   try {
@@ -5089,7 +5603,7 @@ function normalizeDepEdge(
 }
 
 function decodeEvent(row: {
-  id: number;
+  id: string;
   task_id: string;
   ts: string;
   kind: string;

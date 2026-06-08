@@ -53,15 +53,24 @@ function registerRoot(name: string): string {
 }
 
 /**
- * Seed `<root>/.prove/prove.db` as a real acb v1 db: the full v1 table set plus
- * a `_migrations_log` row at acb@1. That sits BELOW the live acb head (>1), so
- * the live registry reports it behind — yet it is a faithful, migratable db, so
- * the read path's auto-migrating store open advances it cleanly rather than
- * erroring on missing tables.
+ * Seed `<root>/.prove/prove.db` as a behind db relative to the redesigned v1
+ * schema: a `_migrations_log` table that exists but carries NO acb row, so the
+ * applied acb version is 0 — below the live acb head (1). The live registry
+ * therefore reports it behind. It is a faithful, migratable db (no acb tables
+ * yet), so the read path's auto-migrating store open runs the acb v1 migration
+ * and creates every table cleanly rather than erroring on a missing one.
+ *
+ * Behind is structurally possible only as applied-below-expected within a
+ * domain. The clean v1 reset collapsed every domain to one version, so a
+ * same-lineage store can be behind only by having NOT YET applied that domain's
+ * v1 — exactly this fixture (acb applied 0 vs expected 1).
  */
 async function seedBehindAcbV1Db(root: string): Promise<void> {
   const dbFile = join(root, ".prove", "prove.db");
   const db = await openStore({ path: dbFile });
+  // The log exists but records no acb row — applied acb = 0 (behind v1). A
+  // non-acb sentinel row keeps the log non-empty so it is a realistic
+  // partially-initialized store rather than a never-migrated one.
   await db.exec(`
     CREATE TABLE _migrations_log (
       domain TEXT NOT NULL,
@@ -69,33 +78,6 @@ async function seedBehindAcbV1Db(root: string): Promise<void> {
       description TEXT NOT NULL,
       applied_at TEXT NOT NULL,
       PRIMARY KEY (domain, version)
-    );
-    INSERT INTO _migrations_log (domain, version, description, applied_at)
-      VALUES ('acb', 1, 'create acb_manifests + acb_acb_documents + acb_review_state', '2026-01-01T00:00:00Z');
-
-    CREATE TABLE acb_manifests (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      branch TEXT NOT NULL,
-      commit_sha TEXT NOT NULL,
-      timestamp TEXT NOT NULL,
-      data TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      run_slug TEXT
-    );
-    CREATE TABLE acb_acb_documents (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      branch TEXT NOT NULL UNIQUE,
-      data TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-    CREATE TABLE acb_review_state (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      branch TEXT NOT NULL UNIQUE,
-      acb_hash TEXT NOT NULL,
-      data TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL
     );
   `);
   db.close();
@@ -118,20 +100,21 @@ describe("storeBehindSchema (injected expected map)", () => {
   test("returns the 409 body when a registered domain is behind", async () => {
     const root = registerRoot("behind");
     await seedBehindAcbV1Db(root);
-    // Expected acb head is 2 but the seeded db only applied acb@1 → behind.
-    const body = await storeBehindSchema(root, new Map([["acb", 2]]));
+    // Expected acb head is 1 but the seeded db has not applied acb at all
+    // (applied 0) → behind. The high-water schema_version is 0 (an empty log).
+    const body = await storeBehindSchema(root, new Map([["acb", 1]]));
     expect(body).toEqual({
       error: "store schema behind",
       project: root,
-      store: { schema_version: 1, behind: true },
+      store: { schema_version: 0, behind: true },
     });
   });
 
   test("returns null when every domain is level (write may proceed)", async () => {
     const root = registerRoot("current");
     await seedBehindAcbV1Db(root);
-    // Expected head equals the applied version → not behind.
-    expect(await storeBehindSchema(root, new Map([["acb", 1]]))).toBeNull();
+    // Expected head 0 equals the applied version (0) → not behind.
+    expect(await storeBehindSchema(root, new Map([["acb", 0]]))).toBeNull();
   });
 
   test("returns null for an absent db (fail-open, write service owns creation)", async () => {
@@ -185,7 +168,7 @@ describe("behind-schema write guard over HTTP", () => {
       const body = res.json() as { error: string; project: string; store: unknown };
       expect(body.error).toBe("store schema behind");
       expect(body.project).toBe(behind);
-      expect(body.store).toEqual({ schema_version: 1, behind: true });
+      expect(body.store).toEqual({ schema_version: 0, behind: true });
 
       // The refusal never opened the writable (migrating) store, so the acb
       // verdict table was never created and no row landed.

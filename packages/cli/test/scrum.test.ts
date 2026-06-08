@@ -216,11 +216,11 @@ describe('claude-prove scrum task lifecycle', () => {
     expect(tLinkDec.exitCode).toBe(0);
     const linked = JSON.parse(tLinkDec.stdout.trim()) as {
       linked: boolean;
-      event_id: number;
+      event_id: string;
       decision_id: string;
     };
     expect(linked.linked).toBe(true);
-    expect(typeof linked.event_id).toBe('number');
+    expect(typeof linked.event_id).toBe('string');
     expect(linked.decision_id).toBe('2026-04-23-scrum');
 
     // Link a run retroactively.

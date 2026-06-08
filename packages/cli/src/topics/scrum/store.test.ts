@@ -238,18 +238,23 @@ describe('ScrumStore — tasks', () => {
     expect((await store.getTask('t1'))?.id).toBe('t1');
   });
 
-  test('decodeTask degrades a corrupt acceptance_json column to null instead of throwing', async () => {
-    await seedTask('t1');
+  test('hydrate degrades a corrupt acceptance_policy_json column to a null policy instead of throwing', async () => {
+    // One criterion + a poisoned policy column: the criteria rows must still
+    // hydrate while the unparseable policy degrades to absent — a single corrupt
+    // column cannot brick the task read.
+    await seedTask('t1', { acceptance: { criteria: [ac('c1')] } });
     // Simulate a poisoned column (manual DB edit / aborted migration) by
     // writing invalid JSON through raw SQL, bypassing the store's write guards.
-    (await store.getStore())
+    const stmt = await store
+      .getStore()
       .getDb()
-      .prepare('UPDATE scrum_tasks SET acceptance_json = ? WHERE id = ?')
-      .run('{not json', 't1');
+      .prepare('UPDATE scrum_tasks SET acceptance_policy_json = ? WHERE id = ?');
+    await stmt.run('{not json', 't1');
 
     const task = await store.getTask('t1');
     expect(task?.id).toBe('t1');
-    expect(task?.acceptance).toBeNull();
+    expect(task?.acceptance?.criteria.map((c) => c.id)).toEqual(['c1']);
+    expect(task?.acceptance?.policy).toBeUndefined();
   });
 
   test('transaction rolls back every write when the body throws', async () => {
@@ -836,10 +841,11 @@ describe('ScrumStore — dependencies', () => {
 // ===========================================================================
 
 describe('ScrumStore — events', () => {
-  test('appendEvent returns a positive row id', async () => {
+  test('appendEvent returns a ULID row id', async () => {
     await seedTask('t1');
     const id = await store.appendEvent({ taskId: 't1', kind: 'note', payload: { msg: 'hi' } });
-    expect(id).toBeGreaterThan(0);
+    expect(typeof id).toBe('string');
+    expect(id).toHaveLength(26);
   });
 
   test('appendEvent rejects unknown task', async () => {
@@ -1159,7 +1165,7 @@ describe('ScrumStore — acceptance criteria', () => {
     expect((await store.getTask('t1'))?.acceptance).toBeNull();
   });
 
-  test('createTask with acceptance round-trips through acceptance_json', async () => {
+  test('createTask with acceptance round-trips through the normalized criteria table', async () => {
     const acceptance: Acceptance = { criteria: [ac('c1'), ac('c2')] };
     await seedTask('t1', { acceptance });
     const reloaded = await store.getTask('t1');
@@ -1725,6 +1731,118 @@ describe('ScrumStore — recordCriterionVerdict + record option', () => {
     });
     await store.recordCriterionVerdict('t', 'a', true, null, 'alice');
     expect((await store.getTask('t'))?.acceptance?.criteria[0]?.verification?.verified_by).toBe('alice');
+  });
+});
+
+// Append-only verdict log + criterion-head view + supersession survival
+// ===========================================================================
+
+describe('ScrumStore — append-only criterion verdicts', () => {
+  /** Count rows in scrum_criterion_verdicts whose criterion belongs to `taskId`. */
+  async function verdictRowCount(taskId: string): Promise<number> {
+    const rows = (await store.getStore().all(
+      `SELECT COUNT(*) AS n FROM scrum_criterion_verdicts v
+       INNER JOIN scrum_acceptance_criteria c ON c.id = v.criterion_id
+       WHERE c.task_id = ?`,
+      [taskId],
+    )) as Array<{ n: number }>;
+    return (rows[0]?.n ?? 0) as number;
+  }
+
+  test('re-verifying APPENDS a second verdict row; the prior row is retained', async () => {
+    await seedTask('t', {
+      acceptance: { criteria: [ac('a', { verifies_by: 'agent', check: 'judge it' })] },
+    });
+    await store.recordCriterionVerdict('t', 'a', false, 'first pass failed');
+    expect(await verdictRowCount('t')).toBe(1);
+    // A re-verify must NOT update in place — it appends another row.
+    await store.recordCriterionVerdict('t', 'a', true, null, 'reviewer');
+    expect(await verdictRowCount('t')).toBe(2);
+  });
+
+  test('the criterion-head read returns ONLY the latest verdict', async () => {
+    await seedTask('t', {
+      acceptance: { criteria: [ac('a', { verifies_by: 'agent', check: 'judge it' })] },
+    });
+    await store.recordCriterionVerdict('t', 'a', false, 'regressed');
+    await store.recordCriterionVerdict('t', 'a', true, null, 'reviewer');
+    // Two rows on the log, but the reconstructed criterion reflects the head only.
+    expect(await verdictRowCount('t')).toBe(2);
+    const c = (await store.getTask('t'))?.acceptance?.criteria[0];
+    expect(c?.verification?.verdict).toBe('verified');
+    expect(c?.verification?.verified_by).toBe('reviewer');
+    expect(c?.verification?.reason).toBeNull();
+  });
+
+  test('a re-responded gate is rejected, so its single verdict row stays the head', async () => {
+    await seedTask('t', { acceptance: { criteria: [gateAc('g')] } });
+    await store.respondGate('t', 'g', 'approved', { responder: 'alice' });
+    // The gate is decided once; re-deciding is rejected (supersede to re-decide).
+    await expect(store.respondGate('t', 'g', 'rejected', { responder: 'bob' })).rejects.toThrow(
+      /already resolved/,
+    );
+    expect(await verdictRowCount('t')).toBe(1);
+    expect((await store.getTask('t'))?.acceptance?.criteria[0]?.gate?.verdict).toBe('approved');
+  });
+
+  test('the story-close floor reads the HEAD verdict (a failed-then-verified criterion closes)', async () => {
+    const runDir = mkdtempSync(join(tmpdir(), 'scrum-head-'));
+    try {
+      appendEntry(runDir, {
+        id: 'synth',
+        ts: '2026-06-01T00:00:00Z',
+        type: 'synthesis',
+        agent: 'worker',
+        run_path: runDir,
+        body: 'wrapped',
+        outcome: 'shipped',
+      });
+      await seedTask('s', {
+        layer: 'story',
+        status: 'in_progress',
+        acceptance: { criteria: [ac('b', { verifies_by: 'bash', check: 'true' })] },
+      });
+      await store.linkRun({ taskId: 's', runPath: runDir });
+      // First a failed verdict (the floor would block on this head)...
+      await store.recordCriterionVerdict('s', 'b', false, 'flaked');
+      await expect(store.updateTaskStatus('s', 'done')).rejects.toThrow(/cannot close.*b \(bash\)/);
+      // ...then a passing re-verify appends a newer head, so the close succeeds.
+      await store.recordCriterionVerdict('s', 'b', true);
+      await expect(store.updateTaskStatus('s', 'done')).resolves.toBeDefined();
+      expect((await store.getTask('s'))?.status).toBe('done');
+    } finally {
+      rmSync(runDir, { recursive: true, force: true });
+    }
+  });
+
+  test('supersession is append+flip: the superseded criterion row survives with status=superseded', async () => {
+    await seedTask('t', { acceptance: { criteria: [ac('c1'), ac('c2')] } });
+    await store.supersedeCriterion('t', 'c1', 'replaced', 'c2');
+    // The row is NOT deleted — it survives in the criteria table, flipped.
+    const rows = (await store.getStore().all(
+      'SELECT criterion_id, status, reason, superseded_by FROM scrum_acceptance_criteria WHERE task_id = ? ORDER BY criterion_id',
+      ['t'],
+    )) as Array<{ criterion_id: string; status: string; reason: string | null; superseded_by: string | null }>;
+    expect(rows).toHaveLength(2);
+    const c1 = rows.find((r) => r.criterion_id === 'c1');
+    expect(c1?.status).toBe('superseded');
+    expect(c1?.reason).toBe('replaced');
+    expect(c1?.superseded_by).toBe('c2');
+    expect(rows.find((r) => r.criterion_id === 'c2')?.status).toBe('active');
+  });
+
+  test('supersession preserves the criterion verdict history (verdict rows are not cascaded)', async () => {
+    await seedTask('t', {
+      acceptance: { criteria: [ac('a', { verifies_by: 'agent', check: 'judge it' })] },
+    });
+    await store.recordCriterionVerdict('t', 'a', true, null, 'reviewer');
+    expect(await verdictRowCount('t')).toBe(1);
+    await store.supersedeCriterion('t', 'a', 'no longer needed');
+    // The flip is a targeted UPDATE — the verdict row is untouched.
+    expect(await verdictRowCount('t')).toBe(1);
+    const c = (await store.getTask('t'))?.acceptance?.criteria[0];
+    expect(c?.status).toBe('superseded');
+    expect(c?.verification?.verdict).toBe('verified');
   });
 });
 
@@ -2624,7 +2742,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 28,
+      schema_version: 1,
     });
   });
 
@@ -2637,7 +2755,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(28);
+    expect(updated.provenance.schema_version).toBe(1);
   });
 });
 
@@ -3628,7 +3746,7 @@ describe('ScrumStore — team Lore layer (v19)', () => {
     expect(row.body).toBe('prefer idempotent migrations');
     expect(row.author_contributor_id).toBe('ct-lead');
     expect(row.created_at).toBe('2026-01-01T00:00:00Z');
-    expect(row.id).toBeGreaterThan(0);
+    expect(row.id).toHaveLength(26);
     // A seated tech_lead authoring their own team's Lore raises no warning.
     expect(warning).toBeNull();
   });
@@ -3718,8 +3836,10 @@ describe('ScrumStore — team Lore layer (v19)', () => {
       body: 'correction: use spaces',
       authorContributorId: 'ct-lead',
     });
-    // Both entries survive — the original is never mutated or removed.
-    expect(correction.row.id).toBeGreaterThan(first.row.id);
+    // Both entries survive — the original is never mutated or removed. The
+    // correction's ULID sorts strictly after the original's (monotonic), so
+    // listLores ORDER BY id ASC keeps them in insert order.
+    expect(correction.row.id > first.row.id).toBe(true);
     expect((await store.listLores('payments')).map((l) => l.body)).toEqual([
       'use tabs',
       'correction: use spaces',
@@ -3752,7 +3872,7 @@ describe('ScrumStore — Annotation layer (v20)', () => {
     expect(row.body).toBe('watch the off-by-one');
     expect(row.author).toBe('CT-a');
     expect(row.created_at).toBe('2026-01-01T00:00:00Z');
-    expect(row.id).toBeGreaterThan(0);
+    expect(row.id).toHaveLength(26);
   });
 
   test('addAnnotation rejects a target_kind outside the closed enum, naming the set', async () => {
@@ -3818,8 +3938,9 @@ describe('ScrumStore — Annotation layer (v20)', () => {
       body: 'correction: use spaces',
       author: 'CT-a',
     });
-    // Both entries survive — the original is never mutated or removed.
-    expect(correction.id).toBeGreaterThan(first.id);
+    // Both entries survive — the original is never mutated or removed. The
+    // correction's ULID sorts strictly after the original's (monotonic).
+    expect(correction.id > first.id).toBe(true);
     expect((await store.listAnnotations('task', 't1')).map((a) => a.body)).toEqual([
       'use tabs',
       'correction: use spaces',
@@ -4786,7 +4907,7 @@ describe('ScrumStore — escalation protocol (v24)', () => {
     expect(row.resolution_mode).toBeNull();
     expect(row.resolved_at).toBeNull();
     expect(row.raised_by).toBe('CT-impl');
-    expect(row.id).toBeGreaterThan(0);
+    expect(row.id).toHaveLength(26);
   });
 
   test('raiseEscalation accepts an explicit starting layer', async () => {

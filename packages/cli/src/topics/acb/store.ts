@@ -16,8 +16,9 @@
  *   - `openAcbStore` wraps `openStore` + `runMigrations` to give ACB
  *     consumers a one-call entry point.
  *   - The `AcbStore` class exposes camelCase methods: saveManifest returns
- *     the new rowid as `number`; load* returns `unknown | null`; cleanBranch
- *     returns per-table deletion counts keyed by the acb-prefixed table names.
+ *     the new row's ULID id as `string`; load* returns `unknown | null`;
+ *     cleanBranch returns per-table deletion counts keyed by the acb-prefixed
+ *     table names.
  */
 
 import {
@@ -26,11 +27,13 @@ import {
   type Store,
   type StoreOptions,
   VERDICT_VALUES,
+  appendGroupVerdict,
+  assertStoreSchemaCompatible,
   listDomains,
   openStore,
   registerSchema,
   runMigrations,
-  upsertGroupVerdict,
+  ulid,
 } from '@claude-prove/store';
 
 // Re-export the canonical verdict vocabulary so existing
@@ -47,9 +50,42 @@ export {
 // Schema registration
 // ---------------------------------------------------------------------------
 
+/**
+ * ACB v1 schema — one fresh, sync-safe DDL. Every table the acb domain owns,
+ * with NO AUTOINCREMENT.
+ *
+ * Every contended document is an APPEND-ONLY revision log read through a head
+ * VIEW, never an in-place row that a second writer overwrites. A save APPENDS a
+ * new ULID-keyed revision; the head view returns the latest revision per key as
+ * `MAX(id)` — a ULID id is monotonic, so the lexically-greatest id is the
+ * most-recently appended, with no separate sequence or timestamp tiebreak. Two
+ * writers each append a distinct ULID-keyed row and BOTH survive whole-
+ * transaction sync replay (REBASE_LOCAL picks a single winning transaction);
+ * an in-place UPDATE or a UNIQUE-keyed upsert would let one writer clobber the
+ * other, and a shared rowid sequence would lose a row outright.
+ *
+ *   acb_manifests        — append-only manifest log; ULID PK. One row per save.
+ *   acb_acb_documents    — append-only ACB-document revisions; ULID PK, branch
+ *                          key (NOT unique). The latest revision per branch is
+ *                          the head, surfaced by acb_acb_documents_head.
+ *   acb_review_state     — append-only review-state revisions; ULID PK, branch
+ *                          key (NOT unique). Head: acb_review_state_head.
+ *   acb_group_verdicts   — append-only verdict revisions; ULID PK, natural
+ *                          `(slug, group_id)` key (NOT unique). Head:
+ *                          acb_group_verdicts_head (latest per key).
+ *
+ * Each head view re-derives the ORIGINAL `created_at` as the MIN created_at
+ * across a key's revisions and the LATEST write time as the head revision's
+ * `created_at` (exposed as `updated_at`), so a reader sees the same
+ * `{created_at, updated_at}` pair the old in-place row carried.
+ *
+ * Verdict values are written canonical at the source (the `appendGroupVerdict`
+ * write-service), and `coerceLegacyVerdict` normalizes any legacy string read
+ * from a hand-edited row — so no in-chain UPDATE migration is needed.
+ */
 const ACB_MIGRATION_V1_SQL = `
 CREATE TABLE acb_manifests (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,
     branch TEXT NOT NULL,
     commit_sha TEXT NOT NULL,
     timestamp TEXT NOT NULL,
@@ -59,75 +95,83 @@ CREATE TABLE acb_manifests (
 );
 
 CREATE TABLE acb_acb_documents (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    branch TEXT NOT NULL UNIQUE,
+    id TEXT PRIMARY KEY,
+    branch TEXT NOT NULL,
     data TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    created_at TEXT NOT NULL
 );
 
 CREATE TABLE acb_review_state (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    branch TEXT NOT NULL UNIQUE,
+    id TEXT PRIMARY KEY,
+    branch TEXT NOT NULL,
     acb_hash TEXT NOT NULL,
     data TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    created_at TEXT NOT NULL
 );
 
-CREATE INDEX idx_acb_manifests_branch ON acb_manifests(branch);
-CREATE INDEX idx_acb_manifests_branch_sha ON acb_manifests(branch, commit_sha);
-CREATE INDEX idx_acb_manifests_run_slug ON acb_manifests(run_slug, branch);
-`;
-
-/**
- * v2: absorb review-ui's `group_verdicts` table into the acb domain as
- * `acb_group_verdicts`. The legacy bare `group_verdicts` table was created
- * ad-hoc by `packages/review-ui/server/src/acb.ts::ensureVerdictTable` on
- * every server boot, so older `.prove/prove.db` files may already have it.
- *
- * Backfill pattern: create the new table, copy any rows from the legacy
- * table (when present) that aren't already under the new name, then drop
- * the legacy table. Every statement is idempotent — the migration log
- * guards against re-running, but the SQL itself also tolerates a partial
- * landing (e.g., crash between rename and drop).
- */
-const ACB_MIGRATION_V2_SQL = `
-CREATE TABLE IF NOT EXISTS acb_group_verdicts (
+CREATE TABLE acb_group_verdicts (
+    id          TEXT PRIMARY KEY,
     slug        TEXT NOT NULL,
     group_id    TEXT NOT NULL,
     verdict     TEXT NOT NULL,
     note        TEXT,
     fix_prompt  TEXT,
-    updated_at  TEXT NOT NULL,
-    PRIMARY KEY (slug, group_id)
+    created_at  TEXT NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_acb_group_verdicts_slug ON acb_group_verdicts(slug);
-`;
 
-/**
- * v3: normalize `acb_group_verdicts.verdict` to the canonical `VerdictValue`
- * vocabulary from `./schemas.ts`. Pre-v3 builds wrote UI-native strings
- * (`'approved'`, `'discuss'`); this migration rewrites them in place so
- * every reader sees a single dialect. `'rework'`, `'rejected'`, `'pending'`
- * pass through unchanged — the mapping is append-only.
- *
- * `coerceLegacyVerdict` below is the runtime belt-and-braces companion:
- * if a concurrent writer lands a legacy value between migration runs, the
- * read path still normalizes it before returning to callers.
- */
-const ACB_MIGRATION_V3_SQL = `
-UPDATE acb_group_verdicts SET verdict = 'accepted'         WHERE verdict = 'approved';
-UPDATE acb_group_verdicts SET verdict = 'needs_discussion' WHERE verdict = 'discuss';
+CREATE VIEW acb_acb_documents_head AS
+SELECT
+    h.branch,
+    h.data,
+    (SELECT MIN(d.created_at) FROM acb_acb_documents d WHERE d.branch = h.branch) AS created_at,
+    h.created_at AS updated_at
+FROM acb_acb_documents h
+WHERE h.id = (
+    SELECT MAX(d2.id) FROM acb_acb_documents d2 WHERE d2.branch = h.branch
+);
+
+CREATE VIEW acb_review_state_head AS
+SELECT
+    h.branch,
+    h.acb_hash,
+    h.data,
+    (SELECT MIN(r.created_at) FROM acb_review_state r WHERE r.branch = h.branch) AS created_at,
+    h.created_at AS updated_at
+FROM acb_review_state h
+WHERE h.id = (
+    SELECT MAX(r2.id) FROM acb_review_state r2 WHERE r2.branch = h.branch
+);
+
+CREATE VIEW acb_group_verdicts_head AS
+SELECT
+    h.slug,
+    h.group_id,
+    h.verdict,
+    h.note,
+    h.fix_prompt,
+    h.created_at AS updated_at
+FROM acb_group_verdicts h
+WHERE h.id = (
+    SELECT MAX(v2.id) FROM acb_group_verdicts v2
+    WHERE v2.slug = h.slug AND v2.group_id = h.group_id
+);
+
+CREATE INDEX idx_acb_manifests_branch ON acb_manifests(branch);
+CREATE INDEX idx_acb_manifests_branch_sha ON acb_manifests(branch, commit_sha);
+CREATE INDEX idx_acb_manifests_run_slug ON acb_manifests(run_slug, branch);
+CREATE INDEX idx_acb_acb_documents_branch ON acb_acb_documents(branch);
+CREATE INDEX idx_acb_review_state_branch ON acb_review_state(branch);
+CREATE INDEX idx_acb_group_verdicts_slug ON acb_group_verdicts(slug);
+CREATE INDEX idx_acb_group_verdicts_key ON acb_group_verdicts(slug, group_id);
 `;
 
 /**
  * Idempotent acb-domain registration. Safe to call from module side-effect
- * AND from tests that have hit `clearRegistry()` — both paths land
- * a single acb/v1 entry. The guard exists because other test files in the
- * same `bun test` process wipe the registry between tests, and bun shares
- * module cache across files, so a module-scoped `registerSchema` runs
- * only once per process and cannot recover after a wipe.
+ * AND from tests that have hit `clearRegistry()` — both paths land a single
+ * acb/v1 entry. The guard exists because other test files in the same
+ * `bun test` process wipe the registry between tests, and bun shares module
+ * cache across files, so a module-scoped `registerSchema` runs only once per
+ * process and cannot recover after a wipe.
  */
 export function ensureAcbSchemaRegistered(): void {
   if (listDomains().includes('acb')) return;
@@ -136,36 +180,9 @@ export function ensureAcbSchemaRegistered(): void {
     migrations: [
       {
         version: 1,
-        description: 'create acb_manifests + acb_acb_documents + acb_review_state',
+        description: 'create the redesigned sync-safe acb schema (ULID/composite PKs, no rowid)',
         up: async (store) => {
           await store.exec(ACB_MIGRATION_V1_SQL);
-        },
-      },
-      {
-        version: 2,
-        description: 'create acb_group_verdicts (absorb review-ui group_verdicts)',
-        up: async (store) => {
-          await store.exec(ACB_MIGRATION_V2_SQL);
-          // Legacy backfill: the review-ui server used to create a bare
-          // `group_verdicts` table at boot. Copy any existing rows into
-          // the acb-prefixed table, then drop the legacy source.
-          const legacy = await store.get<{ name: string }>(
-            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'group_verdicts'",
-          );
-          if (legacy) {
-            await store.exec(`
-              INSERT OR IGNORE INTO acb_group_verdicts (slug, group_id, verdict, note, fix_prompt, updated_at)
-              SELECT slug, group_id, verdict, note, fix_prompt, updated_at FROM group_verdicts;
-              DROP TABLE group_verdicts;
-            `);
-          }
-        },
-      },
-      {
-        version: 3,
-        description: 'normalize acb_group_verdicts.verdict to canonical VerdictValue vocabulary',
-        up: async (store) => {
-          await store.exec(ACB_MIGRATION_V3_SQL);
         },
       },
     ],
@@ -210,10 +227,9 @@ const ACB_TABLES = new Set<string>([
  * path verbatim). Instead they degrade to the safe `'pending'` fallback,
  * which keeps the record renderable without claiming a verdict was reached.
  *
- * Runtime complement to migration v3: when the DB file is at v2 (older
- * installs on first boot after upgrade) the migration has already run by
- * the time reads happen, but this helper also catches any value that
- * slipped in via a race between migration and a concurrent writer.
+ * The redesigned schema has no in-chain verdict-normalization migration, so
+ * canonicalization lives entirely here on the read path: a legacy value
+ * hand-written into the table is normalized the moment it is read back.
  */
 export function coerceLegacyVerdict(raw: string): GroupVerdict {
   switch (raw) {
@@ -242,6 +258,17 @@ export function coerceLegacyVerdict(raw: string): GroupVerdict {
 export async function openAcbStore(opts: StoreOptions = {}): Promise<AcbStore> {
   ensureAcbSchemaRegistered();
   const store = await openStore(opts);
+  // Refuse a write-open against a legacy (pre-Turso-v1) or ahead store BEFORE
+  // running migrations, so an incompatible store is never silently migrated or
+  // written. A readonly open skips the guard.
+  if (!opts.readonly) {
+    try {
+      await assertStoreSchemaCompatible(store);
+    } catch (err) {
+      store.close();
+      throw err;
+    }
+  }
   await runMigrations(store);
   return new AcbStore(store);
 }
@@ -277,8 +304,9 @@ export class AcbStore {
   // -- Manifests ----------------------------------------------------------
 
   /**
-   * Insert a manifest row. Returns the new row's `id` (INTEGER PRIMARY
-   * KEY AUTOINCREMENT).
+   * Insert a manifest row. Returns the new row's ULID `id` — a collision-free
+   * TEXT id the minting writer decides, so two manifests written under
+   * whole-transaction sync replay never clobber on a shared rowid.
    *
    * The stored timestamp defaults to `data.timestamp` when present and
    * falls back to now(), so manifests order deterministically in
@@ -289,22 +317,14 @@ export class AcbStore {
     commitSha: string,
     data: unknown,
     runSlug?: string,
-  ): Promise<number> {
+  ): Promise<string> {
     const ts = extractTimestamp(data) ?? isoNow();
-    const stmt = await this.store
-      .getDb()
-      .prepare(
-        'INSERT INTO acb_manifests (branch, commit_sha, timestamp, data, created_at, run_slug) VALUES (?, ?, ?, ?, ?, ?)',
-      );
-    const result = await stmt.run(
-      branch,
-      commitSha,
-      ts,
-      JSON.stringify(data),
-      isoNow(),
-      runSlug ?? null,
+    const id = ulid();
+    await this.store.run(
+      'INSERT INTO acb_manifests (id, branch, commit_sha, timestamp, data, created_at, run_slug) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [id, branch, commitSha, ts, JSON.stringify(data), isoNow(), runSlug ?? null],
     );
-    return Number(result.lastInsertRowid);
+    return id;
   }
 
   /** Any manifest row for `branch`? */
@@ -375,19 +395,24 @@ export class AcbStore {
 
   // -- ACB Documents ------------------------------------------------------
 
-  /** Upsert an ACB document on `branch` (PK). Bumps `updated_at`. */
+  /**
+   * Append a new ACB-document revision for `branch`. Every save adds a row; the
+   * latest revision per branch is the head (read through `loadAcb`). A ULID id
+   * keyed by branch (NOT unique) lets two concurrent writers each land a
+   * distinct row that both survive whole-transaction sync replay, where an
+   * in-place UPDATE would clobber one.
+   */
   async saveAcb(branch: string, data: unknown): Promise<void> {
-    const now = isoNow();
     await this.store.run(
-      'INSERT INTO acb_acb_documents (branch, data, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(branch) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at',
-      [branch, JSON.stringify(data), now, now],
+      'INSERT INTO acb_acb_documents (id, branch, data, created_at) VALUES (?, ?, ?, ?)',
+      [ulid(), branch, JSON.stringify(data), isoNow()],
     );
   }
 
-  /** Load the ACB document for `branch`, or null. */
+  /** Load the latest ACB-document revision for `branch` via the head view, or null. */
   async loadAcb(branch: string): Promise<unknown | null> {
     const rows = await this.store.all<{ data: string }>(
-      'SELECT data FROM acb_acb_documents WHERE branch = ?',
+      'SELECT data FROM acb_acb_documents_head WHERE branch = ?',
       [branch],
     );
     const [row] = rows;
@@ -395,10 +420,14 @@ export class AcbStore {
     return JSON.parse(row.data) as unknown;
   }
 
-  /** Branch with the most-recently updated ACB document, or null. */
+  /**
+   * Branch whose latest ACB-document revision was written most recently, or
+   * null. Reads the head view (one row per branch) and orders by that head
+   * revision's write time.
+   */
   async latestAcbBranch(): Promise<string | null> {
     const rows = await this.store.all<{ branch: string }>(
-      'SELECT branch FROM acb_acb_documents ORDER BY updated_at DESC LIMIT 1',
+      'SELECT branch FROM acb_acb_documents_head ORDER BY updated_at DESC LIMIT 1',
     );
     const [row] = rows;
     return row ? row.branch : null;
@@ -406,19 +435,23 @@ export class AcbStore {
 
   // -- Review State -------------------------------------------------------
 
-  /** Upsert review state on `branch` (PK). Bumps `updated_at`. */
+  /**
+   * Append a new review-state revision for `branch`. Every save adds a row; the
+   * latest revision per branch is the head (read through `loadReview`). Same
+   * append-only rationale as `saveAcb`: a ULID id keyed by branch (NOT unique)
+   * keeps two concurrent writers' rows from clobbering under sync replay.
+   */
   async saveReview(branch: string, acbHash: string, data: unknown): Promise<void> {
-    const now = isoNow();
     await this.store.run(
-      'INSERT INTO acb_review_state (branch, acb_hash, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(branch) DO UPDATE SET acb_hash = excluded.acb_hash, data = excluded.data, updated_at = excluded.updated_at',
-      [branch, acbHash, JSON.stringify(data), now, now],
+      'INSERT INTO acb_review_state (id, branch, acb_hash, data, created_at) VALUES (?, ?, ?, ?, ?)',
+      [ulid(), branch, acbHash, JSON.stringify(data), isoNow()],
     );
   }
 
-  /** Load review state for `branch`, or null. */
+  /** Load the latest review-state revision for `branch` via the head view, or null. */
   async loadReview(branch: string): Promise<unknown | null> {
     const rows = await this.store.all<{ data: string }>(
-      'SELECT data FROM acb_review_state WHERE branch = ?',
+      'SELECT data FROM acb_review_state_head WHERE branch = ?',
       [branch],
     );
     const [row] = rows;
@@ -428,7 +461,11 @@ export class AcbStore {
 
   // -- Group Verdicts -----------------------------------------------------
 
-  /** List every verdict recorded for `slug`. Order is insertion-defined. */
+  /**
+   * List the latest verdict per `(slug, groupId)` for `slug` via the head view.
+   * One row per group; superseded earlier revisions stay in the base table for
+   * audit but never surface here. Order is the head view's row order.
+   */
   async listGroupVerdicts(slug: string): Promise<GroupVerdictRecord[]> {
     const rows = await this.store.all<{
       slug: string;
@@ -438,7 +475,7 @@ export class AcbStore {
       fix_prompt: string | null;
       updated_at: string;
     }>(
-      'SELECT slug, group_id, verdict, note, fix_prompt, updated_at FROM acb_group_verdicts WHERE slug = ?',
+      'SELECT slug, group_id, verdict, note, fix_prompt, updated_at FROM acb_group_verdicts_head WHERE slug = ?',
       [slug],
     );
     return rows.map((r) => ({
@@ -452,10 +489,11 @@ export class AcbStore {
   }
 
   /**
-   * Upsert a verdict on `(slug, groupId)`. Bumps `updated_at` to now().
+   * Append a new verdict revision for `(slug, groupId)`. Every call adds a row;
+   * the latest revision per key is the head (read through `listGroupVerdicts`).
    *
-   * Thin delegate to the `@claude-prove/store` write-service so the upsert SQL
-   * and the `updated_at` stamp live in exactly one place across every caller.
+   * Thin delegate to the `@claude-prove/store` write-service so the append SQL
+   * and the `created_at` stamp live in exactly one place across every caller.
    */
   async upsertGroupVerdict(
     slug: string,
@@ -464,10 +502,15 @@ export class AcbStore {
     note: string | null,
     fixPrompt: string | null,
   ): Promise<GroupVerdictRecord> {
-    return upsertGroupVerdict(this.store, slug, groupId, verdict, note, fixPrompt);
+    return appendGroupVerdict(this.store, slug, groupId, verdict, note, fixPrompt);
   }
 
-  /** Delete the `(slug, groupId)` verdict row. No-op if absent. */
+  /**
+   * Retire the `(slug, groupId)` verdict: delete EVERY revision for that key.
+   * No-op if absent. This is key retirement (the group's whole verdict history
+   * is dropped), distinct from the append-only save path — `upsertGroupVerdict`
+   * never deletes.
+   */
   async clearGroupVerdict(slug: string, groupId: string): Promise<void> {
     await this.store.run('DELETE FROM acb_group_verdicts WHERE slug = ? AND group_id = ?', [
       slug,
@@ -476,11 +519,11 @@ export class AcbStore {
   }
 
   /**
-   * Delete all verdict rows for `slug`. Call this from the slug-retirement
+   * Retire every verdict revision for `slug`. Call this from the slug-retirement
    * path (wave cleanup, run teardown) rather than relying on branch cleanup —
    * `acb_group_verdicts` has no `branch` column (it is keyed by `(slug,
    * group_id)`), so branch-scoped deletion is structurally inapplicable.
-   * Returns the number of rows deleted.
+   * Returns the number of rows deleted (across all revisions).
    */
   async clearVerdictsForSlug(slug: string): Promise<number> {
     const stmt = await this.store.getDb().prepare('DELETE FROM acb_group_verdicts WHERE slug = ?');

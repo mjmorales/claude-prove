@@ -130,11 +130,10 @@ function asAskVerdict(raw: string | undefined): AskVerdict | null {
   return (ASK_VERDICTS as string[]).includes(raw) ? (raw as AskVerdict) : null;
 }
 
-/** Parse a positional ask-id arg to a positive integer, or null when missing/invalid. */
-function asAskId(raw: string | undefined): number | null {
+/** Take a positional ask-id arg as a non-empty string id (a ULID), or null when missing. */
+function asAskId(raw: string | undefined): string | null {
   if (raw === undefined || raw.length === 0) return null;
-  const n = Number(raw);
-  return Number.isInteger(n) && n > 0 ? n : null;
+  return raw;
 }
 
 // ---------------------------------------------------------------------------
@@ -188,7 +187,7 @@ async function doRespond(
 ): Promise<number> {
   const id = asAskId(idArg);
   if (id === null) {
-    process.stderr.write('scrum ask respond: a positive integer <ask-id> is required\n');
+    process.stderr.write('scrum ask respond: an <ask-id> is required\n');
     return 1;
   }
   const verdict = asAskVerdict(flags.verdict);
@@ -226,7 +225,7 @@ async function doRespond(
 async function doAwait(store: ScrumStore, idArg: string | undefined): Promise<number> {
   const id = asAskId(idArg);
   if (id === null) {
-    process.stderr.write('scrum ask await: a positive integer <ask-id> is required\n');
+    process.stderr.write('scrum ask await: an <ask-id> is required\n');
     return 1;
   }
 

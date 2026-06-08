@@ -22,7 +22,7 @@
 
 import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { openStore, runMigrations } from '@claude-prove/store';
+import { openStore, runMigrations, ulid } from '@claude-prove/store';
 import { type Database, connect } from '@tursodatabase/database';
 import { ensureAcbSchemaRegistered } from './store';
 
@@ -294,32 +294,42 @@ async function readLegacyReviews(legacyDb: Database): Promise<LegacyReviewRow[]>
 // ---------------------------------------------------------------------------
 
 async function insertManifests(db: Database, rows: LegacyManifestRow[]): Promise<void> {
+  // The new schema assigns a fresh ULID id per row — the legacy AUTOINCREMENT
+  // rowid is not carried over (nothing references it; the manifest log orders
+  // by timestamp).
   const stmt = await db.prepare(
-    'INSERT INTO acb_manifests (branch, commit_sha, timestamp, data, created_at, run_slug) VALUES (?, ?, ?, ?, ?, ?)',
+    'INSERT INTO acb_manifests (id, branch, commit_sha, timestamp, data, created_at, run_slug) VALUES (?, ?, ?, ?, ?, ?, ?)',
   );
   for (const r of rows) {
-    await stmt.run(r.branch, r.commit_sha, r.timestamp, r.data, r.created_at, r.run_slug);
+    await stmt.run(ulid(), r.branch, r.commit_sha, r.timestamp, r.data, r.created_at, r.run_slug);
   }
 }
 
 async function insertDocuments(db: Database, rows: LegacyDocumentRow[]): Promise<void> {
-  // UNIQUE(branch): legacy should have at most one row per branch, but
-  // `INSERT OR IGNORE` gives us a stable fallback if the invariant ever
-  // slips (e.g., a manually-edited db).
+  // The redesigned `acb_acb_documents` is an append-only revision log with no
+  // UNIQUE(branch); the latest revision per branch is read through the head
+  // view. Legacy carried at most one row per branch, so a plain INSERT lands
+  // exactly one revision per branch — that lone revision IS the head. The
+  // legacy `updated_at` is dropped: the head view re-derives the document's
+  // updated time from its newest revision's `created_at`. A fresh ULID id is
+  // minted per row.
   const stmt = await db.prepare(
-    'INSERT OR IGNORE INTO acb_acb_documents (branch, data, created_at, updated_at) VALUES (?, ?, ?, ?)',
+    'INSERT INTO acb_acb_documents (id, branch, data, created_at) VALUES (?, ?, ?, ?)',
   );
   for (const r of rows) {
-    await stmt.run(r.branch, r.data, r.created_at, r.updated_at);
+    await stmt.run(ulid(), r.branch, r.data, r.created_at);
   }
 }
 
 async function insertReviews(db: Database, rows: LegacyReviewRow[]): Promise<void> {
+  // Same append-only revision shape as `insertDocuments`: one legacy row per
+  // branch becomes one head revision; `updated_at` is dropped in favor of the
+  // head view's `created_at`-derived recency.
   const stmt = await db.prepare(
-    'INSERT OR IGNORE INTO acb_review_state (branch, acb_hash, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+    'INSERT INTO acb_review_state (id, branch, acb_hash, data, created_at) VALUES (?, ?, ?, ?, ?)',
   );
   for (const r of rows) {
-    await stmt.run(r.branch, r.acb_hash, r.data, r.created_at, r.updated_at);
+    await stmt.run(ulid(), r.branch, r.acb_hash, r.data, r.created_at);
   }
 }
 

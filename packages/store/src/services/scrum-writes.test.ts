@@ -5,9 +5,11 @@
  *
  * The scrum domain schema lives in the CLI package, not here, so these tests
  * register a minimal scrum schema covering exactly the tables the transition
- * write touches (`scrum_tasks`, `scrum_events`, `scrum_run_links`). That keeps
- * the store package free of any `@claude-prove/cli` import while still proving
- * the write against real migrated tables.
+ * write touches (`scrum_tasks`, `scrum_acceptance_criteria`,
+ * `scrum_criterion_verdicts` + its head view, `scrum_events`,
+ * `scrum_run_links`). That keeps the store package free of any
+ * `@claude-prove/cli` import while still proving the write against real migrated
+ * tables.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
@@ -17,17 +19,26 @@ import { join } from 'node:path';
 import { type Store, openStore } from '../connection';
 import { runMigrations } from '../migrate';
 import { clearRegistry, registerSchema } from '../registry';
-import { type Acceptance, type TaskStatus, updateTaskStatus } from './scrum-writes';
+import { ulid } from '../ulid';
+import {
+  type Acceptance,
+  type AcceptanceCriterion,
+  type TaskStatus,
+  updateTaskStatus,
+} from './scrum-writes';
 
-// Minimal scrum schema — only the three tables the transition write reads and
-// writes, with every column the service stamps. Mirrors the shape the full CLI
-// scrum migrations produce, narrowed to this service's surface.
+// Minimal scrum schema — only the tables the transition write reads and writes,
+// with every column the service stamps. Mirrors the shape the full CLI scrum
+// migrations produce, narrowed to this service's surface. The acceptance floor
+// reads its criteria + the latest verdict per criterion from the normalized
+// `scrum_acceptance_criteria` + `scrum_criterion_verdicts` tables (via the
+// criterion-head view), so all four land here.
 const SCRUM_TEST_SCHEMA_SQL = `
 CREATE TABLE scrum_tasks (
     id TEXT PRIMARY KEY,
     status TEXT NOT NULL,
     layer TEXT,
-    acceptance_json TEXT,
+    acceptance_policy_json TEXT,
     milestone_id TEXT,
     created_at TEXT NOT NULL,
     last_event_at TEXT,
@@ -35,11 +46,49 @@ CREATE TABLE scrum_tasks (
     last_modified_at TEXT,
     worker_id TEXT,
     run_id TEXT,
+    status_event_id TEXT,
     deleted_at TEXT
 );
 
+CREATE TABLE scrum_acceptance_criteria (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    criterion_id TEXT NOT NULL,
+    ord TEXT NOT NULL,
+    text TEXT NOT NULL,
+    verifies_by TEXT NOT NULL,
+    check_payload TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    idempotent INTEGER NOT NULL DEFAULT 0,
+    scope TEXT,
+    timeout TEXT,
+    superseded_by TEXT,
+    reason TEXT,
+    inherited_from TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (task_id, criterion_id)
+);
+
+CREATE TABLE scrum_criterion_verdicts (
+    id TEXT PRIMARY KEY,
+    criterion_id TEXT NOT NULL,
+    channel TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    reason TEXT,
+    by_whom TEXT,
+    comment TEXT,
+    at TEXT NOT NULL
+);
+
+CREATE VIEW scrum_criterion_head AS
+SELECT v.criterion_id, v.channel, v.verdict, v.reason, v.by_whom, v.comment, v.at
+FROM scrum_criterion_verdicts v
+WHERE v.id = (
+    SELECT MAX(v2.id) FROM scrum_criterion_verdicts v2 WHERE v2.criterion_id = v.criterion_id
+);
+
 CREATE TABLE scrum_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL,
     ts TEXT NOT NULL,
     kind TEXT NOT NULL,
@@ -95,17 +144,77 @@ async function seedTask(id: string, opts: SeedTaskOptions = {}): Promise<void> {
   const acceptance = opts.acceptance === undefined ? null : opts.acceptance;
   const now = '2026-06-01T00:00:00Z';
   await store.run(
-    'INSERT INTO scrum_tasks (id, status, layer, acceptance_json, created_at, last_event_at, last_modified_by, last_modified_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)',
+    'INSERT INTO scrum_tasks (id, status, layer, acceptance_policy_json, created_at, last_event_at, last_modified_by, last_modified_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)',
     [
       id,
       status,
       layer,
-      acceptance === null ? null : JSON.stringify(acceptance),
+      acceptance?.policy ? JSON.stringify(acceptance.policy) : null,
       now,
       now,
       null,
       now,
     ],
+  );
+  for (const criterion of acceptance?.criteria ?? []) {
+    await seedCriterion(id, criterion, now);
+  }
+}
+
+/**
+ * Insert one criterion DEFINITION row plus — when the in-memory criterion
+ * carries a resolved gate/verification — its head verdict, mirroring how the CLI
+ * store decomposes an `Acceptance` object into the normalized tables. A seeded
+ * `gate_pending` gate writes NO verdict row (the floor reads `gate_pending` as
+ * the absent-verdict default). A resolved gate or any recorded verification
+ * appends a single verdict row, which the criterion-head view surfaces.
+ */
+async function seedCriterion(
+  taskId: string,
+  criterion: AcceptanceCriterion,
+  at: string,
+): Promise<void> {
+  const rowId = ulid();
+  await store.run(
+    'INSERT INTO scrum_acceptance_criteria (id, task_id, criterion_id, ord, text, verifies_by, check_payload, status, idempotent, scope, timeout, superseded_by, reason, inherited_from, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    [
+      rowId,
+      taskId,
+      criterion.id,
+      ulid(),
+      criterion.text,
+      criterion.verifies_by,
+      criterion.check,
+      criterion.status,
+      criterion.idempotent ? 1 : 0,
+      criterion.scope ?? null,
+      criterion.timeout ?? null,
+      criterion.superseded_by ?? null,
+      criterion.reason ?? null,
+      criterion.inherited_from ?? null,
+      at,
+    ],
+  );
+  if (
+    criterion.verifies_by === 'gate' &&
+    criterion.gate &&
+    criterion.gate.verdict !== 'gate_pending'
+  ) {
+    await appendVerdict(rowId, 'gate', criterion.gate.verdict, at);
+  } else if (criterion.verifies_by !== 'gate' && criterion.verification) {
+    await appendVerdict(rowId, 'verification', criterion.verification.verdict, at);
+  }
+}
+
+async function appendVerdict(
+  criterionRowId: string,
+  channel: 'gate' | 'verification',
+  verdict: string,
+  at: string,
+): Promise<void> {
+  await store.run(
+    'INSERT INTO scrum_criterion_verdicts (id, criterion_id, channel, verdict, reason, by_whom, comment, at) VALUES (?, ?, ?, ?, NULL, NULL, NULL, ?)',
+    [ulid(), criterionRowId, channel, verdict, at],
   );
 }
 
@@ -161,6 +270,69 @@ describe('updateTaskStatus — valid transition', () => {
     )[0];
     expect(row?.status).toBe('ready');
     expect(row?.last_modified_by).toBe('agent-x');
+  });
+});
+
+describe('updateTaskStatus — status_event_id provenance', () => {
+  // Treat the event as the primary fact: after a transition the task's
+  // status_event_id must point at the id of the status_changed event that set
+  // the status — the same id, stamped in the same transaction as the append.
+  async function statusEventId(taskId: string): Promise<string | null> {
+    const row = (
+      await store.all<{ status_event_id: string | null }>(
+        'SELECT status_event_id FROM scrum_tasks WHERE id = ?',
+        [taskId],
+      )
+    )[0];
+    return row?.status_event_id ?? null;
+  }
+
+  async function latestStatusEvent(taskId: string): Promise<string> {
+    const row = (
+      await store.all<{ id: string }>(
+        "SELECT id FROM scrum_events WHERE task_id = ? AND kind = 'status_changed' ORDER BY id DESC LIMIT 1",
+        [taskId],
+      )
+    )[0];
+    if (!row) throw new Error(`no status_changed event for task '${taskId}'`);
+    return row.id;
+  }
+
+  test('a fresh (un-transitioned) task has a NULL status_event_id', async () => {
+    await seedTask('t1', { status: 'backlog' });
+    expect(await statusEventId('t1')).toBeNull();
+  });
+
+  test('a transition stamps status_event_id with the appended status_changed event id', async () => {
+    await seedTask('t1', { status: 'backlog' });
+    await updateTaskStatus(store, 't1', 'ready', 'agent-x');
+
+    const pointer = await statusEventId('t1');
+    expect(pointer).not.toBeNull();
+    expect(pointer).toBe(await latestStatusEvent('t1'));
+  });
+
+  test('a multi-transition sequence leaves status_event_id on the LATEST transition event', async () => {
+    await seedTask('t1', { status: 'backlog' });
+    await updateTaskStatus(store, 't1', 'ready');
+    await updateTaskStatus(store, 't1', 'in_progress');
+    await updateTaskStatus(store, 't1', 'review');
+
+    // Three transitions appended three events; the pointer tracks the last one.
+    expect(await eventCount('t1', 'status_changed')).toBe(3);
+    const pointer = await statusEventId('t1');
+    const latest = await latestStatusEvent('t1');
+    expect(pointer).toBe(latest);
+
+    // The pointed-at event is genuinely the most-recent transition (review),
+    // not an earlier one — its payload records the final hop.
+    const ev = (
+      await store.all<{ payload_json: string }>(
+        'SELECT payload_json FROM scrum_events WHERE id = ?',
+        [pointer ?? ''],
+      )
+    )[0];
+    expect(JSON.parse(ev?.payload_json ?? '{}')).toEqual({ from: 'in_progress', to: 'review' });
   });
 });
 
@@ -266,6 +438,48 @@ describe('updateTaskStatus — story acceptance floor', () => {
       /unsatisfied acceptance criteria/,
     );
     expect(await eventCount('s', 'status_changed')).toBe(0);
+  });
+
+  test('the floor reads the HEAD verdict — a rejected-then-approved gate satisfies the close', async () => {
+    // Seed an in_progress story (no linked run, so the synthesis floor is exempt)
+    // with a single gate criterion, then append TWO verdict rows: a rejected one
+    // followed by an approved one. The floor must read only the latest (approved),
+    // so the close succeeds — proving it consults the criterion-head view, not the
+    // first or an aggregate of every appended verdict.
+    await seedTask('s', {
+      status: 'in_progress',
+      layer: 'story',
+      acceptance: {
+        criteria: [
+          {
+            id: 'g1',
+            text: 'gate',
+            verifies_by: 'gate',
+            check: '',
+            status: 'active',
+            idempotent: true,
+            gate: { verdict: 'gate_pending' },
+          },
+        ],
+      },
+    });
+    const rowId = (
+      await store.all<{ id: string }>(
+        'SELECT id FROM scrum_acceptance_criteria WHERE task_id = ? AND criterion_id = ?',
+        ['s', 'g1'],
+      )
+    )[0]?.id;
+    if (!rowId) throw new Error('expected the seeded criterion row');
+    await store.run(
+      "INSERT INTO scrum_criterion_verdicts (id, criterion_id, channel, verdict, reason, by_whom, comment, at) VALUES (?, ?, 'gate', 'rejected', NULL, NULL, NULL, ?)",
+      [ulid(), rowId, '2026-06-01T00:00:01Z'],
+    );
+    await store.run(
+      "INSERT INTO scrum_criterion_verdicts (id, criterion_id, channel, verdict, reason, by_whom, comment, at) VALUES (?, ?, 'gate', 'approved', NULL, NULL, NULL, ?)",
+      [ulid(), rowId, '2026-06-01T00:00:02Z'],
+    );
+    await expect(updateTaskStatus(store, 's', 'done')).resolves.toBeDefined();
+    expect(await eventCount('s', 'status_changed')).toBe(1);
   });
 });
 

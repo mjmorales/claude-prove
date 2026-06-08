@@ -1,35 +1,139 @@
 /**
- * Scrum domain schema — migration v1 creates every table the scrum topic
- * needs (tasks, milestones, tags, deps, events, run links, context bundles).
+ * Scrum domain schema — a single fresh v1 migration that creates every table
+ * the scrum topic needs in its redesigned, sync-safe shape.
  *
- * Structural mirror of `packages/cli/src/topics/acb/store.ts::ACB_MIGRATION_V1_SQL`
- * plus the `ensureAcbSchemaRegistered` guard pattern. The side-effect call
- * to `registerSchema` at module scope declares the domain once; the named
- * `ensureScrumSchemaRegistered()` helper re-registers idempotently so tests
- * that call `clearRegistry()` can recover.
+ * Sync-safety rewrite: the store runs on a local engine that syncs whole
+ * transactions with a single winner (REBASE_LOCAL), not a per-row CRDT. Two
+ * writers that both allocate the next AUTOINCREMENT rowid collide on the same
+ * integer and one row is silently lost on rebase. Every primary key here is
+ * therefore a distinct collision-free value the minting writer decides — a
+ * ULID TEXT id on append-only tables, or a natural/composite key — so two
+ * concurrent inserts both survive the rebase. NO table uses AUTOINCREMENT or
+ * an INTEGER rowid alias.
+ *
+ * Clean v1: this is a from-scratch base schema, not an incremental chain. A
+ * pre-v1 store carrying the legacy multi-version lineage is incompatible and
+ * is handled by a separate reset or migrate-to-turso path, never auto-migrated
+ * through this module.
  *
  * Table-name convention: every domain table carries the `scrum_` prefix to
  * namespace the scrum domain within the shared store. Indexes carry the
- * `idx_scrum_` prefix.
+ * `idx_scrum_` prefix. ULID ids stay lexicographically time-ordered, so an
+ * `ORDER BY id ASC` over a ULID column reproduces insert-order reads.
  */
 
 import { listDomains, registerSchema } from '@claude-prove/store';
 
 // ---------------------------------------------------------------------------
-// Migration v1 — all 7 tables + 5 indexes in one atomic transaction
+// Migration v1 — the entire redesigned scrum schema in one atomic transaction
 // ---------------------------------------------------------------------------
 
 /**
- * Core scrum schema. Order matters — FK-bearing tables reference `scrum_tasks`
- * and `scrum_milestones` which must exist first.
+ * Order matters — FK-bearing tables reference `scrum_tasks`, `scrum_milestones`,
+ * `scrum_teams`, `scrum_contributors`, and `scrum_lores`, which must exist
+ * first.
  *
- *   scrum_tasks           — one row per task; FK to milestone (nullable)
- *   scrum_milestones      — one row per milestone
- *   scrum_tags            — composite PK (task_id, tag)
- *   scrum_deps            — composite PK (from_task_id, to_task_id, kind)
- *   scrum_events          — append-only audit log; AUTOINCREMENT id
- *   scrum_run_links       — composite PK (task_id, run_path); links orchestrator runs
- *   scrum_context_bundles — PK task_id; cached denormalized context JSON
+ *   scrum_milestones      — one row per milestone; `initiative` is the optional
+ *                           tier above the milestone.
+ *   scrum_tasks           — one row per task. TEXT PK (an external slug-style id).
+ *                           Optional containment tree (`parent_id`/`layer`),
+ *                           the task-level acceptance `policy` (`acceptance_policy_json`
+ *                           — the criteria themselves are normalized out into
+ *                           `scrum_acceptance_criteria`), declared bounds
+ *                           (`bounds_json`), terminal/last-touch/executing
+ *                           provenance, an optional `team_slug` binding, and
+ *                           `status_event_id` — a forward FK to the
+ *                           `scrum_events` row (kind `status_changed`) that set
+ *                           the current authored status. Treating the event as
+ *                           the primary fact, the status column is a fold and
+ *                           this pointer is its provenance: every transition
+ *                           stamps the column with the id of the same event it
+ *                           appends, in one transaction. NULL until the first
+ *                           transition.
+ *   scrum_acceptance_criteria — one row per acceptance criterion. PK is a minted
+ *                           ULID surrogate (`id`); the criterion's author-given
+ *                           external id rides as `criterion_id`, unique only
+ *                           WITHIN a task — an inherited copy reuses the same
+ *                           external id on a different task, so the external id
+ *                           cannot be the global PK. Carries the criterion
+ *                           DEFINITION; the gate/verification VERDICT is NOT
+ *                           stored here — it lives append-only in
+ *                           scrum_criterion_verdicts (whose `criterion_id`
+ *                           references THIS surrogate, not the external id).
+ *                           Supersession is an append+flip (status='superseded'
+ *                           + superseded_by pointer to a replacement external
+ *                           id), never a delete. `ord` is a per-row minted ULID
+ *                           preserving authored array order (the external id is
+ *                           a slug, not lexically insert-ordered, so it cannot
+ *                           carry the ordering).
+ *   scrum_criterion_verdicts — APPEND-ONLY verdict log; ULID TEXT PK. One new
+ *                           row per gate response AND per bash/agent/assert
+ *                           verification — a re-verify APPENDS, it never updates.
+ *                           `channel` distinguishes a gate response ('gate')
+ *                           from a recorded verification ('verification'). The
+ *                           latest verdict per criterion is the head (max id),
+ *                           surfaced by the scrum_criterion_head view. This
+ *                           append-then-head shape is what makes a verdict
+ *                           commute under whole-transaction sync replay: two
+ *                           writers each append a distinct ULID-keyed row and
+ *                           both survive the rebase, where a single mutable
+ *                           verdict column would have one writer clobber the
+ *                           other.
+ *   scrum_criterion_head  — VIEW: the latest verdict row per criterion_id
+ *                           (max(id), since a ULID id is monotonic so the
+ *                           lexically-greatest id is the most-recently appended).
+ *                           The story-close floor and the task-detail read
+ *                           consult this for each criterion's current verdict.
+ *   scrum_ready_eligible  — VIEW: the base actionable task set — every non-deleted
+ *                           task in `ready` or `backlog`. This is the candidate
+ *                           floor `nextReady` ranks on top of; the multi-factor
+ *                           SCORING (unblock-depth, hotness, tag/escalation boosts)
+ *                           stays in TS and is intentionally NOT pushed into SQL.
+ *                           Defining the eligible predicate once here keeps every
+ *                           reader (the CLI ranking and the review-ui boundary)
+ *                           on a single shared definition.
+ *   scrum_current_operator— VIEW: the operator-of-record's CURRENT open interval
+ *                           (the single `to_ts IS NULL` row, of which the
+ *                           set-then-append invariant guarantees at most one).
+ *                           Resolution AT an arbitrary past instant stays a
+ *                           parameterized interval scan (`operatorOfRecordAt`);
+ *                           only the shared "who holds it now" derivation lives in
+ *                           this view.
+ *   scrum_tags            — composite PK (task_id, tag).
+ *   scrum_deps            — composite PK (from_task_id, to_task_id, kind).
+ *   scrum_events          — append-only audit log; ULID TEXT PK.
+ *   scrum_run_links       — composite PK (task_id, run_path).
+ *   scrum_context_bundles — PK task_id; cached denormalized context JSON.
+ *   scrum_decisions       — Codex records; TEXT PK (filename slug). Append-only
+ *                           with supersession; gated write protocol; Lore→Codex
+ *                           promotion provenance (`source_lore_id` → scrum_lores).
+ *                           Carries a nullable `embedding F32_BLOB(32)` — a
+ *                           fixed-32-dim float vector the engine can populate
+ *                           with `vector32(...)` and search with
+ *                           `vector_distance_cos(...)`. The column ships unpopulated
+ *                           (every row NULL); a later phase backfills it and adds
+ *                           semantic search. Nullable so a write that has no
+ *                           embedding to attach simply leaves it NULL.
+ *   scrum_contributors    — CT-UUID registry; TEXT PK.
+ *   scrum_operator_history— operator-of-record position history; ULID TEXT PK.
+ *   scrum_teams           — team registry; TEXT slug PK.
+ *   scrum_team_scopes     — per-team read/write globs; composite PK
+ *                           (team_slug, kind, glob).
+ *   scrum_team_members    — per-team three-role roster + position history;
+ *                           ULID TEXT PK.
+ *   scrum_team_accepts    — per-team accepted ask types; ULID TEXT PK,
+ *                           self-superseding (`superseded_by` → ULID).
+ *   scrum_team_exposes    — per-team exposed outputs; ULID TEXT PK,
+ *                           self-superseding.
+ *   scrum_lores           — per-team append-only Lore; ULID TEXT PK; compaction
+ *                           supersession pointer. Carries the same nullable
+ *                           `embedding F32_BLOB(32)` as scrum_decisions, unpopulated
+ *                           at this layer for a later semantic-search phase.
+ *   scrum_annotations     — per-artifact append-only notes; ULID TEXT PK.
+ *   scrum_asks            — cross-team ask protocol; ULID TEXT PK.
+ *   scrum_escalations     — typed escalation walk-up chain; ULID TEXT PK,
+ *                           self-FK (`walked_up_from` → ULID) + the serialized
+ *                           `attributes.linked_escalation` ULID forward pointer.
  */
 export const SCRUM_MIGRATION_V1_SQL = `
 CREATE TABLE scrum_milestones (
@@ -39,7 +143,8 @@ CREATE TABLE scrum_milestones (
     target_state TEXT,
     status TEXT NOT NULL,
     created_at TEXT NOT NULL,
-    closed_at TEXT
+    closed_at TEXT,
+    initiative TEXT
 );
 
 CREATE TABLE scrum_tasks (
@@ -51,7 +156,49 @@ CREATE TABLE scrum_tasks (
     created_by_agent TEXT,
     created_at TEXT NOT NULL,
     last_event_at TEXT,
-    deleted_at TEXT
+    deleted_at TEXT,
+    parent_id TEXT REFERENCES scrum_tasks(id),
+    layer TEXT,
+    acceptance_policy_json TEXT,
+    bounds_json TEXT,
+    terminal_reason TEXT,
+    terminal_detail TEXT,
+    last_modified_by TEXT,
+    last_modified_at TEXT,
+    worker_id TEXT,
+    run_id TEXT,
+    team_slug TEXT,
+    status_event_id TEXT REFERENCES scrum_events(id)
+);
+
+CREATE TABLE scrum_acceptance_criteria (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES scrum_tasks(id),
+    criterion_id TEXT NOT NULL,
+    ord TEXT NOT NULL,
+    text TEXT NOT NULL,
+    verifies_by TEXT NOT NULL CHECK (verifies_by IN ('bash', 'assert', 'gate', 'agent')),
+    check_payload TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'superseded')),
+    idempotent INTEGER NOT NULL DEFAULT 0,
+    scope TEXT,
+    timeout TEXT,
+    superseded_by TEXT,
+    reason TEXT,
+    inherited_from TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (task_id, criterion_id)
+);
+
+CREATE TABLE scrum_criterion_verdicts (
+    id TEXT PRIMARY KEY,
+    criterion_id TEXT NOT NULL REFERENCES scrum_acceptance_criteria(id),
+    channel TEXT NOT NULL CHECK (channel IN ('gate', 'verification')),
+    verdict TEXT NOT NULL,
+    reason TEXT,
+    by_whom TEXT,
+    comment TEXT,
+    at TEXT NOT NULL
 );
 
 CREATE TABLE scrum_tags (
@@ -69,7 +216,7 @@ CREATE TABLE scrum_deps (
 );
 
 CREATE TABLE scrum_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL REFERENCES scrum_tasks(id),
     ts TEXT NOT NULL,
     kind TEXT NOT NULL,
@@ -92,35 +239,6 @@ CREATE TABLE scrum_context_bundles (
     bundle_json TEXT NOT NULL
 );
 
-CREATE INDEX idx_scrum_events_task_ts ON scrum_events(task_id, ts DESC);
-CREATE INDEX idx_scrum_tasks_status_event ON scrum_tasks(status, last_event_at DESC);
-CREATE INDEX idx_scrum_run_links_path ON scrum_run_links(run_path);
-CREATE INDEX idx_scrum_deps_to_task ON scrum_deps(to_task_id);
-CREATE INDEX idx_scrum_tags_tag ON scrum_tags(tag);
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v2 — scrum_decisions (decision-record persistence)
-// ---------------------------------------------------------------------------
-
-/**
- * v2: persist decision records as first-class rows in the scrum domain.
- *
- *   scrum_decisions — one row per decision (id = filename slug, e.g.
- *                     `decision-persistence`); `content_sha`
- *                     is `sha256(content)` hex-encoded so downstream
- *                     drift-detection can compare against the working-tree
- *                     file without re-reading it. `source_path` is
- *                     nullable because git-recovered rows may lack a
- *                     working-tree file.
- *
- * `status` defaults to `'accepted'` per decision-record convention. Indexes
- * cover the two filter dimensions used by `listDecisions` — topic and status.
- *
- * Table and index names carry the `scrum_` / `idx_scrum_` prefix per the
- * domain-namespacing contract established in v1.
- */
-export const SCRUM_MIGRATION_V2_SQL = `
 CREATE TABLE scrum_decisions (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -130,293 +248,17 @@ CREATE TABLE scrum_decisions (
     source_path TEXT,
     content_sha TEXT NOT NULL,
     recorded_at TEXT NOT NULL,
-    recorded_by_agent TEXT
+    recorded_by_agent TEXT,
+    superseded_by TEXT REFERENCES scrum_decisions(id),
+    reason TEXT,
+    kind TEXT,
+    write_status TEXT,
+    gate_responder TEXT,
+    gate_responded_at TEXT,
+    source_lore_id TEXT REFERENCES scrum_lores(id),
+    embedding F32_BLOB(32)
 );
 
-CREATE INDEX idx_scrum_decisions_topic ON scrum_decisions(topic);
-CREATE INDEX idx_scrum_decisions_status ON scrum_decisions(status);
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v3 — optional containment tree + layer tagging on scrum_tasks
-// ---------------------------------------------------------------------------
-
-/**
- * v3: add an OPTIONAL hierarchy to `scrum_tasks`. Two nullable columns plus a
- * parent index:
- *
- *   parent_id — self-FK; the containment tree (epic→story→task). Separate
- *               from `scrum_deps`, which stays purely for blocking edges.
- *               NULL = a flat, parent-less task (the unlayered shape).
- *   layer     — 'epic' | 'story' | 'task'; NULL = untiered/flat. No CHECK
- *               constraint so older databases stay forward-compatible and
- *               the vocabulary can extend without a migration.
- *
- * SQLite permits `ADD COLUMN ... REFERENCES` only because the added column's
- * default is NULL (no existing row needs a parent), so both ALTERs are safe
- * on a populated table. The parent index backs `getChildren` /
- * `derivedStatus` tree walks.
- *
- * Depth is optional: flat tasks (parent_id NULL, layer NULL) keep their exact
- * unlayered behavior.
- */
-export const SCRUM_MIGRATION_V3_SQL = `
-ALTER TABLE scrum_tasks ADD COLUMN parent_id TEXT REFERENCES scrum_tasks(id);
-ALTER TABLE scrum_tasks ADD COLUMN layer TEXT;
-CREATE INDEX idx_scrum_tasks_parent ON scrum_tasks(parent_id);
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v4 — append-only supersession on scrum_decisions
-// ---------------------------------------------------------------------------
-
-/**
- * v4: add append-only supersession to `scrum_decisions` — a retired record is
- * never hard-deleted; the replacement supersedes and the original stays
- * auditable. Two nullable columns, no hard-delete path:
- *
- *   superseded_by — self-FK to the replacement decision's `id`. NULL = the
- *                   decision is current (not retired). When set, the row's
- *                   `status` flips to `'superseded'` and this points at the
- *                   replacement, so the supersession graph is explicit and
- *                   the original stays auditable.
- *   reason        — free-text rationale recorded at supersession time. NULL
- *                   on every legacy row and on any decision never superseded.
- *
- * SQLite permits `ADD COLUMN ... REFERENCES` only because the added column's
- * default is NULL (no existing row needs a replacement), so the ALTER is safe
- * on a populated table. No CHECK on `status` — the column stays forward-
- * compatible TEXT (matches the v2 convention); the closed vocabulary
- * `accepted | superseded | deprecated` is documented on `DecisionRow`.
- */
-export const SCRUM_MIGRATION_V4_SQL = `
-ALTER TABLE scrum_decisions ADD COLUMN superseded_by TEXT REFERENCES scrum_decisions(id);
-ALTER TABLE scrum_decisions ADD COLUMN reason TEXT;
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v5 — first-class acceptance criteria on scrum_tasks
-// ---------------------------------------------------------------------------
-
-/**
- * v5: add first-class acceptance criteria to `scrum_tasks`. One nullable JSON
- * column, matching the `scrum_context_bundles.bundle_json` JSON-column
- * precedent (no new table):
- *
- *   acceptance_json — JSON-encoded `Acceptance` object
- *                     `{ criteria: AcceptanceCriterion[], policy?: AcceptancePolicy }`.
- *                     NULL = a task with no authored acceptance (the
- *                     criteria-free shape). Decoded to `ScrumTask.acceptance`
- *                     at the row boundary in `store.ts`.
- *
- * Criteria are append-only: a retired criterion is never removed from the
- * array. Instead its `status` flips to `'superseded'` with a `reason` and an
- * optional `superseded_by` pointer — the supersession discipline mirrors v4's
- * `scrum_decisions`.
- *
- * `ADD COLUMN` with a NULL default is safe on a populated table (no existing
- * row needs acceptance). No CHECK constraint — the column stays
- * forward-compatible TEXT, with the closed `verifies_by` / `status` / policy
- * vocabularies documented on the `Acceptance` types in `types.ts`.
- */
-export const SCRUM_MIGRATION_V5_SQL = `
-ALTER TABLE scrum_tasks ADD COLUMN acceptance_json TEXT;
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v6 — optional declared bounds on scrum_tasks
-// ---------------------------------------------------------------------------
-
-/**
- * v6: add an OPTIONAL declared-bounds authoring column to `scrum_tasks` — the
- * milestone-side half of per-task bounds. One nullable JSON column, matching
- * the v5 `acceptance_json` JSON-column precedent (no new table):
- *
- *   bounds_json — JSON-encoded `TaskBounds` object
- *                 `{ read?, write?, tools?: { allow?, deny? },
- *                    budgets?: { tokens?, tool_calls?, wall_clock_s? } }`.
- *                 NULL = a task with no authored bounds (the unbounded shape).
- *                 Decoded to `ScrumTask.bounds` at the row boundary in
- *                 `store.ts`.
- *
- * The column is the optional milestone-authored authoring SOURCE: a bound set
- * here survives `compile-plan` into the emitted plan's `tasks[].bounds`
- * (mirroring the run-state v3 `TASK_PLAN_SPEC.bounds` shape) instead of being
- * re-authored every run. The canonical ENFORCEMENT input stays the ephemeral
- * `plan.json tasks[].bounds`; this column only feeds it. Enforcement split:
- * `write[]`/`read[]`/`budgets` are advisory (the git worktree is the write
- * wall), `tools` map to native permissions — there is NO native deny-outside
- * rule.
- *
- * `ADD COLUMN` with a NULL default is safe on a populated table (no existing
- * row needs bounds). No CHECK constraint — the column stays
- * forward-compatible TEXT, with the closed shape documented on the
- * `TaskBounds` type in `types.ts` and validated on write in `store.ts`.
- */
-export const SCRUM_MIGRATION_V6_SQL = `
-ALTER TABLE scrum_tasks ADD COLUMN bounds_json TEXT;
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v7 — terminal provenance on scrum_tasks
-// ---------------------------------------------------------------------------
-
-/**
- * v7: record WHY a task reached a terminal status — terminal cancel provenance
- * as a `{reason, detail}` pair. Two nullable TEXT columns, no new table:
- *
- *   terminal_reason — coarse cause, written when a task is cancelled. The
- *                     canonical closed vocabulary is `cancelled` (a direct
- *                     `task cancel`) and `parent_cancelled` (swept by a
- *                     `--cascade` walk from an ancestor). NULL on every live
- *                     task and on `done` tasks (success carries no reason).
- *   terminal_detail — free-text elaboration recorded at cancel time (e.g.
- *                     "parent 'epic-1' cancelled"). NULL when no detail given.
- *
- * `ADD COLUMN` with a NULL default is safe on a populated table (no existing
- * row needs provenance). No CHECK constraint — the column stays
- * forward-compatible TEXT, matching the v2–v6 convention; the closed
- * `terminal_reason` vocabulary is documented on `ScrumTask` in `types.ts`.
- *
- * Scope note (Phase-0): the cancel cascade + this provenance land now;
- * supersede→re-decompose (lift-vs-cancel-per-child judgment) is a later-phase
- * follow-up and writes no new column here.
- */
-export const SCRUM_MIGRATION_V7_SQL = `
-ALTER TABLE scrum_tasks ADD COLUMN terminal_reason TEXT;
-ALTER TABLE scrum_tasks ADD COLUMN terminal_detail TEXT;
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v8 — Codex kind taxonomy on scrum_decisions
-// ---------------------------------------------------------------------------
-
-/**
- * v8: add an OPTIONAL `kind` to `scrum_decisions` — the decision subtype
- * taxonomy. One nullable TEXT column:
- *
- *   kind — the Codex subtype a decision belongs to. Canonical closed
- *          vocabulary `adr | glossary | pattern`; NULL = an untyped/legacy
- *          decision (every legacy row). The curation step (model-owned) sets
- *          it when promoting a reasoning-log finding into a durable decision.
- *
- * `ADD COLUMN` with a NULL default is safe on a populated table (no existing
- * row needs a kind). No CHECK constraint — the column stays forward-compatible
- * TEXT, matching the v2–v7 convention; the closed vocabulary is documented on
- * `DecisionRow` in `types.ts`.
- */
-export const SCRUM_MIGRATION_V8_SQL = `
-ALTER TABLE scrum_decisions ADD COLUMN kind TEXT;
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v9 — last-touch provenance on scrum_tasks
-// ---------------------------------------------------------------------------
-
-/**
- * v9: record WHO/WHEN last modified a task. Two nullable TEXT columns, no new
- * table:
- *
- *   last_modified_by — the agent of the most recent row mutation, where the
- *                      store method receives one (status/milestone/cancel).
- *                      NULL when the mutation carried no agent (acceptance/
- *                      bounds/soft-delete edits) or on every legacy row.
- *   last_modified_at — ISO-8601 timestamp stamped on every task-row write.
- *                      Distinct from `last_event_at` (bumped on any event
- *                      append); a future mutation that does not append an
- *                      event still moves `last_modified_at`.
- *
- * `ADD COLUMN` with a NULL default is safe on a populated table (no existing
- * row needs provenance). No CHECK — the columns stay forward-compatible TEXT,
- * matching the v2–v8 convention. `createTask` seeds the pair to
- * (`created_by_agent`, `created_at`) so a freshly-created task already carries
- * coherent last-touch provenance.
- */
-export const SCRUM_MIGRATION_V9_SQL = `
-ALTER TABLE scrum_tasks ADD COLUMN last_modified_by TEXT;
-ALTER TABLE scrum_tasks ADD COLUMN last_modified_at TEXT;
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v10 — initiative grouping on scrum_milestones (the tier above milestone)
-// ---------------------------------------------------------------------------
-
-/**
- * v10: add an OPTIONAL `initiative` grouping to `scrum_milestones` — the tier
- * above milestone. One nullable TEXT column:
- *
- *   initiative — a free-text label tying several milestones to one outcome
- *                bet. NULL = the milestone belongs to no initiative (the flat
- *                default).
- *
- * `ADD COLUMN` with a NULL default is safe on a populated table (no existing
- * milestone needs an initiative). No CHECK — the column stays forward-compatible
- * TEXT, matching the grouping/subtype columns on the other tables.
- */
-export const SCRUM_MIGRATION_V10_SQL = `
-ALTER TABLE scrum_milestones ADD COLUMN initiative TEXT;
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v11 — executing-worker/run attribution on scrum_tasks
-// ---------------------------------------------------------------------------
-
-/**
- * v11: record WHICH worker/run last wrote a task — executing attribution. Two
- * nullable TEXT columns, no new table:
- *
- *   worker_id — opaque id of the executing unit (leaf worker / driver session)
- *               that last wrote the row. NULL when no worker context was in
- *               scope (a bare CLI edit) or on every legacy row.
- *   run_id    — the orchestrator run slug the write happened under. NULL when
- *               no run context was in scope or on every legacy row.
- *
- * This pair extends the last-touch provenance (`last_modified_by`/`_at`, which
- * carry the mutating AGENT and TIMESTAMP) with the executing UNIT and RUN, so a
- * task row alone answers "who, when, under which worker and run". The CLI
- * sources both from the run env the orchestrator sets at dispatch
- * (`PROVE_WORKER_ID` / `PROVE_RUN_SLUG`), defaulting NULL when absent.
- *
- * `ADD COLUMN` with a NULL default is safe on a populated table (no existing
- * row needs attribution). No CHECK — the columns stay forward-compatible TEXT,
- * matching the v2–v10 convention.
- */
-export const SCRUM_MIGRATION_V11_SQL = `
-ALTER TABLE scrum_tasks ADD COLUMN worker_id TEXT;
-ALTER TABLE scrum_tasks ADD COLUMN run_id TEXT;
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v12 — contributor registry (scrum_contributors)
-// ---------------------------------------------------------------------------
-
-/**
- * v12: a contributor registry — one row per stable contributor identity, the
- * backing for role rosters, attribution, and PR-comment author matching. A new
- * table (not a column on an existing one) because a contributor is its own
- * entity, referenced from many task rows rather than owned by one:
- *
- *   scrum_contributors — `id` is a CT-prefixed stable contributor id (a
- *                        CT-UUID, e.g. `ct-jane-doe-…`) that never changes once
- *                        minted, so attribution survives a renamed handle or
- *                        email. `slug` is the human-friendly handle; `status`
- *                        is the registry lifecycle (`active`/`inactive`).
- *                        `github` and `email` are the two resolution keys —
- *                        `resolve` matches an executing worker / event author
- *                        by github first, then falls back to email.
- *
- * The row carries the same provenance columns as the on-disk `contributor.md`
- * identity artifact (`created_by`/`created_at`/`last_modified_by`/
- * `last_modified_at`) so the table and the file mirror one shape. No CHECK on
- * `status` — the column stays forward-compatible TEXT, matching the v2–v11
- * convention; the closed `active | inactive` vocabulary is documented on the
- * `Contributor` type in `types.ts`.
- *
- * Indexes back the two resolution lookups (`github`, `email`) plus the
- * `slug` uniqueness probe. Table and index names carry the `scrum_` /
- * `idx_scrum_` prefix per the domain-namespacing contract established in v1.
- */
-export const SCRUM_MIGRATION_V12_SQL = `
 CREATE TABLE scrum_contributors (
     id TEXT PRIMARY KEY,
     slug TEXT NOT NULL UNIQUE,
@@ -430,48 +272,8 @@ CREATE TABLE scrum_contributors (
     last_modified_at TEXT
 );
 
-CREATE INDEX idx_scrum_contributors_github ON scrum_contributors(github);
-CREATE INDEX idx_scrum_contributors_email ON scrum_contributors(email);
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v13 — operator-of-record position history (scrum_operator_history)
-// ---------------------------------------------------------------------------
-
-/**
- * v13: an append-only position-history table for the operator-of-record role —
- * who held it over time, so attribution can be POINT-IN-TIME rather than
- * current-holder-only. A new table (not a column) because the role's holder is
- * a time-series of intervals, not a single value:
- *
- *   scrum_operator_history — one row per held interval. `contributor_id` is a
- *                            CT-UUID (a `scrum_contributors.id`) — the holder.
- *                            `from_ts` is when the holder took the role;
- *                            `to_ts` is when they handed it off, or NULL for the
- *                            CURRENT (open) holder. Resolving an action at
- *                            timestamp `t` returns the row whose half-open
- *                            interval `[from_ts, to_ts)` contains `t` — i.e.
- *                            `from_ts <= t AND (to_ts IS NULL OR t < to_ts)`.
- *
- * Invariant: at most one open row (`to_ts IS NULL`) at a time — setting a new
- * holder first closes the prior open row's `to_ts` to the new `from_ts`, then
- * appends the new open row. Enforced in `store.ts::setOperatorOfRecord`, not by
- * a partial unique index, so the closing-then-appending sequence stays one
- * transaction. History is append-only: a prior interval is never mutated except
- * to stamp its `to_ts` once on handoff.
- *
- * This is the single role slot that exists — a degenerate one-row roster. A
- * later multi-role roster generalizes it (more roles, each a parallel interval
- * series); this table is the strict subset that widens, not a throwaway.
- *
- * `id` is an AUTOINCREMENT surrogate (the row has no natural key — a contributor
- * may hold the role across several disjoint intervals). `created_at` records
- * when the row was appended (distinct from `from_ts`, which can be backdated to
- * the real handoff instant). Index backs the point-in-time resolve scan.
- */
-export const SCRUM_MIGRATION_V13_SQL = `
 CREATE TABLE scrum_operator_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,
     contributor_id TEXT NOT NULL REFERENCES scrum_contributors(id),
     from_ts TEXT NOT NULL,
     to_ts TEXT,
@@ -479,133 +281,25 @@ CREATE TABLE scrum_operator_history (
     created_by TEXT
 );
 
-CREATE INDEX idx_scrum_operator_history_interval ON scrum_operator_history(from_ts, to_ts);
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v14 — team registry (scrum_teams)
-// ---------------------------------------------------------------------------
-
-/**
- * v14: a team registry — one row per team, the unit a body of work and the
- * artifacts it owns are organized around. A new table (not a column on an
- * existing one) because a team is its own entity, referenced from many rows
- * rather than owned by one:
- *
- *   scrum_teams — `slug` is the human-friendly handle and primary key, unique
- *                 across the registry. `team_type` is the team's interaction
- *                 archetype (`stream_aligned`/`platform`/`enabling`/
- *                 `complicated_subsystem`). `charter` is a one-line mission
- *                 statement. `lifetime` is the team's expected longevity
- *                 (`persistent` — stands indefinitely; `terminates_on_milestone`
- *                 — disbands when its goal milestone closes).
- *
- * No CHECK on `team_type` or `lifetime` — the columns stay forward-compatible
- * TEXT, matching the v2–v13 convention; the closed `team_type` and `lifetime`
- * vocabularies are documented on the `TeamType`/`TeamLifetime` types in
- * `types.ts` and enforced at the store boundary in `store.ts::createTeam`.
- *
- * The registry is the minimal foundation: scope globs, a roster, accept/expose
- * contracts, and the concrete terminating-milestone target are appended by
- * later additive migrations (own columns or own tables) on top of this base —
- * the table and index names carry the `scrum_` / `idx_scrum_` prefix per the
- * domain-namespacing contract established in v1.
- */
-export const SCRUM_MIGRATION_V14_SQL = `
 CREATE TABLE scrum_teams (
     slug TEXT PRIMARY KEY,
     team_type TEXT NOT NULL,
     charter TEXT,
     lifetime TEXT NOT NULL DEFAULT 'persistent',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    terminates_on_milestone TEXT,
+    status TEXT NOT NULL DEFAULT 'active'
 );
 
-CREATE INDEX idx_scrum_teams_type ON scrum_teams(team_type);
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v15 — per-team read/write scope globs (scrum_team_scopes)
-// ---------------------------------------------------------------------------
-
-/**
- * v15: per-team scope globs — the path globs a team reads from and writes to.
- * A new table (not columns on `scrum_teams`) because scope is one-to-many: a
- * team carries an arbitrary number of read and write globs, so each is its own
- * row rather than a column on the registry. Mirrors how the operator position
- * history landed as its own table rather than a column on the contributor.
- *
- *   scrum_team_scopes — one row per (team, kind, glob). `team_slug` is an FK to
- *                       `scrum_teams.slug` — the owning team. `kind` is the
- *                       scope side (`read`/`write`); the column carries no CHECK,
- *                       so this closed set is documented on the `TeamScopeKind`
- *                       type and enforced at the store boundary, matching the
- *                       v2–v14 forward-compatible-TEXT convention. `glob` is a
- *                       single path glob (e.g. `src/auth/**`).
- *
- * Single-writer-per-path is the standing rule on the WRITE side: across the
- * whole registry, no two teams may declare write globs that could match the
- * same path. READ globs may overlap freely. The disjointness is validated at
- * the store boundary (a load-time cross-team check), not by a SQL constraint —
- * glob overlap is not expressible as a UNIQUE index.
- *
- * Index backs the per-team scope fetch (`team_slug`). Table and index names
- * carry the `scrum_` / `idx_scrum_` prefix per the domain-namespacing contract
- * established in v1.
- */
-export const SCRUM_MIGRATION_V15_SQL = `
 CREATE TABLE scrum_team_scopes (
     team_slug TEXT NOT NULL REFERENCES scrum_teams(slug),
     kind TEXT NOT NULL,
-    glob TEXT NOT NULL
+    glob TEXT NOT NULL,
+    PRIMARY KEY (team_slug, kind, glob)
 );
 
-CREATE INDEX idx_scrum_team_scopes_team ON scrum_team_scopes(team_slug);
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v16 — per-team three-role roster + position history
-//                 (scrum_team_members)
-// ---------------------------------------------------------------------------
-
-/**
- * v16: a per-team role roster with position history. Every team has exactly
- * three role slots (`tech_lead`/`engineer`/`implementer`), and each slot is an
- * append-only series of held intervals — who filled it over time, so a slot's
- * holder is POINT-IN-TIME, not current-holder-only. This is the per-(team, role)
- * generalization of the single-slot operator position history: the same
- * close-then-append rotation, parallelized across (team, role) pairs.
- *
- *   scrum_team_members — one row per held interval of one (team, role) slot.
- *                        `team_slug` is the owning team (a `scrum_teams.slug`).
- *                        `role` is which of the three slots the interval fills;
- *                        the column carries no CHECK, so the closed `TeamRole`
- *                        vocabulary is documented on the type and enforced at the
- *                        store boundary, matching the v2–v15 forward-compatible-
- *                        TEXT convention. `contributor_id` is a CT-UUID — a SOFT
- *                        reference (no foreign key), stored exactly as the
- *                        operator history stores its holder. `from_ts` is when
- *                        the holder took the slot; `to_ts` is when they vacated
- *                        it, or NULL for the CURRENT (open) holder. `reason` is a
- *                        free-text rotation rationale, or NULL.
- *
- * Invariant: at most one open row (`to_ts IS NULL`) per (team_slug, role) —
- * rotating a slot first closes its prior open row's `to_ts` to the new holder's
- * `from_ts`, then appends the new open row. Enforced in
- * `store.ts::rotateTeamMember`, not by a partial unique index, so the
- * close-then-append sequence stays one transaction. The same contributor MAY
- * fill multiple slots on a team — that is the team-of-one case and is permitted
- * (the store warns but never rejects).
- *
- * `id` is an AUTOINCREMENT surrogate (a contributor may hold a slot across
- * several disjoint intervals). `created_at` records when the row was appended
- * (distinct from `from_ts`, which can be backdated to the real rotation instant).
- * Index backs the per-(team, role) interval scan. Table and index names carry
- * the `scrum_` / `idx_scrum_` prefix per the domain-namespacing contract
- * established in v1.
- */
-export const SCRUM_MIGRATION_V16_SQL = `
 CREATE TABLE scrum_team_members (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,
     team_slug TEXT NOT NULL REFERENCES scrum_teams(slug),
     role TEXT NOT NULL,
     contributor_id TEXT NOT NULL,
@@ -615,206 +309,40 @@ CREATE TABLE scrum_team_members (
     created_at TEXT NOT NULL
 );
 
-CREATE INDEX idx_scrum_team_members_team_role ON scrum_team_members(team_slug, role);
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v17 — per-team accept/expose interface, append-only with
-//                 supersession (scrum_team_accepts + scrum_team_exposes)
-// ---------------------------------------------------------------------------
-
-/**
- * v17: a team's published interface — the ask types it ACCEPTS and the outputs
- * it EXPOSES. Two new tables (not columns on `scrum_teams`) because the
- * interface is one-to-many: a team accepts an arbitrary number of ask types and
- * exposes an arbitrary number of outputs, so each is its own row rather than a
- * column on the registry. Mirrors how the scope globs landed as their own table.
- *
- *   scrum_team_accepts — one row per (team, ask_type) the team handles.
- *                        `team_slug` is an FK to `scrum_teams.slug` — the owning
- *                        team. `ask_type` is a closed kebab-case ask type
- *                        (e.g. `schema-change`, `api-review`); the FORMAT is
- *                        validated at the store boundary (`^[a-z0-9]+(-[a-z0-9]+)*$`),
- *                        not by a SQL constraint.
- *   scrum_team_exposes — one row per (team, name, schema_ref) output other teams
- *                        consume. `team_slug` is the FK; `name` is the output's
- *                        handle and `schema_ref` points at its shape — both free
- *                        text.
- *
- * Both tables are APPEND-ONLY WITH SUPERSESSION: a published interface entry is
- * never hard-deleted — removing it is an explicit edit that flips `status` from
- * `active` to `superseded`, records a `reason`, and optionally points
- * `superseded_by` at a replacement row's id. The retired row stays for audit,
- * mirroring the supersession discipline on `scrum_decisions` and the per-task
- * acceptance criteria. Removing a published interface is a backward-compatibility
- * hazard, so the history must survive. `status` is a closed `active | superseded`
- * enum guarded at the store boundary; the column carries no SQL CHECK, matching
- * the v2–v16 forward-compatible-TEXT convention.
- *
- * `id` is an AUTOINCREMENT surrogate (a team may accept the same ask type across
- * several supersession generations). `created_at` records when the row was
- * appended. Indexes back the per-team interface fetch (`team_slug`). Table and
- * index names carry the `scrum_` / `idx_scrum_` prefix per the domain-namespacing
- * contract established in v1.
- */
-export const SCRUM_MIGRATION_V17_SQL = `
 CREATE TABLE scrum_team_accepts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,
     team_slug TEXT NOT NULL REFERENCES scrum_teams(slug),
     ask_type TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
-    superseded_by INTEGER REFERENCES scrum_team_accepts(id),
+    superseded_by TEXT REFERENCES scrum_team_accepts(id),
     reason TEXT,
     created_at TEXT NOT NULL
 );
 
 CREATE TABLE scrum_team_exposes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,
     team_slug TEXT NOT NULL REFERENCES scrum_teams(slug),
     name TEXT NOT NULL,
     schema_ref TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
-    superseded_by INTEGER REFERENCES scrum_team_exposes(id),
+    superseded_by TEXT REFERENCES scrum_team_exposes(id),
     reason TEXT,
     created_at TEXT NOT NULL
 );
 
-CREATE INDEX idx_scrum_team_accepts_team ON scrum_team_accepts(team_slug);
-CREATE INDEX idx_scrum_team_exposes_team ON scrum_team_exposes(team_slug);
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v18 — team lifecycle: terminating-milestone target + active/inactive
-//                 status (additive columns on scrum_teams)
-// ---------------------------------------------------------------------------
-
-/**
- * v18: two additive columns on `scrum_teams` completing the team lifecycle.
- * Both are `ALTER TABLE ... ADD COLUMN` so the migration is forward-only and
- * preserves every existing row — pre-v18 teams read `terminates_on_milestone`
- * NULL and `status` 'active', exactly the persistent-and-live default.
- *
- *   terminates_on_milestone — the concrete milestone id this team disbands on,
- *                             for a `lifetime = 'terminates_on_milestone'` team;
- *                             NULL for a `persistent` team. The base registry
- *                             (v14) carries only the `lifetime` archetype; this
- *                             column is the concrete target the archetype names.
- *                             A team carrying a target is disbanded when that
- *                             milestone closes (the milestone-close trigger).
- *                             The lifetime↔target consistency rule (a
- *                             terminates_on_milestone team must carry a target; a
- *                             persistent team must not) is enforced at the store
- *                             boundary, not by a SQL constraint — it spans two
- *                             columns and tolerates the gradual create-then-set
- *                             flow only at the boundary.
- *   status                  — the team's lifecycle state, a closed
- *                             `active | inactive` enum. `active` is the default a
- *                             live team carries; `inactive` is the terminal state
- *                             a disbanded team is flipped to (its scope released,
- *                             exposes superseded, roster vacated). The column
- *                             carries no CHECK, so the closed set is documented on
- *                             the `TeamStatus` type and guarded at the store
- *                             boundary, matching the v2–v17 forward-compatible-
- *                             TEXT convention.
- *
- * `terminates_on_milestone` is NOT a foreign key to `scrum_milestones`: a team
- * may name a target milestone that is created later, and the soft reference
- * mirrors how the roster's `contributor_id` and the operator history hold their
- * referents without an FK.
- */
-export const SCRUM_MIGRATION_V18_SQL = `
-ALTER TABLE scrum_teams ADD COLUMN terminates_on_milestone TEXT;
-ALTER TABLE scrum_teams ADD COLUMN status TEXT NOT NULL DEFAULT 'active';
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v19 — per-team Lore memory layer (scrum_lores)
-// ---------------------------------------------------------------------------
-
-/**
- * v19: a per-team Lore layer — the accumulated team conventions and wisdom a
- * team writes down for itself. A new table (not columns on `scrum_teams`)
- * because Lore is one-to-many: a team accrues an arbitrary number of entries
- * over its lifetime, so each is its own row rather than a column on the
- * registry. Mirrors how the scope globs and the accept/expose interface landed
- * as their own tables.
- *
- *   scrum_lores — one row per Lore entry a team has recorded. `team_slug` is an
- *                 FK to `scrum_teams.slug` — the owning team. `body` is the
- *                 entry's free-text content (a convention, a lesson, a standing
- *                 note). `author_contributor_id` is the CT-UUID of the
- *                 contributor who wrote it — a SOFT reference (no foreign key),
- *                 stored exactly as the roster and operator history store their
- *                 holders. `created_at` records when the entry was appended.
- *
- * APPEND-ONLY: Lore is never updated or deleted in place — a correction is a
- * NEW entry, not an edit, so the full history of what a team believed at each
- * point survives. This mirrors the position-history idiom (intervals are
- * appended, never rewritten). At this version a Lore entry carried no lifecycle
- * state at all; v28 adds the supersession pointer (`superseded_by` + `reason`)
- * once compaction gives an entry exactly one state to flip — see v28 for the
- * rationale.
- *
- * Readable by ALL, but written ONLY by the team's current `tech_lead`. The
- * authorship guard is enforced at the store boundary in `recordLore` (reading
- * the team's open `tech_lead` roster slot), NOT by a SQL constraint — the rule
- * spans two tables (the entry's author vs the team's current tech_lead) and is
- * not expressible as a column CHECK.
- *
- * `id` is an AUTOINCREMENT surrogate. Index backs the per-team Lore fetch
- * (`team_slug`). Table and index names carry the `scrum_` / `idx_scrum_` prefix
- * per the domain-namespacing contract established in v1.
- */
-export const SCRUM_MIGRATION_V19_SQL = `
 CREATE TABLE scrum_lores (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,
     team_slug TEXT NOT NULL REFERENCES scrum_teams(slug),
     body TEXT NOT NULL,
     author_contributor_id TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    superseded_by TEXT,
+    reason TEXT,
+    embedding F32_BLOB(32)
 );
 
-CREATE INDEX idx_scrum_lores_team ON scrum_lores(team_slug);
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v20 — per-artifact Annotation memory layer (scrum_annotations)
-// ---------------------------------------------------------------------------
-
-/**
- * v20: an Annotation layer — the lightest memory layer. An Annotation is a
- * per-artifact note captured during work, visible to ANYONE reading the target,
- * written by the artifact's owner. A new table (not columns on an existing one)
- * because an Annotation is not owned by any one artifact table: a single note
- * may hang off a task, a team, or a decision, so the target is addressed by a
- * (kind, ref) pair rather than a typed foreign key.
- *
- *   scrum_annotations — one row per note appended to a target artifact.
- *                 `target_kind` is the artifact class the note attaches to
- *                 (`task` | `team` | `decision`) — a closed enum carrying NO SQL
- *                 CHECK; the boundary guard in `addAnnotation` enforces it, and
- *                 the index orders by it. `target_ref` is the specific target's
- *                 identifier within that class (a task id, a team slug, a
- *                 decision id) — a SOFT reference: it spans multiple tables by
- *                 `target_kind`, so it carries NO foreign key and the store does
- *                 NOT verify the target row exists, matching how the roster's
- *                 `contributor_id` holds its referent without an FK. `body` is
- *                 the note's free text. `author` records who wrote it.
- *                 `created_at` records when it was appended.
- *
- * APPEND-ONLY, no supersession column: an Annotation is never updated or deleted
- * in place — a correction is a NEW row, not an edit, so the full history of what
- * was noted at each point survives. Mirrors the per-team Lore idiom (entries are
- * appended, never rewritten); an Annotation has no lifecycle state to flip, so
- * it carries no `status`/`superseded_by` pointer.
- *
- * `id` is an AUTOINCREMENT surrogate. The index backs the per-target fetch
- * (`target_kind, target_ref`). Table and index names carry the `scrum_` /
- * `idx_scrum_` prefix per the domain-namespacing contract established in v1.
- */
-export const SCRUM_MIGRATION_V20_SQL = `
 CREATE TABLE scrum_annotations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,
     target_kind TEXT NOT NULL,
     target_ref TEXT NOT NULL,
     body TEXT NOT NULL,
@@ -822,174 +350,21 @@ CREATE TABLE scrum_annotations (
     created_at TEXT NOT NULL
 );
 
-CREATE INDEX idx_scrum_annotations_target ON scrum_annotations(target_kind, target_ref);
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v21 — gated Codex write protocol on scrum_decisions
-// ---------------------------------------------------------------------------
-
-/**
- * v21: a per-subtype write gate on the Codex (`scrum_decisions`). Certain
- * decision subtypes are not durably accepted the moment they are recorded — they
- * land as a DRAFT and become accepted only when their required gate/review is
- * approved. Three nullable TEXT columns, no new table:
- *
- *   write_status       — the decision's write-gate state, a closed
- *                        `draft | approved | rejected` enum. Set to `'draft'` on
- *                        record for a GATED-kind decision (`adr | glossary |
- *                        pattern`); NULL for a non-gated decision (no kind, or a
- *                        kind outside the gated set) — which bypasses the gate
- *                        and records as `accepted` immediately. `approved` flips
- *                        the row's `status` to `'accepted'`; `rejected` blocks
- *                        the decision (its `status` stays `'draft'`, never
- *                        `accepted`).
- *   gate_responder     — who resolved the gate (approved/rejected it). NULL while
- *                        `draft` or on a non-gated row.
- *   gate_responded_at  — ISO-8601 timestamp of the gate-resolving write. NULL
- *                        until resolved.
- *
- * The per-kind rule (a human approve gate for `adr`/`pattern`; a tech_lead
- * review for `glossary`, where the responder must currently hold a `tech_lead`
- * slot on some team) spans the team roster and is enforced at the store boundary
- * in `approveDecision`, NOT by a SQL constraint.
- *
- * `ADD COLUMN` with a NULL default is safe on a populated table (every existing
- * decision is already durably accepted and needs no gate). No CHECK — the
- * columns stay forward-compatible TEXT, matching the v2–v20 convention; the
- * closed `write_status` vocabulary is documented on `DecisionWriteStatus` in
- * `types.ts`.
- */
-export const SCRUM_MIGRATION_V21_SQL = `
-ALTER TABLE scrum_decisions ADD COLUMN write_status TEXT;
-ALTER TABLE scrum_decisions ADD COLUMN gate_responder TEXT;
-ALTER TABLE scrum_decisions ADD COLUMN gate_responded_at TEXT;
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v22 — Lore→Codex promotion provenance on scrum_decisions
-// ---------------------------------------------------------------------------
-
-/**
- * v22: a single nullable provenance column linking a Codex decision back to the
- * team Lore entry it was promoted FROM. When a generally-applicable Lore entry
- * is lifted into the Codex (`scrum_decisions`), the resulting decision carries
- * the source `scrum_lores.id` so the promotion is traceable both ways: the Lore
- * entry survives append-only in `scrum_lores`, and the decision points back at
- * its origin. NULL for a decision authored directly (the common case) — every
- * existing decision predates promotion, so the backfill default is NULL.
- *
- *   source_lore_id — the `scrum_lores.id` this decision was promoted from, or
- *                    NULL when the decision was authored directly. An INTEGER
- *                    REFERENCES the Lore row; the Lore is never hard-deleted, so
- *                    the back-pointer always resolves.
- *
- * `ADD COLUMN` with a NULL default is safe on a populated table. No new table —
- * provenance is one additive column, matching the v4/v8/v21 in-place extensions
- * of `scrum_decisions` rather than a side table.
- */
-export const SCRUM_MIGRATION_V22_SQL = `
-ALTER TABLE scrum_decisions ADD COLUMN source_lore_id INTEGER REFERENCES scrum_lores(id);
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v23 — cross-team ask protocol (scrum_asks)
-// ---------------------------------------------------------------------------
-
-/**
- * v23: the cross-team ask protocol — one row per ask a team files against a
- * sibling team. An ask is the request a worker raises when its work is blocked
- * on another team's published interface: "team A needs team B to handle ask type
- * T, and A's artifact ART is blocked until B does". A new table (not a column on
- * an existing one) because an ask is its own entity, relating two teams and a
- * blocking artifact rather than being owned by any single one:
- *
- *   scrum_asks — one row per filed ask. `from_team` and `to_team` are both
- *                `scrum_teams.slug` FKs — the team raising the ask and the
- *                sibling it is asking. `ask_type` is the kebab-case interface
- *                type the ask targets; at filing time it MUST be one of
- *                `to_team`'s ACTIVE `scrum_team_accepts` rows — a team can only
- *                be asked for what it has published it accepts. `blocking_artifact`
- *                is the `scrum_tasks.id` of the artifact blocked on the ask — the
- *                FK guarantees the cited artifact exists. `state` is the ask
- *                lifecycle; a freshly-filed ask is always `'filed'`.
- *
- * Validation that spans tables (the `ask_type ∈ to_team.accepts` membership
- * rule) is enforced at the store boundary in `fileAsk`, NOT by a SQL constraint
- * — it reads the sibling team's active accept interface, which is not expressible
- * as a column CHECK. The two team FKs and the artifact FK ARE expressed in the
- * schema, so an unknown team or artifact is rejected by the engine even before
- * the boundary check runs.
- *
- * `id` is an AUTOINCREMENT surrogate. `state` carries no CHECK — the column stays
- * forward-compatible TEXT, matching the v2–v22 convention; the closed `AskState`
- * vocabulary is documented on the `AskRow` type in `types.ts`. Indexes back the
- * per-recipient fetch (`to_team`) and the per-artifact fetch (`blocking_artifact`).
- * Table and index names carry the `scrum_` / `idx_scrum_` prefix per the
- * domain-namespacing contract established in v1.
- */
-export const SCRUM_MIGRATION_V23_SQL = `
 CREATE TABLE scrum_asks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,
     from_team TEXT NOT NULL REFERENCES scrum_teams(slug),
     to_team TEXT NOT NULL REFERENCES scrum_teams(slug),
     ask_type TEXT NOT NULL,
     blocking_artifact TEXT NOT NULL REFERENCES scrum_tasks(id),
     state TEXT NOT NULL DEFAULT 'filed',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    mapped_artifact TEXT,
+    rejected_reason TEXT,
+    counter_proposal TEXT
 );
 
-CREATE INDEX idx_scrum_asks_to_team ON scrum_asks(to_team);
-CREATE INDEX idx_scrum_asks_blocking_artifact ON scrum_asks(blocking_artifact);
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v24 — escalation protocol (scrum_escalations)
-// ---------------------------------------------------------------------------
-
-/**
- * v24: the escalation protocol — a typed escalation that walks UP a fixed
- * authority chain one rung at a time, with per-receiver resolution modes. A new
- * table (not columns on an existing one) because an escalation is its own
- * entity referenced from many rows, and because the walk-up is append-only: a
- * single escalation that climbs the chain materializes as a SERIES of rows, one
- * per rung it touched, linked by `walked_up_from`.
- *
- *   scrum_escalations — one row per typed escalation AT one rung of the chain.
- *                 `task_id` is the owning task — a SOFT reference (no FK), held
- *                 exactly as the roster's `contributor_id` and the annotation's
- *                 `target_ref` hold their referents. `escalation_type` is the
- *                 closed kind (`blocked` | `ambiguous` | `conflict` |
- *                 `missing_context`); `layer` is the rung of the walk-up chain
- *                 (`implementer` → `engineer` → `tech_lead` → `pm` → `strategy`
- *                 → `human`); `state` is the four-state lifecycle (`open` |
- *                 `resolved` | `re_escalated` | `auto_bubbled`). None carry a SQL
- *                 CHECK — the columns stay forward-compatible TEXT, matching the
- *                 v2–v22 convention; the closed vocabularies are documented on
- *                 the `EscalationType` / `EscalationLayer` / `EscalationState`
- *                 types and enforced at the store boundary. `summary` is the
- *                 receiver-facing prose. `raised_by` / `resolved_by` record
- *                 provenance. `resolution_mode` is the `EscalationResolutionMode`
- *                 applied to close the row (NULL while `open`); `resolution_note`
- *                 is the receiver's rationale. `walked_up_from` is the
- *                 `scrum_escalations.id` this row was kicked up FROM (NULL for a
- *                 root) — the back-pointer that reconstructs the chain.
- *
- * Walk-up is APPEND-ONLY with explicit linkage, not an in-place layer bump: a
- * `re_escalate` / `auto_bubble` closes the current row (`state` →
- * `re_escalated` / `auto_bubbled`) and APPENDS a fresh `open` row at the next
- * rung carrying `walked_up_from = <closed row id>`. The single-rung advance is
- * enforced at the store boundary against the canonical `ESCALATION_CHAIN`, NOT
- * by SQL — "one layer up, no skips" spans two rows and is not expressible as a
- * column constraint.
- *
- * Indexes back the two hot reads: open escalations per task (`task_id, state`)
- * and the chain back-link (`walked_up_from`). Table and index names carry the
- * `scrum_` / `idx_scrum_` prefix per the domain-namespacing contract.
- */
-export const SCRUM_MIGRATION_V24_SQL = `
 CREATE TABLE scrum_escalations (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL,
     escalation_type TEXT NOT NULL,
     layer TEXT NOT NULL,
@@ -999,163 +374,67 @@ CREATE TABLE scrum_escalations (
     resolution_mode TEXT,
     resolution_note TEXT,
     resolved_by TEXT,
-    walked_up_from INTEGER REFERENCES scrum_escalations(id),
+    walked_up_from TEXT REFERENCES scrum_escalations(id),
+    attributes TEXT,
     created_at TEXT NOT NULL,
     resolved_at TEXT
 );
 
+CREATE VIEW scrum_criterion_head AS
+SELECT v.criterion_id, v.channel, v.verdict, v.reason, v.by_whom, v.comment, v.at
+FROM scrum_criterion_verdicts v
+WHERE v.id = (
+    SELECT MAX(v2.id) FROM scrum_criterion_verdicts v2 WHERE v2.criterion_id = v.criterion_id
+);
+
+CREATE VIEW scrum_ready_eligible AS
+SELECT id FROM scrum_tasks WHERE deleted_at IS NULL AND status IN ('ready', 'backlog');
+
+CREATE VIEW scrum_current_operator AS
+SELECT contributor_id, from_ts, to_ts, created_at, created_by
+FROM scrum_operator_history
+WHERE to_ts IS NULL;
+
+CREATE INDEX idx_scrum_acceptance_criteria_task ON scrum_acceptance_criteria(task_id);
+CREATE INDEX idx_scrum_criterion_verdicts_criterion ON scrum_criterion_verdicts(criterion_id);
+CREATE INDEX idx_scrum_events_task_ts ON scrum_events(task_id, ts DESC);
+CREATE INDEX idx_scrum_tasks_status_event ON scrum_tasks(status, last_event_at DESC);
+CREATE INDEX idx_scrum_run_links_path ON scrum_run_links(run_path);
+CREATE INDEX idx_scrum_deps_to_task ON scrum_deps(to_task_id);
+CREATE INDEX idx_scrum_tags_tag ON scrum_tags(tag);
+CREATE INDEX idx_scrum_tasks_parent ON scrum_tasks(parent_id);
+CREATE INDEX idx_scrum_decisions_topic ON scrum_decisions(topic);
+CREATE INDEX idx_scrum_decisions_status ON scrum_decisions(status);
+CREATE INDEX idx_scrum_contributors_github ON scrum_contributors(github);
+CREATE INDEX idx_scrum_contributors_email ON scrum_contributors(email);
+CREATE INDEX idx_scrum_operator_history_interval ON scrum_operator_history(from_ts, to_ts);
+CREATE INDEX idx_scrum_teams_type ON scrum_teams(team_type);
+CREATE INDEX idx_scrum_team_scopes_team ON scrum_team_scopes(team_slug);
+CREATE INDEX idx_scrum_team_members_team_role ON scrum_team_members(team_slug, role);
+CREATE INDEX idx_scrum_team_accepts_team ON scrum_team_accepts(team_slug);
+CREATE INDEX idx_scrum_team_exposes_team ON scrum_team_exposes(team_slug);
+CREATE INDEX idx_scrum_lores_team ON scrum_lores(team_slug);
+CREATE INDEX idx_scrum_annotations_target ON scrum_annotations(target_kind, target_ref);
+CREATE INDEX idx_scrum_asks_to_team ON scrum_asks(to_team);
+CREATE INDEX idx_scrum_asks_blocking_artifact ON scrum_asks(blocking_artifact);
 CREATE INDEX idx_scrum_escalations_task_state ON scrum_escalations(task_id, state);
 CREATE INDEX idx_scrum_escalations_walked_up_from ON scrum_escalations(walked_up_from);
 `;
 
-// ---------------------------------------------------------------------------
-// Migration v25 — ask triage/respond: response provenance on scrum_asks
-// ---------------------------------------------------------------------------
-
 /**
- * v25: three additive columns on `scrum_asks` completing the ask triage/respond
- * step. A filed ask is triaged to one of three verdicts — accept, reject, or
- * counter — and the verdict's provenance lands on the ask row itself rather than
- * a new table, because a response is a one-to-one property of the ask it answers
- * (an ask is filed once and responded to once). All three are
- * `ALTER TABLE ... ADD COLUMN` so the migration is forward-only and preserves
- * every existing row — a pre-v25 (still-`filed`) ask reads all three NULL.
- *
- *   mapped_artifact  — set ONLY on an `accept`: the `scrum_tasks.id` of the
- *                      single child task the accepting team created under its
- *                      tree to satisfy the ask. A SOFT reference (no FK) so it
- *                      matches how the escalation roster and operator history
- *                      hold their referents; the accept path creates the child
- *                      in the same transaction, so the id always resolves at
- *                      write time. NULL on `reject` / `counter`.
- *   rejected_reason  — set ONLY on a `reject`: the responder's free-text
- *                      rationale for declining the ask. NULL otherwise.
- *   counter_proposal — set ONLY on a `counter`: the responder's free-text
- *                      counter-proposal (a different artifact, scope, or
- *                      interface than the ask requested). NULL otherwise.
- *
- * The `state` column (v23) carries the verdict itself — `accepted` | `rejected`
- * | `countered` — extending the closed `AskState` set documented on the `AskRow`
- * type; the column keeps no CHECK, matching the v2–v24 forward-compatible-TEXT
- * convention. The "exactly one of the three columns is non-NULL, and it matches
- * the verdict" invariant is enforced at the store boundary in `respondAsk`, not
- * by SQL — it spans the verdict and three columns and is not expressible as a
- * column CHECK.
+ * Current scrum-domain store version. The redesigned base schema is a fresh
+ * v1; there is no incremental chain. Stamped as the per-artifact
+ * `schema_version` on the reusable provenance block (see `taskProvenance` in
+ * `store.ts`), so every scrum row reports the schema it was read under.
  */
-export const SCRUM_MIGRATION_V25_SQL = `
-ALTER TABLE scrum_asks ADD COLUMN mapped_artifact TEXT;
-ALTER TABLE scrum_asks ADD COLUMN rejected_reason TEXT;
-ALTER TABLE scrum_asks ADD COLUMN counter_proposal TEXT;
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v26 — escalation staleness auto-bubble marker
-// ---------------------------------------------------------------------------
-
-/**
- * v26: a nullable `attributes` JSON column on `scrum_escalations` carrying
- * structured per-row markers. The staleness floor writes
- * `{ "auto_bubbled": true, "linked_escalation": <new row id> }` onto a row it
- * bubbles, so the closed (`auto_bubbled`) row carries BOTH the marker and a
- * FORWARD pointer to the fresh row one rung up. This complements the existing
- * `walked_up_from` BACK-pointer (new → original): together they make the
- * staleness walk-up traversable in either direction, and the marker
- * distinguishes a clock-driven bubble from a receiver-driven `re_escalate` at a
- * glance without reading `resolution_mode`.
- *
- * A nullable column (not a new table) because the marker is a property OF an
- * existing escalation row, not its own entity. NULL = no marker (the default
- * for every raised / re-escalated / resolved row). The column carries no SQL
- * CHECK — it stays forward-compatible TEXT, matching the v24 convention; the
- * `EscalationAttributes` shape is documented on the type and parsed tolerantly
- * at the store read boundary so one corrupt row cannot brick an escalation read.
- */
-export const SCRUM_MIGRATION_V26_SQL = `
-ALTER TABLE scrum_escalations ADD COLUMN attributes TEXT;
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v27 — team binding on scrum_tasks
-// ---------------------------------------------------------------------------
-
-/**
- * v27: add an OPTIONAL `team_slug` to `scrum_tasks` — the team a task is bound
- * to. One nullable TEXT column, no new table:
- *
- *   team_slug — the `scrum_teams.slug` that owns this task, or NULL for an
- *               unbound (team-less) task. A SOFT reference (no foreign key),
- *               held exactly as the escalation roster and operator history hold
- *               their referents — the binding is forward-compatible with a team
- *               registered later, and registry membership is validated at the
- *               CLI boundary on `--team`, not by a SQL constraint.
- *
- * This is the foundation column every downstream role-bound flag and the
- * decompose stamping write to. `ADD COLUMN` with a NULL default is safe on a
- * populated table (no existing row needs a team). No CHECK — the column stays
- * forward-compatible TEXT, matching the v2–v26 convention.
- */
-export const SCRUM_MIGRATION_V27_SQL = `
-ALTER TABLE scrum_tasks ADD COLUMN team_slug TEXT;
-`;
-
-// ---------------------------------------------------------------------------
-// Migration v28 — Lore supersession (compaction lifecycle on scrum_lores)
-// ---------------------------------------------------------------------------
-
-/**
- * v28: a supersession pointer on `scrum_lores` — the compaction lifecycle. Two
- * nullable TEXT columns, no new table:
- *
- *   superseded_by — what replaced this entry, or NULL while the entry is LIVE.
- *                   A TYPED SOFT reference in `lore:<id>` | `decision:<id>`
- *                   form: a consolidation replaces an entry with another Lore
- *                   row of the same team, while a Lore→Codex promotion replaces
- *                   it with a `scrum_decisions` row. The replacement spans two
- *                   tables, so the column carries NO foreign key — the (kind,
- *                   ref) addressing matches the annotation target idiom (v20);
- *                   referent existence is validated at the store boundary in
- *                   `supersedeLore`, not by SQL.
- *   reason        — why the entry was replaced. NULL while live; required by
- *                   the store boundary on every supersession write, matching
- *                   the `scrum_decisions` supersession convention.
- *
- * v19 deliberately shipped Lore with no supersession column ("a Lore entry has
- * no lifecycle state to flip"). Compaction introduces exactly one such state:
- * an entry FOLDED into a distilled consolidation, or PROMOTED into the Codex,
- * is replaced-with-pointer — the append-only-with-supersession discipline, not
- * an edit or a delete. The row survives untouched (`body`, author, timestamp
- * immutable); only the live/superseded read surface changes. Live entries are
- * `WHERE superseded_by IS NULL` — the filter the team artifact's recent window
- * and the disband Lore→Codex sweep read, so a folded entry leaves the visible
- * window the moment its replacement lands while history stays fully auditable.
- *
- * A supersession is resolved ONCE: re-superseding an already-superseded entry
- * is refused at the store boundary (mirroring the decision write-gate's
- * one-shot rule). `ADD COLUMN` with a NULL default is safe on a populated
- * table (every existing entry is live). No CHECK — the columns stay
- * forward-compatible TEXT, matching the v2–v27 convention.
- */
-export const SCRUM_MIGRATION_V28_SQL = `
-ALTER TABLE scrum_lores ADD COLUMN superseded_by TEXT;
-ALTER TABLE scrum_lores ADD COLUMN reason TEXT;
-`;
-
-/**
- * Current scrum-domain store version — the highest migration version this
- * module registers. Stamped as the per-artifact `schema_version` on the
- * reusable provenance block (see `taskProvenance` in `store.ts`), so every
- * scrum row reports the schema it was read under. Bump in lockstep with the
- * top migration version on every additive hop.
- */
-export const SCRUM_SCHEMA_VERSION = 28;
+export const SCRUM_SCHEMA_VERSION = 1;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
- * side-effect AND from tests that have hit `clearRegistry()` — both
- * paths land a single scrum/{v1..vN} entry set. Matches
- * `ensureAcbSchemaRegistered` exactly; the guard exists because bun shares
- * module cache across test files, so a module-scoped `registerSchema` runs
- * only once per process and cannot recover after a registry wipe.
+ * side-effect AND from tests that have hit `clearRegistry()` — both paths land
+ * a single scrum/v1 entry. The guard exists because bun shares module cache
+ * across test files, so a module-scoped `registerSchema` runs only once per
+ * process and cannot recover after a registry wipe.
  */
 export function ensureScrumSchemaRegistered(): void {
   if (listDomains().includes('scrum')) return;
@@ -1164,222 +443,9 @@ export function ensureScrumSchemaRegistered(): void {
     migrations: [
       {
         version: 1,
-        description:
-          'create scrum_tasks + scrum_milestones + scrum_tags + scrum_deps + scrum_events + scrum_run_links + scrum_context_bundles',
+        description: 'create the redesigned sync-safe scrum schema (ULID/composite PKs, no rowid)',
         up: async (store) => {
           await store.exec(SCRUM_MIGRATION_V1_SQL);
-        },
-      },
-      {
-        version: 2,
-        description:
-          'create scrum_decisions + idx_scrum_decisions_topic + idx_scrum_decisions_status',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V2_SQL);
-        },
-      },
-      {
-        version: 3,
-        description:
-          'add scrum_tasks.parent_id (self-FK) + scrum_tasks.layer + idx_scrum_tasks_parent',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V3_SQL);
-        },
-      },
-      {
-        version: 4,
-        description:
-          'add scrum_decisions.superseded_by (self-FK) + scrum_decisions.reason for append-only supersession',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V4_SQL);
-        },
-      },
-      {
-        version: 5,
-        description:
-          'add scrum_tasks.acceptance_json (nullable JSON) for first-class acceptance criteria',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V5_SQL);
-        },
-      },
-      {
-        version: 6,
-        description:
-          'add scrum_tasks.bounds_json (nullable JSON) for milestone-authored declared bounds',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V6_SQL);
-        },
-      },
-      {
-        version: 7,
-        description:
-          'add scrum_tasks.terminal_reason + scrum_tasks.terminal_detail for cancel provenance',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V7_SQL);
-        },
-      },
-      {
-        version: 8,
-        description: 'add scrum_decisions.kind (nullable) for the Codex subtype taxonomy',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V8_SQL);
-        },
-      },
-      {
-        version: 9,
-        description:
-          'add scrum_tasks.last_modified_by + scrum_tasks.last_modified_at for last-touch provenance',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V9_SQL);
-        },
-      },
-      {
-        version: 10,
-        description: 'add scrum_milestones.initiative (nullable) for the initiative grouping tier',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V10_SQL);
-        },
-      },
-      {
-        version: 11,
-        description:
-          'add scrum_tasks.worker_id + scrum_tasks.run_id for executing-worker/run attribution',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V11_SQL);
-        },
-      },
-      {
-        version: 12,
-        description:
-          'create scrum_contributors (CT-UUID registry) + idx_scrum_contributors_github + idx_scrum_contributors_email',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V12_SQL);
-        },
-      },
-      {
-        version: 13,
-        description:
-          'create scrum_operator_history (operator-of-record position history) + idx_scrum_operator_history_interval',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V13_SQL);
-        },
-      },
-      {
-        version: 14,
-        description: 'create scrum_teams (team registry) + idx_scrum_teams_type',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V14_SQL);
-        },
-      },
-      {
-        version: 15,
-        description:
-          'create scrum_team_scopes (per-team read/write scope globs) + idx_scrum_team_scopes_team',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V15_SQL);
-        },
-      },
-      {
-        version: 16,
-        description:
-          'create scrum_team_members (per-team three-role roster + position history) + idx_scrum_team_members_team_role',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V16_SQL);
-        },
-      },
-      {
-        version: 17,
-        description:
-          'create scrum_team_accepts + scrum_team_exposes (per-team accept/expose interface, append-only with supersession) + idx_scrum_team_accepts_team + idx_scrum_team_exposes_team',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V17_SQL);
-        },
-      },
-      {
-        version: 18,
-        description:
-          'add scrum_teams.terminates_on_milestone (nullable target) + scrum_teams.status (active|inactive) for the team lifecycle',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V18_SQL);
-        },
-      },
-      {
-        version: 19,
-        description:
-          'create scrum_lores (per-team append-only Lore memory layer, tech_lead-authored) + idx_scrum_lores_team',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V19_SQL);
-        },
-      },
-      {
-        version: 20,
-        description:
-          'create scrum_annotations (per-artifact append-only Annotation memory layer, soft target reference) + idx_scrum_annotations_target',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V20_SQL);
-        },
-      },
-      {
-        version: 21,
-        description:
-          'add scrum_decisions.write_status (draft|approved|rejected) + gate_responder + gate_responded_at for the gated Codex write protocol',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V21_SQL);
-        },
-      },
-      {
-        version: 22,
-        description:
-          'add scrum_decisions.source_lore_id (nullable self-FK to scrum_lores) for Lore→Codex promotion provenance',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V22_SQL);
-        },
-      },
-      {
-        version: 23,
-        description:
-          'create scrum_asks (cross-team ask protocol) + idx_scrum_asks_to_team + idx_scrum_asks_blocking_artifact',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V23_SQL);
-        },
-      },
-      {
-        version: 24,
-        description:
-          'create scrum_escalations (typed escalation walk-up chain + four-state machine + resolution modes) + idx_scrum_escalations_task_state + idx_scrum_escalations_walked_up_from',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V24_SQL);
-        },
-      },
-      {
-        version: 25,
-        description:
-          'add scrum_asks.mapped_artifact + scrum_asks.rejected_reason + scrum_asks.counter_proposal for the ask triage/respond verdict provenance',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V25_SQL);
-        },
-      },
-      {
-        version: 26,
-        description:
-          'add scrum_escalations.attributes (nullable JSON) carrying the staleness auto-bubble marker { auto_bubbled, linked_escalation }',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V26_SQL);
-        },
-      },
-      {
-        version: 27,
-        description: 'add scrum_tasks.team_slug (nullable soft reference) for the team binding',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V27_SQL);
-        },
-      },
-      {
-        version: 28,
-        description:
-          'add scrum_lores.superseded_by (typed soft ref lore:<id> | decision:<id>) + reason — the compaction lifecycle (append-only-with-supersession)',
-        up: async (store) => {
-          await store.exec(SCRUM_MIGRATION_V28_SQL);
         },
       },
     ],

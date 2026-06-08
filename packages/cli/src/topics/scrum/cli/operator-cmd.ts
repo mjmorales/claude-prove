@@ -13,11 +13,14 @@
  *                              and syncs `charter.md`'s `operator_of_record`
  *                              frontmatter field to the new holder. Prints the
  *                              new open interval row.
- *   resolve --at ISO           Resolve the contributor who held the role AT the
- *                              given instant (the interval `[from_ts, to_ts)`
- *                              containing it) — NOT the current holder. Prints
- *                              the matched contributor JSON row, or exits 1 on a
- *                              miss (no holder in effect at that instant).
+ *   resolve [--at ISO]         With `--at`: resolve the contributor who held the
+ *                              role AT the given instant (the interval
+ *                              `[from_ts, to_ts)` containing it) — point-in-time
+ *                              attribution. Without `--at`: resolve the CURRENT
+ *                              holder (the open `to_ts IS NULL` interval) via the
+ *                              shared `scrum_current_operator` view. Prints the
+ *                              matched contributor JSON row, or exits 1 on a miss
+ *                              (no holder in effect, or the role is unset).
  *   history                    [--human]
  *                              Print the full position history, oldest first.
  *
@@ -141,20 +144,19 @@ function syncCharterOperator(workspaceRoot: string, contributorId: string): bool
 // ---------------------------------------------------------------------------
 
 async function doResolve(store: ScrumStore, flags: OperatorCmdFlags): Promise<number> {
-  if (flags.at === undefined || flags.at.length === 0) {
-    process.stderr.write('scrum operator resolve: --at <ISO-8601 instant> is required\n');
-    return 1;
-  }
-
-  const row = await store.operatorOfRecordAt(flags.at);
+  // `--at` selects point-in-time attribution (the interval scan); omitting it
+  // resolves the CURRENT holder via the shared `scrum_current_operator` view.
+  const at = flags.at !== undefined && flags.at.length > 0 ? flags.at : undefined;
+  const row = at !== undefined ? await store.operatorOfRecordAt(at) : await store.currentOperator();
+  const at_label = at ?? 'now';
   if (row === null) {
     process.stdout.write('null\n');
-    process.stderr.write(`scrum operator resolve: no holder in effect at ${flags.at}\n`);
+    process.stderr.write(`scrum operator resolve: no holder in effect at ${at_label}\n`);
     return 1;
   }
 
   process.stdout.write(`${JSON.stringify(row)}\n`);
-  process.stderr.write(`scrum operator resolve: ${row.id} (${row.slug}) at ${flags.at}\n`);
+  process.stderr.write(`scrum operator resolve: ${row.id} (${row.slug}) at ${at_label}\n`);
   return 0;
 }
 

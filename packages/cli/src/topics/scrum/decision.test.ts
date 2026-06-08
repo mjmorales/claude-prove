@@ -22,11 +22,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { clearRegistry, openStore, registerSchema, runMigrations } from '@claude-prove/store';
-import {
-  SCRUM_MIGRATION_V1_SQL,
-  SCRUM_MIGRATION_V2_SQL,
-  ensureScrumSchemaRegistered,
-} from './schemas';
+import { SCRUM_MIGRATION_V1_SQL, ensureScrumSchemaRegistered } from './schemas';
 import { type ScrumStore, openScrumStore } from './store';
 
 // ---------------------------------------------------------------------------
@@ -101,17 +97,20 @@ describe('ScrumStore — decisions: schema materialization', () => {
       'write_status:TEXT:0',
       'gate_responder:TEXT:0',
       'gate_responded_at:TEXT:0',
-      // v22 appends the Lore→Codex promotion provenance, NULL default.
-      'source_lore_id:INTEGER:0',
+      // The Lore→Codex promotion provenance is a TEXT ULID ref to scrum_lores.
+      'source_lore_id:TEXT:0',
+      // Nullable fixed-32-dim float embedding, unpopulated at this layer (a
+      // later semantic-search phase backfills it).
+      'embedding:F32_BLOB:0',
     ]);
   });
 });
 
 // ===========================================================================
-// 2. v1 -> v2 migration preserves existing data
+// 2. The consolidated v1 schema co-locates scrum_decisions with the core tables
 // ===========================================================================
 
-describe('ScrumStore — decisions: v1 -> v2 migration', () => {
+describe('ScrumStore — decisions: v1 schema materialization', () => {
   let projectDir: string;
 
   beforeEach(() => {
@@ -122,74 +121,51 @@ describe('ScrumStore — decisions: v1 -> v2 migration', () => {
     rmSync(projectDir, { recursive: true, force: true });
   });
 
-  test('v1 -> v2 preserves scrum_tasks + scrum_events and leaves scrum_decisions empty', async () => {
+  test('the single v1 DDL stands up scrum_decisions alongside scrum_tasks + scrum_events', async () => {
     const dbPath = join(projectDir, 'prove.db');
 
-    // -- Phase 1: v1-only registration, seed data ---------------------------
+    // The redesigned schema is one fresh v1 hop: scrum_decisions is created in
+    // the same DDL as the core tables (no separate add-decisions migration).
     clearRegistry();
     registerSchema({
       domain: 'scrum',
       migrations: [
         {
           version: 1,
-          description: 'v1-only test fixture',
+          description: 'v1 consolidated test fixture',
           up: (db) => db.exec(SCRUM_MIGRATION_V1_SQL),
         },
       ],
     });
 
     const v1Store = await openStore({ path: dbPath });
-    await runMigrations(v1Store);
+    const result = await runMigrations(v1Store);
+    expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([1]);
+
     await v1Store.exec(`
       INSERT INTO scrum_tasks (id, title, status, created_at)
         VALUES ('t-seed', 'Seeded task', 'backlog', '2026-04-01T00:00:00Z');
-      INSERT INTO scrum_events (task_id, ts, kind, payload_json)
-        VALUES ('t-seed', '2026-04-01T00:00:00Z', 'task_created', '{"title":"Seeded task"}');
+      INSERT INTO scrum_events (id, task_id, ts, kind, payload_json)
+        VALUES ('evt-seed', 't-seed', '2026-04-01T00:00:00Z', 'task_created', '{"title":"Seeded task"}');
     `);
-    v1Store.close();
 
-    // -- Phase 2: re-register v1+v2, re-open same file ----------------------
-    clearRegistry();
-    registerSchema({
-      domain: 'scrum',
-      migrations: [
-        {
-          version: 1,
-          description: 'v1-only test fixture',
-          up: (db) => db.exec(SCRUM_MIGRATION_V1_SQL),
-        },
-        {
-          version: 2,
-          description: 'add scrum_decisions',
-          up: (db) => db.exec(SCRUM_MIGRATION_V2_SQL),
-        },
-      ],
-    });
-
-    const v2Store = await openStore({ path: dbPath });
-    const result = await runMigrations(v2Store);
-
-    // Only v2 should have landed this run; v1 was already in the log.
-    expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([2]);
-
-    // v1 rows survive the ladder.
-    const tasks = await v2Store.all<{ id: string; title: string; status: string }>(
+    const tasks = await v1Store.all<{ id: string; title: string; status: string }>(
       'SELECT id, title, status FROM scrum_tasks',
     );
     expect(tasks).toEqual([{ id: 't-seed', title: 'Seeded task', status: 'backlog' }]);
 
-    const events = await v2Store.all<{ task_id: string; kind: string }>(
+    const events = await v1Store.all<{ task_id: string; kind: string }>(
       'SELECT task_id, kind FROM scrum_events',
     );
     expect(events).toEqual([{ task_id: 't-seed', kind: 'task_created' }]);
 
-    // New table exists and is empty.
-    const decisionCount = await v2Store.all<{ count: number }>(
+    // scrum_decisions exists in the same v1 DDL and starts empty.
+    const decisionCount = await v1Store.all<{ count: number }>(
       'SELECT COUNT(*) AS count FROM scrum_decisions',
     );
     expect(decisionCount).toEqual([{ count: 0 }]);
 
-    v2Store.close();
+    v1Store.close();
   });
 });
 
