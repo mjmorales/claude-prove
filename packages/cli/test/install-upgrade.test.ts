@@ -11,7 +11,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -33,24 +33,35 @@ interface RunEnv {
   PROVE_FORCE_MODE?: string;
 }
 
-function runBin(args: string[], env: RunEnv): RunResult {
-  const result = spawnSync('bun', ['run', BIN, ...args], {
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      // The session may inject CLAUDE_PROVE_PLUGIN_DIR (settings.local.json
-      // env block), which outranks the CLAUDE_PLUGIN_ROOT pins these tests
-      // rely on for mode detection. Empty string = unset for the resolver.
-      CLAUDE_PROVE_PLUGIN_DIR: '',
-      NODE_ENV: 'test',
-      ...env,
-    },
+// Async spawn, not spawnSync: the stubbed-CDN suite serves its payload from
+// THIS process via Bun.serve, and a synchronous child wait blocks the event
+// loop the stub needs to answer — the child then hangs until its own fetch
+// timeout aborts. Awaiting an async child keeps the loop free.
+function runBin(args: string[], env: RunEnv): Promise<RunResult> {
+  return new Promise((resolve) => {
+    const child = spawn('bun', ['run', BIN, ...args], {
+      env: {
+        ...process.env,
+        // The session may inject CLAUDE_PROVE_PLUGIN_DIR (settings.local.json
+        // env block), which outranks the CLAUDE_PLUGIN_ROOT pins these tests
+        // rely on for mode detection. Empty string = unset for the resolver.
+        CLAUDE_PROVE_PLUGIN_DIR: '',
+        NODE_ENV: 'test',
+        ...env,
+      },
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d) => {
+      stdout += d;
+    });
+    child.stderr.on('data', (d) => {
+      stderr += d;
+    });
+    child.on('close', (status) => {
+      resolve({ stdout, stderr, status: status ?? -1 });
+    });
   });
-  return {
-    stdout: result.stdout ?? '',
-    stderr: result.stderr ?? '',
-    status: result.status ?? -1,
-  };
 }
 
 function makeCompiledPluginFixture(): string {
@@ -70,19 +81,19 @@ function currentTarget(): string {
 }
 
 describe('claude-prove install upgrade — dev provenance', () => {
-  test('a bun-run source invocation exits 1 with the dev-mode error', () => {
-    const { stderr, status } = runBin(['install', 'upgrade'], {});
+  test('a bun-run source invocation exits 1 with the dev-mode error', async () => {
+    const { stderr, status } = await runBin(['install', 'upgrade'], {});
     expect(status).toBe(1);
     expect(stderr).toContain('upgrade is a compiled-mode command; use git pull in dev checkouts');
   });
 
-  test('plugin-root env vars cannot flip a source invocation to compiled', () => {
+  test('plugin-root env vars cannot flip a source invocation to compiled', async () => {
     // Provenance wins: even a compiled-shaped plugin root (no packages/cli/src)
     // pinned via both env vars must not unlock the download path when the
     // process itself runs from sources.
     const pluginRoot = makeCompiledPluginFixture();
     try {
-      const { stderr, status } = runBin(['install', 'upgrade'], {
+      const { stderr, status } = await runBin(['install', 'upgrade'], {
         CLAUDE_PLUGIN_ROOT: pluginRoot,
         CLAUDE_PROVE_PLUGIN_DIR: pluginRoot,
       });
@@ -93,8 +104,8 @@ describe('claude-prove install upgrade — dev provenance', () => {
     }
   });
 
-  test('PROVE_FORCE_MODE=dev refuses even when set explicitly', () => {
-    const { status, stderr } = runBin(['install', 'upgrade'], { PROVE_FORCE_MODE: 'dev' });
+  test('PROVE_FORCE_MODE=dev refuses even when set explicitly', async () => {
+    const { status, stderr } = await runBin(['install', 'upgrade'], { PROVE_FORCE_MODE: 'dev' });
     expect(status).toBe(1);
     expect(stderr).toContain('upgrade is a compiled-mode command');
   });
@@ -129,10 +140,10 @@ describe('claude-prove install upgrade — compiled mode with stubbed CDN', () =
     server.stop(true);
   });
 
-  test('downloads payload, chmods +x, and atomic-renames to --prefix', () => {
+  test('downloads payload, chmods +x, and atomic-renames to --prefix', async () => {
     const prefix = mkdtempSync(join(tmpdir(), 'prove-install-upgrade-prefix-'));
     try {
-      const { stdout, stderr, status } = runBin(['install', 'upgrade', '--prefix', prefix], {
+      const { stdout, stderr, status } = await runBin(['install', 'upgrade', '--prefix', prefix], {
         ...FORCE,
         PROVE_RELEASE_URL_BASE: baseUrl,
       });
@@ -157,10 +168,10 @@ describe('claude-prove install upgrade — compiled mode with stubbed CDN', () =
     }
   });
 
-  test('exits 1 when the CDN responds with 404', () => {
+  test('exits 1 when the CDN responds with 404', async () => {
     const prefix = mkdtempSync(join(tmpdir(), 'prove-install-upgrade-404-'));
     try {
-      const { stderr, status } = runBin(['install', 'upgrade', '--prefix', prefix], {
+      const { stderr, status } = await runBin(['install', 'upgrade', '--prefix', prefix], {
         ...FORCE,
         // Point at a path the stub returns 404 for.
         PROVE_RELEASE_URL_BASE: `${baseUrl}/missing`,
