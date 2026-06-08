@@ -120,7 +120,10 @@ function resolveStalledAfterDays(raw: number | string | undefined): number {
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_STALLED_AFTER_DAYS;
 }
 
-async function findStalledWip(store: ScrumStore, stalledAfterDays: number): Promise<StalledEntry[]> {
+async function findStalledWip(
+  store: ScrumStore,
+  stalledAfterDays: number,
+): Promise<StalledEntry[]> {
   const now = Date.now();
   const thresholdMs = stalledAfterDays * 24 * 60 * 60 * 1000;
   const stalled: StalledEntry[] = [];

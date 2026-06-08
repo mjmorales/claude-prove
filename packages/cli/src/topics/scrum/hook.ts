@@ -86,9 +86,7 @@ export interface SessionStartDigest {
  * `nextReady`. Never throws — errors land on stderr with exit 0 so a broken
  * scrum store never bricks a session.
  */
-export async function onSessionStart(
-  payload: Record<string, unknown> | null,
-): Promise<HookResult> {
+export async function onSessionStart(payload: Record<string, unknown> | null): Promise<HookResult> {
   try {
     const project = resolveProjectDir(payload);
     const store = await openScrumStore({ cwd: project });
@@ -123,9 +121,7 @@ export async function onSessionStart(
  * carrying remediation. Exit 1 fires only on unexpected errors after the
  * filter passes — those indicate a real problem worth surfacing.
  */
-export async function onSubagentStop(
-  payload: Record<string, unknown> | null,
-): Promise<HookResult> {
+export async function onSubagentStop(payload: Record<string, unknown> | null): Promise<HookResult> {
   if (!payload) return EMPTY_HOOK_RESULT;
 
   const subagentType = readString(payload, 'subagent_type');

@@ -86,10 +86,11 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      const tables = (await raw.all<{ name: string }>(
+      const tables = (
+        await raw.all<{ name: string }>(
           "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'scrum_%' ORDER BY name",
-        ))
-        .map((r) => r.name);
+        )
+      ).map((r) => r.name);
       expect(tables).toEqual([
         'scrum_annotations',
         'scrum_asks',
@@ -129,10 +130,11 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      const indexes = (await raw.all<{ name: string }>(
+      const indexes = (
+        await raw.all<{ name: string }>(
           "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_scrum_%' ORDER BY name",
-        ))
-        .map((r) => r.name);
+        )
+      ).map((r) => r.name);
       expect(indexes).toEqual([
         'idx_scrum_annotations_target',
         'idx_scrum_asks_blocking_artifact',
@@ -166,10 +168,11 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      const cols = (await raw.all<{ name: string; type: string; notnull: number }>(
+      const cols = (
+        await raw.all<{ name: string; type: string; notnull: number }>(
           "SELECT name, type, [notnull] FROM pragma_table_info('scrum_tasks') ORDER BY cid",
-        ))
-        .map((c) => `${c.name}:${c.type}:${c.notnull}`);
+        )
+      ).map((c) => `${c.name}:${c.type}:${c.notnull}`);
       expect(cols).toEqual([
         'id:TEXT:0', // PRIMARY KEY without NOT NULL keyword still gets notnull=0 in pragma
         'title:TEXT:1',
@@ -276,10 +279,11 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      const cols = (await raw.all<{ name: string; type: string; notnull: number }>(
+      const cols = (
+        await raw.all<{ name: string; type: string; notnull: number }>(
           "SELECT name, type, [notnull] FROM pragma_table_info('scrum_decisions') ORDER BY cid",
-        ))
-        .map((c) => `${c.name}:${c.type}:${c.notnull}`);
+        )
+      ).map((c) => `${c.name}:${c.type}:${c.notnull}`);
       expect(cols).toEqual([
         'id:TEXT:0',
         'title:TEXT:1',
@@ -343,10 +347,11 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      const cols = (await raw.all<{ name: string; type: string; notnull: number }>(
+      const cols = (
+        await raw.all<{ name: string; type: string; notnull: number }>(
           "SELECT name, type, [notnull] FROM pragma_table_info('scrum_escalations') ORDER BY cid",
-        ))
-        .map((c) => `${c.name}:${c.type}:${c.notnull}`);
+        )
+      ).map((c) => `${c.name}:${c.type}:${c.notnull}`);
       expect(cols).toEqual([
         'id:INTEGER:0',
         'task_id:TEXT:1',
@@ -418,10 +423,11 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      const cols = (await raw.all<{ name: string; type: string; notnull: number }>(
+      const cols = (
+        await raw.all<{ name: string; type: string; notnull: number }>(
           "SELECT name, type, [notnull] FROM pragma_table_info('scrum_tasks') ORDER BY cid",
-        ))
-        .map((c) => `${c.name}:${c.type}:${c.notnull}`);
+        )
+      ).map((c) => `${c.name}:${c.type}:${c.notnull}`);
       expect(cols).toEqual([
         'id:TEXT:0',
         'title:TEXT:1',
@@ -532,10 +538,10 @@ describe('scrum domain registration', () => {
       await raw.exec(
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
       );
-      const row = await raw.all<{ last_modified_by: string | null; last_modified_at: string | null }>(
-        'SELECT last_modified_by, last_modified_at FROM scrum_tasks WHERE id = ?',
-        ['t1'],
-      );
+      const row = await raw.all<{
+        last_modified_by: string | null;
+        last_modified_at: string | null;
+      }>('SELECT last_modified_by, last_modified_at FROM scrum_tasks WHERE id = ?', ['t1']);
       expect(row).toEqual([{ last_modified_by: null, last_modified_at: null }]);
     } finally {
       raw.close();
@@ -912,8 +918,9 @@ describe('scrum domain registration', () => {
       expect(tables).toEqual([{ name: 'scrum_contributors' }]);
 
       // Column shape matches the on-disk contributor.md schema + provenance.
-      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_contributors)'))
-        .map((c) => c.name);
+      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_contributors)')).map(
+        (c) => c.name,
+      );
       expect(cols).toEqual([
         'id',
         'slug',
@@ -964,8 +971,9 @@ describe('scrum domain registration', () => {
       );
       expect(tables).toEqual([{ name: 'scrum_operator_history' }]);
 
-      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_operator_history)'))
-        .map((c) => c.name);
+      const cols = (
+        await raw.all<{ name: string }>('PRAGMA table_info(scrum_operator_history)')
+      ).map((c) => c.name);
       expect(cols).toEqual([
         'id',
         'contributor_id',
@@ -1022,7 +1030,9 @@ describe('scrum domain registration', () => {
 
       // v18 appends terminates_on_milestone + status after the v14 base columns
       // (ADD COLUMN lands them at the end), NULL/'active' defaults respectively.
-      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_teams)')).map((c) => c.name);
+      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_teams)')).map(
+        (c) => c.name,
+      );
       expect(cols).toEqual([
         'slug',
         'team_type',
@@ -1087,8 +1097,9 @@ describe('scrum domain registration', () => {
       );
       expect(tables).toEqual([{ name: 'scrum_team_scopes' }]);
 
-      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_scopes)'))
-        .map((c) => c.name);
+      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_scopes)')).map(
+        (c) => c.name,
+      );
       expect(cols).toEqual(['team_slug', 'kind', 'glob']);
     } finally {
       raw.close();
@@ -1137,8 +1148,9 @@ describe('scrum domain registration', () => {
       );
       expect(tables).toEqual([{ name: 'scrum_team_members' }]);
 
-      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_members)'))
-        .map((c) => c.name);
+      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_members)')).map(
+        (c) => c.name,
+      );
       expect(cols).toEqual([
         'id',
         'team_slug',
@@ -1189,8 +1201,9 @@ describe('scrum domain registration', () => {
     try {
       await runMigrations(raw);
 
-      const acceptCols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_accepts)'))
-        .map((c) => c.name);
+      const acceptCols = (
+        await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_accepts)')
+      ).map((c) => c.name);
       expect(acceptCols).toEqual([
         'id',
         'team_slug',
@@ -1201,8 +1214,9 @@ describe('scrum domain registration', () => {
         'created_at',
       ]);
 
-      const exposeCols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_exposes)'))
-        .map((c) => c.name);
+      const exposeCols = (
+        await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_exposes)')
+      ).map((c) => c.name);
       expect(exposeCols).toEqual([
         'id',
         'team_slug',
@@ -1231,10 +1245,13 @@ describe('scrum domain registration', () => {
       await raw.exec(
         "INSERT INTO scrum_team_exposes (team_slug, name, schema_ref, created_at) VALUES ('payments', 'PaymentEvent', 'schemas/payment-event.json', '2026-01-01T00:00:00Z')",
       );
-      const accepts = await raw.all<{ ask_type: string; status: string; superseded_by: number | null }>(
-        'SELECT ask_type, status, superseded_by FROM scrum_team_accepts WHERE team_slug = ?',
-        ['payments'],
-      );
+      const accepts = await raw.all<{
+        ask_type: string;
+        status: string;
+        superseded_by: number | null;
+      }>('SELECT ask_type, status, superseded_by FROM scrum_team_accepts WHERE team_slug = ?', [
+        'payments',
+      ]);
       expect(accepts).toEqual([
         { ask_type: 'schema-change', status: 'active', superseded_by: null },
       ]);
@@ -1291,7 +1308,9 @@ describe('scrum domain registration', () => {
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_lores'",
       );
       expect(tables).toEqual([{ name: 'scrum_lores' }]);
-      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_lores)')).map((c) => c.name);
+      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_lores)')).map(
+        (c) => c.name,
+      );
       // v28 appends the supersession pointer + reason after the v19 base
       // columns (ADD COLUMN lands them at the end), NULL defaults.
       expect(cols).toEqual([
@@ -1350,8 +1369,9 @@ describe('scrum domain registration', () => {
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_annotations'",
       );
       expect(tables).toEqual([{ name: 'scrum_annotations' }]);
-      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_annotations)'))
-        .map((c) => c.name);
+      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_annotations)')).map(
+        (c) => c.name,
+      );
       expect(cols).toEqual(['id', 'target_kind', 'target_ref', 'body', 'author', 'created_at']);
     } finally {
       raw.close();
@@ -1403,10 +1423,11 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      const cols = (await raw.all<{ name: string; type: string; notnull: number }>(
+      const cols = (
+        await raw.all<{ name: string; type: string; notnull: number }>(
           "SELECT name, type, [notnull] FROM pragma_table_info('scrum_decisions') ORDER BY cid",
-        ))
-        .map((c) => `${c.name}:${c.type}:${c.notnull}`);
+        )
+      ).map((c) => `${c.name}:${c.type}:${c.notnull}`);
       expect(cols).toEqual([
         'id:TEXT:0',
         'title:TEXT:1',

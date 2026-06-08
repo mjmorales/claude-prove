@@ -296,7 +296,9 @@ describe('runMilestoneCmd close → curation trigger', () => {
 
   test('re-closing an already-closed milestone does not re-fire curation', async () => {
     await seedTaskWithFinding('mc2', 'cur-2');
-    await withCapture(() => runMilestoneCmd('close', ['mc2', undefined], { workspaceRoot: workspace }));
+    await withCapture(() =>
+      runMilestoneCmd('close', ['mc2', undefined], { workspaceRoot: workspace }),
+    );
     const second = await withCapture(() =>
       runMilestoneCmd('close', ['mc2', undefined], { workspaceRoot: workspace }),
     );
@@ -341,11 +343,15 @@ describe('runLinkRunCmd plan.task_id dual-write', () => {
   }
 
   test('writes top-level plan.task_id and reports plan_updated', async () => {
-    await withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'lr-1' }));
+    await withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'lr-1' }),
+    );
     const runRel = join('.prove', 'runs', 'feat', 'lr-1');
     seedRunPlan(runRel);
 
-    const res = await withCapture(() => runLinkRunCmd('lr-1', runRel, { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runLinkRunCmd('lr-1', runRel, { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(0);
     const payload = JSON.parse(res.stdout.trim()) as { plan_updated: boolean };
     expect(payload.plan_updated).toBe(true);
@@ -360,11 +366,15 @@ describe('runLinkRunCmd plan.task_id dual-write', () => {
   });
 
   test('store link still succeeds when plan.json is absent (best-effort plan write)', async () => {
-    await withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'lr-2' }));
+    await withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'lr-2' }),
+    );
     const runRel = join('.prove', 'runs', 'feat', 'lr-2');
     // Note: no plan.json seeded — the run-dir does not exist.
 
-    const res = await withCapture(() => runLinkRunCmd('lr-2', runRel, { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runLinkRunCmd('lr-2', runRel, { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(0);
     const payload = JSON.parse(res.stdout.trim()) as { linked: boolean; plan_updated: boolean };
     expect(payload.linked).toBe(true);
@@ -376,7 +386,9 @@ describe('runLinkRunCmd plan.task_id dual-write', () => {
     const runRel = join('.prove', 'runs', 'feat', 'lr-3');
     seedRunPlan(runRel);
 
-    const res = await withCapture(() => runLinkRunCmd('nope', runRel, { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runLinkRunCmd('nope', runRel, { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(1);
     const written = JSON.parse(readFileSync(join(workspace, runRel, 'plan.json'), 'utf8')) as {
       task_id?: string;
@@ -441,7 +453,9 @@ describe('runMilestoneCmd initiative grouping', () => {
 
 describe('runNextReadyCmd', () => {
   test('default JSON is an array shape', async () => {
-    await withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'Foo', id: 'foo' }));
+    await withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'Foo', id: 'foo' }),
+    );
     const res = await withCapture(() => runNextReadyCmd({}));
     expect(res.exit).toBe(0);
     const rows = JSON.parse(res.stdout.trim());
@@ -485,7 +499,9 @@ describe('runNextReadyCmd', () => {
     expect(row?.rationale.escalation_boost).toBeGreaterThan(0);
     expect(row?.rationale.escalation_type).toBe('ambiguous');
 
-    const human = await withCapture(() => runNextReadyCmd({ workspaceRoot: workspace, human: true }));
+    const human = await withCapture(() =>
+      runNextReadyCmd({ workspaceRoot: workspace, human: true }),
+    );
     expect(human.stdout).toContain('escalation=');
   });
 });
@@ -606,7 +622,9 @@ describe('runTaskCmd', () => {
     // link-decision now reads the file — seed one so the handler succeeds.
     mkdirSync(join(workspace, '.prove', 'decisions'), { recursive: true });
     writeFileSync(join(workspace, '.prove', 'decisions', 'x.md'), '# X decision\n', 'utf8');
-    const res = await withCapture(() => runTaskCmd('link-decision', ['z', '.prove/decisions/x.md'], {}));
+    const res = await withCapture(() =>
+      runTaskCmd('link-decision', ['z', '.prove/decisions/x.md'], {}),
+    );
     expect(res.exit).toBe(0);
     const payload = JSON.parse(res.stdout.trim());
     expect(payload.linked).toBe(true);
@@ -625,7 +643,9 @@ describe('runTaskCmd', () => {
   });
 
   test('status: rejects an unknown status string with exit 1', async () => {
-    await withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'S2', id: 's2' }));
+    await withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'S2', id: 's2' }),
+    );
     const res = await withCapture(() => runTaskCmd('status', ['s2', 'bogus'], {}));
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain("invalid status 'bogus'");
@@ -640,7 +660,9 @@ describe('runTaskCmd', () => {
   });
 
   test('status: surfaces invalid-transition errors from the store', async () => {
-    await withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'S3', id: 's3' }));
+    await withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'S3', id: 's3' }),
+    );
     // backlog -> done is not allowed; must go through ready/in_progress first
     const res = await withCapture(() => runTaskCmd('status', ['s3', 'done'], {}));
     expect(res.exit).toBe(1);
@@ -711,7 +733,9 @@ describe('runTaskCmd', () => {
   });
 
   test('cancel: already-terminal task surfaces the store error as exit 1', async () => {
-    await withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'C2', id: 'c2' }));
+    await withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'C2', id: 'c2' }),
+    );
     await withCapture(() => runTaskCmd('cancel', ['c2', undefined], {}));
     const res = await withCapture(() => runTaskCmd('cancel', ['c2', undefined], {}));
     expect(res.exit).toBe(1);
@@ -722,7 +746,11 @@ describe('runTaskCmd', () => {
   // move action
   // -------------------------------------------------------------------------
 
-  async function seedMove(taskId: string, milestoneId?: string, milestoneStatus?: 'closed'): Promise<void> {
+  async function seedMove(
+    taskId: string,
+    milestoneId?: string,
+    milestoneStatus?: 'closed',
+  ): Promise<void> {
     if (milestoneId) {
       await withCapture(() =>
         runMilestoneCmd('create', [undefined, undefined], {
@@ -745,9 +773,13 @@ describe('runTaskCmd', () => {
 
   test('move: reassigns milestone and returns updated task JSON', async () => {
     await seedMove('mv-1', 'm1');
-    await withCapture(() => runMilestoneCmd('create', [undefined, undefined], { title: 'M2', id: 'm2' }));
+    await withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], { title: 'M2', id: 'm2' }),
+    );
 
-    const res = await withCapture(() => runTaskCmd('move', ['mv-1', undefined], { milestone: 'm2' }));
+    const res = await withCapture(() =>
+      runTaskCmd('move', ['mv-1', undefined], { milestone: 'm2' }),
+    );
     expect(res.exit).toBe(0);
     const task = JSON.parse(res.stdout.trim()) as { id: string; milestone_id: string };
     expect(task.id).toBe('mv-1');
@@ -758,7 +790,9 @@ describe('runTaskCmd', () => {
   test('move: --unassign clears milestone_id', async () => {
     await seedMove('mv-2', 'm1');
 
-    const res = await withCapture(() => runTaskCmd('move', ['mv-2', undefined], { unassign: true }));
+    const res = await withCapture(() =>
+      runTaskCmd('move', ['mv-2', undefined], { unassign: true }),
+    );
     expect(res.exit).toBe(0);
     const task = JSON.parse(res.stdout.trim()) as { milestone_id: string | null };
     expect(task.milestone_id).toBeNull();
@@ -784,7 +818,9 @@ describe('runTaskCmd', () => {
   });
 
   test('move: missing <id> exits 1 with a usage hint', async () => {
-    const res = await withCapture(() => runTaskCmd('move', [undefined, undefined], { milestone: 'm1' }));
+    const res = await withCapture(() =>
+      runTaskCmd('move', [undefined, undefined], { milestone: 'm1' }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('<id> positional argument required');
   });
@@ -800,16 +836,22 @@ describe('runTaskCmd', () => {
   });
 
   test('move: unknown task id → exit 1', async () => {
-    await withCapture(() => runMilestoneCmd('create', [undefined, undefined], { title: 'M1', id: 'm1' }));
+    await withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], { title: 'M1', id: 'm1' }),
+    );
 
-    const res = await withCapture(() => runTaskCmd('move', ['ghost', undefined], { milestone: 'm1' }));
+    const res = await withCapture(() =>
+      runTaskCmd('move', ['ghost', undefined], { milestone: 'm1' }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain("unknown task 'ghost'");
   });
 
   test('move: closed target milestone succeeds with stderr warning and exit 0', async () => {
     await seedMove('mv-6', 'm-closed', 'closed');
-    await withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'MV-7', id: 'mv-7' }));
+    await withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'MV-7', id: 'mv-7' }),
+    );
 
     const res = await withCapture(() =>
       runTaskCmd('move', ['mv-7', undefined], { milestone: 'm-closed' }),
@@ -878,7 +920,9 @@ describe('runTaskCmd', () => {
       runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'mvt-1', team: 'payments' }),
     );
 
-    const res = await withCapture(() => runTaskCmd('move', ['mvt-1', undefined], { team: 'identity' }));
+    const res = await withCapture(() =>
+      runTaskCmd('move', ['mvt-1', undefined], { team: 'identity' }),
+    );
     expect(res.exit).toBe(0);
     const task = JSON.parse(res.stdout.trim()) as { id: string; team_slug: string };
     expect(task.team_slug).toBe('identity');
@@ -899,9 +943,13 @@ describe('runTaskCmd', () => {
   });
 
   test('move --team: unknown team → exit 1, store error bubbles through', async () => {
-    await withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'mvt-3' }));
+    await withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'mvt-3' }),
+    );
 
-    const res = await withCapture(() => runTaskCmd('move', ['mvt-3', undefined], { team: 'ghost' }));
+    const res = await withCapture(() =>
+      runTaskCmd('move', ['mvt-3', undefined], { team: 'ghost' }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain("unknown team_slug 'ghost'");
   });
@@ -909,15 +957,21 @@ describe('runTaskCmd', () => {
   test('move --team: inactive (terminated) team → exit 1', async () => {
     await seedTeam('payments');
     await withCapture(() => runTeamCmd('terminate', ['payments'], { workspaceRoot: workspace }));
-    await withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'mvt-4' }));
+    await withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'mvt-4' }),
+    );
 
-    const res = await withCapture(() => runTaskCmd('move', ['mvt-4', undefined], { team: 'payments' }));
+    const res = await withCapture(() =>
+      runTaskCmd('move', ['mvt-4', undefined], { team: 'payments' }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain("team 'payments' is inactive");
   });
 
   test('move: neither --milestone, --unassign, nor --team → exit 1 with usage hint', async () => {
-    await withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'mvt-5' }));
+    await withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'T', id: 'mvt-5' }),
+    );
     const res = await withCapture(() => runTaskCmd('move', ['mvt-5', undefined], {}));
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('--milestone <id>, --unassign, or --team <slug> is required');
@@ -1237,7 +1291,9 @@ describe('runTaskCmd acceptance', () => {
 
   test('verify rejects an invalid --verdict', async () => {
     await seedAcTask();
-    const res = await withCapture(() => runTaskCmd('acceptance', ['verify', 'at'], { verdict: 'maybe' }));
+    const res = await withCapture(() =>
+      runTaskCmd('acceptance', ['verify', 'at'], { verdict: 'maybe' }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('--verdict must be one of');
   });
@@ -1283,7 +1339,9 @@ describe('runTaskCmd acceptance', () => {
 
 describe('runGateCmd respond', () => {
   async function seedGateTask(taskId = 'gt', criterionId = 'g1'): Promise<void> {
-    await withCapture(() => runTaskCmd('create', [undefined, undefined], { title: taskId, id: taskId }));
+    await withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: taskId, id: taskId }),
+    );
     await withCapture(() =>
       runTaskCmd('acceptance', ['add', taskId], {
         text: 'operator approves',
@@ -1336,7 +1394,9 @@ describe('runGateCmd respond', () => {
   });
 
   test('rejects a non-gate criterion (exit 1)', async () => {
-    await withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'bt', id: 'bt' }));
+    await withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'bt', id: 'bt' }),
+    );
     await withCapture(() =>
       runTaskCmd('acceptance', ['add', 'bt'], {
         text: 'builds',
@@ -1353,7 +1413,9 @@ describe('runGateCmd respond', () => {
   test('rejects an already-resolved gate (exit 1)', async () => {
     await seedGateTask();
     await withCapture(() => runGateCmd('respond', ['g1', 'approve'], { task: 'gt', by: 'x' }));
-    const res = await withCapture(() => runGateCmd('respond', ['g1', 'reject'], { task: 'gt', by: 'y' }));
+    const res = await withCapture(() =>
+      runGateCmd('respond', ['g1', 'reject'], { task: 'gt', by: 'y' }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('already resolved');
   });
@@ -1514,7 +1576,9 @@ describe('runMilestoneCmd', () => {
 
 describe('runTagCmd', () => {
   test('add + list + remove round-trip', async () => {
-    await withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'TT', id: 'tt' }));
+    await withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'TT', id: 'tt' }),
+    );
     const a = await withCapture(() => runTagCmd('add', ['tt', 'bug'], {}));
     expect(a.exit).toBe(0);
     const l = await withCapture(() => runTagCmd('list', [undefined, undefined], { task: 'tt' }));
@@ -1540,7 +1604,9 @@ describe('runTagCmd', () => {
 describe('runLinkRunCmd', () => {
   test('happy path: JSON payload with linked=true', async () => {
     await withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'L', id: 'l' }));
-    const res = await withCapture(() => runLinkRunCmd('l', '.prove/runs/main/l/', { branch: 'main' }));
+    const res = await withCapture(() =>
+      runLinkRunCmd('l', '.prove/runs/main/l/', { branch: 'main' }),
+    );
     expect(res.exit).toBe(0);
     const payload = JSON.parse(res.stdout.trim());
     expect(payload.linked).toBe(true);
@@ -1673,7 +1739,9 @@ describe('runAlertsCmd', () => {
     await s.store.run('UPDATE scrum_tasks SET last_event_at = ? WHERE id = ?', [ancient, 'w']);
     s.close();
 
-    const res = await withCapture(() => runAlertsCmd({ workspaceRoot: workspace, stalledAfterDays: 7 }));
+    const res = await withCapture(() =>
+      runAlertsCmd({ workspaceRoot: workspace, stalledAfterDays: 7 }),
+    );
     expect(res.exit).toBe(0);
     const payload = JSON.parse(res.stdout.trim()) as {
       stalled_wip: Array<{ id: string; stalled_days: number; status: string }>;
@@ -1736,7 +1804,9 @@ describe('runAlertsCmd', () => {
     mkdirSync(join(workspace, '.prove', 'runs', 'main', 'untracked'), { recursive: true });
     const trackedDir = join(workspace, '.prove', 'runs', 'main', 'tracked');
     mkdirSync(trackedDir, { recursive: true });
-    await withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'T', id: 't-match' }));
+    await withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'T', id: 't-match' }),
+    );
     writeFileSync(
       join(trackedDir, 'plan.json'),
       JSON.stringify({ kind: 'plan', schema_version: '5', task_id: 't-match', tasks: [] }),
@@ -1779,7 +1849,9 @@ describe('runAlertsCmd', () => {
   });
 
   test('an auto-bubbled escalation surfaces in alerts via the blocker_raised bridge', async () => {
-    await withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'AB', id: 'ab' }));
+    await withCapture(() =>
+      runTaskCmd('create', [undefined, undefined], { title: 'AB', id: 'ab' }),
+    );
     await withCapture(() => runTaskCmd('status', ['ab', 'ready'], {}));
     // biome-ignore lint/suspicious/noExplicitAny: test-only store reach-in to seed + bubble an escalation.
     const { openScrumStore } = require('../store') as any;
@@ -2031,7 +2103,9 @@ describe('runDecisionCmd', () => {
 
   test('record --kind: persists a canonical Codex subtype, case-normalized', async () => {
     const rel = writeDecision('.prove/decisions/2026-06-01-kindly.md', '# Kindly\n\nBody\n');
-    const res = await withCapture(() => runDecisionCmd('record', [rel, undefined], { kind: 'ADR' }));
+    const res = await withCapture(() =>
+      runDecisionCmd('record', [rel, undefined], { kind: 'ADR' }),
+    );
     expect(res.exit).toBe(0);
     const row = JSON.parse(res.stdout.trim()) as { id: string; kind: string | null };
     expect(row.kind).toBe('adr');
@@ -2039,7 +2113,9 @@ describe('runDecisionCmd', () => {
 
   test('record --kind: unknown subtype → exit 1, no row recorded', async () => {
     const rel = writeDecision('.prove/decisions/2026-06-01-bogus.md', '# Bogus\n\nBody\n');
-    const res = await withCapture(() => runDecisionCmd('record', [rel, undefined], { kind: 'lore' }));
+    const res = await withCapture(() =>
+      runDecisionCmd('record', [rel, undefined], { kind: 'lore' }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain("unknown --kind 'lore'");
     expect(res.stderr).toContain('adr, glossary, pattern');
@@ -2136,7 +2212,9 @@ describe('runDecisionCmd', () => {
     const rel = writeDecision('.prove/decisions/2026-04-24-h.md', '# H\n\n**Topic**: t\n');
     await withCapture(() => runDecisionCmd('record', [rel, undefined], {}));
 
-    const res = await withCapture(() => runDecisionCmd('list', [undefined, undefined], { human: true }));
+    const res = await withCapture(() =>
+      runDecisionCmd('list', [undefined, undefined], { human: true }),
+    );
     expect(res.exit).toBe(0);
     expect(res.stdout).toContain('ID');
     expect(res.stdout).toContain('TITLE');
@@ -2295,7 +2373,9 @@ describe('runDecisionCmd approve / reject (gated write)', () => {
     const rel = join('.prove', 'decisions', 'draft-adr.md');
     mkdirSync(join(workspace, '.prove', 'decisions'), { recursive: true });
     writeFileSync(join(workspace, rel), '# draft-adr\n\nBody\n', 'utf8');
-    const res = await withCapture(() => runDecisionCmd('record', [rel, undefined], { kind: 'adr' }));
+    const res = await withCapture(() =>
+      runDecisionCmd('record', [rel, undefined], { kind: 'adr' }),
+    );
     expect(res.exit).toBe(0);
     const row = JSON.parse(res.stdout.trim()) as { status: string; write_status: string };
     expect(row.status).toBe('draft');
@@ -2332,7 +2412,9 @@ describe('runDecisionCmd approve / reject (gated write)', () => {
     expect(denied.stderr).toContain('requires a tech_lead review');
 
     // The tech_lead approves successfully.
-    const ok = await withCapture(() => runDecisionCmd('approve', ['g1', undefined], { by: 'ct-lead' }));
+    const ok = await withCapture(() =>
+      runDecisionCmd('approve', ['g1', undefined], { by: 'ct-lead' }),
+    );
     expect(ok.exit).toBe(0);
     expect((JSON.parse(ok.stdout.trim()) as { status: string }).status).toBe('accepted');
   });
@@ -2375,7 +2457,9 @@ describe('runDecisionCmd approve / reject (gated write)', () => {
     mkdirSync(join(workspace, '.prove', 'decisions'), { recursive: true });
     writeFileSync(join(workspace, rel), '# plain\n\nBody\n', 'utf8');
     await withCapture(() => runDecisionCmd('record', [rel, undefined], {}));
-    const res = await withCapture(() => runDecisionCmd('approve', ['plain', undefined], { by: 'ct-x' }));
+    const res = await withCapture(() =>
+      runDecisionCmd('approve', ['plain', undefined], { by: 'ct-x' }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('is not gated');
   });
@@ -2383,7 +2467,9 @@ describe('runDecisionCmd approve / reject (gated write)', () => {
   test('re-deciding an already-resolved gate exits 1', async () => {
     await recordKind('a1', 'adr');
     await withCapture(() => runDecisionCmd('approve', ['a1', undefined], { by: 'ct-x' }));
-    const res = await withCapture(() => runDecisionCmd('reject', ['a1', undefined], { by: 'ct-y' }));
+    const res = await withCapture(() =>
+      runDecisionCmd('reject', ['a1', undefined], { by: 'ct-y' }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain("already resolved ('approved')");
   });
@@ -2853,7 +2939,9 @@ describe('runContributorCmd', () => {
   });
 
   test('register without --slug exits 1', async () => {
-    const res = await withCapture(() => runContributorCmd('register', { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runContributorCmd('register', { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('--slug');
   });
@@ -2867,8 +2955,12 @@ describe('runContributorCmd', () => {
   });
 
   test('list returns the registered contributors as JSON', async () => {
-    await withCapture(() => runContributorCmd('register', { slug: 'amy', workspaceRoot: workspace }));
-    await withCapture(() => runContributorCmd('register', { slug: 'zed', workspaceRoot: workspace }));
+    await withCapture(() =>
+      runContributorCmd('register', { slug: 'amy', workspaceRoot: workspace }),
+    );
+    await withCapture(() =>
+      runContributorCmd('register', { slug: 'zed', workspaceRoot: workspace }),
+    );
     const res = await withCapture(() => runContributorCmd('list', { workspaceRoot: workspace }));
     expect(res.exit).toBe(0);
     const rows = JSON.parse(res.stdout.trim()) as ContributorRow[];
@@ -2932,7 +3024,9 @@ describe('runContributorCmd', () => {
   });
 
   test('unknown sub-action exits 1', async () => {
-    const res = await withCapture(() => runContributorCmd('frobnicate', { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runContributorCmd('frobnicate', { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('unknown contributor action');
   });
@@ -3180,7 +3274,9 @@ interface OperatorRow {
 
 /** Register a contributor through the CLI and return its minted CT-UUID. */
 async function registerContributorCli(slug: string): Promise<string> {
-  const reg = await withCapture(() => runContributorCmd('register', { slug, workspaceRoot: workspace }));
+  const reg = await withCapture(() =>
+    runContributorCmd('register', { slug, workspaceRoot: workspace }),
+  );
   return (JSON.parse(reg.stdout.trim()) as ContributorRow).id;
 }
 
@@ -3424,13 +3520,17 @@ describe('runTeamCmd', () => {
         workspaceRoot: workspace,
       }),
     );
-    const res = await withCapture(() => runTeamCmd('show', ['payments'], { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runTeamCmd('show', ['payments'], { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(0);
     expect((JSON.parse(res.stdout.trim()) as TeamRow).slug).toBe('payments');
   });
 
   test('show on an unknown slug exits 1 with null on stdout', async () => {
-    const res = await withCapture(() => runTeamCmd('show', ['ghost'], { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runTeamCmd('show', ['ghost'], { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stdout.trim()).toBe('null');
     expect(res.stderr).toContain("no team 'ghost'");
@@ -3451,7 +3551,9 @@ describe('runTeamCmd', () => {
         workspaceRoot: workspace,
       }),
     );
-    const res = await withCapture(() => runTeamCmd('list', [undefined], { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runTeamCmd('list', [undefined], { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(0);
     const rows = JSON.parse(res.stdout.trim()) as TeamRow[];
     expect(rows.map((r) => r.slug)).toEqual(['alpha', 'zeta']);
@@ -3676,7 +3778,9 @@ describe('runTeamCmd', () => {
         workspaceRoot: workspace,
       }),
     );
-    const res = await withCapture(() => runTeamCmd('roster', ['payments'], { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runTeamCmd('roster', ['payments'], { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(0);
     const roster = JSON.parse(res.stdout.trim()) as RosterResult;
     expect(roster.slug).toBe('payments');
@@ -3686,7 +3790,9 @@ describe('runTeamCmd', () => {
   });
 
   test('roster on an unknown slug exits 1 with null on stdout', async () => {
-    const res = await withCapture(() => runTeamCmd('roster', ['ghost'], { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runTeamCmd('roster', ['ghost'], { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stdout.trim()).toBe('null');
     expect(res.stderr).toContain("no team 'ghost'");
@@ -3888,7 +3994,9 @@ describe('runTeamCmd', () => {
   });
 
   test('interface on an unknown slug exits 1 with null on stdout', async () => {
-    const res = await withCapture(() => runTeamCmd('interface', ['ghost'], { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runTeamCmd('interface', ['ghost'], { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stdout.trim()).toBe('null');
     expect(res.stderr).toContain("no team 'ghost'");
@@ -3971,7 +4079,9 @@ describe('runTeamCmd', () => {
   });
 
   test('terminate on an unknown team exits 1', async () => {
-    const res = await withCapture(() => runTeamCmd('terminate', ['ghost'], { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runTeamCmd('terminate', ['ghost'], { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain("unknown team 'ghost'");
   });
@@ -4009,7 +4119,9 @@ describe('runTeamCmd', () => {
     );
     expect(cl.exit).toBe(0);
 
-    const shown = await withCapture(() => runTeamCmd('show', ['squad'], { workspaceRoot: workspace }));
+    const shown = await withCapture(() =>
+      runTeamCmd('show', ['squad'], { workspaceRoot: workspace }),
+    );
     expect((JSON.parse(shown.stdout.trim()) as TeamRow).status).toBe('inactive');
   });
 });
@@ -4086,7 +4198,9 @@ describe('runLoreCmd', () => {
     expect(res.stderr).toContain('not the current tech_lead');
     expect(res.stderr).toContain('CT-lead');
     // The rejected write left no entry.
-    const list = await withCapture(() => runLoreCmd('list', ['payments'], { workspaceRoot: workspace }));
+    const list = await withCapture(() =>
+      runLoreCmd('list', ['payments'], { workspaceRoot: workspace }),
+    );
     expect(JSON.parse(list.stdout.trim())).toEqual([]);
   });
 
@@ -4145,14 +4259,18 @@ describe('runLoreCmd', () => {
         workspaceRoot: workspace,
       }),
     );
-    const res = await withCapture(() => runLoreCmd('list', ['payments'], { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runLoreCmd('list', ['payments'], { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(0);
     const rows = JSON.parse(res.stdout.trim()) as LoreRow[];
     expect(rows.map((r) => r.body)).toEqual(['first', 'second']);
   });
 
   test('list on an unknown team returns an empty array, exit 0', async () => {
-    const res = await withCapture(() => runLoreCmd('list', ['ghost'], { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runLoreCmd('list', ['ghost'], { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(0);
     expect(JSON.parse(res.stdout.trim())).toEqual([]);
   });
@@ -4168,13 +4286,17 @@ describe('runLoreCmd', () => {
       }),
     );
     const id = (JSON.parse(recorded.stdout.trim()) as LoreRow).id;
-    const res = await withCapture(() => runLoreCmd('show', [String(id)], { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runLoreCmd('show', [String(id)], { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(0);
     expect((JSON.parse(res.stdout.trim()) as LoreRow).body).toBe('pin the schema version');
   });
 
   test('show on an unknown id exits 1 with null on stdout', async () => {
-    const res = await withCapture(() => runLoreCmd('show', ['999999'], { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runLoreCmd('show', ['999999'], { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stdout.trim()).toBe('null');
     expect(res.stderr).toContain("no entry '999999'");
@@ -4287,7 +4409,9 @@ describe('runLoreCmd', () => {
     );
     expect((JSON.parse(live.stdout.trim()) as LoreRow[]).map((r) => r.body)).toEqual(['keep']);
     expect(live.stderr).toContain('1 live entries');
-    const all = await withCapture(() => runLoreCmd('list', ['payments'], { workspaceRoot: workspace }));
+    const all = await withCapture(() =>
+      runLoreCmd('list', ['payments'], { workspaceRoot: workspace }),
+    );
     expect((JSON.parse(all.stdout.trim()) as LoreRow[]).map((r) => r.body)).toEqual([
       'rot',
       'keep',
@@ -4343,13 +4467,17 @@ describe('runLoreCmd', () => {
   });
 
   test('promote on an unknown lore id exits 1', async () => {
-    const res = await withCapture(() => runLoreCmd('promote', ['999'], { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runLoreCmd('promote', ['999'], { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain("unknown lore id '999'");
   });
 
   test('an unknown lore action exits 1', async () => {
-    const res = await withCapture(() => runLoreCmd('bogus', ['payments'], { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runLoreCmd('bogus', ['payments'], { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('unknown lore action');
   });
@@ -4656,14 +4784,16 @@ describe('runEscalationCmd', () => {
 
   test('resolve with --mode resolve transitions the row to resolved, no walk-up', async () => {
     const raised = JSON.parse(
-      (await withCapture(() =>
-        runEscalationCmd('raise', [undefined], {
-          task: 't1',
-          type: 'ambiguous',
-          summary: 's',
-          workspaceRoot: workspace,
-        }),
-      )).stdout.trim(),
+      (
+        await withCapture(() =>
+          runEscalationCmd('raise', [undefined], {
+            task: 't1',
+            type: 'ambiguous',
+            summary: 's',
+            workspaceRoot: workspace,
+          }),
+        )
+      ).stdout.trim(),
     ) as EscalationRowJson;
 
     const res = await withCapture(() =>
@@ -4684,14 +4814,16 @@ describe('runEscalationCmd', () => {
 
   test('resolve with --mode re_decompose discharges the row and flags re-decomposition', async () => {
     const raised = JSON.parse(
-      (await withCapture(() =>
-        runEscalationCmd('raise', [undefined], {
-          task: 't1',
-          type: 'blocked',
-          summary: 's',
-          workspaceRoot: workspace,
-        }),
-      )).stdout.trim(),
+      (
+        await withCapture(() =>
+          runEscalationCmd('raise', [undefined], {
+            task: 't1',
+            type: 'blocked',
+            summary: 's',
+            workspaceRoot: workspace,
+          }),
+        )
+      ).stdout.trim(),
     ) as EscalationRowJson;
 
     const res = await withCapture(() =>
@@ -4708,14 +4840,16 @@ describe('runEscalationCmd', () => {
 
   test('resolve with --mode re_escalate closes the row and walks one rung up', async () => {
     const raised = JSON.parse(
-      (await withCapture(() =>
-        runEscalationCmd('raise', [undefined], {
-          task: 't1',
-          type: 'conflict',
-          summary: 's',
-          workspaceRoot: workspace,
-        }),
-      )).stdout.trim(),
+      (
+        await withCapture(() =>
+          runEscalationCmd('raise', [undefined], {
+            task: 't1',
+            type: 'conflict',
+            summary: 's',
+            workspaceRoot: workspace,
+          }),
+        )
+      ).stdout.trim(),
     ) as EscalationRowJson;
 
     const res = await withCapture(() =>
@@ -4733,14 +4867,16 @@ describe('runEscalationCmd', () => {
 
   test('resolve requires --mode and rejects an off-enum mode', async () => {
     const raised = JSON.parse(
-      (await withCapture(() =>
-        runEscalationCmd('raise', [undefined], {
-          task: 't1',
-          type: 'blocked',
-          summary: 's',
-          workspaceRoot: workspace,
-        }),
-      )).stdout.trim(),
+      (
+        await withCapture(() =>
+          runEscalationCmd('raise', [undefined], {
+            task: 't1',
+            type: 'blocked',
+            summary: 's',
+            workspaceRoot: workspace,
+          }),
+        )
+      ).stdout.trim(),
     ) as EscalationRowJson;
 
     const noMode = await withCapture(() =>
@@ -4769,14 +4905,16 @@ describe('runEscalationCmd', () => {
 
   test('list --task shows a task full history; list without --task shows only open rows', async () => {
     const raised = JSON.parse(
-      (await withCapture(() =>
-        runEscalationCmd('raise', [undefined], {
-          task: 't1',
-          type: 'blocked',
-          summary: 's',
-          workspaceRoot: workspace,
-        }),
-      )).stdout.trim(),
+      (
+        await withCapture(() =>
+          runEscalationCmd('raise', [undefined], {
+            task: 't1',
+            type: 'blocked',
+            summary: 's',
+            workspaceRoot: workspace,
+          }),
+        )
+      ).stdout.trim(),
     ) as EscalationRowJson;
     // Walk it up: the root closes, a fresh open row appears at engineer.
     await withCapture(() =>
@@ -4803,22 +4941,26 @@ describe('runEscalationCmd', () => {
 
   test('chain reconstructs the full walk-up root-rung-first', async () => {
     const raised = JSON.parse(
-      (await withCapture(() =>
-        runEscalationCmd('raise', [undefined], {
-          task: 't1',
-          type: 'ambiguous',
-          summary: 's',
-          workspaceRoot: workspace,
-        }),
-      )).stdout.trim(),
+      (
+        await withCapture(() =>
+          runEscalationCmd('raise', [undefined], {
+            task: 't1',
+            type: 'ambiguous',
+            summary: 's',
+            workspaceRoot: workspace,
+          }),
+        )
+      ).stdout.trim(),
     ) as EscalationRowJson;
     const walked = JSON.parse(
-      (await withCapture(() =>
-        runEscalationCmd('resolve', [String(raised.id)], {
-          mode: 're_escalate',
-          workspaceRoot: workspace,
-        }),
-      )).stdout.trim(),
+      (
+        await withCapture(() =>
+          runEscalationCmd('resolve', [String(raised.id)], {
+            mode: 're_escalate',
+            workspaceRoot: workspace,
+          }),
+        )
+      ).stdout.trim(),
     ) as ResolveResultJson;
 
     const res = await withCapture(() =>
@@ -4830,7 +4972,9 @@ describe('runEscalationCmd', () => {
   });
 
   test('show and chain on an unknown id exit 1', async () => {
-    const show = await withCapture(() => runEscalationCmd('show', ['999'], { workspaceRoot: workspace }));
+    const show = await withCapture(() =>
+      runEscalationCmd('show', ['999'], { workspaceRoot: workspace }),
+    );
     expect(show.exit).toBe(1);
     const chain = await withCapture(() =>
       runEscalationCmd('chain', ['999'], { workspaceRoot: workspace }),
@@ -5199,7 +5343,9 @@ describe('runAskCmd', () => {
 
   /** Run `ask await <id>` and return the parsed JSON report. */
   async function awaitAsk(id: number): Promise<{ res: Captured; report: AwaitJson }> {
-    const res = await withCapture(() => runAskCmd('await', [String(id)], { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runAskCmd('await', [String(id)], { workspaceRoot: workspace }),
+    );
     return { res, report: JSON.parse(res.stdout.trim().split('\n')[0] ?? '') as AwaitJson };
   }
 
@@ -5265,7 +5411,9 @@ describe('runAskCmd', () => {
 
   test('await without a valid <ask-id> exits 1', async () => {
     await seedAskFixture();
-    const res = await withCapture(() => runAskCmd('await', [undefined], { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runAskCmd('await', [undefined], { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('<ask-id>');
   });
@@ -5278,7 +5426,9 @@ describe('runAskCmd', () => {
   });
 
   test('an unknown ask action exits 1', async () => {
-    const res = await withCapture(() => runAskCmd('bogus', [undefined], { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runAskCmd('bogus', [undefined], { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('unknown ask action');
   });

@@ -26,7 +26,10 @@ import { type ScrumStore, openScrumStore } from '../store';
  * forwarded to the machine-config reader (the `~/.claude-prove` root) so tests
  * never touch the developer's real home dotfile.
  */
-export async function openCliStore(workspaceRoot: string, configBase?: string): Promise<ScrumStore> {
+export async function openCliStore(
+  workspaceRoot: string,
+  configBase?: string,
+): Promise<ScrumStore> {
   const store = await openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
   try {
     store.defaultActor = resolveDefaultContributor(workspaceRoot, configBase);

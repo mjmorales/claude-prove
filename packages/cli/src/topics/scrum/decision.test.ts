@@ -319,13 +319,17 @@ describe('ScrumStore — decisions: supersedeDecision', () => {
   });
 
   test('refuses to supersede a decision by itself', async () => {
-    await expect(store.supersedeDecision('old', 'old', 'why')).rejects.toThrow(/cannot supersede itself/);
+    await expect(store.supersedeDecision('old', 'old', 'why')).rejects.toThrow(
+      /cannot supersede itself/,
+    );
   });
 
   test('refuses when the decision is already superseded', async () => {
     await store.supersedeDecision('old', 'new', 'first supersession');
     await store.recordDecision({ id: 'newer', title: 'Newer', content: 'newer body' });
-    await expect(store.supersedeDecision('old', 'newer', 'second')).rejects.toThrow(/already superseded/);
+    await expect(store.supersedeDecision('old', 'newer', 'second')).rejects.toThrow(
+      /already superseded/,
+    );
   });
 
   test('listDecisions still returns superseded rows by default (append-only)', async () => {
@@ -372,7 +376,9 @@ describe('ScrumStore — decisions: supersedeDecision', () => {
 
     // supersedeDecision still refuses a second retire — terminal state intact.
     await store.recordDecision({ id: 'newer', title: 'Newer', content: 'newer body' });
-    await expect(store.supersedeDecision('old', 'newer', 'second')).rejects.toThrow(/already superseded/);
+    await expect(store.supersedeDecision('old', 'newer', 'second')).rejects.toThrow(
+      /already superseded/,
+    );
   });
 });
 
@@ -427,7 +433,11 @@ describe('ScrumStore — decisions: upsert semantics', () => {
     // A current decision re-recorded with no status stays current with null
     // pointer/reason — unchanged from the original upsert semantics.
     await store.recordDecision({ id: 'current', title: 'Current', content: 'v1' });
-    const reRecorded = await store.recordDecision({ id: 'current', title: 'Current v2', content: 'v2' });
+    const reRecorded = await store.recordDecision({
+      id: 'current',
+      title: 'Current v2',
+      content: 'v2',
+    });
 
     expect(reRecorded.status).toBe('accepted');
     expect(reRecorded.superseded_by).toBeNull();
@@ -502,12 +512,16 @@ describe('ScrumStore — decisions: listDecisions', () => {
       content: 'body',
     });
 
-    expect(
-      (await store.listDecisions({ status: 'accepted' })).map((d) => d.id).sort(),
-    ).toEqual(['lowercase', 'titlecase', 'uppercase']);
-    expect(
-      (await store.listDecisions({ topic: 'architecture' })).map((d) => d.id).sort(),
-    ).toEqual(['lowercase', 'titlecase', 'uppercase']);
+    expect((await store.listDecisions({ status: 'accepted' })).map((d) => d.id).sort()).toEqual([
+      'lowercase',
+      'titlecase',
+      'uppercase',
+    ]);
+    expect((await store.listDecisions({ topic: 'architecture' })).map((d) => d.id).sort()).toEqual([
+      'lowercase',
+      'titlecase',
+      'uppercase',
+    ]);
     expect(
       (await store.listDecisions({ topic: 'ARCHITECTURE', status: 'Accepted' }))
         .map((d) => d.id)

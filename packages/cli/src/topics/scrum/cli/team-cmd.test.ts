@@ -161,7 +161,9 @@ describe('runTeamCmd terminate — agent files', () => {
       expect(existsSync(agentPath('delta', role))).toBe(true);
     }
 
-    const res = await withCapture(() => runTeamCmd('terminate', ['delta'], { workspaceRoot: workspace }));
+    const res = await withCapture(() =>
+      runTeamCmd('terminate', ['delta'], { workspaceRoot: workspace }),
+    );
     expect(res.exit).toBe(0);
 
     for (const role of TEAM_ROLES) {

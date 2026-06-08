@@ -53,10 +53,7 @@ export type AnnotationAction = 'add' | 'list';
 
 const ANNOTATION_ACTIONS: AnnotationAction[] = ['add', 'list'];
 
-export async function runAnnotationCmd(
-  action: string,
-  flags: AnnotationCmdFlags,
-): Promise<number> {
+export async function runAnnotationCmd(action: string, flags: AnnotationCmdFlags): Promise<number> {
   if (!isAnnotationAction(action)) {
     process.stderr.write(
       `error: unknown annotation action '${action}'. expected one of: ${ANNOTATION_ACTIONS.join(', ')}\n`,

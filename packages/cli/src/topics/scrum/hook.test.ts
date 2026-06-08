@@ -537,9 +537,9 @@ describe('onSubagentStop — advisory contribution floor', () => {
     expect(await contributionMisses('floor-throw')).toHaveLength(0);
     const store = await openScrumStore({ cwd: project });
     try {
-      expect((await store.listEventsForTask('floor-throw')).some((e) => e.kind === 'run_completed')).toBe(
-        true,
-      );
+      expect(
+        (await store.listEventsForTask('floor-throw')).some((e) => e.kind === 'run_completed'),
+      ).toBe(true);
     } finally {
       store.close();
     }

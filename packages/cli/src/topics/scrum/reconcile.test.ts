@@ -227,7 +227,9 @@ describe('reconcileRunCompleted — orphan run', () => {
     expect(result.kind).toBe('orphan');
     expect(result.taskId).toBe('does-not-exist');
     expect(
-      (await store.listEventsForTask(ORPHAN_TASK_ID)).some((e) => e.kind === 'unlinked_run_detected'),
+      (await store.listEventsForTask(ORPHAN_TASK_ID)).some(
+        (e) => e.kind === 'unlinked_run_detected',
+      ),
     ).toBe(true);
   });
 
@@ -265,7 +267,9 @@ describe('reconcileRunCompleted — orphan run', () => {
     expect(result.kind).toBe('orphan');
     expect(await store.getTask(ORPHAN_TASK_ID)).not.toBeNull();
     expect(
-      (await store.listEventsForTask(ORPHAN_TASK_ID)).some((e) => e.kind === 'unlinked_run_detected'),
+      (await store.listEventsForTask(ORPHAN_TASK_ID)).some(
+        (e) => e.kind === 'unlinked_run_detected',
+      ),
     ).toBe(true);
   });
 });
@@ -334,7 +338,9 @@ describe('reconcileRunCompleted — unlinked_run_detected dedup', () => {
 
     // Exactly one event for the target run_path regardless of ordering.
     const targetPath = '.prove/runs/feat/many-orphans';
-    expect(await store.hasOrphanEventForRunPath(targetPath, 'plan.json missing task_id')).toBe(true);
+    expect(await store.hasOrphanEventForRunPath(targetPath, 'plan.json missing task_id')).toBe(
+      true,
+    );
     const events = (await store.listEventsForTask(ORPHAN_TASK_ID, 2000)).filter(
       (e) =>
         e.kind === 'unlinked_run_detected' &&
@@ -422,7 +428,10 @@ describe('isRunOrphan', () => {
     await store.createTask({ id: 'scrum-iso-3', title: 'Store-linked' });
     const statePath = writeRun({ branch: 'feat', slug: 'iso-store', taskId: null });
     const runDir = statePath.replace('/state.json', '');
-    await store.linkRun({ taskId: 'scrum-iso-3', runPath: join('.prove', 'runs', 'feat', 'iso-store') });
+    await store.linkRun({
+      taskId: 'scrum-iso-3',
+      runPath: join('.prove', 'runs', 'feat', 'iso-store'),
+    });
     expect(await isRunOrphan(runDir, store)).toBe(false);
   });
 });
@@ -448,10 +457,14 @@ describe('reconcileRunCompleted — link resolution beyond top-level plan.task_i
     const sentinel = await store.getTask(ORPHAN_TASK_ID);
     if (sentinel) {
       expect(
-        (await store.listEventsForTask(ORPHAN_TASK_ID)).some((e) => e.kind === 'unlinked_run_detected'),
+        (await store.listEventsForTask(ORPHAN_TASK_ID)).some(
+          (e) => e.kind === 'unlinked_run_detected',
+        ),
       ).toBe(false);
     }
-    expect((await store.listEventsForTask('scrum-40')).some((e) => e.kind === 'run_completed')).toBe(true);
+    expect(
+      (await store.listEventsForTask('scrum-40')).some((e) => e.kind === 'run_completed'),
+    ).toBe(true);
   });
 
   test('a store-linked run sweeps clean — no unlinked_run_detected on repeated sweeps', async () => {
@@ -487,7 +500,10 @@ describe('reconcileRunCompleted — link resolution beyond top-level plan.task_i
     await store.createTask({ id: 'scrum-43', title: 'Plan-side' });
     await store.createTask({ id: 'scrum-44', title: 'Store-side' });
     const statePath = writeRun({ branch: 'feat', slug: 'precedence', taskId: 'scrum-43' });
-    await store.linkRun({ taskId: 'scrum-44', runPath: join('.prove', 'runs', 'feat', 'precedence') });
+    await store.linkRun({
+      taskId: 'scrum-44',
+      runPath: join('.prove', 'runs', 'feat', 'precedence'),
+    });
 
     const result = await reconcileRunCompleted(statePath, store);
     expect(result.taskId).toBe('scrum-43');
@@ -794,9 +810,7 @@ describe('reconcileMilestoneClosed', () => {
 
     const result = await reconcileMilestoneClosed('m5', store);
     expect(result.emitted[0]?.candidateCount).toBe(3);
-    const ids = (await curationPayload('task-multi'))?.candidates
-      .map((c) => c.entry_id)
-      .sort();
+    const ids = (await curationPayload('task-multi'))?.candidates.map((c) => c.entry_id).sort();
     expect(ids).toEqual(['dup', 'h-one', 'r-two']);
   });
 
