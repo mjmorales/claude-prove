@@ -10,12 +10,12 @@
  * migrate-legacy-db absent + populated paths.
  */
 
-import { Database } from 'bun:sqlite';
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { connect } from '@tursodatabase/database';
 
 // ---------------------------------------------------------------------------
 // Test harness — locate `bin/run.ts`, spawn `bun run` against it
@@ -215,7 +215,7 @@ describe('claude-prove acb assemble', () => {
     expect(res.stderr).toContain('Assembled 0 manifests → 0 intent groups');
   });
 
-  test('N manifests seeded via save-manifest: groups > 0, manifests cleared', () => {
+  test('N manifests seeded via save-manifest: groups > 0, manifests cleared', async () => {
     const repo = trackRepo('asm-seeded');
     const sha = gitStdout(['git', 'rev-parse', 'HEAD'], repo);
 
@@ -251,24 +251,22 @@ describe('claude-prove acb assemble', () => {
 
     // Verify the ACB document landed and manifests were cleared.
     const dbPath = join(repo, '.prove', 'prove.db');
-    const db = new Database(dbPath, { readonly: true });
+    const db = await connect(dbPath, { readonly: true });
     try {
-      const docRow = db
-        .prepare<{ data: string }, [string]>('SELECT data FROM acb_acb_documents WHERE branch = ?')
-        .get('feat/x');
+      const docStmt = await db.prepare('SELECT data FROM acb_acb_documents WHERE branch = ?');
+      const docRow = (await docStmt.get('feat/x')) as { data: string } | undefined;
       expect(docRow).not.toBeNull();
       const doc = JSON.parse(docRow?.data ?? '{}') as { intent_groups: unknown[] };
       expect(Array.isArray(doc.intent_groups)).toBe(true);
       expect(doc.intent_groups.length).toBe(2);
 
-      const manifestCount = db
-        .prepare<{ n: number }, [string]>(
-          'SELECT COUNT(*) AS n FROM acb_manifests WHERE branch = ?',
-        )
-        .get('feat/x');
+      const countStmt = await db.prepare(
+        'SELECT COUNT(*) AS n FROM acb_manifests WHERE branch = ?',
+      );
+      const manifestCount = (await countStmt.get('feat/x')) as { n: number } | undefined;
       expect(manifestCount?.n).toBe(0);
     } finally {
-      db.close();
+      await db.close();
     }
   });
 
@@ -350,16 +348,16 @@ describe('claude-prove acb migrate-legacy-db', () => {
     expect(res.stderr).toContain('no legacy .prove/acb.db');
   });
 
-  test('populated legacy db: rows copied, legacy file removed', () => {
+  test('populated legacy db: rows copied, legacy file removed', async () => {
     const repo = trackRepo('mig-pop');
     const proveDir = join(repo, '.prove');
     mkdirSync(proveDir, { recursive: true });
 
     // Seed a post-migrate legacy db (has run_slug column) with one manifest.
     const legacyPath = join(proveDir, 'acb.db');
-    const legacy = new Database(legacyPath);
+    const legacy = await connect(legacyPath);
     try {
-      legacy.exec(`
+      await legacy.exec(`
         CREATE TABLE manifests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             branch TEXT NOT NULL,
@@ -385,20 +383,19 @@ describe('claude-prove acb migrate-legacy-db', () => {
             updated_at TEXT NOT NULL
         );
       `);
-      legacy
-        .prepare<unknown, [string, string, string, string, string, string | null]>(
-          'INSERT INTO manifests (branch, commit_sha, timestamp, data, created_at, run_slug) VALUES (?, ?, ?, ?, ?, ?)',
-        )
-        .run(
-          'feat/legacy',
-          'deadbeef',
-          '2026-04-22T12:00:00Z',
-          '{"acb_manifest_version":"0.2"}',
-          '2026-04-22T12:00:00Z',
-          null,
-        );
+      const insertStmt = await legacy.prepare(
+        'INSERT INTO manifests (branch, commit_sha, timestamp, data, created_at, run_slug) VALUES (?, ?, ?, ?, ?, ?)',
+      );
+      await insertStmt.run(
+        'feat/legacy',
+        'deadbeef',
+        '2026-04-22T12:00:00Z',
+        '{"acb_manifest_version":"0.2"}',
+        '2026-04-22T12:00:00Z',
+        null,
+      );
     } finally {
-      legacy.close();
+      await legacy.close();
     }
 
     const res = runAcb(['migrate-legacy-db', '--workspace-root', repo], repo);
@@ -407,14 +404,13 @@ describe('claude-prove acb migrate-legacy-db', () => {
     expect(existsSync(legacyPath)).toBe(false);
 
     const proveDbPath = join(proveDir, 'prove.db');
-    const proveDb = new Database(proveDbPath, { readonly: true });
+    const proveDb = await connect(proveDbPath, { readonly: true });
     try {
-      const row = proveDb
-        .prepare<{ n: number }, []>('SELECT COUNT(*) AS n FROM acb_manifests')
-        .get();
+      const countStmt = await proveDb.prepare('SELECT COUNT(*) AS n FROM acb_manifests');
+      const row = (await countStmt.get()) as { n: number } | undefined;
       expect(row?.n).toBe(1);
     } finally {
-      proveDb.close();
+      await proveDb.close();
     }
   });
 });
