@@ -30,6 +30,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { type ScrumStore, openScrumStore } from '@claude-prove/cli/scrum/store';
 import type {
+  Contributor,
   MilestoneStatus,
   ScrumEvent,
   ScrumMilestone,
@@ -286,6 +287,33 @@ export function registerScrumRoutes(app: FastifyInstance, resolveProject: Projec
       reply,
       { kind: 'default', value: { events: [] } },
       async (store) => ({ events: await store.listRecentEvents(limit) }),
+    );
+  });
+
+  // Base actionable task ids — the non-deleted ready/backlog set, read from the
+  // SAME shared `scrum_ready_eligible` view the CLI's nextReady ranks on top of.
+  // Neither surface re-derives this predicate in TS; both read one view.
+  app.get('/api/scrum/ready-eligible', async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
+    return withStore<{ ids: string[] }>(
+      repoRoot,
+      reply,
+      { kind: 'default', value: { ids: [] } },
+      async (store) => ({ ids: await store.readyEligibleIds() }),
+    );
+  });
+
+  // The CURRENT operator-of-record holder, read from the SAME shared
+  // `scrum_current_operator` view the CLI's `operator resolve` (no `--at`) uses.
+  app.get('/api/scrum/current-operator', async (req, reply) => {
+    const repoRoot = resolveProject(req, reply);
+    if (repoRoot === null) return reply;
+    return withStore<{ operator: Contributor | null }>(
+      repoRoot,
+      reply,
+      { kind: 'default', value: { operator: null } },
+      async (store) => ({ operator: await store.currentOperator() }),
     );
   });
 

@@ -802,7 +802,9 @@ describe('scrum domain registration', () => {
         INSERT INTO scrum_operator_history (id, contributor_id, from_ts, to_ts, created_at) VALUES ('${ulid()}', 'ct-bob', '2026-03-01T00:00:00Z', NULL, '2026-03-01T00:00:00Z');
       `);
       const holders = (
-        await raw.all<{ contributor_id: string }>('SELECT contributor_id FROM scrum_current_operator')
+        await raw.all<{ contributor_id: string }>(
+          'SELECT contributor_id FROM scrum_current_operator',
+        )
       ).map((r) => r.contributor_id);
       // The closed jane interval is excluded; only the open bob row is current.
       expect(holders).toEqual(['ct-bob']);

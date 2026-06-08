@@ -2426,6 +2426,21 @@ export class ScrumStore {
   // ==========================================================================
 
   /**
+   * The base actionable task ids — every non-deleted task in `ready` or
+   * `backlog`, read straight from the shared `scrum_ready_eligible` view. This
+   * is the UNSCORED candidate floor `nextReady` ranks on top of, surfaced as a
+   * standalone reader so a second consumer (the review-ui boundary) shares the
+   * SAME view definition rather than re-deriving the predicate in TS. Ordered
+   * by id for a deterministic, comparable set.
+   */
+  async readyEligibleIds(): Promise<string[]> {
+    const rows = (await this.many('SELECT id FROM scrum_ready_eligible ORDER BY id ASC')) as Array<{
+      id: string;
+    }>;
+    return rows.map((r) => r.id);
+  }
+
+  /**
    * Rank tasks in `ready` or `backlog` by composite priority:
    *   score = unblock_depth * 10 + milestone_boost * 5 + context_hotness * 3 + tag_boost
    *
