@@ -53,7 +53,7 @@ export type AnnotationAction = 'add' | 'list';
 
 const ANNOTATION_ACTIONS: AnnotationAction[] = ['add', 'list'];
 
-export function runAnnotationCmd(action: string, flags: AnnotationCmdFlags): number {
+export async function runAnnotationCmd(action: string, flags: AnnotationCmdFlags): Promise<number> {
   if (!isAnnotationAction(action)) {
     process.stderr.write(
       `error: unknown annotation action '${action}'. expected one of: ${ANNOTATION_ACTIONS.join(', ')}\n`,
@@ -65,13 +65,13 @@ export function runAnnotationCmd(action: string, flags: AnnotationCmdFlags): num
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'add':
-        return doAdd(store, flags);
+        return await doAdd(store, flags);
       case 'list':
-        return doList(store, flags);
+        return await doList(store, flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -101,7 +101,7 @@ function asTargetKind(raw: string | undefined): AnnotationTargetKind | null {
 // add
 // ---------------------------------------------------------------------------
 
-function doAdd(store: ScrumStore, flags: AnnotationCmdFlags): number {
+async function doAdd(store: ScrumStore, flags: AnnotationCmdFlags): Promise<number> {
   const targetKind = asTargetKind(flags.targetKind);
   if (targetKind === null) {
     process.stderr.write(
@@ -122,7 +122,7 @@ function doAdd(store: ScrumStore, flags: AnnotationCmdFlags): number {
     return 1;
   }
 
-  const row = store.addAnnotation({
+  const row = await store.addAnnotation({
     targetKind,
     targetRef: flags.target,
     body: flags.body,
@@ -140,7 +140,7 @@ function doAdd(store: ScrumStore, flags: AnnotationCmdFlags): number {
 // list
 // ---------------------------------------------------------------------------
 
-function doList(store: ScrumStore, flags: AnnotationCmdFlags): number {
+async function doList(store: ScrumStore, flags: AnnotationCmdFlags): Promise<number> {
   const targetKind = asTargetKind(flags.targetKind);
   if (targetKind === null) {
     process.stderr.write(
@@ -153,7 +153,7 @@ function doList(store: ScrumStore, flags: AnnotationCmdFlags): number {
     return 1;
   }
 
-  const rows = store.listAnnotations(targetKind, flags.target);
+  const rows = await store.listAnnotations(targetKind, flags.target);
   if (flags.human === true) {
     process.stdout.write(renderHumanTable(rows));
   } else {

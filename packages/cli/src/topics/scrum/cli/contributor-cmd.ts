@@ -92,11 +92,11 @@ export type ContributorAction = 'register' | 'list' | 'resolve' | 'default';
 
 const CONTRIBUTOR_ACTIONS: ContributorAction[] = ['register', 'list', 'resolve', 'default'];
 
-export function runContributorCmd(
+export async function runContributorCmd(
   action: string,
   flags: ContributorCmdFlags,
   subAction?: string,
-): number {
+): Promise<number> {
   if (!isContributorAction(action)) {
     process.stderr.write(
       `error: unknown contributor action '${action}'. expected one of: ${CONTRIBUTOR_ACTIONS.join(', ')}\n`,
@@ -115,15 +115,15 @@ export function runContributorCmd(
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'register':
-        return doRegister(store, workspaceRoot, flags);
+        return await doRegister(store, workspaceRoot, flags);
       case 'list':
-        return doList(store, flags);
+        return await doList(store, flags);
       case 'resolve':
-        return doResolve(store, flags);
+        return await doResolve(store, flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -142,7 +142,11 @@ function isContributorAction(value: string): value is ContributorAction {
 // register
 // ---------------------------------------------------------------------------
 
-function doRegister(store: ScrumStore, workspaceRoot: string, flags: ContributorCmdFlags): number {
+async function doRegister(
+  store: ScrumStore,
+  workspaceRoot: string,
+  flags: ContributorCmdFlags,
+): Promise<number> {
   if (flags.slug === undefined || flags.slug.length === 0) {
     process.stderr.write('scrum contributor register: --slug <slug> is required\n');
     return 1;
@@ -155,10 +159,10 @@ function doRegister(store: ScrumStore, workspaceRoot: string, flags: Contributor
   // the artifact write below re-emits/merges either way. This is the repair
   // path for a registry row whose identity artifact was never emitted or was
   // lost; an --id conflicting with the registered CT-UUID throws in the store.
-  const existing = store.getContributorBySlug(flags.slug);
+  const existing = await store.getContributorBySlug(flags.slug);
   const row =
     existing === null
-      ? store.registerContributor({
+      ? await store.registerContributor({
           slug: flags.slug,
           id: flags.id,
           status,
@@ -166,7 +170,7 @@ function doRegister(store: ScrumStore, workspaceRoot: string, flags: Contributor
           github: emptyToNull(flags.github),
           email: emptyToNull(flags.email),
         })
-      : store.reconcileContributor({
+      : await store.reconcileContributor({
           slug: flags.slug,
           id: emptyToUndefined(flags.id),
           status,
@@ -378,11 +382,11 @@ function yamlValue(value: string | null): string {
 // list
 // ---------------------------------------------------------------------------
 
-function doList(store: ScrumStore, flags: ContributorCmdFlags): number {
+async function doList(store: ScrumStore, flags: ContributorCmdFlags): Promise<number> {
   const status = normalizeStatus(flags.status);
   if (status === INVALID_STATUS) return 1;
 
-  const rows = store.listContributors(status);
+  const rows = await store.listContributors(status);
   if (flags.human === true) {
     process.stdout.write(renderHumanTable(rows));
   } else {
@@ -408,7 +412,7 @@ function renderHumanTable(rows: Contributor[]): string {
 // resolve — github match first, then email fallback
 // ---------------------------------------------------------------------------
 
-function doResolve(store: ScrumStore, flags: ContributorCmdFlags): number {
+async function doResolve(store: ScrumStore, flags: ContributorCmdFlags): Promise<number> {
   const github = emptyToNull(flags.github);
   const email = emptyToNull(flags.email);
   if (github === null && email === null) {
@@ -418,7 +422,7 @@ function doResolve(store: ScrumStore, flags: ContributorCmdFlags): number {
     return 1;
   }
 
-  const row = store.resolveContributor({ github, email });
+  const row = await store.resolveContributor({ github, email });
   if (row === null) {
     const probe = [github ? `github=${github}` : null, email ? `email=${email}` : null]
       .filter((p) => p !== null)

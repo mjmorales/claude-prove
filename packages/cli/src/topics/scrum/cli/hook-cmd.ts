@@ -25,7 +25,7 @@ export type HookEvent = 'session-start' | 'subagent-stop' | 'stop';
 
 const HOOK_EVENTS: readonly HookEvent[] = ['session-start', 'subagent-stop', 'stop'];
 
-export function runHookCmd(event: string, _flags: HookCmdFlags): number {
+export async function runHookCmd(event: string, _flags: HookCmdFlags): Promise<number> {
   if (!isHookEvent(event)) {
     process.stderr.write(
       `error: unknown hook event '${event}' (expected: ${HOOK_EVENTS.join(' | ')})\n`,
@@ -48,7 +48,7 @@ export function runHookCmd(event: string, _flags: HookCmdFlags): number {
     return 0;
   }
 
-  const result: HookResult = dispatch(event, payload);
+  const result: HookResult = await dispatch(event, payload);
   if (result.stdout.length > 0) process.stdout.write(result.stdout);
   if (result.stderr.length > 0) process.stderr.write(result.stderr);
   return result.exitCode;
@@ -58,7 +58,7 @@ function isHookEvent(value: string): value is HookEvent {
   return (HOOK_EVENTS as readonly string[]).includes(value);
 }
 
-function dispatch(event: HookEvent, payload: Record<string, unknown> | null): HookResult {
+function dispatch(event: HookEvent, payload: Record<string, unknown> | null): Promise<HookResult> {
   switch (event) {
     case 'session-start':
       return onSessionStart(payload);

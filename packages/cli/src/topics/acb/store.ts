@@ -138,25 +138,23 @@ export function ensureAcbSchemaRegistered(): void {
       {
         version: 1,
         description: 'create acb_manifests + acb_acb_documents + acb_review_state',
-        up: (db: Database) => {
-          db.exec(ACB_MIGRATION_V1_SQL);
+        up: async (store) => {
+          await store.exec(ACB_MIGRATION_V1_SQL);
         },
       },
       {
         version: 2,
         description: 'create acb_group_verdicts (absorb review-ui group_verdicts)',
-        up: (db: Database) => {
-          db.exec(ACB_MIGRATION_V2_SQL);
+        up: async (store) => {
+          await store.exec(ACB_MIGRATION_V2_SQL);
           // Legacy backfill: the review-ui server used to create a bare
           // `group_verdicts` table at boot. Copy any existing rows into
           // the acb-prefixed table, then drop the legacy source.
-          const legacy = db
-            .prepare<{ name: string }, []>(
-              "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'group_verdicts'",
-            )
-            .get();
+          const legacy = await store.get<{ name: string }>(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'group_verdicts'",
+          );
           if (legacy) {
-            db.exec(`
+            await store.exec(`
               INSERT OR IGNORE INTO acb_group_verdicts (slug, group_id, verdict, note, fix_prompt, updated_at)
               SELECT slug, group_id, verdict, note, fix_prompt, updated_at FROM group_verdicts;
               DROP TABLE group_verdicts;
@@ -167,8 +165,8 @@ export function ensureAcbSchemaRegistered(): void {
       {
         version: 3,
         description: 'normalize acb_group_verdicts.verdict to canonical VerdictValue vocabulary',
-        up: (db: Database) => {
-          db.exec(ACB_MIGRATION_V3_SQL);
+        up: async (store) => {
+          await store.exec(ACB_MIGRATION_V3_SQL);
         },
       },
     ],

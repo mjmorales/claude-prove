@@ -33,6 +33,7 @@
 
 import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
+import type { ScrumStore } from '../store';
 import { openCliStore } from './cli-store';
 
 export interface GateCmdFlags {
@@ -49,11 +50,11 @@ const GATE_ACTIONS: GateAction[] = ['respond'];
 /** Closed respond-verdict set the CLI accepts; `gate_pending` is not a target. */
 const RESPOND_VERDICTS = ['approve', 'reject'] as const;
 
-export function runGateCmd(
+export async function runGateCmd(
   action: string,
   positional: (string | undefined)[],
   flags: GateCmdFlags,
-): number {
+): Promise<number> {
   if (!isGateAction(action)) {
     process.stderr.write(
       `error: unknown gate action '${action}'. expected one of: ${GATE_ACTIONS.join(', ')}\n`,
@@ -65,11 +66,11 @@ export function runGateCmd(
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'respond':
-        return doRespond(store, positional[0], positional[1], flags);
+        return await doRespond(store, positional[0], positional[1], flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -91,12 +92,12 @@ function isGateAction(value: string): value is GateAction {
  * contributor. Store-side rejections (unknown id, non-gate, already-resolved)
  * surface here as exit 1.
  */
-function doRespond(
-  store: ReturnType<typeof openCliStore>,
+async function doRespond(
+  store: ScrumStore,
   criterionId: string | undefined,
   verdictArg: string | undefined,
   flags: GateCmdFlags,
-): number {
+): Promise<number> {
   if (criterionId === undefined || criterionId.length === 0) {
     process.stderr.write('scrum gate respond: <criterion-id> positional argument required\n');
     return 1;
@@ -124,7 +125,7 @@ function doRespond(
         : null;
   const comment = flags.comment && flags.comment.length > 0 ? flags.comment : null;
 
-  const task = store.respondGate(flags.task, criterionId, verdict, {
+  const task = await store.respondGate(flags.task, criterionId, verdict, {
     responder: responder ?? '',
     comment,
   });

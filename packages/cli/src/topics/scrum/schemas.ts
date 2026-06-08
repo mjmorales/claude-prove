@@ -13,7 +13,6 @@
  * `idx_scrum_` prefix.
  */
 
-import type { Database } from 'bun:sqlite';
 import { listDomains, registerSchema } from '@claude-prove/store';
 
 // ---------------------------------------------------------------------------
@@ -1167,220 +1166,220 @@ export function ensureScrumSchemaRegistered(): void {
         version: 1,
         description:
           'create scrum_tasks + scrum_milestones + scrum_tags + scrum_deps + scrum_events + scrum_run_links + scrum_context_bundles',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V1_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V1_SQL);
         },
       },
       {
         version: 2,
         description:
           'create scrum_decisions + idx_scrum_decisions_topic + idx_scrum_decisions_status',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V2_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V2_SQL);
         },
       },
       {
         version: 3,
         description:
           'add scrum_tasks.parent_id (self-FK) + scrum_tasks.layer + idx_scrum_tasks_parent',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V3_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V3_SQL);
         },
       },
       {
         version: 4,
         description:
           'add scrum_decisions.superseded_by (self-FK) + scrum_decisions.reason for append-only supersession',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V4_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V4_SQL);
         },
       },
       {
         version: 5,
         description:
           'add scrum_tasks.acceptance_json (nullable JSON) for first-class acceptance criteria',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V5_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V5_SQL);
         },
       },
       {
         version: 6,
         description:
           'add scrum_tasks.bounds_json (nullable JSON) for milestone-authored declared bounds',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V6_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V6_SQL);
         },
       },
       {
         version: 7,
         description:
           'add scrum_tasks.terminal_reason + scrum_tasks.terminal_detail for cancel provenance',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V7_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V7_SQL);
         },
       },
       {
         version: 8,
         description: 'add scrum_decisions.kind (nullable) for the Codex subtype taxonomy',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V8_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V8_SQL);
         },
       },
       {
         version: 9,
         description:
           'add scrum_tasks.last_modified_by + scrum_tasks.last_modified_at for last-touch provenance',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V9_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V9_SQL);
         },
       },
       {
         version: 10,
         description: 'add scrum_milestones.initiative (nullable) for the initiative grouping tier',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V10_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V10_SQL);
         },
       },
       {
         version: 11,
         description:
           'add scrum_tasks.worker_id + scrum_tasks.run_id for executing-worker/run attribution',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V11_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V11_SQL);
         },
       },
       {
         version: 12,
         description:
           'create scrum_contributors (CT-UUID registry) + idx_scrum_contributors_github + idx_scrum_contributors_email',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V12_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V12_SQL);
         },
       },
       {
         version: 13,
         description:
           'create scrum_operator_history (operator-of-record position history) + idx_scrum_operator_history_interval',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V13_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V13_SQL);
         },
       },
       {
         version: 14,
         description: 'create scrum_teams (team registry) + idx_scrum_teams_type',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V14_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V14_SQL);
         },
       },
       {
         version: 15,
         description:
           'create scrum_team_scopes (per-team read/write scope globs) + idx_scrum_team_scopes_team',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V15_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V15_SQL);
         },
       },
       {
         version: 16,
         description:
           'create scrum_team_members (per-team three-role roster + position history) + idx_scrum_team_members_team_role',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V16_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V16_SQL);
         },
       },
       {
         version: 17,
         description:
           'create scrum_team_accepts + scrum_team_exposes (per-team accept/expose interface, append-only with supersession) + idx_scrum_team_accepts_team + idx_scrum_team_exposes_team',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V17_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V17_SQL);
         },
       },
       {
         version: 18,
         description:
           'add scrum_teams.terminates_on_milestone (nullable target) + scrum_teams.status (active|inactive) for the team lifecycle',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V18_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V18_SQL);
         },
       },
       {
         version: 19,
         description:
           'create scrum_lores (per-team append-only Lore memory layer, tech_lead-authored) + idx_scrum_lores_team',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V19_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V19_SQL);
         },
       },
       {
         version: 20,
         description:
           'create scrum_annotations (per-artifact append-only Annotation memory layer, soft target reference) + idx_scrum_annotations_target',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V20_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V20_SQL);
         },
       },
       {
         version: 21,
         description:
           'add scrum_decisions.write_status (draft|approved|rejected) + gate_responder + gate_responded_at for the gated Codex write protocol',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V21_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V21_SQL);
         },
       },
       {
         version: 22,
         description:
           'add scrum_decisions.source_lore_id (nullable self-FK to scrum_lores) for Lore→Codex promotion provenance',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V22_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V22_SQL);
         },
       },
       {
         version: 23,
         description:
           'create scrum_asks (cross-team ask protocol) + idx_scrum_asks_to_team + idx_scrum_asks_blocking_artifact',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V23_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V23_SQL);
         },
       },
       {
         version: 24,
         description:
           'create scrum_escalations (typed escalation walk-up chain + four-state machine + resolution modes) + idx_scrum_escalations_task_state + idx_scrum_escalations_walked_up_from',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V24_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V24_SQL);
         },
       },
       {
         version: 25,
         description:
           'add scrum_asks.mapped_artifact + scrum_asks.rejected_reason + scrum_asks.counter_proposal for the ask triage/respond verdict provenance',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V25_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V25_SQL);
         },
       },
       {
         version: 26,
         description:
           'add scrum_escalations.attributes (nullable JSON) carrying the staleness auto-bubble marker { auto_bubbled, linked_escalation }',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V26_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V26_SQL);
         },
       },
       {
         version: 27,
         description: 'add scrum_tasks.team_slug (nullable soft reference) for the team binding',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V27_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V27_SQL);
         },
       },
       {
         version: 28,
         description:
           'add scrum_lores.superseded_by (typed soft ref lore:<id> | decision:<id>) + reason — the compaction lifecycle (append-only-with-supersession)',
-        up: (db: Database) => {
-          db.exec(SCRUM_MIGRATION_V28_SQL);
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V28_SQL);
         },
       },
     ],
