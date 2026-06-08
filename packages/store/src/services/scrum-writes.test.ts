@@ -39,7 +39,7 @@ CREATE TABLE scrum_tasks (
 );
 
 CREATE TABLE scrum_events (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL,
     ts TEXT NOT NULL,
     kind TEXT NOT NULL,
