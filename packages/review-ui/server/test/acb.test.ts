@@ -58,7 +58,7 @@ describe('verdict round-trip on a fresh db', () => {
     expect(rows[0]).toEqual(rec);
   });
 
-  test('upsert twice on the same (slug, groupId) overwrites', async () => {
+  test('a second verdict on the same (slug, groupId) appends; list returns the latest via the head view', async () => {
     await upsertVerdict(repoRoot, 'my-slug', 'g1', 'accepted', null, null);
     const updated = await upsertVerdict(
       repoRoot,
@@ -71,9 +71,23 @@ describe('verdict round-trip on a fresh db', () => {
     expect(updated.verdict).toBe('rework');
     expect(updated.fixPrompt).toBe('Please add a test');
 
+    // The head view collapses the two revisions to the latest.
     const rows = await listVerdicts(repoRoot, 'my-slug');
     expect(rows).toHaveLength(1);
     expect(rows[0].verdict).toBe('rework');
+
+    // Append-only: both revisions persist in the base table; nothing was
+    // overwritten.
+    const db = await openStore({ path: join(repoRoot, '.prove/prove.db') });
+    try {
+      const counted = await db.all<{ n: number }>(
+        'SELECT COUNT(*) AS n FROM acb_group_verdicts WHERE slug = ? AND group_id = ?',
+        ['my-slug', 'g1'],
+      );
+      expect(counted[0]?.n).toBe(2);
+    } finally {
+      db.close();
+    }
   });
 
   test('clearVerdict removes the row; subsequent clear is a no-op', async () => {
@@ -117,11 +131,14 @@ describe('legacy verdict canonicalization at the read boundary', () => {
     // table, including acb_group_verdicts).
     await listVerdicts(repoRoot, 'warmup');
 
-    // Hand-write a legacy verdict value into the canonical v1 table.
+    // Hand-write a legacy verdict value into the canonical v1 revision table.
+    // The table is append-only with a ULID PK, so the insert supplies an `id`
+    // and the `created_at` stamp (read back through the head view as
+    // `updatedAt`).
     const db = await openStore({ path: dbFile });
     await db.run(
-      'INSERT INTO acb_group_verdicts (slug, group_id, verdict, note, fix_prompt, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-      ['pre-phase-11', 'g1', 'approved', 'carryover', null, '2026-01-01T00:00:00Z'],
+      'INSERT INTO acb_group_verdicts (id, slug, group_id, verdict, note, fix_prompt, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ['01HEAD000000000000000000V1', 'pre-phase-11', 'g1', 'approved', 'carryover', null, '2026-01-01T00:00:00Z'],
     );
     db.close();
 

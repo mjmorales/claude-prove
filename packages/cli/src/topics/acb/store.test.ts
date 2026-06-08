@@ -64,7 +64,7 @@ describe('acb domain registration', () => {
     expect(listDomains()).toContain('acb');
   });
 
-  test('openAcbStore applies the single v1 migration and creates all 4 acb_ tables', async () => {
+  test('openAcbStore applies the single v1 migration and creates all 4 acb_ tables + 3 head views', async () => {
     // Use a raw store so we can introspect sqlite_master + _migrations_log
     // without reaching into AcbStore internals. ensureAcbSchemaRegistered
     // guarantees acb is in the registry.
@@ -84,16 +84,32 @@ describe('acb domain registration', () => {
         'acb_review_state',
       ]);
 
+      // Each contended document is an append-only revision log read through a
+      // head view; assert all three heads exist.
+      const views = (
+        await raw.all<{ name: string }>(
+          "SELECT name FROM sqlite_master WHERE type = 'view' AND name LIKE 'acb_%' ORDER BY name",
+        )
+      ).map((r) => r.name);
+      expect(views).toEqual([
+        'acb_acb_documents_head',
+        'acb_group_verdicts_head',
+        'acb_review_state_head',
+      ]);
+
       const indexes = (
         await raw.all<{ name: string }>(
           "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_acb_%' ORDER BY name",
         )
       ).map((r) => r.name);
       expect(indexes).toEqual([
+        'idx_acb_acb_documents_branch',
+        'idx_acb_group_verdicts_key',
         'idx_acb_group_verdicts_slug',
         'idx_acb_manifests_branch',
         'idx_acb_manifests_branch_sha',
         'idx_acb_manifests_run_slug',
+        'idx_acb_review_state_branch',
       ]);
 
       const log = await raw.all<{ domain: string; version: number; description: string }>(
@@ -140,8 +156,9 @@ describe('acb domain registration', () => {
       // across every formerly-AUTOINCREMENT table and assert it never appears.
       await raw.exec(`
         INSERT INTO acb_manifests (id, branch, commit_sha, timestamp, data, created_at) VALUES ('m1', 'b', 'sha', 't', '{}', 't');
-        INSERT INTO acb_acb_documents (id, branch, data, created_at, updated_at) VALUES ('d1', 'b', '{}', 't', 't');
-        INSERT INTO acb_review_state (id, branch, acb_hash, data, created_at, updated_at) VALUES ('r1', 'b', 'h', '{}', 't', 't');
+        INSERT INTO acb_acb_documents (id, branch, data, created_at) VALUES ('d1', 'b', '{}', 't');
+        INSERT INTO acb_review_state (id, branch, acb_hash, data, created_at) VALUES ('r1', 'b', 'h', '{}', 't');
+        INSERT INTO acb_group_verdicts (id, slug, group_id, verdict, created_at) VALUES ('v1', 's', 'g', 'pending', 't');
       `);
       const seq = await raw.all<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'sqlite_sequence'",
@@ -180,7 +197,7 @@ describe('acb domain registration', () => {
       await store
         .getStore()
         .run(
-          "INSERT INTO acb_group_verdicts (slug, group_id, verdict, note, fix_prompt, updated_at) VALUES ('my-slug', 'g1', 'approved', 'lgtm', NULL, '2026-01-01T00:00:00Z')",
+          "INSERT INTO acb_group_verdicts (id, slug, group_id, verdict, note, fix_prompt, created_at) VALUES ('01HEAD000000000000000000V1', 'my-slug', 'g1', 'approved', 'lgtm', NULL, '2026-01-01T00:00:00Z')",
         );
       const rows = await store.listGroupVerdicts('my-slug');
       expect(rows).toEqual([
@@ -227,7 +244,7 @@ describe('AcbStore: group verdicts', () => {
     expect(rows[0]).toEqual(rec);
   });
 
-  test('upsertGroupVerdict updates on conflict (slug, groupId)', async () => {
+  test('a second verdict on the same (slug, groupId) appends a revision; the head returns the latest', async () => {
     await store.upsertGroupVerdict('my-slug', 'g1', 'accepted', 'lgtm', null);
     const updated = await store.upsertGroupVerdict(
       'my-slug',
@@ -239,9 +256,20 @@ describe('AcbStore: group verdicts', () => {
     expect(updated.verdict).toBe('rework');
     expect(updated.fixPrompt).toBe('Please add unit tests');
 
+    // The head view collapses the two revisions to the latest one.
     const rows = await store.listGroupVerdicts('my-slug');
     expect(rows).toHaveLength(1);
     expect(rows[0].verdict).toBe('rework');
+
+    // The prior revision is retained in the append-only base table — nothing
+    // was overwritten, so both ULID-keyed rows survive.
+    const all = await store
+      .getStore()
+      .all<{ n: number }>(
+        'SELECT COUNT(*) AS n FROM acb_group_verdicts WHERE slug = ? AND group_id = ?',
+        ['my-slug', 'g1'],
+      );
+    expect(all[0]?.n).toBe(2);
   });
 
   test('clearGroupVerdict deletes the row; no-op when absent', async () => {
@@ -379,18 +407,29 @@ describe('AcbStore: acb documents', () => {
     expect(await store.loadAcb('feat/x')).toBeNull();
   });
 
-  test('saveAcb upserts — second call overwrites data', async () => {
+  test('saveAcb appends a revision — loadAcb returns the latest via the head view', async () => {
     await store.saveAcb('feat/x', { id: 'v1' });
     await store.saveAcb('feat/x', { id: 'v2' });
     const loaded = await store.loadAcb('feat/x');
     expect(asObj(loaded).id).toBe('v2');
   });
 
-  test('latestAcbBranch returns the most-recently updated branch', async () => {
+  test('saveAcb twice on the same branch retains both revisions in the base table', async () => {
+    await store.saveAcb('feat/x', { id: 'v1' });
+    await store.saveAcb('feat/x', { id: 'v2' });
+    const rows = await store
+      .getStore()
+      .all<{ n: number }>('SELECT COUNT(*) AS n FROM acb_acb_documents WHERE branch = ?', [
+        'feat/x',
+      ]);
+    expect(rows[0]?.n).toBe(2);
+  });
+
+  test('latestAcbBranch returns the branch whose head revision was written most recently', async () => {
     await store.saveAcb('feat/old', { id: 'old' });
-    // Date.prototype.toISOString has ms resolution, so back-to-back
-    // saveAcb calls can collide on updated_at. Wait a tick to guarantee
-    // strict ordering — matches the Python reference's test intent.
+    // Date.prototype.toISOString has ms resolution, but the head view orders by
+    // the ULID id (monotonic within a process), so back-to-back appends still
+    // order deterministically. The tick keeps created_at human-distinct too.
     await new Promise((resolve) => setTimeout(resolve, 2));
     await store.saveAcb('feat/new', { id: 'new' });
     expect(await store.latestAcbBranch()).toBe('feat/new');
@@ -400,7 +439,7 @@ describe('AcbStore: acb documents', () => {
     expect(await store.latestAcbBranch()).toBeNull();
   });
 
-  test('saveAcb twice on the same branch keeps a single row', async () => {
+  test('saveAcb twice on the same branch keeps a single head branch', async () => {
     await store.saveAcb('feat/x', { id: 'v1' });
     await store.saveAcb('feat/x', { id: 'v2' });
     expect(await store.branches()).toEqual(['feat/x']);
@@ -429,11 +468,19 @@ describe('AcbStore: review state', () => {
     expect(await store.loadReview('feat/x')).toBeNull();
   });
 
-  test('saveReview upserts — second call replaces verdict + hash', async () => {
+  test('saveReview appends a revision — loadReview returns the latest via the head view', async () => {
     await store.saveReview('feat/x', 'h1', { overall_verdict: 'pending' });
     await store.saveReview('feat/x', 'h2', { overall_verdict: 'approved' });
     const loaded = await store.loadReview('feat/x');
     expect(asObj(loaded).overall_verdict).toBe('approved');
+
+    // Both revisions persist in the append-only base table.
+    const rows = await store
+      .getStore()
+      .all<{ n: number }>('SELECT COUNT(*) AS n FROM acb_review_state WHERE branch = ?', [
+        'feat/x',
+      ]);
+    expect(rows[0]?.n).toBe(2);
   });
 });
 
