@@ -31,7 +31,7 @@ interface Captured {
   exit: number;
 }
 
-function withCapture(fn: () => number): Captured {
+async function withCapture(fn: () => Promise<number>): Promise<Captured> {
   let stdout = '';
   let stderr = '';
   const origOut = process.stdout.write.bind(process.stdout);
@@ -45,7 +45,7 @@ function withCapture(fn: () => number): Captured {
     return true;
   }) as typeof process.stderr.write;
   try {
-    const exit = fn();
+    const exit = await fn();
     return { stdout, stderr, exit };
   } finally {
     process.stdout.write = origOut;
@@ -57,7 +57,7 @@ function withCapture(fn: () => number): Captured {
  * Seed a milestone `m1` with one shipped story (a hack + synthesis) and one
  * cancelled story (a risk it raised before being cut). Returns the abs db path.
  */
-function seedMilestone(): void {
+async function seedMilestone(): Promise<void> {
   const shippedRunRel = join('.prove', 'runs', 'main', 'story-1');
   const cancelledRunRel = join('.prove', 'runs', 'main', 'story-2');
   const shippedRunDir = join(root, shippedRunRel);
@@ -93,30 +93,35 @@ function seedMilestone(): void {
     mitigation: 'add a limiter',
   });
 
-  const store = openScrumStore({ override: join(root, '.prove', 'prove.db') });
-  store.createMilestone({
-    id: 'm1',
-    title: 'Milestone One',
-    description: null,
-    targetState: null,
-    initiative: null,
-  });
-  store.createTask({ id: 't1', title: 'Auth login', milestoneId: 'm1' });
-  store.createTask({ id: 't2', title: 'Magic links', milestoneId: 'm1' });
-  store.linkRun({ taskId: 't1', runPath: shippedRunRel });
-  store.linkRun({ taskId: 't2', runPath: cancelledRunRel });
-  // t1 ships; t2 is cancelled with a recorded reason.
-  store.updateTaskStatus('t1', 'ready');
-  store.updateTaskStatus('t1', 'in_progress');
-  store.updateTaskStatus('t1', 'done');
-  store.cancelTask('t2', { reason: 'cancelled', detail: 'descoped to next milestone' });
-  store.close();
+  const store = await openScrumStore({ override: join(root, '.prove', 'prove.db') });
+  try {
+    await store.createMilestone({
+      id: 'm1',
+      title: 'Milestone One',
+      description: null,
+      targetState: null,
+      initiative: null,
+    });
+    await store.createTask({ id: 't1', title: 'Auth login', milestoneId: 'm1' });
+    await store.createTask({ id: 't2', title: 'Magic links', milestoneId: 'm1' });
+    await store.linkRun({ taskId: 't1', runPath: shippedRunRel });
+    await store.linkRun({ taskId: 't2', runPath: cancelledRunRel });
+    // t1 ships; t2 is cancelled with a recorded reason.
+    await store.updateTaskStatus('t1', 'ready');
+    await store.updateTaskStatus('t1', 'in_progress');
+    await store.updateTaskStatus('t1', 'done');
+    await store.cancelTask('t2', { reason: 'cancelled', detail: 'descoped to next milestone' });
+  } finally {
+    // Await every write above before the sync close so no pending prepared
+    // statement runs after the connection finalizes.
+    store.close();
+  }
 }
 
 describe('acb milestone-brief render', () => {
-  test('rolls up the four sections from the milestone stories, exit 0', () => {
-    seedMilestone();
-    const res = withCapture(() =>
+  test('rolls up the four sections from the milestone stories, exit 0', async () => {
+    await seedMilestone();
+    const res = await withCapture(() =>
       runMilestoneBrief('render', { milestone: 'm1', workspaceRoot: root }),
     );
     expect(res.exit).toBe(0);
@@ -128,15 +133,15 @@ describe('acb milestone-brief render', () => {
     expect(res.stderr).toContain('Milestone brief rendered');
   });
 
-  test('missing --milestone → exit 1', () => {
-    const res = withCapture(() => runMilestoneBrief('render', { workspaceRoot: root }));
+  test('missing --milestone → exit 1', async () => {
+    const res = await withCapture(() => runMilestoneBrief('render', { workspaceRoot: root }));
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('--milestone is required');
   });
 
-  test('unknown milestone → exit 1', () => {
-    seedMilestone();
-    const res = withCapture(() =>
+  test('unknown milestone → exit 1', async () => {
+    await seedMilestone();
+    const res = await withCapture(() =>
       runMilestoneBrief('render', { milestone: 'nope', workspaceRoot: root }),
     );
     expect(res.exit).toBe(1);
@@ -145,15 +150,15 @@ describe('acb milestone-brief render', () => {
 });
 
 describe('acb milestone-brief validate', () => {
-  test('PASS: a preserving brief → JSON ok:true, exit 0', () => {
-    seedMilestone();
-    const rendered = withCapture(() =>
-      runMilestoneBrief('render', { milestone: 'm1', workspaceRoot: root }),
+  test('PASS: a preserving brief → JSON ok:true, exit 0', async () => {
+    await seedMilestone();
+    const rendered = (
+      await withCapture(() => runMilestoneBrief('render', { milestone: 'm1', workspaceRoot: root }))
     ).stdout;
     const briefFile = join(root, 'mbrief.md');
     writeFileSync(briefFile, rendered, 'utf8');
 
-    const res = withCapture(() =>
+    const res = await withCapture(() =>
       runMilestoneBrief('validate', { milestone: 'm1', file: briefFile, workspaceRoot: root }),
     );
     expect(res.exit).toBe(0);
@@ -163,13 +168,13 @@ describe('acb milestone-brief validate', () => {
     expect(res.stderr).toContain('preserves all 2');
   });
 
-  test('FAIL: a brief dropping the cancelled story risk → ok:false, exit 1', () => {
-    seedMilestone();
+  test('FAIL: a brief dropping the cancelled story risk → ok:false, exit 1', async () => {
+    await seedMilestone();
     const badFile = join(root, 'bad.md');
     // Mentions the shipped hack but omits the cancelled story's risk id.
     writeFileSync(badFile, 'we kept h1 but said nothing about the cut risk', 'utf8');
 
-    const res = withCapture(() =>
+    const res = await withCapture(() =>
       runMilestoneBrief('validate', { milestone: 'm1', file: badFile, workspaceRoot: root }),
     );
     expect(res.exit).toBe(1);
@@ -179,8 +184,8 @@ describe('acb milestone-brief validate', () => {
     expect(res.stderr).toContain('DROPPED');
   });
 
-  test('unknown sub-action → exit 1', () => {
-    const res = withCapture(() =>
+  test('unknown sub-action → exit 1', async () => {
+    const res = await withCapture(() =>
       runMilestoneBrief('bogus', { milestone: 'm1', workspaceRoot: root }),
     );
     expect(res.exit).toBe(1);

@@ -37,7 +37,7 @@ export interface SaveManifestOpts {
   workspaceRoot?: string;
 }
 
-export function runSaveManifest(opts: SaveManifestOpts): number {
+export async function runSaveManifest(opts: SaveManifestOpts): Promise<number> {
   const branch = opts.branch ?? currentBranch() ?? 'unknown';
 
   const sha = opts.sha ?? headSha();
@@ -87,12 +87,12 @@ export function runSaveManifest(opts: SaveManifestOpts): number {
     return 1;
   }
 
-  ensureLegacyImported(workspaceRoot);
+  await ensureLegacyImported(workspaceRoot);
 
-  const store = openAcbStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
+  const store = await openAcbStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
   let rowId: number;
   try {
-    rowId = store.saveManifest(branch, sha, data, runSlug ?? undefined);
+    rowId = await store.saveManifest(branch, sha, data, runSlug ?? undefined);
   } finally {
     store.close();
   }

@@ -78,7 +78,7 @@ export function register(cli: CAC): void {
       'after writing --out, open it with artifacts.html_open (or the platform opener)',
     )
     .option('--workspace-root <path>', 'status: project root to resolve .prove/prove.db from')
-    .action((action: string, flags: ReportFlags) => {
+    .action(async (action: string, flags: ReportFlags) => {
       if (!isReportAction(action)) {
         process.stderr.write(
           `claude-prove report: unknown action '${action}'. expected one of: ${REPORT_ACTIONS.join(', ')}\n`,
@@ -89,7 +89,9 @@ export function register(cli: CAC): void {
         process.stderr.write(`claude-prove report ${action}: --open requires --out <path>\n`);
         process.exit(1);
       }
-      process.exit(action === 'status' ? dispatchStatus(flags) : dispatchFileAction(action, flags));
+      const code =
+        action === 'status' ? await dispatchStatus(flags) : dispatchFileAction(action, flags);
+      process.exit(code);
     });
 }
 
@@ -98,15 +100,17 @@ function isReportAction(value: string): value is ReportAction {
 }
 
 /** `status` reads the live scrum store (no `--file`) and renders the dashboard. */
-function dispatchStatus(flags: ReportFlags): number {
+async function dispatchStatus(flags: ReportFlags): Promise<number> {
   const workspaceRoot =
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
+  const store = await openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
   let doc: ReportDocument;
   try {
-    doc = statusSnapshotToReportDocument(buildSnapshot(store));
+    // Await the snapshot before the sync close so no pending prepared
+    // statement runs after the connection finalizes.
+    doc = statusSnapshotToReportDocument(await buildSnapshot(store));
   } finally {
     store.close();
   }
