@@ -1975,6 +1975,114 @@ describe('ScrumStore — cancelTask + cancelTaskCascade', () => {
 });
 
 // ===========================================================================
+// Batched subtree read — bounded query count (N+1 elimination)
+//
+// Both derivedStatus and cancelTaskCascade route their subtree walk through
+// `fetchSubtreeChildren`, which fetches the whole live forest in ONE SELECT and
+// then walks the adjacency map in memory. The regression guard is that the
+// subtree-fetch query count does NOT scale with node count: a 3-node tree and a
+// 14-node tree must issue the IDENTICAL number of subtree SELECTs (one per
+// top-level call), proving the read is not the per-node `getChildren` SELECT it
+// replaced.
+// ===========================================================================
+
+describe('ScrumStore — batched subtree read is bounded (no N+1)', () => {
+  // The single SELECT fetchSubtreeChildren issues: the whole live forest,
+  // ordered, with no parent_id filter. getChildren's per-node SELECT carries a
+  // `parent_id = ?` clause, so this exact substring isolates the subtree fetch.
+  const SUBTREE_SELECT = 'FROM scrum_tasks WHERE deleted_at IS NULL ORDER BY created_at ASC';
+
+  /**
+   * Wrap the live DB's `prepare` so every prepared statement counts its `all()`
+   * executions whose SQL is the subtree fetch. Statements are cached by SQL in
+   * the store's `prep()`, so the wrap survives across calls; we count
+   * executions, not prepares. Returns a `{ count }` box read after the call.
+   */
+  function countSubtreeSelects(target: ScrumStore): { count: number } {
+    const box = { count: 0 };
+    const db = target.getStore().getDb();
+    const realPrepare = db.prepare.bind(db);
+    // biome-ignore lint/suspicious/noExplicitAny: test seam over the driver's untyped statement
+    db.prepare = (sql: string): any => {
+      const stmt = realPrepare(sql);
+      if (!sql.includes(SUBTREE_SELECT)) return stmt;
+      const realAll = stmt.all.bind(stmt);
+      // biome-ignore lint/suspicious/noExplicitAny: forward arbitrary bind params
+      stmt.all = (...params: any[]) => {
+        box.count += 1;
+        return realAll(...params);
+      };
+      return stmt;
+    };
+    return box;
+  }
+
+  /** Seed a `root → children` star plus deeper levels into a specific store. */
+  async function seedTree(target: ScrumStore, root: string, childCount: number): Promise<void> {
+    await target.createTask({ id: root, title: `Task ${root}`, layer: 'epic' });
+    for (let i = 0; i < childCount; i += 1) {
+      const child = `${root}-c${i}`;
+      await target.createTask({
+        id: child,
+        title: `Task ${child}`,
+        parentId: root,
+        layer: 'story',
+      });
+      // Give the first child grandchildren so the larger tree spans 3+ levels.
+      if (i === 0) {
+        for (let g = 0; g < 3; g += 1) {
+          await target.createTask({
+            id: `${child}-g${g}`,
+            title: `Task ${child}-g${g}`,
+            parentId: child,
+            layer: 'task',
+          });
+        }
+      }
+    }
+  }
+
+  test('derivedStatus issues the same subtree-SELECT count for a small and a large tree', async () => {
+    // Small tree: root + 1 child + 3 grandchildren = 5 nodes, 3 levels.
+    const small = await openScrumStore({ path: ':memory:' });
+    await seedTree(small, 'root', 1);
+    const smallSpy = countSubtreeSelects(small);
+    await small.derivedStatus('root');
+    small.close();
+
+    // Large tree: root + 10 children + 3 grandchildren = 14 nodes, 3 levels.
+    const large = await openScrumStore({ path: ':memory:' });
+    await seedTree(large, 'root', 10);
+    const largeSpy = countSubtreeSelects(large);
+    await large.derivedStatus('root');
+    large.close();
+
+    // Exactly one subtree fetch per call, and identical regardless of node count.
+    expect(smallSpy.count).toBe(1);
+    expect(largeSpy.count).toBe(1);
+    expect(largeSpy.count).toBe(smallSpy.count);
+  });
+
+  test('cancelTaskCascade issues the same subtree-SELECT count for a small and a large tree', async () => {
+    const small = await openScrumStore({ path: ':memory:' });
+    await seedTree(small, 'root', 1);
+    const smallSpy = countSubtreeSelects(small);
+    await small.cancelTaskCascade('root');
+    small.close();
+
+    const large = await openScrumStore({ path: ':memory:' });
+    await seedTree(large, 'root', 10);
+    const largeSpy = countSubtreeSelects(large);
+    await large.cancelTaskCascade('root');
+    large.close();
+
+    expect(smallSpy.count).toBe(1);
+    expect(largeSpy.count).toBe(1);
+    expect(largeSpy.count).toBe(smallSpy.count);
+  });
+});
+
+// ===========================================================================
 // Acceptance freeze guard (v7)
 // ===========================================================================
 
