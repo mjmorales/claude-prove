@@ -37,9 +37,45 @@ import { listDomains, registerSchema } from '@claude-prove/store';
  *                           tier above the milestone.
  *   scrum_tasks           — one row per task. TEXT PK (an external slug-style id).
  *                           Optional containment tree (`parent_id`/`layer`),
- *                           first-class acceptance (`acceptance_json`), declared
- *                           bounds (`bounds_json`), terminal/last-touch/executing
+ *                           the task-level acceptance `policy` (`acceptance_policy_json`
+ *                           — the criteria themselves are normalized out into
+ *                           `scrum_acceptance_criteria`), declared bounds
+ *                           (`bounds_json`), terminal/last-touch/executing
  *                           provenance, and an optional `team_slug` binding.
+ *   scrum_acceptance_criteria — one row per acceptance criterion. PK is a minted
+ *                           ULID surrogate (`id`); the criterion's author-given
+ *                           external id rides as `criterion_id`, unique only
+ *                           WITHIN a task — an inherited copy reuses the same
+ *                           external id on a different task, so the external id
+ *                           cannot be the global PK. Carries the criterion
+ *                           DEFINITION; the gate/verification VERDICT is NOT
+ *                           stored here — it lives append-only in
+ *                           scrum_criterion_verdicts (whose `criterion_id`
+ *                           references THIS surrogate, not the external id).
+ *                           Supersession is an append+flip (status='superseded'
+ *                           + superseded_by pointer to a replacement external
+ *                           id), never a delete. `ord` is a per-row minted ULID
+ *                           preserving authored array order (the external id is
+ *                           a slug, not lexically insert-ordered, so it cannot
+ *                           carry the ordering).
+ *   scrum_criterion_verdicts — APPEND-ONLY verdict log; ULID TEXT PK. One new
+ *                           row per gate response AND per bash/agent/assert
+ *                           verification — a re-verify APPENDS, it never updates.
+ *                           `channel` distinguishes a gate response ('gate')
+ *                           from a recorded verification ('verification'). The
+ *                           latest verdict per criterion is the head (max id),
+ *                           surfaced by the scrum_criterion_head view. This
+ *                           append-then-head shape is what makes a verdict
+ *                           commute under whole-transaction sync replay: two
+ *                           writers each append a distinct ULID-keyed row and
+ *                           both survive the rebase, where a single mutable
+ *                           verdict column would have one writer clobber the
+ *                           other.
+ *   scrum_criterion_head  — VIEW: the latest verdict row per criterion_id
+ *                           (max(id), since a ULID id is monotonic so the
+ *                           lexically-greatest id is the most-recently appended).
+ *                           The story-close floor and the task-detail read
+ *                           consult this for each criterion's current verdict.
  *   scrum_tags            — composite PK (task_id, tag).
  *   scrum_deps            — composite PK (from_task_id, to_task_id, kind).
  *   scrum_events          — append-only audit log; ULID TEXT PK.
@@ -91,7 +127,7 @@ CREATE TABLE scrum_tasks (
     deleted_at TEXT,
     parent_id TEXT REFERENCES scrum_tasks(id),
     layer TEXT,
-    acceptance_json TEXT,
+    acceptance_policy_json TEXT,
     bounds_json TEXT,
     terminal_reason TEXT,
     terminal_detail TEXT,
@@ -100,6 +136,36 @@ CREATE TABLE scrum_tasks (
     worker_id TEXT,
     run_id TEXT,
     team_slug TEXT
+);
+
+CREATE TABLE scrum_acceptance_criteria (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES scrum_tasks(id),
+    criterion_id TEXT NOT NULL,
+    ord TEXT NOT NULL,
+    text TEXT NOT NULL,
+    verifies_by TEXT NOT NULL CHECK (verifies_by IN ('bash', 'assert', 'gate', 'agent')),
+    check_payload TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'superseded')),
+    idempotent INTEGER NOT NULL DEFAULT 0,
+    scope TEXT,
+    timeout TEXT,
+    superseded_by TEXT,
+    reason TEXT,
+    inherited_from TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE (task_id, criterion_id)
+);
+
+CREATE TABLE scrum_criterion_verdicts (
+    id TEXT PRIMARY KEY,
+    criterion_id TEXT NOT NULL REFERENCES scrum_acceptance_criteria(id),
+    channel TEXT NOT NULL CHECK (channel IN ('gate', 'verification')),
+    verdict TEXT NOT NULL,
+    reason TEXT,
+    by_whom TEXT,
+    comment TEXT,
+    at TEXT NOT NULL
 );
 
 CREATE TABLE scrum_tags (
@@ -279,6 +345,15 @@ CREATE TABLE scrum_escalations (
     resolved_at TEXT
 );
 
+CREATE VIEW scrum_criterion_head AS
+SELECT v.criterion_id, v.channel, v.verdict, v.reason, v.by_whom, v.comment, v.at
+FROM scrum_criterion_verdicts v
+WHERE v.id = (
+    SELECT MAX(v2.id) FROM scrum_criterion_verdicts v2 WHERE v2.criterion_id = v.criterion_id
+);
+
+CREATE INDEX idx_scrum_acceptance_criteria_task ON scrum_acceptance_criteria(task_id);
+CREATE INDEX idx_scrum_criterion_verdicts_criterion ON scrum_criterion_verdicts(criterion_id);
 CREATE INDEX idx_scrum_events_task_ts ON scrum_events(task_id, ts DESC);
 CREATE INDEX idx_scrum_tasks_status_event ON scrum_tasks(status, last_event_at DESC);
 CREATE INDEX idx_scrum_run_links_path ON scrum_run_links(run_path);

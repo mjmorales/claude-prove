@@ -99,7 +99,10 @@ export interface AcceptancePolicy {
   rerun_policy: 'all' | 'failed_only';
 }
 
-/** Decoded `scrum_tasks.acceptance_json`. */
+/**
+ * A task's acceptance, reconstructed from the normalized criteria +
+ * head-verdict tables (the task row carries only the `policy`).
+ */
 export interface Acceptance {
   criteria: AcceptanceCriterion[];
   policy?: AcceptancePolicy;
@@ -294,18 +297,53 @@ interface TransitionTaskRow {
   id: string;
   status: TaskStatus;
   layer: TaskLayer | null;
-  acceptance_json: string | null;
 }
 
 /**
- * Fetch the transition-relevant projection of a live task, decoding
- * `acceptance_json`, or null if the row is missing or soft-deleted. A corrupt
- * `acceptance_json` degrades to `null` (with a stderr warning) rather than
- * throwing, so one poisoned row cannot brick the transition read.
+ * Raw `scrum_acceptance_criteria` projection the floor reads (the DEFINITION).
+ * `id` is the surrogate row id (the verdict-log FK target); `criterion_id` is
+ * the author-given external id the floor surfaces in its error detail.
+ */
+interface CriterionRow {
+  id: string;
+  criterion_id: string;
+  ord: string;
+  text: string;
+  verifies_by: AcceptanceVerifiesBy;
+  check_payload: string;
+  status: AcceptanceCriterionStatus;
+  idempotent: number;
+  scope: string | null;
+  timeout: string | null;
+  superseded_by: string | null;
+  reason: string | null;
+  inherited_from: string | null;
+}
+
+/**
+ * Raw `scrum_criterion_head` view projection — the latest verdict per criterion.
+ * `criterion_id` here is the criterion-row SURROGATE id, not the external id.
+ */
+interface HeadRow {
+  criterion_id: string;
+  channel: 'gate' | 'verification';
+  verdict: string;
+  reason: string | null;
+  by_whom: string | null;
+  comment: string | null;
+  at: string;
+}
+
+/**
+ * Fetch the transition-relevant projection of a live task, reconstructing its
+ * `Acceptance` from the normalized criteria + head-verdict tables (the floor
+ * reads the latest verdict per criterion, never a mutable column). Returns null
+ * if the row is missing or soft-deleted; a task with no criteria has a null
+ * acceptance, exactly as the empty-blob read used to.
  */
 async function getTransitionTask(store: Store, id: string): Promise<TransitionTask | null> {
   const row = await store.get<TransitionTaskRow>(
-    'SELECT id, status, layer, acceptance_json FROM scrum_tasks WHERE id = ? AND deleted_at IS NULL',
+    'SELECT id, status, layer FROM scrum_tasks WHERE id = ? AND deleted_at IS NULL',
     [id],
   );
   if (!row) return null;
@@ -313,18 +351,78 @@ async function getTransitionTask(store: Store, id: string): Promise<TransitionTa
     id: row.id,
     status: row.status,
     layer: row.layer,
-    acceptance: safeParseAcceptance(row.acceptance_json, row.id),
+    acceptance: await loadAcceptance(store, id),
   };
 }
 
-function safeParseAcceptance(raw: string | null, taskId: string): Acceptance | null {
-  if (raw === null) return null;
-  try {
-    return JSON.parse(raw) as Acceptance;
-  } catch {
-    process.stderr.write(`scrum: task '${taskId}' has corrupt acceptance_json; treating as null\n`);
-    return null;
+/**
+ * Rebuild a task's `Acceptance` (criteria + their head verdict) from the tables.
+ * The DEFINITION rows are ordered by the minted `ord` (authored array order);
+ * each criterion's latest verdict folds back into its `gate`/`verification`
+ * field via the criterion-head view, so the floor reads the same satisfaction
+ * state the blob used to carry. A gate-kind criterion with no verdict row reads
+ * `gate: {verdict: 'gate_pending'}`. The transition floor ignores `policy`, so
+ * this returns just `{criteria}` (null when the task carries no criteria).
+ */
+async function loadAcceptance(store: Store, taskId: string): Promise<Acceptance | null> {
+  const criterionRows = await store.all<CriterionRow>(
+    'SELECT id, criterion_id, ord, text, verifies_by, check_payload, status, idempotent, scope, timeout, superseded_by, reason, inherited_from FROM scrum_acceptance_criteria WHERE task_id = ?',
+    [taskId],
+  );
+  if (criterionRows.length === 0) return null;
+
+  const headRows = await store.all<HeadRow>(
+    `SELECT h.criterion_id, h.channel, h.verdict, h.reason, h.by_whom, h.comment, h.at
+     FROM scrum_criterion_head h
+     INNER JOIN scrum_acceptance_criteria c ON c.id = h.criterion_id
+     WHERE c.task_id = ?`,
+    [taskId],
+  );
+  const heads = new Map<string, HeadRow>();
+  for (const head of headRows) heads.set(head.criterion_id, head);
+
+  const criteria = criterionRows
+    .slice()
+    .sort((a, b) => a.ord.localeCompare(b.ord))
+    .map((c) => decodeCriterion(c, heads.get(c.id)));
+  return { criteria };
+}
+
+/** Fold one criterion DEFINITION row + its head verdict into an `AcceptanceCriterion`. */
+function decodeCriterion(row: CriterionRow, head: HeadRow | undefined): AcceptanceCriterion {
+  const criterion: AcceptanceCriterion = {
+    id: row.criterion_id,
+    text: row.text,
+    verifies_by: row.verifies_by,
+    check: row.check_payload,
+    status: row.status,
+    idempotent: row.idempotent !== 0,
+    superseded_by: row.superseded_by,
+    reason: row.reason,
+    inherited_from: row.inherited_from,
+  };
+  if (row.scope !== null) criterion.scope = row.scope as AcceptanceScope;
+  if (row.timeout !== null) criterion.timeout = row.timeout;
+
+  if (row.verifies_by === 'gate') {
+    criterion.gate =
+      head && head.channel === 'gate'
+        ? {
+            verdict: head.verdict as GateVerdict,
+            responder: head.by_whom,
+            comment: head.comment,
+            responded_at: head.at,
+          }
+        : { verdict: 'gate_pending' };
+  } else if (head && head.channel === 'verification') {
+    criterion.verification = {
+      verdict: head.verdict as VerificationVerdict,
+      reason: head.reason,
+      verified_by: head.by_whom,
+      verified_at: head.at,
+    };
   }
+  return criterion;
 }
 
 /** Run links for `taskId`, ordered by `linked_at` ASC (oldest first). */

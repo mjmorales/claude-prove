@@ -37,6 +37,7 @@ import { SCRUM_SCHEMA_VERSION, ensureScrumSchemaRegistered } from './schemas';
 import type {
   Acceptance,
   AcceptanceCriterion,
+  AcceptancePolicy,
   AcceptanceScope,
   AddAnnotationInput,
   AnnotationRow,
@@ -105,7 +106,7 @@ import type {
   TeamTerminateResult,
   TeamType,
   TeamWriteScopeConflict,
-  VerificationRecord,
+  VerificationVerdict,
 } from './types';
 import type { AddTeamExposeInput, CreateTeamInput } from './types';
 import {
@@ -185,10 +186,10 @@ export interface CreateTaskInput {
   /** Containment tier; NULL = flat. */
   layer?: TaskLayer | null;
   /**
-   * Acceptance criteria authored at create time (v5). Validated for the
-   * idempotent/policy invariant before insert. When omitted, the task's
-   * `acceptance_json` stays NULL unless `parentId` carries inheritable
-   * criteria (see `inheritAcceptance`).
+   * Acceptance criteria authored at create time. Validated for the
+   * idempotent/policy invariant before insert. When omitted, the task gets no
+   * criteria unless `parentId` carries inheritable ones (see
+   * `inheritAcceptance`).
    */
   acceptance?: Acceptance | null;
   /**
@@ -341,15 +342,18 @@ export interface ResolveContributorKey {
 
 /**
  * Canonical `scrum_tasks` column list, in declaration order. Every SELECT
- * routes through this so the v3 `parent_id`/`layer`, v5 `acceptance_json`,
- * v6 `bounds_json`, and v11 `worker_id`/`run_id` columns stay in lockstep with
- * the `ScrumTaskRow` shape. Raw rows carry `acceptance_json`/`bounds_json:
- * string | null`; `decodeTask` turns them into the decoded
- * `ScrumTask.acceptance`/`.bounds` fields and assembles the `provenance` block
- * at the public boundary.
+ * routes through this so the `parent_id`/`layer`, `acceptance_policy_json`,
+ * `bounds_json`, and `worker_id`/`run_id` columns stay in lockstep with the
+ * `ScrumTaskRow` shape. The acceptance CRITERIA are normalized out into
+ * `scrum_acceptance_criteria` (verdicts append-only in
+ * `scrum_criterion_verdicts`); only the task-level acceptance POLICY rides the
+ * task row as `acceptance_policy_json`. Raw rows carry
+ * `acceptance_policy_json`/`bounds_json: string | null`; `decodeTask` joins the
+ * hydrated criteria back onto the policy to rebuild the public
+ * `ScrumTask.acceptance` object and assembles the `provenance` block.
  */
 const TASK_COLUMNS =
-  'id, title, description, status, milestone_id, team_slug, parent_id, layer, acceptance_json, bounds_json, terminal_reason, terminal_detail, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, deleted_at';
+  'id, title, description, status, milestone_id, team_slug, parent_id, layer, acceptance_policy_json, bounds_json, terminal_reason, terminal_detail, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, deleted_at';
 
 /** Canonical `scrum_milestones` SELECT column list; includes the v10 `initiative` grouping. */
 const MILESTONE_COLUMNS =
@@ -418,15 +422,59 @@ const DECISION_COLUMNS =
 const ASK_TYPE_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 /**
- * Raw `scrum_tasks` SELECT shape — identical to `ScrumTask` except the v5
- * acceptance and v6 bounds columns arrive as their on-disk JSON strings and the
- * derived `provenance` block is absent (assembled by `decodeTask`).
- * `decodeTask` is the sole bridge from this to the public `ScrumTask`.
+ * Raw `scrum_tasks` SELECT shape — identical to `ScrumTask` except the bounds
+ * column arrives as its on-disk JSON string, the acceptance CRITERIA are NOT on
+ * the row (they live in `scrum_acceptance_criteria`, hydrated separately) — only
+ * the task-level acceptance POLICY rides as `acceptance_policy_json` — and the
+ * derived `provenance` block is absent (assembled by `decodeTask`). `decodeTask`
+ * is the sole bridge from this (plus the hydrated criteria) to the public
+ * `ScrumTask`.
  */
 type ScrumTaskRow = Omit<ScrumTask, 'acceptance' | 'bounds' | 'provenance'> & {
-  acceptance_json: string | null;
+  acceptance_policy_json: string | null;
   bounds_json: string | null;
 };
+
+/**
+ * Raw `scrum_acceptance_criteria` SELECT shape — the criterion DEFINITION. `id`
+ * is the minted ULID surrogate PK (and the verdict-log FK target);
+ * `criterion_id` is the author-given external id, unique only within a task.
+ */
+interface AcceptanceCriterionRow {
+  id: string;
+  task_id: string;
+  criterion_id: string;
+  ord: string;
+  text: string;
+  verifies_by: AcceptanceCriterion['verifies_by'];
+  check_payload: string;
+  status: AcceptanceCriterion['status'];
+  idempotent: number;
+  scope: string | null;
+  timeout: string | null;
+  superseded_by: string | null;
+  reason: string | null;
+  inherited_from: string | null;
+}
+
+/**
+ * Raw `scrum_criterion_head` view row — the latest verdict per criterion. Its
+ * `criterion_id` is the criterion-row SURROGATE id (`scrum_acceptance_criteria.id`),
+ * not the external author id.
+ */
+interface CriterionHeadRow {
+  criterion_id: string;
+  channel: 'gate' | 'verification';
+  verdict: string;
+  reason: string | null;
+  by_whom: string | null;
+  comment: string | null;
+  at: string;
+}
+
+/** Canonical `scrum_acceptance_criteria` SELECT column list. */
+const ACCEPTANCE_CRITERION_COLUMNS =
+  'id, task_id, criterion_id, ord, text, verifies_by, check_payload, status, idempotent, scope, timeout, superseded_by, reason, inherited_from';
 
 // Tags that boost priority in nextReady ranking.
 const PRIORITY_TAGS = new Set(['p0', 'p1', 'urgent', 'blocker']);
@@ -661,7 +709,7 @@ export class ScrumStore {
 
     const tx = async () => {
       await this.exec(
-        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, team_slug, parent_id, layer, acceptance_json, bounds_json, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
+        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, team_slug, parent_id, layer, acceptance_policy_json, bounds_json, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
         row.id,
         row.title,
         row.description,
@@ -670,7 +718,7 @@ export class ScrumStore {
         row.team_slug,
         row.parent_id,
         row.layer,
-        acceptance === null ? null : JSON.stringify(acceptance),
+        acceptance?.policy ? JSON.stringify(acceptance.policy) : null,
         bounds === null ? null : JSON.stringify(bounds),
         row.created_by_agent,
         row.created_at,
@@ -680,6 +728,14 @@ export class ScrumStore {
         row.worker_id,
         row.run_id,
       );
+
+      // Acceptance CRITERIA are normalized into their own table — insert each
+      // criterion's DEFINITION row in authored array order. A fresh task carries
+      // no verdicts; the gate seed (`gate_pending`) is a decode artifact, not a
+      // verdict row, so nothing lands in scrum_criterion_verdicts here.
+      for (const criterion of acceptance?.criteria ?? []) {
+        await this.insertCriterionRow(row.id, criterion, createdAt);
+      }
 
       if (input.tags && input.tags.length > 0) {
         const stmt = await this.prep(
@@ -705,13 +761,88 @@ export class ScrumStore {
     return row;
   }
 
+  /**
+   * Decode a batch of raw task rows into public `ScrumTask`s, hydrating each
+   * row's `acceptance` from the normalized criteria + head-verdict tables. The
+   * hydration is BATCHED: it loads every criterion and head verdict for the
+   * whole row set in two queries (not one per task), so a `listTasks`/`nextReady`
+   * walk stays query-bounded rather than N+1. The criteria are grouped by
+   * `task_id` and the head verdicts keyed by `criterion_id` in memory, then
+   * `reconstructAcceptance` folds them onto each task's `policy` column.
+   */
+  private async hydrateRows(rows: ScrumTaskRow[]): Promise<ScrumTask[]> {
+    if (rows.length === 0) return [];
+    const taskIds = rows.map((r) => r.id);
+    const criteriaByTask = await this.loadCriteriaByTask(taskIds);
+    const headByCriterion = await this.loadHeadVerdicts(taskIds);
+    return rows.map((row) =>
+      decodeTask(
+        row,
+        reconstructAcceptance(
+          criteriaByTask.get(row.id) ?? [],
+          headByCriterion,
+          row.acceptance_policy_json,
+          row.id,
+        ),
+      ),
+    );
+  }
+
+  /** Hydrate a single raw row (the one-task read path). */
+  private async hydrateRow(row: ScrumTaskRow): Promise<ScrumTask> {
+    const [task] = await this.hydrateRows([row]);
+    if (!task) throw new Error(`hydrateRow: task '${row.id}' vanished mid-hydrate`);
+    return task;
+  }
+
+  /**
+   * Load every criterion DEFINITION row for the given task ids, grouped by
+   * `task_id`. One query over an expanded placeholder list keeps the read
+   * bounded regardless of the task count.
+   */
+  private async loadCriteriaByTask(
+    taskIds: string[],
+  ): Promise<Map<string, AcceptanceCriterionRow[]>> {
+    const placeholders = taskIds.map(() => '?').join(', ');
+    const rows = (await this.many(
+      `SELECT ${ACCEPTANCE_CRITERION_COLUMNS} FROM scrum_acceptance_criteria WHERE task_id IN (${placeholders})`,
+      ...taskIds,
+    )) as AcceptanceCriterionRow[];
+    const byTask = new Map<string, AcceptanceCriterionRow[]>();
+    for (const row of rows) {
+      const bucket = byTask.get(row.task_id);
+      if (bucket) bucket.push(row);
+      else byTask.set(row.task_id, [row]);
+    }
+    return byTask;
+  }
+
+  /**
+   * Load the latest verdict per criterion (the criterion-head view) for every
+   * criterion belonging to the given task ids, keyed by `criterion_id`. The join
+   * to `scrum_acceptance_criteria` scopes the head read to just these tasks.
+   */
+  private async loadHeadVerdicts(taskIds: string[]): Promise<Map<string, CriterionHeadRow>> {
+    const placeholders = taskIds.map(() => '?').join(', ');
+    const rows = (await this.many(
+      `SELECT h.criterion_id, h.channel, h.verdict, h.reason, h.by_whom, h.comment, h.at
+       FROM scrum_criterion_head h
+       INNER JOIN scrum_acceptance_criteria c ON c.id = h.criterion_id
+       WHERE c.task_id IN (${placeholders})`,
+      ...taskIds,
+    )) as CriterionHeadRow[];
+    const byCriterion = new Map<string, CriterionHeadRow>();
+    for (const row of rows) byCriterion.set(row.criterion_id, row);
+    return byCriterion;
+  }
+
   /** Fetch one task by id, or null if missing or soft-deleted. */
   async getTask(id: string): Promise<ScrumTask | null> {
     const row = (await this.one(
       `SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE id = ? AND deleted_at IS NULL`,
       id,
     )) as ScrumTaskRow | null;
-    return row ? decodeTask(row) : null;
+    return row ? await this.hydrateRow(row) : null;
   }
 
   /**
@@ -726,7 +857,7 @@ export class ScrumStore {
       `SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE id = ?`,
       id,
     )) as ScrumTaskRow | null;
-    return row ? decodeTask(row) : null;
+    return row ? await this.hydrateRow(row) : null;
   }
 
   /** Clear `deleted_at`, reviving a soft-deleted task. No-op on a live row. */
@@ -764,7 +895,7 @@ export class ScrumStore {
 
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const sql = `SELECT ${TASK_COLUMNS} FROM scrum_tasks ${where} ORDER BY created_at ASC`;
-    return ((await this.many(sql, ...params)) as ScrumTaskRow[]).map(decodeTask);
+    return await this.hydrateRows((await this.many(sql, ...params)) as ScrumTaskRow[]);
   }
 
   /**
@@ -1091,12 +1222,12 @@ export class ScrumStore {
    * callers treat both the same.
    */
   async getChildren(taskId: string): Promise<ScrumTask[]> {
-    return (
+    return await this.hydrateRows(
       (await this.many(
         `SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE parent_id = ? AND deleted_at IS NULL ORDER BY created_at ASC`,
         taskId,
-      )) as ScrumTaskRow[]
-    ).map(decodeTask);
+      )) as ScrumTaskRow[],
+    );
   }
 
   /**
@@ -1116,7 +1247,7 @@ export class ScrumStore {
     )) as ScrumTaskRow[];
 
     const byParent = new Map<string, ScrumTask[]>();
-    for (const row of rows.map(decodeTask)) {
+    for (const row of await this.hydrateRows(rows)) {
       const parent = row.parent_id;
       if (parent === null) continue;
       const bucket = byParent.get(parent);
@@ -1218,7 +1349,8 @@ export class ScrumStore {
    * Append one criterion to a task's acceptance list. Creates
    * the acceptance object if the task had none. Rejects a duplicate criterion
    * id and re-validates the idempotent/policy invariant against any existing
-   * policy. Append-only — existing criteria are never mutated or removed.
+   * policy. A TARGETED insert (not a whole-list rewrite) so every existing
+   * criterion keeps its surrogate row and append-only verdict history.
    */
   async addCriterion(taskId: string, criterion: AcceptanceCriterion): Promise<ScrumTask> {
     const task = await this.getTask(taskId);
@@ -1229,22 +1361,29 @@ export class ScrumStore {
     if (criteria.some((c) => c.id === criterion.id)) {
       throw new Error(`addCriterion: duplicate criterion id '${criterion.id}' on task '${taskId}'`);
     }
-    criteria.push(criterion);
-    const next: Acceptance = withGateStatesSeeded(
-      current?.policy ? { criteria, policy: current.policy } : { criteria },
+    // Validate the WHOLE resulting acceptance (the new criterion against any
+    // existing policy / scope-enum guard) before persisting just the new row.
+    const seeded = withGateStatesSeeded(
+      current?.policy
+        ? { criteria: [...criteria, criterion], policy: current.policy }
+        : { criteria: [...criteria, criterion] },
     );
-    validateAcceptance(next);
-    await this.writeAcceptance(taskId, next);
+    validateAcceptance(seeded);
+    const seededCriterion = seeded.criteria[seeded.criteria.length - 1] as AcceptanceCriterion;
+    await this.transaction(async () => {
+      await this.insertCriterionRow(taskId, seededCriterion, isoNow());
+      await this.bumpTaskTouch(taskId);
+    });
     return await this.requireTask(taskId, 'addCriterion');
   }
 
   /**
-   * Supersede a criterion in place (append-only). Flips
-   * its `status` to `'superseded'`, records `reason`, and optionally points
-   * `superseded_by` at a replacement criterion id. Never removes the row —
-   * the retired criterion stays in the array for audit, mirroring
-   * `supersedeDecision`. Rejects unknown task/criterion ids and an
-   * already-superseded criterion.
+   * Supersede a criterion (append-only). Flips its `status` to `'superseded'`,
+   * records `reason`, and optionally points `superseded_by` at a replacement
+   * criterion id. Never removes the row — the retired criterion stays for audit,
+   * mirroring `supersedeDecision`. A TARGETED UPDATE of the one criterion's
+   * definition row, leaving its surrogate and verdict history intact. Rejects
+   * unknown task/criterion ids and an already-superseded criterion.
    */
   async supersedeCriterion(
     taskId: string,
@@ -1266,25 +1405,45 @@ export class ScrumStore {
       throw new Error(`supersedeCriterion: criterion '${criterionId}' is already superseded`);
     }
 
-    const criteria = task.acceptance.criteria.map((c) =>
-      c.id === criterionId
-        ? { ...c, status: 'superseded' as const, reason, superseded_by: supersededBy ?? null }
-        : c,
-    );
-    const next: Acceptance = task.acceptance.policy
-      ? { criteria, policy: task.acceptance.policy }
-      : { criteria };
-    await this.writeAcceptance(taskId, next);
+    await this.transaction(async () => {
+      await this.exec(
+        'UPDATE scrum_acceptance_criteria SET status = ?, reason = ?, superseded_by = ? WHERE task_id = ? AND criterion_id = ?',
+        'superseded',
+        reason,
+        supersededBy ?? null,
+        taskId,
+        criterionId,
+      );
+      await this.bumpTaskTouch(taskId);
+    });
     return await this.requireTask(taskId, 'supersedeCriterion');
   }
 
   /**
-   * Resolve a `gate`-kind criterion's persisted verdict — the mechanical half of
-   * the human approve/reject decision. Transitions the criterion's `gate.verdict`
-   * from `gate_pending` to `approved` or `rejected`, stamps the human `responder`
-   * (the verification contributor of record) and optional `comment`, and appends
-   * a `gate_responded` event so the responder is recorded in the append-only
-   * audit log. The state round-trips through `acceptance_json` — no DB migration.
+   * Bump a task's last-touch provenance (`last_modified_*` + executing
+   * worker/run) after a criterion-table write that does not itself go through
+   * the task-row UPDATE in `writeAcceptance`. Mirrors that write's attribution.
+   */
+  private async bumpTaskTouch(taskId: string): Promise<void> {
+    const { workerId, runId } = resolveRunContext();
+    await this.exec(
+      'UPDATE scrum_tasks SET last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+      this.actor(),
+      isoNow(),
+      workerId,
+      runId,
+      taskId,
+    );
+  }
+
+  /**
+   * Resolve a `gate`-kind criterion's verdict — the mechanical half of the human
+   * approve/reject decision. APPENDS a `gate`-channel verdict row (the criterion
+   * head then reads `approved`/`rejected` with the human `responder` and optional
+   * `comment`) and appends a `gate_responded` event so the responder is recorded
+   * in the append-only audit log. The verdict is an append, not a mutation: a
+   * re-decision would land another row, so the gate is guarded to resolve once
+   * (supersede the criterion to re-decide).
    *
    * This is PULL-based resolution: a session (an interactive `AskUserQuestion`
    * turn, the `scrum gate respond` CLI, or a session-start surfacing of pending
@@ -1332,18 +1491,19 @@ export class ScrumStore {
     const respondedAt = isoNow();
     const responder = opts.responder.length > 0 ? opts.responder : null;
     const comment = opts.comment && opts.comment.length > 0 ? opts.comment : null;
-    const gate = { verdict, responder, comment, responded_at: respondedAt };
-    const criteria = task.acceptance.criteria.map((c) =>
-      c.id === criterionId ? { ...c, gate } : c,
-    );
-    const next: Acceptance = task.acceptance.policy
-      ? { criteria, policy: task.acceptance.policy }
-      : { criteria };
 
-    // Single transaction: persist the verdict AND record the human responder as
-    // the verification contributor in the append-only event log.
+    // Single transaction: APPEND the gate verdict (never mutate the criterion)
+    // AND record the human responder as the verification contributor in the
+    // append-only event log.
     await this.transaction(async () => {
-      await this.writeAcceptance(taskId, next);
+      await this.appendCriterionVerdict(
+        taskId,
+        criterionId,
+        'gate',
+        verdict,
+        { by: responder, comment },
+        respondedAt,
+      );
       await this.appendEvent({
         taskId,
         kind: 'gate_responded',
@@ -1530,19 +1690,18 @@ export class ScrumStore {
     }
 
     const { workerId } = resolveRunContext();
-    const verification: VerificationRecord = {
-      verdict: ok ? 'verified' : 'failed',
-      reason: reason && reason.length > 0 ? reason : null,
-      verified_by: verifiedBy && verifiedBy.length > 0 ? verifiedBy : workerId,
-      verified_at: isoNow(),
-    };
-    const criteria = task.acceptance.criteria.map((c) =>
-      c.id === criterionId ? { ...c, verification } : c,
+    const verifiedByResolved = verifiedBy && verifiedBy.length > 0 ? verifiedBy : workerId;
+    // APPEND a verification verdict (never mutate the criterion). The
+    // criterion-head view reads the latest; a re-verify appends another row and
+    // the prior verdict is retained for audit.
+    await this.appendCriterionVerdict(
+      taskId,
+      criterionId,
+      'verification',
+      ok ? 'verified' : 'failed',
+      { reason: reason && reason.length > 0 ? reason : null, by: verifiedByResolved },
+      isoNow(),
     );
-    const next: Acceptance = task.acceptance.policy
-      ? { criteria, policy: task.acceptance.policy }
-      : { criteria };
-    await this.writeAcceptance(taskId, next);
     return await this.requireTask(taskId, 'recordCriterionVerdict');
   }
 
@@ -1620,21 +1779,220 @@ export class ScrumStore {
   }
 
   /**
-   * Persist an acceptance object (or NULL) to `scrum_tasks.acceptance_json`.
-   * Bumps last-touch provenance (v9): `last_modified_at = now()`,
-   * `last_modified_by` = the ambient actor (`PROVE_AGENT` env / `defaultActor`,
-   * NULL when neither is in scope) — these editors take no per-call agent, so
-   * the ambient resolution is the only attribution available. Still stamps the
-   * executing-worker/run attribution (v11) from the run env so the write's
-   * unit and run are recorded even when the agent is not.
+   * Persist an acceptance object's DEFINITION (criteria rows + the task-level
+   * `policy`), or clear it (NULL). The criteria are the authoring source — the
+   * whole-object setters (`setAcceptance`/`addCriterion`/`supersedeCriterion`/
+   * `createTask`) pass the full intended criteria list, so this replaces the
+   * task's criteria rows wholesale (delete-then-reinsert) inside one
+   * transaction. It does NOT touch `scrum_criterion_verdicts` — a verdict is an
+   * append, owned by `appendCriterionVerdict`; re-writing the definition does
+   * not erase recorded verdicts (their rows survive and the head view still
+   * resolves them onto the re-inserted criterion of the same id).
+   *
+   * The gate/verification fields carried on the in-memory criteria are decode
+   * artifacts (folded in from the head verdict on read), so they are
+   * intentionally ignored here — the verdict log, not the definition write, is
+   * their system of record.
+   *
+   * Bumps last-touch provenance: `last_modified_at = now()`, `last_modified_by`
+   * = the ambient actor (`PROVE_AGENT` env / `defaultActor`, NULL when neither
+   * is in scope), plus the executing-worker/run attribution from the run env.
    */
   private async writeAcceptance(taskId: string, acceptance: Acceptance | null): Promise<void> {
     const { workerId, runId } = resolveRunContext();
+    const at = isoNow();
+    await this.transaction(async () => {
+      await this.exec(
+        'UPDATE scrum_tasks SET acceptance_policy_json = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+        acceptance?.policy ? JSON.stringify(acceptance.policy) : null,
+        this.actor(),
+        at,
+        workerId,
+        runId,
+        taskId,
+      );
+      // Replace-the-whole-object semantics: drop this task's criterion rows and
+      // re-insert fresh surrogates. The verdict rows of the dropped surrogates are
+      // intentionally left in scrum_criterion_verdicts (the append-only log is never
+      // pruned); the criterion-head view's INNER JOIN hides them once their
+      // definition row is gone, so they are inert history, not live state.
+      await this.exec('DELETE FROM scrum_acceptance_criteria WHERE task_id = ?', taskId);
+      const criteria = acceptance?.criteria ?? [];
+      for (const criterion of criteria) {
+        await this.insertCriterionRow(taskId, criterion, at);
+      }
+    });
+  }
+
+  /**
+   * Insert one criterion DEFINITION row. PK is the criterion's own author-given
+   * id (NOT a minted ULID — it is already unique per task). `ord` is a freshly
+   * minted ULID per insert so the authored array order is preserved on read
+   * (the criterion id is an external slug, not lexically insert-ordered, so it
+   * cannot carry the ordering itself).
+   *
+   * If the input criterion arrives carrying a RESOLVED verdict (an approved/
+   * rejected gate, or any recorded verification) AND no verdict row yet exists
+   * for it, seed the first verdict row so a caller establishing criteria from a
+   * pre-decided input (`createTask`/`setAcceptance` with an already-resolved
+   * gate) materializes that decision into the append-only log. The existence
+   * guard keeps this idempotent for the read-modify-write callers
+   * (`addCriterion`/`supersedeCriterion`) whose criteria carry the gate/
+   * verification as a decode artifact from a prior read — their verdict rows
+   * already exist and must NOT be re-appended.
+   */
+  private async insertCriterionRow(
+    taskId: string,
+    criterion: AcceptanceCriterion,
+    at: string,
+  ): Promise<void> {
+    const rowId = ulid();
     await this.exec(
-      'UPDATE scrum_tasks SET acceptance_json = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
-      acceptance === null ? null : JSON.stringify(acceptance),
+      'INSERT INTO scrum_acceptance_criteria (id, task_id, criterion_id, ord, text, verifies_by, check_payload, status, idempotent, scope, timeout, superseded_by, reason, inherited_from, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      rowId,
+      taskId,
+      criterion.id,
+      ulid(),
+      criterion.text,
+      criterion.verifies_by,
+      criterion.check,
+      criterion.status,
+      criterion.idempotent ? 1 : 0,
+      criterion.scope ?? null,
+      criterion.timeout ?? null,
+      criterion.superseded_by ?? null,
+      criterion.reason ?? null,
+      criterion.inherited_from ?? null,
+      at,
+    );
+    await this.seedInputVerdict(taskId, rowId, criterion, at);
+  }
+
+  /**
+   * Seed the first verdict row for a freshly-inserted criterion-row (by SURROGATE
+   * id) that arrived with a resolved verdict on its input shape. This appends
+   * unconditionally — there is NO in-method existence guard. Safety against a
+   * double-append derives entirely from the call shape: every caller reaches a
+   * fresh, verdict-less surrogate (`createTask` builds new rows; `writeAcceptance`
+   * DELETEs the task's criteria and re-inserts new surrogates; `addCriterion`
+   * inserts a duplicate-id-guarded new criterion). A future read-modify-write
+   * caller that feeds an already-persisted verdict back through `insertCriterionRow`
+   * would double-append — do not wire one without adding a guard here. A pending
+   * gate seeds nothing (`gate_pending` is the absent-verdict default the head
+   * reconstruction supplies).
+   */
+  private async seedInputVerdict(
+    taskId: string,
+    rowId: string,
+    criterion: AcceptanceCriterion,
+    at: string,
+  ): Promise<void> {
+    const resolved =
+      criterion.verifies_by === 'gate'
+        ? criterion.gate && criterion.gate.verdict !== 'gate_pending'
+          ? {
+              channel: 'gate' as const,
+              verdict: criterion.gate.verdict,
+              fields: {
+                by: criterion.gate.responder ?? null,
+                comment: criterion.gate.comment ?? null,
+              },
+            }
+          : null
+        : criterion.verification && criterion.verification.verdict !== 'pending'
+          ? {
+              channel: 'verification' as const,
+              verdict: criterion.verification.verdict,
+              fields: {
+                reason: criterion.verification.reason ?? null,
+                by: criterion.verification.verified_by ?? null,
+              },
+            }
+          : null;
+    if (!resolved) return;
+    await this.appendVerdictRow(
+      taskId,
+      rowId,
+      resolved.channel,
+      resolved.verdict,
+      resolved.fields,
+      at,
+    );
+  }
+
+  /**
+   * Resolve a criterion's SURROGATE row id from `(taskId, externalId)`, or null
+   * when the task carries no such criterion. The verdict log keys on the
+   * surrogate, so the external-id-facing callers (`respondGate`/
+   * `recordCriterionVerdict`) resolve it before appending.
+   */
+  private async resolveCriterionRowId(taskId: string, externalId: string): Promise<string | null> {
+    const row = await this.one<{ id: string }>(
+      'SELECT id FROM scrum_acceptance_criteria WHERE task_id = ? AND criterion_id = ?',
+      taskId,
+      externalId,
+    );
+    return row?.id ?? null;
+  }
+
+  /**
+   * Append ONE gate/verification verdict row for the criterion identified by its
+   * EXTERNAL id on `taskId` — never an update. Resolves the criterion-row
+   * surrogate first, then delegates to `appendVerdictRow`. The external-id-facing
+   * public verdict paths (`respondGate`/`recordCriterionVerdict`) call this.
+   */
+  private async appendCriterionVerdict(
+    taskId: string,
+    externalCriterionId: string,
+    channel: 'gate' | 'verification',
+    verdict: string,
+    fields: { reason?: string | null; by?: string | null; comment?: string | null },
+    at: string,
+  ): Promise<void> {
+    const rowId = await this.resolveCriterionRowId(taskId, externalCriterionId);
+    if (rowId === null) {
+      throw new Error(
+        `appendCriterionVerdict: unknown criterion '${externalCriterionId}' on task '${taskId}'`,
+      );
+    }
+    await this.appendVerdictRow(taskId, rowId, channel, verdict, fields, at);
+  }
+
+  /**
+   * Append ONE verdict row to the append-only `scrum_criterion_verdicts` log,
+   * keyed by the criterion-row SURROGATE id — never an update. A `gate`-channel
+   * row records a human gate response; a `verification`-channel row records a
+   * bash/assert/agent verdict. Re-deciding a criterion appends another row; the
+   * criterion-head view (max ULID per surrogate) then reads the latest. The
+   * minted ULID PK makes two concurrent appends commute under whole-transaction
+   * sync replay — both rows survive the rebase, where a single mutable verdict
+   * column would have one writer clobber the other. Bumps the task's last-touch
+   * provenance.
+   */
+  private async appendVerdictRow(
+    taskId: string,
+    criterionRowId: string,
+    channel: 'gate' | 'verification',
+    verdict: string,
+    fields: { reason?: string | null; by?: string | null; comment?: string | null },
+    at: string,
+  ): Promise<void> {
+    const { workerId, runId } = resolveRunContext();
+    await this.exec(
+      'INSERT INTO scrum_criterion_verdicts (id, criterion_id, channel, verdict, reason, by_whom, comment, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      ulid(),
+      criterionRowId,
+      channel,
+      verdict,
+      fields.reason ?? null,
+      fields.by ?? null,
+      fields.comment ?? null,
+      at,
+    );
+    await this.exec(
+      'UPDATE scrum_tasks SET last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
       this.actor(),
-      isoNow(),
+      at,
       workerId,
       runId,
       taskId,
@@ -1824,16 +2182,16 @@ export class ScrumStore {
   }
 
   async listTasksForTag(tag: string): Promise<ScrumTask[]> {
-    return (
+    return await this.hydrateRows(
       (await this.many(
-        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.team_slug, t.parent_id, t.layer, t.acceptance_json, t.bounds_json, t.terminal_reason, t.terminal_detail, t.created_by_agent, t.created_at, t.last_event_at, t.last_modified_by, t.last_modified_at, t.worker_id, t.run_id, t.deleted_at
+        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.team_slug, t.parent_id, t.layer, t.acceptance_policy_json, t.bounds_json, t.terminal_reason, t.terminal_detail, t.created_by_agent, t.created_at, t.last_event_at, t.last_modified_by, t.last_modified_at, t.worker_id, t.run_id, t.deleted_at
        FROM scrum_tasks t
        INNER JOIN scrum_tags g ON g.task_id = t.id
        WHERE g.tag = ? AND t.deleted_at IS NULL
        ORDER BY t.created_at ASC`,
         tag,
-      )) as ScrumTaskRow[]
-    ).map(decodeTask);
+      )) as ScrumTaskRow[],
+    );
   }
 
   // ==========================================================================
@@ -2100,7 +2458,7 @@ export class ScrumStore {
              WHERE deleted_at IS NULL AND status IN ('ready', 'backlog')
              ORDER BY created_at ASC`)
     ) as ScrumTaskRow[];
-    const candidates = candidateRows.map(decodeTask);
+    const candidates = await this.hydrateRows(candidateRows);
 
     // Snapshot active and closed milestone ids in one pass each — both
     // sets feed `computeMilestoneBoost`. Per-invocation lookup keeps the
@@ -4767,26 +5125,104 @@ function taskProvenance(row: ScrumTaskRow): Provenance {
 }
 
 /**
- * Decode a raw `scrum_tasks` SELECT row into the public `ScrumTask`. The two
- * transforms are `acceptance_json` (TEXT|NULL) → `acceptance` and `bounds_json`
- * (TEXT|NULL) → `bounds`; every other column passes through unchanged. NULL
- * JSON → `null`.
+ * Decode a raw `scrum_tasks` SELECT row into the public `ScrumTask`. The
+ * `acceptance` object is reconstructed UPSTREAM (in `hydrateRows`, from the
+ * normalized criteria + head-verdict tables joined onto the row's
+ * `acceptance_policy_json`) and passed in; this function only transforms
+ * `bounds_json` (TEXT|NULL) → `bounds` and assembles the provenance block, with
+ * every other column passing through unchanged.
  *
- * The JSON columns have no SQL-level guarantee of valid JSON (`validateBounds`/
- * `validateAcceptance` only run on writes through the store API). `decodeTask`
- * is on the hot read path of getTask/listTasks/getChildren/listTasksForTag/
+ * The `bounds_json` column has no SQL-level guarantee of valid JSON
+ * (`validateBounds` only runs on writes through the store API). `decodeTask` is
+ * on the hot read path of getTask/listTasks/getChildren/listTasksForTag/
  * nextReady, so a single corrupt row must NOT throw and brick every task read.
  * `safeParseJson` degrades a poisoned column to `null` (with a stderr warning)
- * instead — the task still reads, just without its acceptance/bounds.
+ * instead — the task still reads, just without its bounds.
  */
-function decodeTask(row: ScrumTaskRow): ScrumTask {
-  const { acceptance_json, bounds_json, ...rest } = row;
+function decodeTask(row: ScrumTaskRow, acceptance: Acceptance | null): ScrumTask {
+  const { acceptance_policy_json: _policy, bounds_json, ...rest } = row;
   return {
     ...rest,
-    acceptance: safeParseJson<Acceptance>(acceptance_json, row.id, 'acceptance_json'),
+    acceptance,
     bounds: safeParseJson<TaskBounds>(bounds_json, row.id, 'bounds_json'),
     provenance: taskProvenance(row),
   };
+}
+
+/**
+ * Reassemble a task's `Acceptance` object from its normalized parts: the
+ * criterion DEFINITION rows (ordered by the minted `ord`), the latest verdict
+ * per criterion (the criterion-head view), and the task-level `policy` (the
+ * `acceptance_policy_json` column). Returns `null` when the task carries no
+ * criteria AND no policy — the "no acceptance" shape every read expects.
+ *
+ * The head verdict folds back into the in-memory criterion the same way the
+ * blob used to carry it: a `gate`-channel head becomes `gate: {verdict,
+ * responder, comment, responded_at}`; a `verification`-channel head becomes
+ * `verification: {verdict, reason, verified_by, verified_at}`. A gate-kind
+ * criterion with no verdict row reads `gate: {verdict: 'gate_pending'}` (a
+ * fresh gate always starts pending and resolvable), exactly as
+ * `withGateStatesSeeded` seeded the blob.
+ */
+function reconstructAcceptance(
+  criterionRows: AcceptanceCriterionRow[],
+  heads: Map<string, CriterionHeadRow>,
+  policyJson: string | null,
+  taskId: string,
+): Acceptance | null {
+  const policy = safeParseJson<AcceptancePolicy>(policyJson, taskId, 'acceptance_policy_json');
+  if (criterionRows.length === 0) return policy ? { criteria: [], policy } : null;
+
+  const criteria = criterionRows
+    .slice()
+    .sort((a, b) => a.ord.localeCompare(b.ord))
+    .map((row) => decodeCriterion(row, heads.get(row.id)));
+  return policy ? { criteria, policy } : { criteria };
+}
+
+/**
+ * Decode one criterion DEFINITION row plus its head verdict (if any) into the
+ * public `AcceptanceCriterion`. Optional fields stay absent (not null/undefined
+ * on the shape) so the reconstructed object round-trips byte-for-byte against
+ * what the authoring path wrote — `scope`/`timeout` are only set when present.
+ */
+function decodeCriterion(
+  row: AcceptanceCriterionRow,
+  head: CriterionHeadRow | undefined,
+): AcceptanceCriterion {
+  const criterion: AcceptanceCriterion = {
+    id: row.criterion_id,
+    text: row.text,
+    verifies_by: row.verifies_by,
+    check: row.check_payload,
+    status: row.status,
+    idempotent: row.idempotent !== 0,
+    superseded_by: row.superseded_by,
+    reason: row.reason,
+    inherited_from: row.inherited_from,
+  };
+  if (row.scope !== null) criterion.scope = row.scope as AcceptanceScope;
+  if (row.timeout !== null) criterion.timeout = row.timeout;
+
+  if (row.verifies_by === 'gate') {
+    criterion.gate =
+      head && head.channel === 'gate'
+        ? {
+            verdict: head.verdict as GateVerdict,
+            responder: head.by_whom,
+            comment: head.comment,
+            responded_at: head.at,
+          }
+        : { verdict: 'gate_pending' };
+  } else if (head && head.channel === 'verification') {
+    criterion.verification = {
+      verdict: head.verdict as VerificationVerdict,
+      reason: head.reason,
+      verified_by: head.by_whom,
+      verified_at: head.at,
+    };
+  }
+  return criterion;
 }
 
 /**
