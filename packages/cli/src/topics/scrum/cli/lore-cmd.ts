@@ -370,16 +370,17 @@ function parsePositiveInt(raw: string | undefined, context: string): number | nu
  * the `record` path's contract. Returns the ` -> <path>` suffix for the stderr
  * summary, or an empty string when the mirror was skipped or failed.
  */
-function mirrorTeamArtifact(
+async function mirrorTeamArtifact(
   store: ScrumStore,
   workspaceRoot: string,
   slug: string,
   action: string,
   rowId: number,
-): string {
+): Promise<string> {
   try {
-    const team = store.getTeam(slug);
-    const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+    const team = await store.getTeam(slug);
+    const artifactPath =
+      team !== null ? await reconcileTeamArtifact(store, workspaceRoot, team) : null;
     return artifactPath !== null ? ` -> ${artifactPath}` : '';
   } catch (artifactErr) {
     const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);
