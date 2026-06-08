@@ -233,7 +233,7 @@ function renderHumanTable(rows: LoreRow[]): string {
 // ---------------------------------------------------------------------------
 
 async function doShow(store: ScrumStore, rawId: string | undefined): Promise<number> {
-  const id = parsePositiveInt(rawId, 'scrum lore show');
+  const id = requireId(rawId, 'scrum lore show');
   if (id === null) return 1;
   const row = await store.getLore(id);
   if (row === null) {
@@ -256,7 +256,7 @@ async function doSupersede(
   rawId: string | undefined,
   flags: LoreCmdFlags,
 ): Promise<number> {
-  const id = parsePositiveInt(rawId, 'scrum lore supersede');
+  const id = requireId(rawId, 'scrum lore supersede');
   if (id === null) return 1;
   if (flags.reason === undefined || flags.reason.length === 0) {
     process.stderr.write('scrum lore supersede: --reason <text> is required\n');
@@ -274,9 +274,9 @@ async function doSupersede(
     );
     return 1;
   }
-  let byLoreId: number | undefined;
+  let byLoreId: string | undefined;
   if (hasLore) {
-    const parsed = parsePositiveInt(flags.by, 'scrum lore supersede: --by');
+    const parsed = requireId(flags.by, 'scrum lore supersede: --by');
     if (parsed === null) return 1;
     byLoreId = parsed;
   }
@@ -312,7 +312,7 @@ async function doPromote(
   rawId: string | undefined,
   flags: LoreCmdFlags,
 ): Promise<number> {
-  const id = parsePositiveInt(rawId, 'scrum lore promote');
+  const id = requireId(rawId, 'scrum lore promote');
   if (id === null) return 1;
 
   // Only a gated kind may carry a promotion: a non-gated kind would record as
@@ -350,18 +350,13 @@ async function doPromote(
 // shared helpers
 // ---------------------------------------------------------------------------
 
-/** Parse a required positive-integer id argument; null (after stderr) on failure. */
-function parsePositiveInt(raw: string | undefined, context: string): number | null {
+/** Require a non-empty string id (a ULID) argument; null (after stderr) on a miss. */
+function requireId(raw: string | undefined, context: string): string | null {
   if (raw === undefined || raw.length === 0) {
     process.stderr.write(`${context}: <id> is required\n`);
     return null;
   }
-  const id = Number(raw);
-  if (!Number.isInteger(id) || id <= 0) {
-    process.stderr.write(`${context}: <id> must be a positive integer, got '${raw}'\n`);
-    return null;
-  }
-  return id;
+  return raw;
 }
 
 /**
@@ -375,7 +370,7 @@ async function mirrorTeamArtifact(
   workspaceRoot: string,
   slug: string,
   action: string,
-  rowId: number,
+  rowId: string,
 ): Promise<string> {
   try {
     const team = await store.getTeam(slug);

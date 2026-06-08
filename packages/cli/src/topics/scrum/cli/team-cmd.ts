@@ -1035,36 +1035,27 @@ async function doSyncAgents(
 }
 
 /**
- * Parse a required `--id` flag to a positive integer. Writes a usage error and
- * returns null when absent or non-numeric — the caller turns null into exit 1.
+ * Take a required `--id` flag as a non-empty string id (a ULID). Writes a usage
+ * error and returns null when absent — the caller turns null into exit 1.
  */
-function parseId(raw: string | undefined, action: string): number | null {
+function parseId(raw: string | undefined, action: string): string | null {
   if (raw === undefined || raw.length === 0) {
     process.stderr.write(`scrum team ${action}: --id <id> is required\n`);
     return null;
   }
-  const id = Number(raw);
-  if (!Number.isInteger(id) || id <= 0) {
-    process.stderr.write(`scrum team ${action}: --id must be a positive integer, got '${raw}'\n`);
-    return null;
-  }
-  return id;
+  return raw;
 }
 
 /**
- * Parse an optional `--by` replacement id. Returns `undefined` when absent (no
- * named replacement), the integer when valid, or the `INVALID_ENUM` sentinel
- * (after a usage error) when present but non-numeric.
+ * Take an optional `--by` replacement id. Returns `undefined` when absent (no
+ * named replacement), or the string id when present. The `INVALID_ENUM` sentinel
+ * stays in the union so the call sites keep their guard shape, but a present
+ * string id is always accepted.
  */
 function parseOptionalId(
   raw: string | undefined,
-  action: string,
-): number | undefined | typeof INVALID_ENUM {
+  _action: string,
+): string | undefined | typeof INVALID_ENUM {
   if (raw === undefined || raw.length === 0) return undefined;
-  const id = Number(raw);
-  if (!Number.isInteger(id) || id <= 0) {
-    process.stderr.write(`scrum team ${action}: --by must be a positive integer, got '${raw}'\n`);
-    return INVALID_ENUM;
-  }
-  return id;
+  return raw;
 }

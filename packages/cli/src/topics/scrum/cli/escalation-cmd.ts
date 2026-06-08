@@ -155,11 +155,10 @@ function asResolutionMode(raw: string | undefined): EscalationResolutionMode | n
     : null;
 }
 
-/** Parse a positional id arg to a positive integer, or null when missing/invalid. */
-function asId(raw: string | undefined): number | null {
+/** Take a positional id arg as a non-empty string id (a ULID), or null when missing. */
+function asId(raw: string | undefined): string | null {
   if (raw === undefined || raw.length === 0) return null;
-  const n = Number(raw);
-  return Number.isInteger(n) && n > 0 ? n : null;
+  return raw;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,7 +216,7 @@ async function doRaise(store: ScrumStore, flags: EscalationCmdFlags): Promise<nu
 async function doShow(store: ScrumStore, idArg: string | undefined): Promise<number> {
   const id = asId(idArg);
   if (id === null) {
-    process.stderr.write('scrum escalation show: a positive integer <id> is required\n');
+    process.stderr.write('scrum escalation show: an <id> is required\n');
     return 1;
   }
   const row = await store.getEscalation(id);
@@ -263,7 +262,7 @@ async function doResolve(
 ): Promise<number> {
   const id = asId(idArg);
   if (id === null) {
-    process.stderr.write('scrum escalation resolve: a positive integer <id> is required\n');
+    process.stderr.write('scrum escalation resolve: an <id> is required\n');
     return 1;
   }
   const mode = asResolutionMode(flags.mode);
@@ -302,7 +301,7 @@ async function doChain(
 ): Promise<number> {
   const id = asId(idArg);
   if (id === null) {
-    process.stderr.write('scrum escalation chain: a positive integer <id> is required\n');
+    process.stderr.write('scrum escalation chain: an <id> is required\n');
     return 1;
   }
   if ((await store.getEscalation(id)) === null) {

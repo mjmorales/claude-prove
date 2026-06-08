@@ -180,10 +180,10 @@ export interface SweepResult {
 
 /** One escalation the staleness floor auto-bubbled, as a flat audit ref. */
 export interface AutoBubbledEscalation {
-  /** The closed (`auto_bubbled`) row's id. */
-  from_id: number;
-  /** The freshly-appended `open` row's id one rung up. */
-  to_id: number;
+  /** The closed (`auto_bubbled`) row's id (a ULID). */
+  from_id: string;
+  /** The freshly-appended `open` row's id (a ULID) one rung up. */
+  to_id: string;
   task_id: string;
   /** The rung the closed row sat at. */
   from_layer: EscalationRow['layer'];
@@ -325,7 +325,7 @@ export interface MilestoneCurationResult {
    * that leaves the per-task curation flow unchanged). Idempotent: a re-close
    * skips a team that already carries the compaction summary.
    */
-  compactedTeams: Array<{ teamSlug: string; loreId: number; candidateCount: number }>;
+  compactedTeams: Array<{ teamSlug: string; loreId: string; candidateCount: number }>;
   /** Terminating teams skipped because their compaction Lore already exists. */
   skippedAlreadyCompacted: number;
 }

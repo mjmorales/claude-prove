@@ -246,15 +246,15 @@ export const STALENESS_THRESHOLD_HOURS = 24;
  *   auto_bubbled       — true on a row advanced by the staleness clock (the
  *                        engine), distinguishing it from a receiver-driven
  *                        `re_escalate` without reading `resolution_mode`.
- *   linked_escalation  — the `scrum_escalations.id` of the fresh `open` row this
- *                        row was bubbled UP to. The FORWARD pointer (original →
- *                        new), the inverse of the new row's `walked_up_from`
- *                        BACK-pointer, so the staleness walk-up is traversable
- *                        in either direction.
+ *   linked_escalation  — the `scrum_escalations.id` (a ULID) of the fresh `open`
+ *                        row this row was bubbled UP to. The FORWARD pointer
+ *                        (original → new), the inverse of the new row's
+ *                        `walked_up_from` BACK-pointer, so the staleness walk-up
+ *                        is traversable in either direction.
  */
 export interface EscalationAttributes {
   auto_bubbled?: boolean;
-  linked_escalation?: number;
+  linked_escalation?: string;
 }
 
 /**
@@ -265,7 +265,9 @@ export interface EscalationAttributes {
  * `walked_up_from`. The whole chain a single escalation climbed is therefore
  * reconstructable by following `walked_up_from` back to the root (`null`).
  *
- *   id              — AUTOINCREMENT surrogate.
+ *   id              — a ULID surrogate (a collision-free TEXT id the minting
+ *                     writer decides, so two concurrent inserts both survive
+ *                     whole-transaction sync replay; lexicographically ordered).
  *   task_id         — the owning task; a SOFT reference (no FK) so an escalation
  *                     may name a task the store does not verify, matching how the
  *                     roster and annotations hold their referents.
@@ -293,7 +295,7 @@ export interface EscalationAttributes {
  *   resolved_at     — when this row left `open` (ISO-8601), or NULL while open.
  */
 export interface EscalationRow {
-  id: number;
+  id: string;
   task_id: string;
   escalation_type: EscalationType;
   layer: EscalationLayer;
@@ -303,7 +305,7 @@ export interface EscalationRow {
   resolution_mode: EscalationResolutionMode | null;
   resolution_note: string | null;
   resolved_by: string | null;
-  walked_up_from: number | null;
+  walked_up_from: string | null;
   attributes: EscalationAttributes | null;
   created_at: string;
   resolved_at: string | null;
@@ -333,7 +335,7 @@ export interface RaiseEscalationInput {
  * `resolvedAt` defaults to now().
  */
 export interface ResolveEscalationInput {
-  id: number;
+  id: string;
   mode: EscalationResolutionMode;
   note?: string | null;
   resolvedBy?: string | null;
@@ -761,7 +763,7 @@ export interface ScrumDep {
 }
 
 export interface ScrumEvent {
-  id: number;
+  id: string;
   task_id: string;
   ts: string;
   kind: EventKind;
@@ -886,10 +888,10 @@ export interface DecisionRow {
    * case). Set ONLY by `promoteLoreToCodex`, which lifts a generally-applicable
    * team Lore entry into the Codex as a gated DRAFT carrying this back-pointer.
    * The Lore row is append-only and never hard-deleted, so the pointer always
-   * resolves. INTEGER column — not pinned by a CHECK, matching the
-   * forward-compatible convention on `status`/`kind`/`write_status`.
+   * resolves. TEXT column (a ULID `scrum_lores.id`) — not pinned by a CHECK,
+   * matching the forward-compatible convention on `status`/`kind`/`write_status`.
    */
-  source_lore_id: number | null;
+  source_lore_id: string | null;
 }
 
 /**
@@ -961,7 +963,7 @@ export interface Contributor {
  * later multi-role roster generalizes.
  */
 export interface OperatorHistoryRow {
-  id: number;
+  id: string;
   contributor_id: string;
   from_ts: string;
   to_ts: string | null;
@@ -1215,7 +1217,7 @@ export const TEAM_ROLES: TeamRole[] = ['tech_lead', 'engineer', 'implementer'];
  * except to stamp its `to_ts` once on rotation.
  */
 export interface TeamMemberRow {
-  id: number;
+  id: string;
   team_slug: string;
   role: TeamRole;
   contributor_id: string;
@@ -1312,11 +1314,11 @@ export const TEAM_INTERFACE_STATUSES: TeamInterfaceStatus[] = ['active', 'supers
  *   created_at    — when the row was appended (ISO-8601).
  */
 export interface TeamAcceptRow {
-  id: number;
+  id: string;
   team_slug: string;
   ask_type: string;
   status: TeamInterfaceStatus;
-  superseded_by: number | null;
+  superseded_by: string | null;
   reason: string | null;
   created_at: string;
 }
@@ -1338,12 +1340,12 @@ export interface TeamAcceptRow {
  *   created_at    — when the row was appended (ISO-8601).
  */
 export interface TeamExposeRow {
-  id: number;
+  id: string;
   team_slug: string;
   name: string;
   schema_ref: string;
   status: TeamInterfaceStatus;
-  superseded_by: number | null;
+  superseded_by: string | null;
   reason: string | null;
   created_at: string;
 }
@@ -1514,7 +1516,7 @@ export const ASK_VERDICT_STATE: Record<AskVerdict, AskState> = {
  *   created_at        — when the ask was filed (ISO-8601).
  */
 export interface AskRow {
-  id: number;
+  id: string;
   from_team: string;
   to_team: string;
   ask_type: string;
@@ -1563,7 +1565,7 @@ export interface FileAskInput {
  *                 event for provenance). Optional.
  */
 export interface RespondAskInput {
-  id: number;
+  id: string;
   verdict: AskVerdict;
   comment?: string | null;
   childTitle?: string;
@@ -1641,7 +1643,7 @@ export const ASK_AWAIT_TERMINAL_PHASES: AskAwaitPhase[] = ['ready', 'rejected', 
  *                     that prevents a silent hang.
  */
 export interface AskAwaitReport {
-  ask_id: number;
+  ask_id: string;
   phase: AskAwaitPhase;
   terminal: boolean;
   state: AskState;
@@ -1683,7 +1685,7 @@ export interface AskAwaitReport {
  *                           required on every supersession write.
  */
 export interface LoreRow {
-  id: number;
+  id: string;
   team_slug: string;
   body: string;
   author_contributor_id: string;
@@ -1733,9 +1735,9 @@ export interface RecordLoreResult {
  * (vacant seat = warn-and-allow, matching `recordLore`).
  */
 export interface SupersedeLoreInput {
-  loreId: number;
+  loreId: string;
   /** Replacement Lore entry id (consolidation). Mutually exclusive with `byDecisionId`. */
-  byLoreId?: number;
+  byLoreId?: string;
   /** Replacement Codex decision id (promotion / codex-duplicate retire). Mutually exclusive with `byLoreId`. */
   byDecisionId?: string;
   reason: string;
@@ -1776,7 +1778,7 @@ export interface SupersedeLoreResult {
  *   recordedByAgent — provenance for who promoted; threaded to `recordDecision`.
  */
 export interface PromoteLoreToCodexInput {
-  loreId: number;
+  loreId: string;
   decisionId?: string;
   kind?: string;
   title?: string;
@@ -1821,7 +1823,7 @@ export const ANNOTATION_TARGET_KINDS: AnnotationTargetKind[] = ['task', 'team', 
  *   created_at  — when the note was appended (ISO-8601).
  */
 export interface AnnotationRow {
-  id: number;
+  id: string;
   target_kind: AnnotationTargetKind;
   target_ref: string;
   body: string;
