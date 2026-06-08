@@ -42,7 +42,7 @@ export { isUlid, ulid } from './ulid';
 export {
   type GroupVerdict,
   type GroupVerdictRecord,
-  upsertGroupVerdict,
+  appendGroupVerdict,
   VERDICT_VALUES,
   type VerdictValue,
 } from './services/acb-writes';
