@@ -37,6 +37,8 @@ export {
   registerSchema,
   type SchemaDef,
 } from './registry';
+export { assertStoreSchemaCompatible, SchemaIncompatibleError } from './schema-guard';
+export { isUlid, ulid } from './ulid';
 export {
   type GroupVerdict,
   type GroupVerdictRecord,

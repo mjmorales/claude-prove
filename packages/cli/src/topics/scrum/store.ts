@@ -18,8 +18,10 @@ import {
   type SqlParam,
   type Store,
   type StoreOptions,
+  assertStoreSchemaCompatible,
   openStore,
   runMigrations,
+  ulid,
   updateTaskStatus as updateTaskStatusViaService,
   withTx,
 } from '@claude-prove/store';
@@ -145,6 +147,17 @@ type Statement = Awaited<ReturnType<Database['prepare']>>;
 export async function openScrumStore(opts: StoreOptions = {}): Promise<ScrumStore> {
   ensureScrumSchemaRegistered();
   const store = await openStore(opts);
+  // Refuse a write-open against a legacy (pre-Turso-v1) or ahead store BEFORE
+  // running migrations, so an incompatible store is never silently migrated or
+  // written. A readonly open skips the guard — inspecting an old store is fine.
+  if (!opts.readonly) {
+    try {
+      await assertStoreSchemaCompatible(store);
+    } catch (err) {
+      store.close();
+      throw err;
+    }
+  }
   await runMigrations(store);
   return new ScrumStore(store);
 }
@@ -678,7 +691,8 @@ export class ScrumStore {
       }
 
       await this.exec(
-        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
+        'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+        ulid(),
         row.id,
         createdAt,
         'task_created',
@@ -821,7 +835,8 @@ export class ScrumStore {
         id,
       );
       await this.exec(
-        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
+        'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+        ulid(),
         id,
         ts,
         'milestone_changed',
@@ -888,7 +903,8 @@ export class ScrumStore {
         id,
       );
       await this.exec(
-        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
+        'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+        ulid(),
         id,
         ts,
         'team_changed',
@@ -929,7 +945,8 @@ export class ScrumStore {
         id,
       );
       await this.exec(
-        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
+        'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+        ulid(),
         id,
         ts,
         'task_deleted',
@@ -1048,7 +1065,8 @@ export class ScrumStore {
       id,
     );
     await this.exec(
-      'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+      ulid(),
       id,
       ts,
       'status_changed',
@@ -1881,9 +1899,9 @@ export class ScrumStore {
   /**
    * Append an event. Rejects unknown task ids up front so the caller sees
    * a domain error rather than an opaque FK violation. Returns the new
-   * row id.
+   * row's ULID id.
    */
-  async appendEvent(input: AppendEventInput): Promise<number> {
+  async appendEvent(input: AppendEventInput): Promise<string> {
     if (!(await this.getTask(input.taskId))) {
       throw new Error(`appendEvent: unknown task '${input.taskId}'`);
     }
@@ -1897,9 +1915,11 @@ export class ScrumStore {
     const ts = input.ts ?? isoNow();
     const payload = input.payload === undefined ? null : input.payload;
 
+    const id = ulid();
     const tx = async () => {
-      const result = await this.run(
-        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
+      await this.exec(
+        'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+        id,
         input.taskId,
         ts,
         input.kind,
@@ -1907,7 +1927,7 @@ export class ScrumStore {
         JSON.stringify(payload),
       );
       await this.exec('UPDATE scrum_tasks SET last_event_at = ? WHERE id = ?', ts, input.taskId);
-      return Number(result.lastInsertRowid);
+      return id;
     };
     return await withTx(this.store, tx);
   }
@@ -1919,7 +1939,7 @@ export class ScrumStore {
       taskId,
       limit,
     )) as Array<{
-      id: number;
+      id: string;
       task_id: string;
       ts: string;
       kind: string;
@@ -1950,7 +1970,7 @@ export class ScrumStore {
       'SELECT id, task_id, ts, kind, agent, payload_json FROM scrum_events ORDER BY ts DESC, id DESC LIMIT ?',
       limit,
     )) as Array<{
-      id: number;
+      id: string;
       task_id: string;
       ts: string;
       kind: string;
@@ -2728,19 +2748,20 @@ export class ScrumStore {
     const fromTs = input.fromTs ?? isoNow();
     const createdBy = this.actor(input.createdBy);
 
+    const id = ulid();
     const append = async () => {
       // Close the current open interval (if any) at the new holder's from_ts.
       await this.exec('UPDATE scrum_operator_history SET to_ts = ? WHERE to_ts IS NULL', fromTs);
-      const result = await this.run(
-        'INSERT INTO scrum_operator_history (contributor_id, from_ts, to_ts, created_at, created_by) VALUES (?, ?, NULL, ?, ?)',
+      await this.exec(
+        'INSERT INTO scrum_operator_history (id, contributor_id, from_ts, to_ts, created_at, created_by) VALUES (?, ?, ?, NULL, ?, ?)',
+        id,
         input.contributorId,
         fromTs,
         isoNow(),
         createdBy,
       );
-      return Number(result.lastInsertRowid);
     };
-    const id = await withTx(this.store, append);
+    await withTx(this.store, append);
 
     const row = (await this.one(
       `SELECT ${OPERATOR_HISTORY_COLUMNS} FROM scrum_operator_history WHERE id = ?`,
@@ -3048,6 +3069,7 @@ export class ScrumStore {
       (role) => role !== input.role,
     );
 
+    const id = ulid();
     const append = async () => {
       // Close the current open interval for THIS (team, role) at the new
       // holder's from_ts.
@@ -3057,8 +3079,9 @@ export class ScrumStore {
         input.teamSlug,
         input.role,
       );
-      const result = await this.run(
-        'INSERT INTO scrum_team_members (team_slug, role, contributor_id, from_ts, to_ts, reason, created_at) VALUES (?, ?, ?, ?, NULL, ?, ?)',
+      await this.exec(
+        'INSERT INTO scrum_team_members (id, team_slug, role, contributor_id, from_ts, to_ts, reason, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)',
+        id,
         input.teamSlug,
         input.role,
         input.contributorId,
@@ -3066,9 +3089,8 @@ export class ScrumStore {
         reason,
         isoNow(),
       );
-      return Number(result.lastInsertRowid);
     };
-    const id = await withTx(this.store, append);
+    await withTx(this.store, append);
 
     const row = (await this.one(
       `SELECT ${TEAM_MEMBER_COLUMNS} FROM scrum_team_members WHERE id = ?`,
@@ -3168,8 +3190,10 @@ export class ScrumStore {
         `addTeamAccept: invalid ask_type '${askType}'; expected kebab-case (e.g. 'schema-change')`,
       );
     }
-    const result = await this.run(
-      'INSERT INTO scrum_team_accepts (team_slug, ask_type, status, superseded_by, reason, created_at) VALUES (?, ?, ?, NULL, NULL, ?)',
+    const id = ulid();
+    await this.exec(
+      'INSERT INTO scrum_team_accepts (id, team_slug, ask_type, status, superseded_by, reason, created_at) VALUES (?, ?, ?, ?, NULL, NULL, ?)',
+      id,
       teamSlug,
       askType,
       'active' satisfies TeamInterfaceStatus,
@@ -3177,7 +3201,7 @@ export class ScrumStore {
     );
     return (await this.one(
       `SELECT ${TEAM_ACCEPT_COLUMNS} FROM scrum_team_accepts WHERE id = ?`,
-      Number(result.lastInsertRowid),
+      id,
     )) as TeamAcceptRow;
   }
 
@@ -3194,8 +3218,10 @@ export class ScrumStore {
     if ((await this.getTeam(teamSlug)) === null) {
       throw new Error(`addTeamExpose: unknown team '${teamSlug}'`);
     }
-    const result = await this.run(
-      'INSERT INTO scrum_team_exposes (team_slug, name, schema_ref, status, superseded_by, reason, created_at) VALUES (?, ?, ?, ?, NULL, NULL, ?)',
+    const id = ulid();
+    await this.exec(
+      'INSERT INTO scrum_team_exposes (id, team_slug, name, schema_ref, status, superseded_by, reason, created_at) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?)',
+      id,
       teamSlug,
       input.name,
       input.schemaRef,
@@ -3204,7 +3230,7 @@ export class ScrumStore {
     );
     return (await this.one(
       `SELECT ${TEAM_EXPOSE_COLUMNS} FROM scrum_team_exposes WHERE id = ?`,
-      Number(result.lastInsertRowid),
+      id,
     )) as TeamExposeRow;
   }
 
@@ -3216,9 +3242,9 @@ export class ScrumStore {
    * unknown id and an already-superseded target.
    */
   async supersedeTeamAccept(
-    id: number,
+    id: string,
     reason: string,
-    supersededBy?: number | null,
+    supersededBy?: string | null,
   ): Promise<TeamAcceptRow> {
     const target = (await this.one(
       `SELECT ${TEAM_ACCEPT_COLUMNS} FROM scrum_team_accepts WHERE id = ?`,
@@ -3250,9 +3276,9 @@ export class ScrumStore {
    * already-superseded target.
    */
   async supersedeTeamExpose(
-    id: number,
+    id: string,
     reason: string,
-    supersededBy?: number | null,
+    supersededBy?: string | null,
   ): Promise<TeamExposeRow> {
     const target = (await this.one(
       `SELECT ${TEAM_EXPOSE_COLUMNS} FROM scrum_team_exposes WHERE id = ?`,
@@ -3365,9 +3391,11 @@ export class ScrumStore {
     }
 
     const createdAt = input.createdAt ?? isoNow();
+    const id = ulid();
     const tx = async () => {
-      const result = await this.run(
-        'INSERT INTO scrum_asks (from_team, to_team, ask_type, blocking_artifact, state, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      await this.exec(
+        'INSERT INTO scrum_asks (id, from_team, to_team, ask_type, blocking_artifact, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        id,
         input.fromTeam,
         input.toTeam,
         input.askType,
@@ -3375,7 +3403,6 @@ export class ScrumStore {
         'filed' satisfies AskState,
         createdAt,
       );
-      const id = Number(result.lastInsertRowid);
       // Audit the filing against the blocking artifact's event timeline so the
       // task that triggered the ask carries the cross-team request in its history.
       await this.appendEvent({
@@ -3389,14 +3416,13 @@ export class ScrumStore {
           ask_type: input.askType,
         },
       });
-      return id;
     };
-    const askId = await withTx(this.store, tx);
-    return (await this.one(`SELECT ${ASK_COLUMNS} FROM scrum_asks WHERE id = ?`, askId)) as AskRow;
+    await withTx(this.store, tx);
+    return (await this.one(`SELECT ${ASK_COLUMNS} FROM scrum_asks WHERE id = ?`, id)) as AskRow;
   }
 
   /** Fetch one ask by id, or null if missing. */
-  async getAsk(id: number): Promise<AskRow | null> {
+  async getAsk(id: string): Promise<AskRow | null> {
     const row = (await this.one(
       `SELECT ${ASK_COLUMNS} FROM scrum_asks WHERE id = ?`,
       id,
@@ -3546,7 +3572,7 @@ export class ScrumStore {
    * Rejects an unknown ask id (the one error path); every existing ask yields a
    * report.
    */
-  async awaitAsk(id: number): Promise<AskAwaitReport> {
+  async awaitAsk(id: string): Promise<AskAwaitReport> {
     const ask = await this.getAsk(id);
     if (ask === null) {
       throw new Error(`awaitAsk: unknown ask id '${id}'`);
@@ -3804,8 +3830,10 @@ export class ScrumStore {
       );
     }
 
-    const result = await this.run(
-      'INSERT INTO scrum_lores (team_slug, body, author_contributor_id, created_at) VALUES (?, ?, ?, ?)',
+    const id = ulid();
+    await this.exec(
+      'INSERT INTO scrum_lores (id, team_slug, body, author_contributor_id, created_at) VALUES (?, ?, ?, ?, ?)',
+      id,
       input.teamSlug,
       input.body,
       input.authorContributorId,
@@ -3813,7 +3841,7 @@ export class ScrumStore {
     );
     const row = (await this.one(
       `SELECT ${LORE_COLUMNS} FROM scrum_lores WHERE id = ?`,
-      Number(result.lastInsertRowid),
+      id,
     )) as LoreRow;
     return { row, warning };
   }
@@ -3833,7 +3861,7 @@ export class ScrumStore {
   }
 
   /** Fetch a single Lore entry by id, or null when no such entry exists. */
-  async getLore(id: number): Promise<LoreRow | null> {
+  async getLore(id: string): Promise<LoreRow | null> {
     const row = (await this.one(
       `SELECT ${LORE_COLUMNS} FROM scrum_lores WHERE id = ?`,
       id,
@@ -4041,8 +4069,10 @@ export class ScrumStore {
         `addAnnotation: invalid target_kind '${input.targetKind}'; expected one of: ${ANNOTATION_TARGET_KINDS.join(', ')}`,
       );
     }
-    const result = await this.run(
-      'INSERT INTO scrum_annotations (target_kind, target_ref, body, author, created_at) VALUES (?, ?, ?, ?, ?)',
+    const id = ulid();
+    await this.exec(
+      'INSERT INTO scrum_annotations (id, target_kind, target_ref, body, author, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      id,
       input.targetKind,
       input.targetRef,
       input.body,
@@ -4051,7 +4081,7 @@ export class ScrumStore {
     );
     return (await this.one(
       `SELECT ${ANNOTATION_COLUMNS} FROM scrum_annotations WHERE id = ?`,
-      Number(result.lastInsertRowid),
+      id,
     )) as AnnotationRow;
   }
 
@@ -4116,7 +4146,7 @@ export class ScrumStore {
   }
 
   /** Fetch one escalation by id, or null when no such row exists. */
-  async getEscalation(id: number): Promise<EscalationRow | null> {
+  async getEscalation(id: string): Promise<EscalationRow | null> {
     const row = (await this.one(
       `SELECT ${ESCALATION_COLUMNS} FROM scrum_escalations WHERE id = ?`,
       id,
@@ -4157,11 +4187,11 @@ export class ScrumStore {
    * journey up the ladder: each entry is one rung, with its closing state and
    * resolution. A visited-set guards against an accidental self-link cycle.
    */
-  async getEscalationChain(id: number): Promise<EscalationRow[]> {
+  async getEscalationChain(id: string): Promise<EscalationRow[]> {
     // Walk DOWN to the root via walked_up_from, collecting the rung at each hop.
     const chainDown: EscalationRow[] = [];
-    const visited = new Set<number>();
-    let cursor: number | null = id;
+    const visited = new Set<string>();
+    let cursor: string | null = id;
     while (cursor !== null && !visited.has(cursor)) {
       visited.add(cursor);
       const row = await this.getEscalation(cursor);
@@ -4270,7 +4300,7 @@ export class ScrumStore {
    * the store, preserving the escalation's soft-reference semantics (an
    * escalation may name a task the store does not track).
    */
-  async autoBubbleEscalation(id: number, bubbledAt?: string): Promise<EscalationRow> {
+  async autoBubbleEscalation(id: string, bubbledAt?: string): Promise<EscalationRow> {
     const existing = await this.getEscalation(id);
     if (existing === null) {
       throw new Error(`autoBubbleEscalation: unknown escalation id '${id}'`);
@@ -4315,7 +4345,7 @@ export class ScrumStore {
    * to stamp `{ auto_bubbled, linked_escalation }` on the closed row.
    */
   private async setEscalationAttributes(
-    id: number,
+    id: string,
     attributes: EscalationAttributes | null,
   ): Promise<void> {
     await this.exec(
@@ -4354,13 +4384,15 @@ export class ScrumStore {
     layer: EscalationLayer;
     summary: string;
     raisedBy: string | null;
-    walkedUpFrom: number | null;
+    walkedUpFrom: string | null;
     createdAt: string;
   }): Promise<EscalationRow> {
-    const result = await this.run(
+    const id = ulid();
+    await this.exec(
       `INSERT INTO scrum_escalations
-         (task_id, escalation_type, layer, state, summary, raised_by, walked_up_from, created_at)
-       VALUES (?, ?, ?, 'open', ?, ?, ?, ?)`,
+         (id, task_id, escalation_type, layer, state, summary, raised_by, walked_up_from, created_at)
+       VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?)`,
+      id,
       args.taskId,
       args.escalationType,
       args.layer,
@@ -4369,7 +4401,7 @@ export class ScrumStore {
       args.walkedUpFrom,
       args.createdAt,
     );
-    return await this.requireEscalation(Number(result.lastInsertRowid), 'insertEscalation');
+    return await this.requireEscalation(id, 'insertEscalation');
   }
 
   /**
@@ -4378,7 +4410,7 @@ export class ScrumStore {
    * and resolution path.
    */
   private async closeEscalationRow(
-    id: number,
+    id: string,
     state: EscalationState,
     mode: EscalationResolutionMode | null,
     note: string | null,
@@ -4399,7 +4431,7 @@ export class ScrumStore {
   }
 
   /** Fetch an escalation by id or throw — the post-write read-back guard. */
-  private async requireEscalation(id: number, ctx: string): Promise<EscalationRow> {
+  private async requireEscalation(id: string, ctx: string): Promise<EscalationRow> {
     const row = await this.getEscalation(id);
     if (row === null) {
       throw new Error(`${ctx}: escalation ${id} vanished after write`);
@@ -4793,7 +4825,7 @@ function decodeEscalation(row: EscalationRowRaw): EscalationRow {
 
 function parseEscalationAttributes(
   raw: string | null,
-  escalationId: number,
+  escalationId: string,
 ): EscalationAttributes | null {
   if (raw === null) return null;
   try {
@@ -5089,7 +5121,7 @@ function normalizeDepEdge(
 }
 
 function decodeEvent(row: {
-  id: number;
+  id: string;
   task_id: string;
   ts: string;
   kind: string;

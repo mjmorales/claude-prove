@@ -137,7 +137,7 @@ describe('claude-prove acb save-manifest', () => {
     expect(res.exitCode).toBe(0);
     const stdout = JSON.parse(res.stdout.trim()) as {
       saved: boolean;
-      id: number;
+      id: string;
       branch: string;
       sha: string;
       run_slug: string | null;
@@ -145,7 +145,7 @@ describe('claude-prove acb save-manifest', () => {
     expect(stdout.saved).toBe(true);
     expect(stdout.branch).toBe('feat/x');
     expect(stdout.sha).toBe(sha);
-    expect(typeof stdout.id).toBe('number');
+    expect(typeof stdout.id).toBe('string');
     expect(res.stderr).toContain(`Manifest saved for feat/x (sha: ${sha})`);
   });
 

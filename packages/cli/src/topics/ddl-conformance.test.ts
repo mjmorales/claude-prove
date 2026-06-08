@@ -1,16 +1,13 @@
 /**
- * DDL byte-equality conformance gate for the Turso async-store port.
+ * DDL byte-equality conformance gate for the sync-safe v1 store schema.
  *
- * The legacy-driver -> @tursodatabase/database port must be behavior-identical:
- * it changed how migrations EXECUTE (sync `db.exec` -> async `store.exec`), never
- * the schema they produce. This test pins the emitted DDL so any future drift —
- * a column, table, index, or constraint change — surfaces as a failing golden
- * diff rather than passing silently.
- *
- * The golden (`__fixtures__/store-schema.golden.txt`) was captured from the
- * ported schema, which a source-level diff against the pre-port branch proved
- * carries byte-identical CREATE TABLE/INDEX strings — so the golden equally
- * encodes the pre-port schema.
+ * The golden (`__fixtures__/store-schema.golden.txt`) pins the exact DDL the
+ * redesigned v1 schema emits, so any future drift — a column, table, index, or
+ * constraint change — surfaces as a failing golden diff rather than passing
+ * silently. The snapshot encodes the redesign's invariants: every primary key
+ * is a TEXT (ULID) id, a natural slug, or a composite key, and NO table uses
+ * AUTOINCREMENT or an INTEGER rowid alias (the shape whole-transaction sync
+ * replay would lose a row on).
  *
  * Scope note: the migration registry is process-global and `runMigrations` runs
  * every registered domain on store-open. Importing both the scrum and acb store
@@ -49,6 +46,18 @@ describe('store schema — DDL byte-equality conformance', () => {
       const actual = snapshot(rows);
       const golden = readFileSync(GOLDEN, 'utf8');
       expect(actual).toBe(golden);
+    } finally {
+      store.close();
+    }
+  });
+
+  test('the emitted DDL carries zero AUTOINCREMENT — no rowid alias survives sync replay', async () => {
+    const store = await openScrumStore({ path: ':memory:' });
+    try {
+      const rows = (await store.getStore().all(DUMP_SQL)) as Array<{ sql: string }>;
+      for (const r of rows) {
+        expect(r.sql).not.toContain('AUTOINCREMENT');
+      }
     } finally {
       store.close();
     }

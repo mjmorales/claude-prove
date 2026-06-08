@@ -836,10 +836,11 @@ describe('ScrumStore — dependencies', () => {
 // ===========================================================================
 
 describe('ScrumStore — events', () => {
-  test('appendEvent returns a positive row id', async () => {
+  test('appendEvent returns a ULID row id', async () => {
     await seedTask('t1');
     const id = await store.appendEvent({ taskId: 't1', kind: 'note', payload: { msg: 'hi' } });
-    expect(id).toBeGreaterThan(0);
+    expect(typeof id).toBe('string');
+    expect(id).toHaveLength(26);
   });
 
   test('appendEvent rejects unknown task', async () => {
@@ -2624,7 +2625,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 28,
+      schema_version: 1,
     });
   });
 
@@ -2637,7 +2638,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(28);
+    expect(updated.provenance.schema_version).toBe(1);
   });
 });
 
@@ -3628,7 +3629,7 @@ describe('ScrumStore — team Lore layer (v19)', () => {
     expect(row.body).toBe('prefer idempotent migrations');
     expect(row.author_contributor_id).toBe('ct-lead');
     expect(row.created_at).toBe('2026-01-01T00:00:00Z');
-    expect(row.id).toBeGreaterThan(0);
+    expect(row.id).toHaveLength(26);
     // A seated tech_lead authoring their own team's Lore raises no warning.
     expect(warning).toBeNull();
   });
@@ -3718,8 +3719,10 @@ describe('ScrumStore — team Lore layer (v19)', () => {
       body: 'correction: use spaces',
       authorContributorId: 'ct-lead',
     });
-    // Both entries survive — the original is never mutated or removed.
-    expect(correction.row.id).toBeGreaterThan(first.row.id);
+    // Both entries survive — the original is never mutated or removed. The
+    // correction's ULID sorts strictly after the original's (monotonic), so
+    // listLores ORDER BY id ASC keeps them in insert order.
+    expect(correction.row.id > first.row.id).toBe(true);
     expect((await store.listLores('payments')).map((l) => l.body)).toEqual([
       'use tabs',
       'correction: use spaces',
@@ -3752,7 +3755,7 @@ describe('ScrumStore — Annotation layer (v20)', () => {
     expect(row.body).toBe('watch the off-by-one');
     expect(row.author).toBe('CT-a');
     expect(row.created_at).toBe('2026-01-01T00:00:00Z');
-    expect(row.id).toBeGreaterThan(0);
+    expect(row.id).toHaveLength(26);
   });
 
   test('addAnnotation rejects a target_kind outside the closed enum, naming the set', async () => {
@@ -3818,8 +3821,9 @@ describe('ScrumStore — Annotation layer (v20)', () => {
       body: 'correction: use spaces',
       author: 'CT-a',
     });
-    // Both entries survive — the original is never mutated or removed.
-    expect(correction.id).toBeGreaterThan(first.id);
+    // Both entries survive — the original is never mutated or removed. The
+    // correction's ULID sorts strictly after the original's (monotonic).
+    expect(correction.id > first.id).toBe(true);
     expect((await store.listAnnotations('task', 't1')).map((a) => a.body)).toEqual([
       'use tabs',
       'correction: use spaces',
@@ -4786,7 +4790,7 @@ describe('ScrumStore — escalation protocol (v24)', () => {
     expect(row.resolution_mode).toBeNull();
     expect(row.resolved_at).toBeNull();
     expect(row.raised_by).toBe('CT-impl');
-    expect(row.id).toBeGreaterThan(0);
+    expect(row.id).toHaveLength(26);
   });
 
   test('raiseEscalation accepts an explicit starting layer', async () => {

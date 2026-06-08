@@ -24,6 +24,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { type Store, withTx } from '../connection';
+import { ulid } from '../ulid';
 
 // ---------------------------------------------------------------------------
 // Closed scrum status enum + task / acceptance domain types (canonical copy)
@@ -183,8 +184,15 @@ export async function updateTaskStatus(
       [next, ts, agent ?? null, ts, workerId, runId, id],
     );
     await store.run(
-      'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
-      [id, ts, 'status_changed', agent ?? null, JSON.stringify({ from: task.status, to: next })],
+      'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+      [
+        ulid(),
+        id,
+        ts,
+        'status_changed',
+        agent ?? null,
+        JSON.stringify({ from: task.status, to: next }),
+      ],
     );
   });
 

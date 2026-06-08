@@ -90,7 +90,7 @@ export async function runSaveManifest(opts: SaveManifestOpts): Promise<number> {
   await ensureLegacyImported(workspaceRoot);
 
   const store = await openAcbStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
-  let rowId: number;
+  let rowId: string;
   try {
     rowId = await store.saveManifest(branch, sha, data, runSlug ?? undefined);
   } finally {
