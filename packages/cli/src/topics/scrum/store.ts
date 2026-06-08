@@ -18,6 +18,7 @@ import {
   type SqlParam,
   type Store,
   type StoreOptions,
+  assertStoreSchemaCompatible,
   openStore,
   runMigrations,
   ulid,
@@ -146,6 +147,17 @@ type Statement = Awaited<ReturnType<Database['prepare']>>;
 export async function openScrumStore(opts: StoreOptions = {}): Promise<ScrumStore> {
   ensureScrumSchemaRegistered();
   const store = await openStore(opts);
+  // Refuse a write-open against a legacy (pre-Turso-v1) or ahead store BEFORE
+  // running migrations, so an incompatible store is never silently migrated or
+  // written. A readonly open skips the guard — inspecting an old store is fine.
+  if (!opts.readonly) {
+    try {
+      await assertStoreSchemaCompatible(store);
+    } catch (err) {
+      store.close();
+      throw err;
+    }
+  }
   await runMigrations(store);
   return new ScrumStore(store);
 }
