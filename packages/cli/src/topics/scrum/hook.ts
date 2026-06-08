@@ -86,13 +86,15 @@ export interface SessionStartDigest {
  * `nextReady`. Never throws — errors land on stderr with exit 0 so a broken
  * scrum store never bricks a session.
  */
-export function onSessionStart(payload: Record<string, unknown> | null): HookResult {
+export async function onSessionStart(
+  payload: Record<string, unknown> | null,
+): Promise<HookResult> {
   try {
     const project = resolveProjectDir(payload);
-    const store = openScrumStore({ cwd: project });
+    const store = await openScrumStore({ cwd: project });
     try {
-      const sweep = bubbleStaleEscalations(store, Date.now());
-      const digest = computeDigest(store, sweep, readTriggers(project));
+      const sweep = await bubbleStaleEscalations(store, Date.now());
+      const digest = await computeDigest(store, sweep, readTriggers(project));
       if (isEmptyDigest(digest)) return EMPTY_HOOK_RESULT;
       const body = pyJsonDump({
         hookSpecificOutput: {
@@ -121,7 +123,9 @@ export function onSessionStart(payload: Record<string, unknown> | null): HookRes
  * carrying remediation. Exit 1 fires only on unexpected errors after the
  * filter passes — those indicate a real problem worth surfacing.
  */
-export function onSubagentStop(payload: Record<string, unknown> | null): HookResult {
+export async function onSubagentStop(
+  payload: Record<string, unknown> | null,
+): Promise<HookResult> {
   if (!payload) return EMPTY_HOOK_RESULT;
 
   const subagentType = readString(payload, 'subagent_type');
@@ -141,11 +145,11 @@ export function onSubagentStop(payload: Record<string, unknown> | null): HookRes
     const gate = evaluateSessionEndGate(dirname(statePath), readDevMode(project));
     if (!gate.ok) return blockSessionEnd(gate);
 
-    const store = openScrumStore({ cwd: project });
+    const store = await openScrumStore({ cwd: project });
     try {
       // Pass `project` so rebuildContextBundle resolves run paths against the
       // correct root when firing from a linked worktree or a subdirectory.
-      const result = reconcileRunCompleted(statePath, store, project);
+      const result = await reconcileRunCompleted(statePath, store, project);
       if (result.kind === 'skipped') return EMPTY_HOOK_RESULT;
 
       // Advisory contribution floor: a team-role seat that stops without
@@ -153,7 +157,7 @@ export function onSubagentStop(payload: Record<string, unknown> | null): HookRes
       // blocked. Runs AFTER reconcile (so the seat's own run_completed/synthesis
       // events are already in the window) and never touches `result` — the
       // reconcile outcome and the non-blocking exit code stand regardless.
-      raiseContributionMissIfAny(store, statePath, result);
+      await raiseContributionMissIfAny(store, statePath, result);
       // Surface the blocking reason (e.g. story-close floor rejection, orphan
       // task-not-found) so the operator sees WHY reconcile stalled, not just
       // that a run was processed.
@@ -184,7 +188,7 @@ export function onSubagentStop(payload: Record<string, unknown> | null): HookRes
  * stays non-blocking — any sweep failure is logged to stderr with exit 0 — so
  * a broken scrum store never bricks a session that already satisfied the gate.
  */
-export function onStop(payload: Record<string, unknown> | null): HookResult {
+export async function onStop(payload: Record<string, unknown> | null): Promise<HookResult> {
   try {
     // Resolve cwd/project inside the catch-all so a process.cwd() ENOENT
     // (e.g. the session's worktree was removed) cannot escape as an uncaught
@@ -201,9 +205,9 @@ export function onStop(payload: Record<string, unknown> | null): HookResult {
     if (!gate.ok) return blockSessionEnd(gate);
 
     const sinceTs = readLastSweep(project);
-    const store = openScrumStore({ cwd: project });
+    const store = await openScrumStore({ cwd: project });
     try {
-      const result = sweepUnreconciled(store, sinceTs, project);
+      const result = await sweepUnreconciled(store, sinceTs, project);
       writeLastSweep(project, Date.now());
       if (result.reconciled === 0 && result.errors.length === 0) {
         return EMPTY_HOOK_RESULT;
@@ -230,16 +234,16 @@ export function onStop(payload: Record<string, unknown> | null): HookResult {
 // Session-start digest helpers
 // ---------------------------------------------------------------------------
 
-function computeDigest(
+async function computeDigest(
   store: ScrumStore,
   sweep: StaleEscalationSweepResult,
   triggers: TriggerBinding[],
-): SessionStartDigest {
+): Promise<SessionStartDigest> {
   const nowMs = Date.now();
   const stallCutoffMs = nowMs - STALL_THRESHOLD_HOURS * 3600 * 1000;
 
-  const inProgress = store.listTasks({ status: 'in_progress' });
-  const review = store.listTasks({ status: 'review' });
+  const inProgress = await store.listTasks({ status: 'in_progress' });
+  const review = await store.listTasks({ status: 'review' });
   const active = [...inProgress, ...review].slice(0, DIGEST_MAX_ACTIVE).map(toActiveRow);
 
   const stalled = inProgress
@@ -247,14 +251,14 @@ function computeDigest(
     .slice(0, DIGEST_MAX_STALLED)
     .map(toStalledRow);
 
-  const recent = store.listRecentEvents(DIGEST_MAX_RECENT).map(toRecentRow);
+  const recent = (await store.listRecentEvents(DIGEST_MAX_RECENT)).map(toRecentRow);
 
   return {
     active_tasks: active,
     stalled_wip: stalled,
     recent_events: recent,
     auto_bubbled: sweep.bubbled,
-    bound_actions: computeBoundActions(store, triggers, DIGEST_MAX_BOUND),
+    bound_actions: await computeBoundActions(store, triggers, DIGEST_MAX_BOUND),
   };
 }
 
@@ -398,11 +402,11 @@ const CONTRIBUTION_WINDOW_EPOCH = '0000-01-01T00:00:00.000Z';
  * epoch backstops a missing `started_at` so a real contribution is never
  * excluded by an absent start.
  */
-function raiseContributionMissIfAny(
+async function raiseContributionMissIfAny(
   store: ScrumStore,
   statePath: string,
   result: ReconcileRunResult,
-): void {
+): Promise<void> {
   try {
     if (result.kind !== 'reconciled' || result.taskId === null) return;
 
@@ -413,14 +417,20 @@ function raiseContributionMissIfAny(
     const windowStart = window.start ?? CONTRIBUTION_WINDOW_EPOCH;
     const windowEnd = window.end ?? new Date().toISOString();
 
-    const verdict = detectContributionMiss(store, agentName, result.taskId, windowStart, windowEnd);
+    const verdict = await detectContributionMiss(
+      store,
+      agentName,
+      result.taskId,
+      windowStart,
+      windowEnd,
+    );
     if (!verdict.missed) return;
 
     const payload: EscalationPayload = {
       escalation_type: 'contribution_miss',
       summary: `team agent ${agentName} (role ${verdict.role}, team ${verdict.slug}) stopped without contributing to task ${result.taskId}`,
     };
-    store.appendEvent({ taskId: result.taskId, kind: 'blocker_raised', payload });
+    await store.appendEvent({ taskId: result.taskId, kind: 'blocker_raised', payload });
   } catch (err) {
     // Advisory floor — a failure here must never alter the reconcile outcome.
     process.stderr.write(`scrum contribution floor: ${errMsg(err)}\n`);
