@@ -186,10 +186,10 @@ export interface CreateTaskInput {
   /** Containment tier; NULL = flat. */
   layer?: TaskLayer | null;
   /**
-   * Acceptance criteria authored at create time (v5). Validated for the
-   * idempotent/policy invariant before insert. When omitted, the task's
-   * `acceptance_json` stays NULL unless `parentId` carries inheritable
-   * criteria (see `inheritAcceptance`).
+   * Acceptance criteria authored at create time. Validated for the
+   * idempotent/policy invariant before insert. When omitted, the task gets no
+   * criteria unless `parentId` carries inheritable ones (see
+   * `inheritAcceptance`).
    */
   acceptance?: Acceptance | null;
   /**
@@ -1364,7 +1364,9 @@ export class ScrumStore {
     // Validate the WHOLE resulting acceptance (the new criterion against any
     // existing policy / scope-enum guard) before persisting just the new row.
     const seeded = withGateStatesSeeded(
-      current?.policy ? { criteria: [...criteria, criterion], policy: current.policy } : { criteria: [...criteria, criterion] },
+      current?.policy
+        ? { criteria: [...criteria, criterion], policy: current.policy }
+        : { criteria: [...criteria, criterion] },
     );
     validateAcceptance(seeded);
     const seededCriterion = seeded.criteria[seeded.criteria.length - 1] as AcceptanceCriterion;
@@ -1435,12 +1437,13 @@ export class ScrumStore {
   }
 
   /**
-   * Resolve a `gate`-kind criterion's persisted verdict — the mechanical half of
-   * the human approve/reject decision. Transitions the criterion's `gate.verdict`
-   * from `gate_pending` to `approved` or `rejected`, stamps the human `responder`
-   * (the verification contributor of record) and optional `comment`, and appends
-   * a `gate_responded` event so the responder is recorded in the append-only
-   * audit log. The state round-trips through `acceptance_json` — no DB migration.
+   * Resolve a `gate`-kind criterion's verdict — the mechanical half of the human
+   * approve/reject decision. APPENDS a `gate`-channel verdict row (the criterion
+   * head then reads `approved`/`rejected` with the human `responder` and optional
+   * `comment`) and appends a `gate_responded` event so the responder is recorded
+   * in the append-only audit log. The verdict is an append, not a mutation: a
+   * re-decision would land another row, so the gate is guarded to resolve once
+   * (supersede the criterion to re-decide).
    *
    * This is PULL-based resolution: a session (an interactive `AskUserQuestion`
    * turn, the `scrum gate respond` CLI, or a session-start surfacing of pending
@@ -1881,7 +1884,10 @@ export class ScrumStore {
           ? {
               channel: 'gate' as const,
               verdict: criterion.gate.verdict,
-              fields: { by: criterion.gate.responder ?? null, comment: criterion.gate.comment ?? null },
+              fields: {
+                by: criterion.gate.responder ?? null,
+                comment: criterion.gate.comment ?? null,
+              },
             }
           : null
         : criterion.verification && criterion.verification.verdict !== 'pending'
@@ -1895,7 +1901,14 @@ export class ScrumStore {
             }
           : null;
     if (!resolved) return;
-    await this.appendVerdictRow(taskId, rowId, resolved.channel, resolved.verdict, resolved.fields, at);
+    await this.appendVerdictRow(
+      taskId,
+      rowId,
+      resolved.channel,
+      resolved.verdict,
+      resolved.fields,
+      at,
+    );
   }
 
   /**
@@ -5103,17 +5116,19 @@ function taskProvenance(row: ScrumTaskRow): Provenance {
 }
 
 /**
- * Decode a raw `scrum_tasks` SELECT row into the public `ScrumTask`. The two
- * transforms are `acceptance_json` (TEXT|NULL) → `acceptance` and `bounds_json`
- * (TEXT|NULL) → `bounds`; every other column passes through unchanged. NULL
- * JSON → `null`.
+ * Decode a raw `scrum_tasks` SELECT row into the public `ScrumTask`. The
+ * `acceptance` object is reconstructed UPSTREAM (in `hydrateRows`, from the
+ * normalized criteria + head-verdict tables joined onto the row's
+ * `acceptance_policy_json`) and passed in; this function only transforms
+ * `bounds_json` (TEXT|NULL) → `bounds` and assembles the provenance block, with
+ * every other column passing through unchanged.
  *
- * The JSON columns have no SQL-level guarantee of valid JSON (`validateBounds`/
- * `validateAcceptance` only run on writes through the store API). `decodeTask`
- * is on the hot read path of getTask/listTasks/getChildren/listTasksForTag/
+ * The `bounds_json` column has no SQL-level guarantee of valid JSON
+ * (`validateBounds` only runs on writes through the store API). `decodeTask` is
+ * on the hot read path of getTask/listTasks/getChildren/listTasksForTag/
  * nextReady, so a single corrupt row must NOT throw and brick every task read.
  * `safeParseJson` degrades a poisoned column to `null` (with a stderr warning)
- * instead — the task still reads, just without its acceptance/bounds.
+ * instead — the task still reads, just without its bounds.
  */
 function decodeTask(row: ScrumTaskRow, acceptance: Acceptance | null): ScrumTask {
   const { acceptance_policy_json: _policy, bounds_json, ...rest } = row;

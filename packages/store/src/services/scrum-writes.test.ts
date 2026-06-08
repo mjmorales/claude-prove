@@ -5,9 +5,11 @@
  *
  * The scrum domain schema lives in the CLI package, not here, so these tests
  * register a minimal scrum schema covering exactly the tables the transition
- * write touches (`scrum_tasks`, `scrum_events`, `scrum_run_links`). That keeps
- * the store package free of any `@claude-prove/cli` import while still proving
- * the write against real migrated tables.
+ * write touches (`scrum_tasks`, `scrum_acceptance_criteria`,
+ * `scrum_criterion_verdicts` + its head view, `scrum_events`,
+ * `scrum_run_links`). That keeps the store package free of any
+ * `@claude-prove/cli` import while still proving the write against real migrated
+ * tables.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
@@ -142,7 +144,16 @@ async function seedTask(id: string, opts: SeedTaskOptions = {}): Promise<void> {
   const now = '2026-06-01T00:00:00Z';
   await store.run(
     'INSERT INTO scrum_tasks (id, status, layer, acceptance_policy_json, created_at, last_event_at, last_modified_by, last_modified_at, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)',
-    [id, status, layer, acceptance?.policy ? JSON.stringify(acceptance.policy) : null, now, now, null, now],
+    [
+      id,
+      status,
+      layer,
+      acceptance?.policy ? JSON.stringify(acceptance.policy) : null,
+      now,
+      now,
+      null,
+      now,
+    ],
   );
   for (const criterion of acceptance?.criteria ?? []) {
     await seedCriterion(id, criterion, now);
@@ -183,7 +194,11 @@ async function seedCriterion(
       at,
     ],
   );
-  if (criterion.verifies_by === 'gate' && criterion.gate && criterion.gate.verdict !== 'gate_pending') {
+  if (
+    criterion.verifies_by === 'gate' &&
+    criterion.gate &&
+    criterion.gate.verdict !== 'gate_pending'
+  ) {
     await appendVerdict(rowId, 'gate', criterion.gate.verdict, at);
   } else if (criterion.verifies_by !== 'gate' && criterion.verification) {
     await appendVerdict(rowId, 'verification', criterion.verification.verdict, at);

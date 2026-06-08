@@ -1165,7 +1165,7 @@ describe('ScrumStore — acceptance criteria', () => {
     expect((await store.getTask('t1'))?.acceptance).toBeNull();
   });
 
-  test('createTask with acceptance round-trips through acceptance_json', async () => {
+  test('createTask with acceptance round-trips through the normalized criteria table', async () => {
     const acceptance: Acceptance = { criteria: [ac('c1'), ac('c2')] };
     await seedTask('t1', { acceptance });
     const reloaded = await store.getTask('t1');

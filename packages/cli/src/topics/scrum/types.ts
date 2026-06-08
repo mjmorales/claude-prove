@@ -372,8 +372,8 @@ export interface ResolveEscalationResult {
  *   gate   — `check` is a prompt shown to the operator via `AskUserQuestion`
  *   agent  — `check` is a prompt judged by the `validation-agent`
  *
- * Closed vocabulary documented here, not pinned by a SQL CHECK — the value
- * lives inside `acceptance_json`, so the schema stays forward-compatible.
+ * The criterion's verification channel is pinned by a SQL CHECK on the
+ * `scrum_acceptance_criteria.verifies_by` column (closed enum, byte-stable).
  */
 export type AcceptanceVerifiesBy = 'bash' | 'assert' | 'gate' | 'agent';
 
@@ -383,7 +383,8 @@ export type AcceptanceCriterionStatus = 'active' | 'superseded';
 /**
  * Copy-down scope of a criterion when a child task inherits its parent's
  * shared acceptance. Closed vocabulary documented here, not pinned by a SQL
- * CHECK — the value lives inside `acceptance_json`, so the schema stays
+ * CHECK — the value rides the nullable `scrum_acceptance_criteria.scope`
+ * column, validated at the store write boundary, so the schema stays
  * forward-compatible.
  *
  *   descendants — copy to inheriting children; not a goalpost on the parent
@@ -402,9 +403,11 @@ export const ACCEPTANCE_SCOPES: AcceptanceScope[] = ['descendants', 'self', 'bot
 
 /**
  * Persisted verdict of a `gate`-kind criterion — a HUMAN decision recorded as
- * standing state on the criterion, never a process that blocks waiting for it.
- * Closed vocabulary documented here, not pinned by a SQL CHECK — the value
- * lives inside `acceptance_json`, so the schema stays forward-compatible.
+ * the latest `gate`-channel row in the append-only `scrum_criterion_verdicts`
+ * log (surfaced by the criterion-head view), never a process that blocks waiting
+ * for it. Closed vocabulary documented here; the stored verdict string is the
+ * raw `approved`/`rejected` (a never-decided gate reads `gate_pending` as the
+ * absent-verdict default).
  *
  *   gate_pending — the default a fresh gate-kind criterion carries: a human
  *                  has not yet decided. NOT satisfied; NOT a failure either.
@@ -428,8 +431,9 @@ export const GATE_VERDICTS: GateVerdict[] = ['gate_pending', 'approved', 'reject
  * `bash` check) and the run/plan context (for an `assert` expression) — so it
  * RUNS the heavy verification and STAMPS the result here. The close floor then
  * READS this standing verdict instead of re-running the worktree it cannot run.
- * Closed vocabulary documented here, not pinned by a SQL CHECK — the value lives
- * inside `acceptance_json`, so the schema stays forward-compatible.
+ * Recorded as the latest `verification`-channel row in the append-only
+ * `scrum_criterion_verdicts` log (surfaced by the criterion-head view); a
+ * never-recorded criterion reads `pending` as the absent-verdict default.
  *
  *   pending  — the default a fresh criterion carries: the gate has not recorded
  *              an outcome yet. NOT satisfied; NOT a failure either.
@@ -444,8 +448,9 @@ export const VERIFICATION_VERDICTS: VerificationVerdict[] = ['pending', 'verifie
 
 /**
  * Recorded verification state for a criterion whose verdict the orchestrator
- * validation gate decides and the close floor reads. Carried inside the
- * criterion's `verification` field in `acceptance_json` (no DB migration).
+ * validation gate decides and the close floor reads. Reconstructed on read from
+ * the criterion's latest `verification`-channel row in
+ * `scrum_criterion_verdicts`; absent (no row) reads as `pending`.
  *
  *   verdict     — the current recorded outcome (see `VerificationVerdict`).
  *   reason      — short detail of the outcome: the offending sub-expression on a
@@ -463,10 +468,11 @@ export interface VerificationRecord {
 }
 
 /**
- * Persisted decision state for a `gate`-kind criterion, carried inside the
- * criterion's `gate` field in `acceptance_json` (no DB migration). A fresh
- * gate-kind criterion starts `{ verdict: 'gate_pending' }`; `scrum gate respond`
- * transitions it to `approved`/`rejected` and stamps the human responder.
+ * Persisted decision state for a `gate`-kind criterion, reconstructed on read
+ * from the criterion's latest `gate`-channel row in `scrum_criterion_verdicts`.
+ * A fresh gate-kind criterion (no verdict row) reads `{ verdict: 'gate_pending' }`;
+ * `scrum gate respond` APPENDS an `approved`/`rejected` verdict row stamping the
+ * human responder.
  *
  *   verdict      — the current persisted decision (see `GateVerdict`).
  *   responder    — the human (or agent acting on a human's behalf) who resolved
@@ -555,9 +561,12 @@ export interface AcceptancePolicy {
 }
 
 /**
- * Decoded `scrum_tasks.acceptance_json`. NULL column → `null` on
- * `ScrumTask.acceptance`. `policy` is optional; absent = default
- * sequential, re-run-all behavior at story-close time.
+ * A task's acceptance, reconstructed on read from the normalized
+ * `scrum_acceptance_criteria` rows (each criterion's gate/verification folded in
+ * from the `scrum_criterion_head` view) plus the task-level `policy` carried in
+ * `scrum_tasks.acceptance_policy_json`. No criteria AND no policy → `null` on
+ * `ScrumTask.acceptance`. `policy` is optional; absent = default sequential,
+ * re-run-all behavior at story-close time.
  */
 export interface Acceptance {
   criteria: AcceptanceCriterion[];
@@ -677,9 +686,11 @@ export interface ScrumTask {
   /** Containment tier. NULL = untiered/flat task. */
   layer: TaskLayer | null;
   /**
-   * Decoded from `scrum_tasks.acceptance_json` at the row boundary (v5).
-   * NULL = no authored acceptance. Criteria are append-only (supersede,
-   * never remove).
+   * Reconstructed from the normalized `scrum_acceptance_criteria` +
+   * `scrum_criterion_verdicts` (head view) tables and the task's
+   * `acceptance_policy_json` at the row boundary. NULL = no authored acceptance.
+   * Criteria are append-only (supersede, never remove); verdicts are append-only
+   * (re-verify appends, the head reads the latest).
    */
   acceptance: Acceptance | null;
   /**

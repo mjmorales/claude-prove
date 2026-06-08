@@ -99,7 +99,10 @@ export interface AcceptancePolicy {
   rerun_policy: 'all' | 'failed_only';
 }
 
-/** Decoded `scrum_tasks.acceptance_json`. */
+/**
+ * A task's acceptance, reconstructed from the normalized criteria +
+ * head-verdict tables (the task row carries only the `policy`).
+ */
 export interface Acceptance {
   criteria: AcceptanceCriterion[];
   policy?: AcceptancePolicy;
