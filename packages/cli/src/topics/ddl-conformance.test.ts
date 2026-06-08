@@ -1,8 +1,8 @@
 /**
  * DDL byte-equality conformance gate for the Turso async-store port.
  *
- * The bun:sqlite -> @tursodatabase/database port must be behavior-identical: it
- * changed how migrations EXECUTE (sync `db.exec` -> async `store.exec`), never
+ * The legacy-driver -> @tursodatabase/database port must be behavior-identical:
+ * it changed how migrations EXECUTE (sync `db.exec` -> async `store.exec`), never
  * the schema they produce. This test pins the emitted DDL so any future drift —
  * a column, table, index, or constraint change — surfaces as a failing golden
  * diff rather than passing silently.
