@@ -2426,6 +2426,21 @@ export class ScrumStore {
   // ==========================================================================
 
   /**
+   * The base actionable task ids — every non-deleted task in `ready` or
+   * `backlog`, read straight from the shared `scrum_ready_eligible` view. This
+   * is the UNSCORED candidate floor `nextReady` ranks on top of, surfaced as a
+   * standalone reader so a second consumer (the review-ui boundary) shares the
+   * SAME view definition rather than re-deriving the predicate in TS. Ordered
+   * by id for a deterministic, comparable set.
+   */
+  async readyEligibleIds(): Promise<string[]> {
+    const rows = (await this.many('SELECT id FROM scrum_ready_eligible ORDER BY id ASC')) as Array<{
+      id: string;
+    }>;
+    return rows.map((r) => r.id);
+  }
+
+  /**
    * Rank tasks in `ready` or `backlog` by composite priority:
    *   score = unblock_depth * 10 + milestone_boost * 5 + context_hotness * 3 + tag_boost
    *
@@ -2452,20 +2467,24 @@ export class ScrumStore {
     const limit = options.limit ?? 10;
     const nowMs = options.nowMs ?? Date.now();
 
-    // Two SQL shapes (with/without milestone filter) — both routed through
-    // the prep() cache so the plan is parsed once per process.
+    // The base actionable set (`status IN ('ready','backlog') AND deleted_at IS
+    // NULL`) is defined ONCE in the shared `scrum_ready_eligible` view, so the
+    // CLI ranking and the review-ui boundary share a single eligible predicate.
+    // The milestone filter stays a WHERE on top of the view (it is per-call, not
+    // part of the shared base). Two SQL shapes (with/without that filter) — both
+    // routed through the prep() cache so the plan is parsed once per process.
     const candidateRows = (
       options.milestoneId
         ? await this.many(
             `SELECT ${TASK_COLUMNS}
              FROM scrum_tasks
-             WHERE deleted_at IS NULL AND status IN ('ready', 'backlog') AND milestone_id = ?
+             WHERE id IN (SELECT id FROM scrum_ready_eligible) AND milestone_id = ?
              ORDER BY created_at ASC`,
             options.milestoneId,
           )
         : await this.many(`SELECT ${TASK_COLUMNS}
              FROM scrum_tasks
-             WHERE deleted_at IS NULL AND status IN ('ready', 'backlog')
+             WHERE id IN (SELECT id FROM scrum_ready_eligible)
              ORDER BY created_at ASC`)
     ) as ScrumTaskRow[];
     const candidates = await this.hydrateRows(candidateRows);
@@ -3151,6 +3170,23 @@ export class ScrumStore {
    * Ties on a shared boundary instant resolve to the LATER interval: the upper
    * bound is exclusive (`at < to_ts`), the lower inclusive (`from_ts <= at`).
    */
+  /**
+   * Resolve the contributor who CURRENTLY holds operator-of-record — the single
+   * open interval (`to_ts IS NULL`), of which the set-then-append invariant
+   * guarantees at most one. Returns the `scrum_contributors` row, or null when
+   * the role is unset (no open interval). Reads the shared `scrum_current_operator`
+   * view so the CLI and the review-ui boundary share ONE current-holder
+   * definition; point-in-time-at-an-instant stays the parameterized
+   * `operatorOfRecordAt` scan.
+   */
+  async currentOperator(): Promise<Contributor | null> {
+    const open = (await this.one('SELECT contributor_id FROM scrum_current_operator LIMIT 1')) as {
+      contributor_id: string;
+    } | null;
+    if (open === null) return null;
+    return await this.getContributor(open.contributor_id);
+  }
+
   async operatorOfRecordAt(at: string): Promise<Contributor | null> {
     const interval = (await this.one(
       'SELECT contributor_id FROM scrum_operator_history WHERE from_ts <= ? AND (to_ts IS NULL OR ? < to_ts) ORDER BY from_ts DESC LIMIT 1',

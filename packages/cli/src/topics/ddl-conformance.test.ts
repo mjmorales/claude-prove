@@ -63,6 +63,22 @@ describe('store schema — DDL byte-equality conformance', () => {
     }
   });
 
+  test('the emitted DDL carries the nullable F32_BLOB(32) embedding columns on decisions + lores', async () => {
+    // vector32-present conformance: the Codex-record tables ship the embedding
+    // column a later semantic-search phase populates with vector32(...) and
+    // queries with vector_distance_cos(...). The column is present here, NULL on
+    // every row (no population at this layer).
+    const store = await openScrumStore({ path: ':memory:' });
+    try {
+      const rows = (await store.getStore().all(DUMP_SQL)) as Array<{ name: string; sql: string }>;
+      const byName = new Map(rows.map((r) => [r.name, r.sql.replace(/\s+/g, ' ').trim()]));
+      expect(byName.get('scrum_decisions')).toContain('embedding F32_BLOB (32)');
+      expect(byName.get('scrum_lores')).toContain('embedding F32_BLOB (32)');
+    } finally {
+      store.close();
+    }
+  });
+
   test('opening the acb store emits the same union schema (domain-registration is global)', async () => {
     const store = await openAcbStore({ path: ':memory:' });
     try {

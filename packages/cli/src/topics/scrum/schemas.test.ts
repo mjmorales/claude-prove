@@ -319,6 +319,8 @@ describe('scrum domain registration', () => {
         'gate_responded_at:TEXT:0',
         // The Lore→Codex promotion provenance is now a TEXT ULID ref.
         'source_lore_id:TEXT:0',
+        // Nullable fixed-32-dim float embedding, unpopulated at this layer.
+        'embedding:F32_BLOB:0',
       ]);
     } finally {
       raw.close();
@@ -652,6 +654,8 @@ describe('scrum domain registration', () => {
         'created_at:TEXT',
         'superseded_by:TEXT',
         'reason:TEXT',
+        // Nullable fixed-32-dim float embedding, unpopulated at this layer.
+        'embedding:F32_BLOB',
       ]);
 
       await raw.exec(
@@ -741,6 +745,110 @@ describe('scrum domain registration', () => {
           counter_proposal: null,
         },
       ]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  // -- shared views ---------------------------------------------------------
+
+  test('the v1 DDL defines the shared scrum_ready_eligible + scrum_current_operator views', async () => {
+    const raw = await openStore({ path: ':memory:' });
+    try {
+      await runMigrations(raw);
+      const views = (
+        await raw.all<{ name: string }>(
+          "SELECT name FROM sqlite_master WHERE type = 'view' AND name LIKE 'scrum_%' ORDER BY name",
+        )
+      ).map((r) => r.name);
+      expect(views).toEqual([
+        'scrum_criterion_head',
+        'scrum_current_operator',
+        'scrum_ready_eligible',
+      ]);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('scrum_ready_eligible selects exactly the non-deleted ready/backlog task ids', async () => {
+    const raw = await openStore({ path: ':memory:' });
+    try {
+      await runMigrations(raw);
+      await raw.exec(`
+        INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('ready-1', 'R', 'ready', '2026-01-01T00:00:00Z');
+        INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('backlog-1', 'B', 'backlog', '2026-01-01T00:00:00Z');
+        INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('inprog-1', 'I', 'in_progress', '2026-01-01T00:00:00Z');
+        INSERT INTO scrum_tasks (id, title, status, created_at, deleted_at) VALUES ('deleted-1', 'D', 'ready', '2026-01-01T00:00:00Z', '2026-02-01T00:00:00Z');
+      `);
+      const ids = (
+        await raw.all<{ id: string }>('SELECT id FROM scrum_ready_eligible ORDER BY id')
+      ).map((r) => r.id);
+      // in_progress and soft-deleted rows are excluded; ready + backlog remain.
+      expect(ids).toEqual(['backlog-1', 'ready-1']);
+    } finally {
+      raw.close();
+    }
+  });
+
+  test('scrum_current_operator surfaces only the single open (to_ts IS NULL) interval', async () => {
+    const raw = await openStore({ path: ':memory:' });
+    try {
+      await runMigrations(raw);
+      await raw.exec(`
+        INSERT INTO scrum_contributors (id, slug, status, created_at) VALUES ('ct-jane', 'jane', 'active', '2026-01-01T00:00:00Z');
+        INSERT INTO scrum_contributors (id, slug, status, created_at) VALUES ('ct-bob', 'bob', 'active', '2026-01-01T00:00:00Z');
+        INSERT INTO scrum_operator_history (id, contributor_id, from_ts, to_ts, created_at) VALUES ('${ulid()}', 'ct-jane', '2026-01-01T00:00:00Z', '2026-03-01T00:00:00Z', '2026-01-01T00:00:00Z');
+        INSERT INTO scrum_operator_history (id, contributor_id, from_ts, to_ts, created_at) VALUES ('${ulid()}', 'ct-bob', '2026-03-01T00:00:00Z', NULL, '2026-03-01T00:00:00Z');
+      `);
+      const holders = (
+        await raw.all<{ contributor_id: string }>(
+          'SELECT contributor_id FROM scrum_current_operator',
+        )
+      ).map((r) => r.contributor_id);
+      // The closed jane interval is excluded; only the open bob row is current.
+      expect(holders).toEqual(['ct-bob']);
+    } finally {
+      raw.close();
+    }
+  });
+
+  // -- vector32 embedding columns (grep gates) ------------------------------
+
+  test('the v1 DDL declares nullable F32_BLOB(32) embedding columns on decisions + lores', async () => {
+    // vector32-present assertion: both Codex-record tables carry the embedding
+    // column the later semantic-search phase populates and queries.
+    expect(SCRUM_MIGRATION_V1_SQL).toContain('embedding F32_BLOB(32)');
+    const decisionsDDL = SCRUM_MIGRATION_V1_SQL.slice(
+      SCRUM_MIGRATION_V1_SQL.indexOf('CREATE TABLE scrum_decisions'),
+      SCRUM_MIGRATION_V1_SQL.indexOf('CREATE TABLE scrum_contributors'),
+    );
+    expect(decisionsDDL).toContain('embedding F32_BLOB(32)');
+    const loresDDL = SCRUM_MIGRATION_V1_SQL.slice(
+      SCRUM_MIGRATION_V1_SQL.indexOf('CREATE TABLE scrum_lores'),
+      SCRUM_MIGRATION_V1_SQL.indexOf('CREATE TABLE scrum_annotations'),
+    );
+    expect(loresDDL).toContain('embedding F32_BLOB(32)');
+  });
+
+  test('the v1 DDL carries no acceptance_json (acceptance is normalized out)', async () => {
+    // The acceptance policy is a JSON column; the CRITERIA themselves live in
+    // scrum_acceptance_criteria, never an inline acceptance_json blob.
+    expect(SCRUM_MIGRATION_V1_SQL).not.toContain('acceptance_json');
+  });
+
+  test('a bare insert leaves the embedding column NULL (unpopulated at this layer)', async () => {
+    const raw = await openStore({ path: ':memory:' });
+    try {
+      await runMigrations(raw);
+      await raw.exec(
+        "INSERT INTO scrum_decisions (id, title, content, content_sha, recorded_at) VALUES ('d1', 'D1', 'body', 'deadbeef', '2026-01-01T00:00:00Z')",
+      );
+      const row = await raw.all<{ embedding: unknown }>(
+        'SELECT embedding FROM scrum_decisions WHERE id = ?',
+        ['d1'],
+      );
+      expect(row).toEqual([{ embedding: null }]);
     } finally {
       raw.close();
     }

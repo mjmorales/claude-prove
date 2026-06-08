@@ -99,6 +99,9 @@ describe('ScrumStore — decisions: schema materialization', () => {
       'gate_responded_at:TEXT:0',
       // The Lore→Codex promotion provenance is a TEXT ULID ref to scrum_lores.
       'source_lore_id:TEXT:0',
+      // Nullable fixed-32-dim float embedding, unpopulated at this layer (a
+      // later semantic-search phase backfills it).
+      'embedding:F32_BLOB:0',
     ]);
   });
 });
