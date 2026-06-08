@@ -15,7 +15,7 @@ import { type ResolveOptions, resolveDbPath } from './paths';
 // shared store code must never lean on that — an unawaited prepare can bind
 // against an unresolved handle and silently misbehave.
 //
-// Transactions: the driver has no usable `db.transaction(fn)` and no
+// Transactions: the driver exposes no usable per-call transaction wrapper and no
 // `db.pragma()` shortcut for our purposes. BEGIN IMMEDIATE / COMMIT / ROLLBACK
 // and SAVEPOINT / RELEASE / ROLLBACK TO all run through `db.exec(...)`. A
 // nested BEGIN errors ("cannot start a transaction within a transaction"), so
