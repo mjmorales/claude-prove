@@ -16,8 +16,9 @@
  *   - `openAcbStore` wraps `openStore` + `runMigrations` to give ACB
  *     consumers a one-call entry point.
  *   - The `AcbStore` class exposes camelCase methods: saveManifest returns
- *     the new rowid as `number`; load* returns `unknown | null`; cleanBranch
- *     returns per-table deletion counts keyed by the acb-prefixed table names.
+ *     the new row's ULID id as `string`; load* returns `unknown | null`;
+ *     cleanBranch returns per-table deletion counts keyed by the acb-prefixed
+ *     table names.
  */
 
 import {
@@ -120,8 +121,7 @@ export function ensureAcbSchemaRegistered(): void {
     migrations: [
       {
         version: 1,
-        description:
-          'create the redesigned sync-safe acb schema (ULID/composite PKs, no rowid)',
+        description: 'create the redesigned sync-safe acb schema (ULID/composite PKs, no rowid)',
         up: async (store) => {
           await store.exec(ACB_MIGRATION_V1_SQL);
         },
@@ -168,10 +168,9 @@ const ACB_TABLES = new Set<string>([
  * path verbatim). Instead they degrade to the safe `'pending'` fallback,
  * which keeps the record renderable without claiming a verdict was reached.
  *
- * Runtime complement to migration v3: when the DB file is at v2 (older
- * installs on first boot after upgrade) the migration has already run by
- * the time reads happen, but this helper also catches any value that
- * slipped in via a race between migration and a concurrent writer.
+ * The redesigned schema has no in-chain verdict-normalization migration, so
+ * canonicalization lives entirely here on the read path: a legacy value
+ * hand-written into the table is normalized the moment it is read back.
  */
 export function coerceLegacyVerdict(raw: string): GroupVerdict {
   switch (raw) {

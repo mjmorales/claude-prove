@@ -76,20 +76,19 @@ export async function assertStoreSchemaCompatible(store: Store): Promise<void> {
     if (!registered.has(domain)) continue;
 
     if (maxVersion > TURSO_V1_MAX_VERSION) {
+      const detail = `domain '${domain}' at version ${maxVersion}, but this binary's base schema is v${TURSO_V1_MAX_VERSION}`;
+      const remedy =
+        'the legacy lineage is incompatible and is never auto-migrated. Run `claude-prove store reset --confirm` or the migrate-to-turso migrator.';
       throw new SchemaIncompatibleError(
-        `store predates the Turso v1 schema (domain '${domain}' at version ${maxVersion}, ` +
-          `but this binary's base schema is v${TURSO_V1_MAX_VERSION}); the legacy lineage is ` +
-          'incompatible and is never auto-migrated. Run `claude-prove store reset --confirm` ' +
-          'or the migrate-to-turso migrator.',
+        `store predates the Turso v1 schema (${detail}); ${remedy}`,
       );
     }
 
     const binaryMax = maxRegisteredVersion(domain);
     if (maxVersion > binaryMax) {
+      const detail = `domain '${domain}' at version ${maxVersion}, binary knows up to v${binaryMax}`;
       throw new SchemaIncompatibleError(
-        `store is ahead of this binary (domain '${domain}' at version ${maxVersion}, ` +
-          `binary knows up to v${binaryMax}); refusing to write against a schema this ` +
-          'binary does not understand. Upgrade the binary.',
+        `store is ahead of this binary (${detail}); refusing to write against a schema this binary does not understand. Upgrade the binary.`,
       );
     }
   }
