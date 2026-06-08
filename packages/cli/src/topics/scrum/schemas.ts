@@ -41,7 +41,15 @@ import { listDomains, registerSchema } from '@claude-prove/store';
  *                           — the criteria themselves are normalized out into
  *                           `scrum_acceptance_criteria`), declared bounds
  *                           (`bounds_json`), terminal/last-touch/executing
- *                           provenance, and an optional `team_slug` binding.
+ *                           provenance, an optional `team_slug` binding, and
+ *                           `status_event_id` — a forward FK to the
+ *                           `scrum_events` row (kind `status_changed`) that set
+ *                           the current authored status. Treating the event as
+ *                           the primary fact, the status column is a fold and
+ *                           this pointer is its provenance: every transition
+ *                           stamps the column with the id of the same event it
+ *                           appends, in one transaction. NULL until the first
+ *                           transition.
  *   scrum_acceptance_criteria — one row per acceptance criterion. PK is a minted
  *                           ULID surrogate (`id`); the criterion's author-given
  *                           external id rides as `criterion_id`, unique only
@@ -135,7 +143,8 @@ CREATE TABLE scrum_tasks (
     last_modified_at TEXT,
     worker_id TEXT,
     run_id TEXT,
-    team_slug TEXT
+    team_slug TEXT,
+    status_event_id TEXT REFERENCES scrum_events(id)
 );
 
 CREATE TABLE scrum_acceptance_criteria (

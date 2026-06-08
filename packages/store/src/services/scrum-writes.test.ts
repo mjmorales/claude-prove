@@ -46,6 +46,7 @@ CREATE TABLE scrum_tasks (
     last_modified_at TEXT,
     worker_id TEXT,
     run_id TEXT,
+    status_event_id TEXT,
     deleted_at TEXT
 );
 
@@ -269,6 +270,69 @@ describe('updateTaskStatus — valid transition', () => {
     )[0];
     expect(row?.status).toBe('ready');
     expect(row?.last_modified_by).toBe('agent-x');
+  });
+});
+
+describe('updateTaskStatus — status_event_id provenance', () => {
+  // Treat the event as the primary fact: after a transition the task's
+  // status_event_id must point at the id of the status_changed event that set
+  // the status — the same id, stamped in the same transaction as the append.
+  async function statusEventId(taskId: string): Promise<string | null> {
+    const row = (
+      await store.all<{ status_event_id: string | null }>(
+        'SELECT status_event_id FROM scrum_tasks WHERE id = ?',
+        [taskId],
+      )
+    )[0];
+    return row?.status_event_id ?? null;
+  }
+
+  async function latestStatusEvent(taskId: string): Promise<string> {
+    const row = (
+      await store.all<{ id: string }>(
+        "SELECT id FROM scrum_events WHERE task_id = ? AND kind = 'status_changed' ORDER BY id DESC LIMIT 1",
+        [taskId],
+      )
+    )[0];
+    if (!row) throw new Error(`no status_changed event for task '${taskId}'`);
+    return row.id;
+  }
+
+  test('a fresh (un-transitioned) task has a NULL status_event_id', async () => {
+    await seedTask('t1', { status: 'backlog' });
+    expect(await statusEventId('t1')).toBeNull();
+  });
+
+  test('a transition stamps status_event_id with the appended status_changed event id', async () => {
+    await seedTask('t1', { status: 'backlog' });
+    await updateTaskStatus(store, 't1', 'ready', 'agent-x');
+
+    const pointer = await statusEventId('t1');
+    expect(pointer).not.toBeNull();
+    expect(pointer).toBe(await latestStatusEvent('t1'));
+  });
+
+  test('a multi-transition sequence leaves status_event_id on the LATEST transition event', async () => {
+    await seedTask('t1', { status: 'backlog' });
+    await updateTaskStatus(store, 't1', 'ready');
+    await updateTaskStatus(store, 't1', 'in_progress');
+    await updateTaskStatus(store, 't1', 'review');
+
+    // Three transitions appended three events; the pointer tracks the last one.
+    expect(await eventCount('t1', 'status_changed')).toBe(3);
+    const pointer = await statusEventId('t1');
+    const latest = await latestStatusEvent('t1');
+    expect(pointer).toBe(latest);
+
+    // The pointed-at event is genuinely the most-recent transition (review),
+    // not an earlier one — its payload records the final hop.
+    const ev = (
+      await store.all<{ payload_json: string }>(
+        'SELECT payload_json FROM scrum_events WHERE id = ?',
+        [pointer ?? ''],
+      )
+    )[0];
+    expect(JSON.parse(ev?.payload_json ?? '{}')).toEqual({ from: 'in_progress', to: 'review' });
   });
 });
 

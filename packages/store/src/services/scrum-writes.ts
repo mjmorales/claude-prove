@@ -5,10 +5,13 @@
  * `updateTaskStatus(store, id, next, agent?)` validates the transition against
  * the closed `ALLOWED_TRANSITIONS` table, enforces the two story-layer
  * mechanical floors (acceptance-criteria presence/satisfaction and
- * synthesis-entry presence), then performs the single in-transaction
- * `UPDATE scrum_tasks` + `INSERT INTO scrum_events` (kind `status_changed`,
- * payload `{from,to}`) — bumping `last_event_at` and stamping the row's
- * last-touch + executing-worker/run provenance.
+ * synthesis-entry presence), then in one transaction appends the
+ * `INSERT INTO scrum_events` (kind `status_changed`, payload `{from,to}`) and
+ * runs the `UPDATE scrum_tasks` — bumping `last_event_at`, stamping the row's
+ * last-touch + executing-worker/run provenance, and pointing `status_event_id`
+ * at the very `status_changed` event that set the new status (the event id is
+ * minted once and shared by both writes; the event is inserted first so the
+ * pointer's FK target exists when the row is stamped).
  *
  * Event-log emission for a status transition lives EXACTLY ONCE — here. The
  * service operates on a raw `Store` handle and assumes the scrum domain tables
@@ -154,7 +157,8 @@ const ALLOWED_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
  * Update a task's status. Rejects invalid transitions (see
  * `ALLOWED_TRANSITIONS`) and unknown task ids. Enforces the two story-layer
  * floors, then appends a `status_changed` event inside the same transaction as
- * the row update and bumps `last_event_at`. Returns the post-write task view.
+ * the row update, bumps `last_event_at`, and stamps `status_event_id` with that
+ * event's id. Returns the post-write task view.
  */
 export async function updateTaskStatus(
   store: Store,
@@ -181,21 +185,33 @@ export async function updateTaskStatus(
 
   const ts = isoNow();
   const { workerId, runId } = resolveRunContext();
+  // Treat the event as the primary fact: mint the status_changed event id up
+  // front so the row UPDATE can stamp `status_event_id` with the SAME id the
+  // event INSERT carries. After the transaction, scrum_tasks.status_event_id
+  // points at the exact event that set the current status — provenance, not a
+  // separate fact. Both writes share one transaction, so the pointer can never
+  // dangle.
+  //
+  // The event INSERT runs BEFORE the row UPDATE: status_event_id is an immediate
+  // FK onto scrum_events(id), so the referenced event row must already exist
+  // when the UPDATE stamps the pointer (a transaction with foreign-key checks
+  // ON enforces the constraint per-statement, not at commit).
+  const statusEventId = ulid();
   await withTx(store, async () => {
-    await store.run(
-      'UPDATE scrum_tasks SET status = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
-      [next, ts, agent ?? null, ts, workerId, runId, id],
-    );
     await store.run(
       'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
       [
-        ulid(),
+        statusEventId,
         id,
         ts,
         'status_changed',
         agent ?? null,
         JSON.stringify({ from: task.status, to: next }),
       ],
+    );
+    await store.run(
+      'UPDATE scrum_tasks SET status = ?, status_event_id = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+      [next, statusEventId, ts, agent ?? null, ts, workerId, runId, id],
     );
   });
 
