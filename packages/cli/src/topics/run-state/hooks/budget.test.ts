@@ -125,10 +125,10 @@ describe('runBoundsHook — budget integration', () => {
   });
 
   function stubDeps(active: ActiveBounds): BoundsHookDeps {
-    return { resolveActiveBounds: () => active };
+    return { resolveActiveBounds: () => Promise.resolve(active) };
   }
 
-  test('counts a relevant tool call against the budget and hard-stops at the limit', () => {
+  test('counts a relevant tool call against the budget and hard-stops at the limit', async () => {
     const active: ActiveBounds = {
       taskId: 't1',
       bounds: { budgets: { tool_calls: 2 } },
@@ -139,13 +139,13 @@ describe('runBoundsHook — budget integration', () => {
         { tool_name: 'Read', tool_input: { file_path: join(dir, 'x.ts') }, cwd: dir },
         stubDeps(active),
       );
-    expect(call().stdout).toBe(''); // call 1
-    const stop = call(); // call 2 == limit
+    expect((await call()).stdout).toBe(''); // call 1
+    const stop = await call(); // call 2 == limit
     expect(stop.stdout).toContain('"permissionDecision": "deny"');
     expect(stop.exitCode).toBe(0);
   });
 
-  test('a scope-denied call does NOT consume the tool-call budget', () => {
+  test('a scope-denied call does NOT consume the tool-call budget', async () => {
     // Write outside the write scope is scope-denied before counting; the
     // counter file must not be created.
     const active: ActiveBounds = {
@@ -153,7 +153,7 @@ describe('runBoundsHook — budget integration', () => {
       bounds: { write: ['src/**'], budgets: { tool_calls: 2 } },
       projectRoot: dir,
     };
-    const denied = runBoundsHook(
+    const denied = await runBoundsHook(
       { tool_name: 'Write', tool_input: { file_path: join(dir, 'docs/x.md') }, cwd: dir },
       stubDeps(active),
     );
@@ -162,13 +162,13 @@ describe('runBoundsHook — budget integration', () => {
     expect(() => readFileSync(counterPath(dir, 't1'), 'utf8')).toThrow();
   });
 
-  test('an in-scope call passes the scope wall then counts against the budget', () => {
+  test('an in-scope call passes the scope wall then counts against the budget', async () => {
     const active: ActiveBounds = {
       taskId: 't1',
       bounds: { write: ['src/**'], budgets: { tool_calls: 5 } },
       projectRoot: dir,
     };
-    const result = runBoundsHook(
+    const result = await runBoundsHook(
       { tool_name: 'Write', tool_input: { file_path: join(dir, 'src/a.ts') }, cwd: dir },
       stubDeps(active),
     );
@@ -176,13 +176,13 @@ describe('runBoundsHook — budget integration', () => {
     expect(readFileSync(counterPath(dir, 't1'), 'utf8')).toBe('1');
   });
 
-  test('an irrelevant (uncounted) tool never touches the counter', () => {
+  test('an irrelevant (uncounted) tool never touches the counter', async () => {
     const active: ActiveBounds = {
       taskId: 't1',
       bounds: { budgets: { tool_calls: 2 } },
       projectRoot: dir,
     };
-    const result = runBoundsHook(
+    const result = await runBoundsHook(
       { tool_name: 'Glob', tool_input: { pattern: '**' }, cwd: dir },
       stubDeps(active),
     );
