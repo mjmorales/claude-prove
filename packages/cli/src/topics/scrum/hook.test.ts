@@ -35,10 +35,10 @@ afterEach(() => {
 // Fixture builders
 // ---------------------------------------------------------------------------
 
-function seedStore(seed: (s: ReturnType<typeof openScrumStore>) => void): void {
-  const store = openScrumStore({ cwd: project });
+async function seedStore(seed: (s: ScrumStore) => void | Promise<void>): Promise<void> {
+  const store = await openScrumStore({ cwd: project });
   try {
-    seed(store);
+    await seed(store);
   } finally {
     store.close();
   }
@@ -119,18 +119,18 @@ function writeSynthesis(runDir: string, id: string, outcome: string): void {
 // ===========================================================================
 
 describe('onSessionStart', () => {
-  test('silent when no active tasks or recent events', () => {
-    const result = onSessionStart({ cwd: project });
+  test('silent when no active tasks or recent events', async () => {
+    const result = await onSessionStart({ cwd: project });
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('');
   });
 
-  test('emits hookSpecificOutput with active tasks digest', () => {
-    seedStore((store) => {
-      store.createTask({ id: 't1', title: 'Demo', status: 'in_progress' });
+  test('emits hookSpecificOutput with active tasks digest', async () => {
+    await seedStore(async (store) => {
+      await store.createTask({ id: 't1', title: 'Demo', status: 'in_progress' });
     });
 
-    const result = onSessionStart({ cwd: project });
+    const result = await onSessionStart({ cwd: project });
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('hookSpecificOutput');
     expect(result.stdout).toContain('SessionStart');
@@ -138,10 +138,10 @@ describe('onSessionStart', () => {
     expect(result.stdout).toContain('in_progress');
   });
 
-  test('surfaces stalled WIP in the digest', () => {
-    seedStore((store) => {
+  test('surfaces stalled WIP in the digest', async () => {
+    await seedStore(async (store) => {
       const oldTs = '2020-01-01T00:00:00Z';
-      store.createTask({
+      await store.createTask({
         id: 'stale',
         title: 'Old task',
         status: 'in_progress',
@@ -149,15 +149,15 @@ describe('onSessionStart', () => {
       });
     });
 
-    const result = onSessionStart({ cwd: project });
+    const result = await onSessionStart({ cwd: project });
     expect(result.stdout).toContain('stalled');
   });
 
-  test('exits 0 even when store open fails (non-blocking contract)', () => {
+  test('exits 0 even when store open fails (non-blocking contract)', async () => {
     // Pass a cwd that isn't a git repo — openScrumStore will throw.
     const broken = mkdtempSync(join(tmpdir(), 'scrum-hook-nogit-'));
     try {
-      const result = onSessionStart({ cwd: broken });
+      const result = await onSessionStart({ cwd: broken });
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toContain('scrum session-start hook');
     } finally {
@@ -165,20 +165,20 @@ describe('onSessionStart', () => {
     }
   });
 
-  test('returns EMPTY result on null payload when no scrum state exists', () => {
+  test('returns EMPTY result on null payload when no scrum state exists', async () => {
     // Null payload -> falls through to process.cwd(); harness cwd is the
     // repo root, which has no scrum state for this test. The result should
     // be exit 0 (either empty or an error, both non-blocking).
-    const result = onSessionStart(null);
+    const result = await onSessionStart(null);
     expect(result.exitCode).toBe(0);
   });
 
-  test('auto-bubbles a stale escalation and surfaces it in the digest', () => {
-    seedStore((store) => {
-      store.createTask({ id: 'blocked-task', title: 'Blocked', status: 'ready' });
+  test('auto-bubbles a stale escalation and surfaces it in the digest', async () => {
+    await seedStore(async (store) => {
+      await store.createTask({ id: 'blocked-task', title: 'Blocked', status: 'ready' });
       // created_at far in the past -> reliably past the staleness threshold
       // regardless of the wall clock the hook reads.
-      store.raiseEscalation({
+      await store.raiseEscalation({
         taskId: 'blocked-task',
         escalationType: 'blocked',
         summary: 'no receiver acted in time',
@@ -186,7 +186,7 @@ describe('onSessionStart', () => {
       });
     });
 
-    const result = onSessionStart({ cwd: project });
+    const result = await onSessionStart({ cwd: project });
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('auto-bubbled escalations');
@@ -195,8 +195,8 @@ describe('onSessionStart', () => {
 
     // The store reflects the bubble: original closed auto_bubbled, fresh open
     // row one rung up.
-    seedStore((store) => {
-      const rows = store.listEscalationsForTask('blocked-task');
+    await seedStore(async (store) => {
+      const rows = await store.listEscalationsForTask('blocked-task');
       expect(rows.map((r) => r.state)).toEqual(['auto_bubbled', 'open']);
       const [closed, fresh] = rows;
       expect(closed?.attributes?.auto_bubbled).toBe(true);
@@ -205,23 +205,23 @@ describe('onSessionStart', () => {
     });
   });
 
-  test('leaves a fresh escalation untouched on session-start', () => {
-    seedStore((store) => {
-      store.createTask({ id: 'fresh-task', title: 'Fresh', status: 'ready' });
+  test('leaves a fresh escalation untouched on session-start', async () => {
+    await seedStore(async (store) => {
+      await store.createTask({ id: 'fresh-task', title: 'Fresh', status: 'ready' });
       // created_at = now -> well under the threshold; the sweep must skip it.
-      store.raiseEscalation({
+      await store.raiseEscalation({
         taskId: 'fresh-task',
         escalationType: 'ambiguous',
         summary: 'just raised',
       });
     });
 
-    const result = onSessionStart({ cwd: project });
+    const result = await onSessionStart({ cwd: project });
 
     expect(result.exitCode).toBe(0);
     expect(result.stdout).not.toContain('auto-bubbled escalations');
-    seedStore((store) => {
-      const rows = store.listEscalationsForTask('fresh-task');
+    await seedStore(async (store) => {
+      const rows = await store.listEscalationsForTask('fresh-task');
       expect(rows).toHaveLength(1);
       expect(rows[0]?.state).toBe('open');
     });
@@ -233,60 +233,60 @@ describe('onSessionStart', () => {
 // ===========================================================================
 
 describe('onSubagentStop', () => {
-  test('no-op for non-matching subagent types', () => {
-    const result = onSubagentStop({
+  test('no-op for non-matching subagent types', async () => {
+    const result = await onSubagentStop({
       cwd: project,
       subagent_type: 'some-other-agent',
     });
     expect(result).toEqual({ exitCode: 0, stdout: '', stderr: '' });
   });
 
-  test('no-op when payload is null', () => {
-    const result = onSubagentStop(null);
+  test('no-op when payload is null', async () => {
+    const result = await onSubagentStop(null);
     expect(result).toEqual({ exitCode: 0, stdout: '', stderr: '' });
   });
 
-  test('reconciles when subagent_type matches and run dir resolvable', () => {
-    seedStore((store) => {
-      store.createTask({ id: 'hook-t1', title: 'Hook task' });
+  test('reconciles when subagent_type matches and run dir resolvable', async () => {
+    await seedStore(async (store) => {
+      await store.createTask({ id: 'hook-t1', title: 'Hook task' });
     });
     const runDir = writeRun('feature-hook', 'demo', 'hook-t1');
 
-    const result = onSubagentStop({
+    const result = await onSubagentStop({
       cwd: runDir,
       subagent_type: 'general-purpose',
     });
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('scrum: reconciled');
 
-    const store = openScrumStore({ cwd: project });
+    const store = await openScrumStore({ cwd: project });
     try {
-      const events = store.listEventsForTask('hook-t1');
+      const events = await store.listEventsForTask('hook-t1');
       expect(events.some((e) => e.kind === 'run_completed')).toBe(true);
     } finally {
       store.close();
     }
   });
 
-  test('reconciles orphan run when matching subagent has no linked task', () => {
+  test('reconciles orphan run when matching subagent has no linked task', async () => {
     const runDir = writeRun('feature-orph', 'demo', null);
-    const result = onSubagentStop({
+    const result = await onSubagentStop({
       cwd: runDir,
       subagent_type: 'task-planner',
     });
     expect(result.exitCode).toBe(0);
 
-    const store = openScrumStore({ cwd: project });
+    const store = await openScrumStore({ cwd: project });
     try {
-      const events = store.listEventsForTask('__orphan__');
+      const events = await store.listEventsForTask('__orphan__');
       expect(events.some((e) => e.kind === 'unlinked_run_detected')).toBe(true);
     } finally {
       store.close();
     }
   });
 
-  test('exit 0 when matching subagent but no state.json locatable', () => {
-    const result = onSubagentStop({
+  test('exit 0 when matching subagent but no state.json locatable', async () => {
+    const result = await onSubagentStop({
       cwd: project,
       subagent_type: 'general-purpose',
     });
@@ -294,14 +294,14 @@ describe('onSubagentStop', () => {
     expect(result.stdout).toBe('');
   });
 
-  test('BLOCKS a worker that touched an artifact but logged no synthesis', () => {
-    seedStore((store) => {
-      store.createTask({ id: 'gate-t1', title: 'Gate task' });
+  test('BLOCKS a worker that touched an artifact but logged no synthesis', async () => {
+    await seedStore(async (store) => {
+      await store.createTask({ id: 'gate-t1', title: 'Gate task' });
     });
     const runDir = writeRun('feature-gate', 'demo', 'gate-t1');
     writeCapture(runDir, 'c1', 'Write', 'packages/cli/src/x.ts');
 
-    const result = onSubagentStop({
+    const result = await onSubagentStop({
       cwd: runDir,
       subagent_type: 'general-purpose',
     });
@@ -315,24 +315,24 @@ describe('onSubagentStop', () => {
     expect(payload.reason).toContain('acb log append');
 
     // Blocked before reconcile — no run_completed event should have landed.
-    const store = openScrumStore({ cwd: project });
+    const store = await openScrumStore({ cwd: project });
     try {
-      const events = store.listEventsForTask('gate-t1');
+      const events = await store.listEventsForTask('gate-t1');
       expect(events.some((e) => e.kind === 'run_completed')).toBe(false);
     } finally {
       store.close();
     }
   });
 
-  test('passes a worker whose synthesis declares completed, then reconciles', () => {
-    seedStore((store) => {
-      store.createTask({ id: 'gate-t2', title: 'Gate task 2' });
+  test('passes a worker whose synthesis declares completed, then reconciles', async () => {
+    await seedStore(async (store) => {
+      await store.createTask({ id: 'gate-t2', title: 'Gate task 2' });
     });
     const runDir = writeRun('feature-gate', 'ok', 'gate-t2');
     writeCapture(runDir, 'c1', 'Edit', 'packages/cli/src/y.ts');
     writeSynthesis(runDir, 's1', 'completed');
 
-    const result = onSubagentStop({
+    const result = await onSubagentStop({
       cwd: runDir,
       subagent_type: 'general-purpose',
     });
@@ -340,24 +340,24 @@ describe('onSubagentStop', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('scrum: reconciled');
 
-    const store = openScrumStore({ cwd: project });
+    const store = await openScrumStore({ cwd: project });
     try {
-      const events = store.listEventsForTask('gate-t2');
+      const events = await store.listEventsForTask('gate-t2');
       expect(events.some((e) => e.kind === 'run_completed')).toBe(true);
     } finally {
       store.close();
     }
   });
 
-  test('BLOCKS a worker whose synthesis outcome is an invalid declaration', () => {
-    seedStore((store) => {
-      store.createTask({ id: 'gate-t3', title: 'Gate task 3' });
+  test('BLOCKS a worker whose synthesis outcome is an invalid declaration', async () => {
+    await seedStore(async (store) => {
+      await store.createTask({ id: 'gate-t3', title: 'Gate task 3' });
     });
     const runDir = writeRun('feature-gate', 'bad', 'gate-t3');
     writeCapture(runDir, 'c1', 'Write', 'packages/cli/src/z.ts');
     writeSynthesis(runDir, 's1', 'made some progress');
 
-    const result = onSubagentStop({
+    const result = await onSubagentStop({
       cwd: runDir,
       subagent_type: 'general-purpose',
     });
@@ -398,10 +398,10 @@ describe('onSubagentStop — advisory contribution floor', () => {
     else process.env.PROVE_AGENT = savedAgent;
   });
 
-  function contributionMisses(taskId: string): ScrumEvent[] {
-    const store = openScrumStore({ cwd: project });
+  async function contributionMisses(taskId: string): Promise<ScrumEvent[]> {
+    const store = await openScrumStore({ cwd: project });
     try {
-      return store.listEventsForTask(taskId).filter((e) => {
+      return (await store.listEventsForTask(taskId)).filter((e) => {
         const payload = e.payload as Record<string, unknown> | null;
         return (
           e.kind === 'blocker_raised' &&
@@ -414,14 +414,14 @@ describe('onSubagentStop — advisory contribution floor', () => {
     }
   }
 
-  test('team seat with no contribution raises one contribution_miss alert and does not block', () => {
+  test('team seat with no contribution raises one contribution_miss alert and does not block', async () => {
     process.env.PROVE_AGENT = SEAT_AGENT;
-    seedStore((store) => {
-      store.createTask({ id: 'floor-miss', title: 'Floor miss' });
+    await seedStore(async (store) => {
+      await store.createTask({ id: 'floor-miss', title: 'Floor miss' });
     });
     const runDir = writeRun('feature-floor', 'miss', 'floor-miss');
 
-    const result = onSubagentStop({ cwd: runDir, subagent_type: 'general-purpose' });
+    const result = await onSubagentStop({ cwd: runDir, subagent_type: 'general-purpose' });
 
     // Advisory: the reconcile result stands, never a `decision: block`.
     expect(result.exitCode).toBe(0);
@@ -431,14 +431,14 @@ describe('onSubagentStop — advisory contribution floor', () => {
 
     // Exactly one contribution_miss alert, surfaced via the blocker_raised event
     // surface scrum alerts reads.
-    const misses = contributionMisses('floor-miss');
+    const misses = await contributionMisses('floor-miss');
     expect(misses).toHaveLength(1);
     expect((misses[0]?.payload as Record<string, unknown>).summary).toContain(SEAT_AGENT);
 
     // It lands in listOpenEscalations — the exact source `scrum alerts` reads.
-    const store = openScrumStore({ cwd: project });
+    const store = await openScrumStore({ cwd: project });
     try {
-      const open = store.listOpenEscalations();
+      const open = await store.listOpenEscalations();
       expect(
         open.some((e) => e.task_id === 'floor-miss' && e.escalation_type === 'contribution_miss'),
       ).toBe(true);
@@ -447,12 +447,12 @@ describe('onSubagentStop — advisory contribution floor', () => {
     }
   });
 
-  test('team seat with an in-window contribution raises no alert', () => {
+  test('team seat with an in-window contribution raises no alert', async () => {
     process.env.PROVE_AGENT = SEAT_AGENT;
-    seedStore((store) => {
-      store.createTask({ id: 'floor-hit', title: 'Floor hit' });
+    await seedStore(async (store) => {
+      await store.createTask({ id: 'floor-hit', title: 'Floor hit' });
       // A contribution the seat stamped while the run was live.
-      store.appendEvent({
+      await store.appendEvent({
         taskId: 'floor-hit',
         kind: 'note',
         agent: SEAT_AGENT,
@@ -462,54 +462,54 @@ describe('onSubagentStop — advisory contribution floor', () => {
     });
     const runDir = writeRun('feature-floor', 'hit', 'floor-hit');
 
-    const result = onSubagentStop({ cwd: runDir, subagent_type: 'general-purpose' });
+    const result = await onSubagentStop({ cwd: runDir, subagent_type: 'general-purpose' });
 
     expect(result.stdout).toContain('scrum: reconciled');
-    expect(contributionMisses('floor-hit')).toHaveLength(0);
+    expect(await contributionMisses('floor-hit')).toHaveLength(0);
   });
 
-  test('non-team PROVE_AGENT is a clean no-op (no alert)', () => {
+  test('non-team PROVE_AGENT is a clean no-op (no alert)', async () => {
     process.env.PROVE_AGENT = 'general-purpose';
-    seedStore((store) => {
-      store.createTask({ id: 'floor-nonteam', title: 'Floor non-team' });
+    await seedStore(async (store) => {
+      await store.createTask({ id: 'floor-nonteam', title: 'Floor non-team' });
     });
     const runDir = writeRun('feature-floor', 'nonteam', 'floor-nonteam');
 
-    const result = onSubagentStop({ cwd: runDir, subagent_type: 'general-purpose' });
+    const result = await onSubagentStop({ cwd: runDir, subagent_type: 'general-purpose' });
 
     expect(result.stdout).toContain('scrum: reconciled');
-    expect(contributionMisses('floor-nonteam')).toHaveLength(0);
+    expect(await contributionMisses('floor-nonteam')).toHaveLength(0);
   });
 
-  test('unset PROVE_AGENT is a clean no-op (no alert)', () => {
+  test('unset PROVE_AGENT is a clean no-op (no alert)', async () => {
     clearAgent();
-    seedStore((store) => {
-      store.createTask({ id: 'floor-noagent', title: 'Floor no agent' });
+    await seedStore(async (store) => {
+      await store.createTask({ id: 'floor-noagent', title: 'Floor no agent' });
     });
     const runDir = writeRun('feature-floor', 'noagent', 'floor-noagent');
 
-    const result = onSubagentStop({ cwd: runDir, subagent_type: 'general-purpose' });
+    const result = await onSubagentStop({ cwd: runDir, subagent_type: 'general-purpose' });
 
     expect(result.stdout).toContain('scrum: reconciled');
-    expect(contributionMisses('floor-noagent')).toHaveLength(0);
+    expect(await contributionMisses('floor-noagent')).toHaveLength(0);
   });
 
-  test('an orphan run (no linked task) never raises a contribution miss', () => {
+  test('an orphan run (no linked task) never raises a contribution miss', async () => {
     process.env.PROVE_AGENT = SEAT_AGENT;
     const runDir = writeRun('feature-floor', 'orphan', null);
 
-    const result = onSubagentStop({ cwd: runDir, subagent_type: 'general-purpose' });
+    const result = await onSubagentStop({ cwd: runDir, subagent_type: 'general-purpose' });
 
     expect(result.exitCode).toBe(0);
     const parsed = JSON.parse(result.stdout) as { decision?: string };
     expect(parsed.decision).toBeUndefined();
-    expect(contributionMisses('__orphan__')).toHaveLength(0);
+    expect(await contributionMisses('__orphan__')).toHaveLength(0);
   });
 
-  test('a throw inside the floor is swallowed — the hook still returns its reconcile result', () => {
+  test('a throw inside the floor is swallowed — the hook still returns its reconcile result', async () => {
     process.env.PROVE_AGENT = SEAT_AGENT;
-    seedStore((store) => {
-      store.createTask({ id: 'floor-throw', title: 'Floor throw' });
+    await seedStore(async (store) => {
+      await store.createTask({ id: 'floor-throw', title: 'Floor throw' });
     });
     const runDir = writeRun('feature-floor', 'throw', 'floor-throw');
 
@@ -523,7 +523,7 @@ describe('onSubagentStop — advisory contribution floor', () => {
       return originalAppend.call(this, input);
     };
     try {
-      const result = onSubagentStop({ cwd: runDir, subagent_type: 'general-purpose' });
+      const result = await onSubagentStop({ cwd: runDir, subagent_type: 'general-purpose' });
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('scrum: reconciled');
       const parsed = JSON.parse(result.stdout) as { decision?: string };
@@ -534,10 +534,10 @@ describe('onSubagentStop — advisory contribution floor', () => {
 
     // The throw aborted the floor's append, so no alert landed — but reconcile's
     // own events did, proving the failure was isolated to the floor.
-    expect(contributionMisses('floor-throw')).toHaveLength(0);
-    const store = openScrumStore({ cwd: project });
+    expect(await contributionMisses('floor-throw')).toHaveLength(0);
+    const store = await openScrumStore({ cwd: project });
     try {
-      expect(store.listEventsForTask('floor-throw').some((e) => e.kind === 'run_completed')).toBe(
+      expect((await store.listEventsForTask('floor-throw')).some((e) => e.kind === 'run_completed')).toBe(
         true,
       );
     } finally {
@@ -551,13 +551,13 @@ describe('onSubagentStop — advisory contribution floor', () => {
 // ===========================================================================
 
 describe('onStop', () => {
-  test('sweeps runs and writes last-sweep.json', () => {
-    seedStore((store) => {
-      store.createTask({ id: 'sweep-t1', title: 'Sweep task' });
+  test('sweeps runs and writes last-sweep.json', async () => {
+    await seedStore(async (store) => {
+      await store.createTask({ id: 'sweep-t1', title: 'Sweep task' });
     });
     writeRun('feature-sweep', 'run-a', 'sweep-t1');
 
-    const result = onStop({ cwd: project });
+    const result = await onStop({ cwd: project });
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('scrum:');
 
@@ -568,34 +568,34 @@ describe('onStop', () => {
     expect(parsed.ts).toBeGreaterThan(0);
   });
 
-  test('is idempotent: second call reports 0 reconciles', () => {
-    seedStore((store) => {
-      store.createTask({ id: 'sweep-t2', title: 'Sweep B' });
+  test('is idempotent: second call reports 0 reconciles', async () => {
+    await seedStore(async (store) => {
+      await store.createTask({ id: 'sweep-t2', title: 'Sweep B' });
     });
     writeRun('feature-sweep', 'run-b', 'sweep-t2');
 
-    const first = onStop({ cwd: project });
+    const first = await onStop({ cwd: project });
     expect(first.exitCode).toBe(0);
 
-    const second = onStop({ cwd: project });
+    const second = await onStop({ cwd: project });
     expect(second.exitCode).toBe(0);
     // Second sweep's cursor is after the state.json mtime — 0 reconciles.
     expect(second.stdout).toBe('');
   });
 
-  test('creates .prove/scrum directory when absent', () => {
+  test('creates .prove/scrum directory when absent', async () => {
     // No state files to reconcile — still should create the dir and write
     // the cursor so future sweeps have a starting point.
-    onStop({ cwd: project });
+    await onStop({ cwd: project });
     const body = readFileSync(join(project, '.prove', 'scrum', 'last-sweep.json'), 'utf8');
     const parsed = JSON.parse(body) as { ts: number };
     expect(parsed.ts).toBeGreaterThan(0);
   });
 
-  test('exits 0 even when store open fails (non-blocking contract)', () => {
+  test('exits 0 even when store open fails (non-blocking contract)', async () => {
     const broken = mkdtempSync(join(tmpdir(), 'scrum-hook-nogit-stop-'));
     try {
-      const result = onStop({ cwd: broken });
+      const result = await onStop({ cwd: broken });
       expect(result.exitCode).toBe(0);
       expect(result.stderr).toContain('scrum stop hook');
     } finally {
@@ -613,12 +613,12 @@ describe('onStop', () => {
       if (key in process.env) delete process.env[key];
     });
 
-    test('BLOCKS the session when the active run touched an artifact with no synthesis', () => {
+    test('BLOCKS the session when the active run touched an artifact with no synthesis', async () => {
       const runDir = writeRun('feature-stop-gate', 'block-me', null);
       writeCapture(runDir, 'c1', 'Write', 'packages/cli/src/q.ts');
       process.env.PROVE_RUN_SLUG = 'block-me';
 
-      const result = onStop({ cwd: project });
+      const result = await onStop({ cwd: project });
 
       expect(result.exitCode).toBe(0);
       const payload = JSON.parse(result.stdout) as { decision?: string; reason?: string };
@@ -631,16 +631,16 @@ describe('onStop', () => {
       expect(() => readFileSync(cursorPath, 'utf8')).toThrow();
     });
 
-    test('passes the session and sweeps when the active run declared completed', () => {
-      seedStore((store) => {
-        store.createTask({ id: 'stop-ok', title: 'Stop OK' });
+    test('passes the session and sweeps when the active run declared completed', async () => {
+      await seedStore(async (store) => {
+        await store.createTask({ id: 'stop-ok', title: 'Stop OK' });
       });
       const runDir = writeRun('feature-stop-gate', 'pass-me', 'stop-ok');
       writeCapture(runDir, 'c1', 'Edit', 'packages/cli/src/r.ts');
       writeSynthesis(runDir, 's1', 'completed');
       process.env.PROVE_RUN_SLUG = 'pass-me';
 
-      const result = onStop({ cwd: project });
+      const result = await onStop({ cwd: project });
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).not.toContain('"decision": "block"');
