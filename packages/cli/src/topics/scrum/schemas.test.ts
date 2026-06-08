@@ -86,9 +86,9 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      const tables = await raw.all<{ name: string }>(
+      const tables = (await raw.all<{ name: string }>(
           "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'scrum_%' ORDER BY name",
-        )
+        ))
         .map((r) => r.name);
       expect(tables).toEqual([
         'scrum_annotations',
@@ -129,9 +129,9 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      const indexes = await raw.all<{ name: string }>(
+      const indexes = (await raw.all<{ name: string }>(
           "SELECT name FROM sqlite_master WHERE type = 'index' AND name LIKE 'idx_scrum_%' ORDER BY name",
-        )
+        ))
         .map((r) => r.name);
       expect(indexes).toEqual([
         'idx_scrum_annotations_target',
@@ -166,9 +166,9 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      const cols = await raw.all<{ name: string; type: string; notnull: number }>(
+      const cols = (await raw.all<{ name: string; type: string; notnull: number }>(
           "SELECT name, type, [notnull] FROM pragma_table_info('scrum_tasks') ORDER BY cid",
-        )
+        ))
         .map((c) => `${c.name}:${c.type}:${c.notnull}`);
       expect(cols).toEqual([
         'id:TEXT:0', // PRIMARY KEY without NOT NULL keyword still gets notnull=0 in pragma
@@ -208,7 +208,7 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{ parent_id: string | null; layer: string | null }>(
@@ -228,7 +228,7 @@ describe('scrum domain registration', () => {
       // Verify via sqlite_sequence — it only exists when an AUTOINCREMENT
       // column has been inserted against. Insert a milestone + task + event
       // so the sequence table materializes.
-      await await raw.exec(`
+      await raw.exec(`
         INSERT INTO scrum_milestones (id, title, status, created_at) VALUES ('m1', 'M1', 'active', '2026-01-01T00:00:00Z');
         INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z');
         INSERT INTO scrum_events (task_id, ts, kind, payload_json) VALUES ('t1', '2026-01-01T00:00:00Z', 'note', '{}');
@@ -246,17 +246,17 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(`
+      await raw.exec(`
         INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('a', 'A', 'backlog', '2026-01-01T00:00:00Z');
         INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('b', 'B', 'backlog', '2026-01-01T00:00:00Z');
       `);
       await expect(
-        await raw.exec(
+        raw.exec(
           "INSERT INTO scrum_deps (from_task_id, to_task_id, kind) VALUES ('a', 'b', 'bogus')",
         ),
       ).rejects.toThrow();
       // Legal kinds succeed.
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_deps (from_task_id, to_task_id, kind) VALUES ('a', 'b', 'blocks')",
       );
     } finally {
@@ -276,9 +276,9 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      const cols = await raw.all<{ name: string; type: string; notnull: number }>(
+      const cols = (await raw.all<{ name: string; type: string; notnull: number }>(
           "SELECT name, type, [notnull] FROM pragma_table_info('scrum_decisions') ORDER BY cid",
-        )
+        ))
         .map((c) => `${c.name}:${c.type}:${c.notnull}`);
       expect(cols).toEqual([
         'id:TEXT:0',
@@ -311,7 +311,7 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_decisions (id, title, status, content, content_sha, recorded_at) VALUES ('d1', 'D1', 'accepted', 'body', 'deadbeef', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{ superseded_by: string | null; reason: string | null }>(
@@ -343,9 +343,9 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      const cols = await raw.all<{ name: string; type: string; notnull: number }>(
+      const cols = (await raw.all<{ name: string; type: string; notnull: number }>(
           "SELECT name, type, [notnull] FROM pragma_table_info('scrum_escalations') ORDER BY cid",
-        )
+        ))
         .map((c) => `${c.name}:${c.type}:${c.notnull}`);
       expect(cols).toEqual([
         'id:INTEGER:0',
@@ -373,7 +373,7 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_escalations (task_id, escalation_type, layer, summary, created_at) VALUES ('t1', 'blocked', 'implementer', 's', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{ id: number; state: string; walked_up_from: number | null }>(
@@ -397,7 +397,7 @@ describe('scrum domain registration', () => {
       await runMigrations(raw);
       // Row inserted without the v26 column — simulates a pre-v26 escalation
       // carried through the upgrade. The new column must read NULL.
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_escalations (task_id, escalation_type, layer, summary, created_at) VALUES ('t1', 'blocked', 'implementer', 's', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{ attributes: string | null }>(
@@ -418,9 +418,9 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      const cols = await raw.all<{ name: string; type: string; notnull: number }>(
+      const cols = (await raw.all<{ name: string; type: string; notnull: number }>(
           "SELECT name, type, [notnull] FROM pragma_table_info('scrum_tasks') ORDER BY cid",
-        )
+        ))
         .map((c) => `${c.name}:${c.type}:${c.notnull}`);
       expect(cols).toEqual([
         'id:TEXT:0',
@@ -464,7 +464,7 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{ bounds_json: string | null }>(
@@ -486,7 +486,7 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{ terminal_reason: string | null; terminal_detail: string | null }>(
@@ -507,7 +507,7 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_decisions (id, title, status, content, content_sha, recorded_at) VALUES ('d1', 'D1', 'accepted', 'body', 'deadbeef', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{ kind: string | null }>(
@@ -529,7 +529,7 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{ last_modified_by: string | null; last_modified_at: string | null }>(
@@ -546,7 +546,7 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{ acceptance_json: string | null }>(
@@ -808,7 +808,7 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_milestones (id, title, status, created_at) VALUES ('m1', 'M1', 'planned', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{ initiative: string | null }>(
@@ -834,7 +834,7 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{ team_slug: string | null }>(
@@ -856,10 +856,10 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, created_at) VALUES ('payments', 'stream_aligned', '2026-01-01T00:00:00Z')",
       );
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_lores (team_slug, body, author_contributor_id, created_at) VALUES ('payments', 'prefer idempotent migrations', 'CT-lead', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{ superseded_by: string | null; reason: string | null }>(
@@ -882,7 +882,7 @@ describe('scrum domain registration', () => {
       await runMigrations(raw);
       // Row inserted without the v11 columns — simulates a pre-v11 row carried
       // through the upgrade. The new columns must read NULL.
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('t1', 'T1', 'backlog', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{ worker_id: string | null; run_id: string | null }>(
@@ -912,7 +912,7 @@ describe('scrum domain registration', () => {
       expect(tables).toEqual([{ name: 'scrum_contributors' }]);
 
       // Column shape matches the on-disk contributor.md schema + provenance.
-      const cols = await raw.all<{ name: string }>('PRAGMA table_info(scrum_contributors)')
+      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_contributors)'))
         .map((c) => c.name);
       expect(cols).toEqual([
         'id',
@@ -935,11 +935,11 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_contributors (id, slug, status, created_at) VALUES ('ct-a', 'jane', 'active', '2026-01-01T00:00:00Z')",
       );
       await expect(
-        await raw.exec(
+        raw.exec(
           "INSERT INTO scrum_contributors (id, slug, status, created_at) VALUES ('ct-b', 'jane', 'active', '2026-01-02T00:00:00Z')",
         ),
       ).rejects.toThrow();
@@ -964,7 +964,7 @@ describe('scrum domain registration', () => {
       );
       expect(tables).toEqual([{ name: 'scrum_operator_history' }]);
 
-      const cols = await raw.all<{ name: string }>('PRAGMA table_info(scrum_operator_history)')
+      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_operator_history)'))
         .map((c) => c.name);
       expect(cols).toEqual([
         'id',
@@ -983,10 +983,10 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_contributors (id, slug, status, created_at) VALUES ('ct-jane', 'jane', 'active', '2026-01-01T00:00:00Z')",
       );
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_operator_history (contributor_id, from_ts, to_ts, created_at) VALUES ('ct-jane', '2026-01-01T00:00:00Z', NULL, '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{ to_ts: string | null }>(
@@ -1041,11 +1041,11 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, lifetime, created_at) VALUES ('payments', 'stream_aligned', 'persistent', '2026-01-01T00:00:00Z')",
       );
       await expect(
-        await raw.exec(
+        raw.exec(
           "INSERT INTO scrum_teams (slug, team_type, lifetime, created_at) VALUES ('payments', 'platform', 'persistent', '2026-01-02T00:00:00Z')",
         ),
       ).rejects.toThrow();
@@ -1058,7 +1058,7 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, created_at) VALUES ('platform-core', 'platform', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{ lifetime: string; charter: string | null }>(
@@ -1087,7 +1087,7 @@ describe('scrum domain registration', () => {
       );
       expect(tables).toEqual([{ name: 'scrum_team_scopes' }]);
 
-      const cols = await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_scopes)')
+      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_scopes)'))
         .map((c) => c.name);
       expect(cols).toEqual(['team_slug', 'kind', 'glob']);
     } finally {
@@ -1099,13 +1099,13 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, created_at) VALUES ('payments', 'stream_aligned', '2026-01-01T00:00:00Z')",
       );
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_team_scopes (team_slug, kind, glob) VALUES ('payments', 'write', 'src/payments/**')",
       );
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_team_scopes (team_slug, kind, glob) VALUES ('payments', 'read', 'src/shared/**')",
       );
       const rows = await raw.all<{ kind: string; glob: string }>(
@@ -1137,7 +1137,7 @@ describe('scrum domain registration', () => {
       );
       expect(tables).toEqual([{ name: 'scrum_team_members' }]);
 
-      const cols = await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_members)')
+      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_members)'))
         .map((c) => c.name);
       expect(cols).toEqual([
         'id',
@@ -1158,10 +1158,10 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, created_at) VALUES ('payments', 'stream_aligned', '2026-01-01T00:00:00Z')",
       );
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_team_members (team_slug, role, contributor_id, from_ts, to_ts, reason, created_at) VALUES ('payments', 'tech_lead', 'ct-jane', '2026-01-01T00:00:00Z', NULL, 'founding lead', '2026-01-01T00:00:00Z')",
       );
       const rows = await raw.all<{ role: string; contributor_id: string; to_ts: string | null }>(
@@ -1189,7 +1189,7 @@ describe('scrum domain registration', () => {
     try {
       await runMigrations(raw);
 
-      const acceptCols = await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_accepts)')
+      const acceptCols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_accepts)'))
         .map((c) => c.name);
       expect(acceptCols).toEqual([
         'id',
@@ -1201,7 +1201,7 @@ describe('scrum domain registration', () => {
         'created_at',
       ]);
 
-      const exposeCols = await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_exposes)')
+      const exposeCols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_team_exposes)'))
         .map((c) => c.name);
       expect(exposeCols).toEqual([
         'id',
@@ -1222,13 +1222,13 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, created_at) VALUES ('payments', 'stream_aligned', '2026-01-01T00:00:00Z')",
       );
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_team_accepts (team_slug, ask_type, created_at) VALUES ('payments', 'schema-change', '2026-01-01T00:00:00Z')",
       );
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_team_exposes (team_slug, name, schema_ref, created_at) VALUES ('payments', 'PaymentEvent', 'schemas/payment-event.json', '2026-01-01T00:00:00Z')",
       );
       const accepts = await raw.all<{ ask_type: string; status: string; superseded_by: number | null }>(
@@ -1264,7 +1264,7 @@ describe('scrum domain registration', () => {
       await runMigrations(raw);
       // Insert without the v18 columns — simulates a pre-v18 team carried through
       // the upgrade. terminates_on_milestone reads NULL, status reads 'active'.
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, lifetime, created_at) VALUES ('legacy', 'platform', 'persistent', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{ terminates_on_milestone: string | null; status: string }>(
@@ -1312,13 +1312,13 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, created_at) VALUES ('payments', 'stream_aligned', '2026-01-01T00:00:00Z')",
       );
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_lores (team_slug, body, author_contributor_id, created_at) VALUES ('payments', 'prefer idempotent migrations', 'CT-lead', '2026-01-01T00:00:00Z')",
       );
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_lores (team_slug, body, author_contributor_id, created_at) VALUES ('payments', 'pin the schema version', 'CT-lead', '2026-01-02T00:00:00Z')",
       );
       const rows = await raw.all<{ id: number; body: string; author_contributor_id: string }>(
@@ -1350,7 +1350,7 @@ describe('scrum domain registration', () => {
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'scrum_annotations'",
       );
       expect(tables).toEqual([{ name: 'scrum_annotations' }]);
-      const cols = await raw.all<{ name: string }>('PRAGMA table_info(scrum_annotations)')
+      const cols = (await raw.all<{ name: string }>('PRAGMA table_info(scrum_annotations)'))
         .map((c) => c.name);
       expect(cols).toEqual(['id', 'target_kind', 'target_ref', 'body', 'author', 'created_at']);
     } finally {
@@ -1364,14 +1364,14 @@ describe('scrum domain registration', () => {
       await runMigrations(raw);
       // No team/task/decision row exists — target_ref is a soft reference, so a
       // note attaches without the target's presence.
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_annotations (target_kind, target_ref, body, author, created_at) VALUES ('task', 't1', 'watch the off-by-one', 'CT-a', '2026-01-01T00:00:00Z')",
       );
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_annotations (target_kind, target_ref, body, author, created_at) VALUES ('task', 't1', 'fixed in follow-up', 'CT-b', '2026-01-02T00:00:00Z')",
       );
       // A different target_kind sharing the same ref does NOT collide.
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_annotations (target_kind, target_ref, body, author, created_at) VALUES ('team', 't1', 'team note', 'CT-c', '2026-01-03T00:00:00Z')",
       );
       const rows = await raw.all<{ id: number; body: string; author: string }>(
@@ -1403,9 +1403,9 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      const cols = await raw.all<{ name: string; type: string; notnull: number }>(
+      const cols = (await raw.all<{ name: string; type: string; notnull: number }>(
           "SELECT name, type, [notnull] FROM pragma_table_info('scrum_decisions') ORDER BY cid",
-        )
+        ))
         .map((c) => `${c.name}:${c.type}:${c.notnull}`);
       expect(cols).toEqual([
         'id:TEXT:0',
@@ -1438,7 +1438,7 @@ describe('scrum domain registration', () => {
       await runMigrations(raw);
       // A decision inserted without the v21 columns — simulates a pre-v21 row
       // carried through the upgrade. The new columns must read NULL.
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_decisions (id, title, status, content, content_sha, recorded_at) VALUES ('d1', 'D1', 'accepted', 'body', 'sha', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{
@@ -1468,7 +1468,7 @@ describe('scrum domain registration', () => {
       await runMigrations(raw);
       // A decision inserted without the v22 column — simulates a pre-v22 row
       // carried through the upgrade. The new column must read NULL.
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_decisions (id, title, status, content, content_sha, recorded_at) VALUES ('d1', 'D1', 'accepted', 'body', 'sha', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{ source_lore_id: number | null }>(
@@ -1499,17 +1499,17 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, lifetime, created_at) VALUES ('payments', 'stream_aligned', 'persistent', '2026-01-01T00:00:00Z')",
       );
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, lifetime, created_at) VALUES ('identity', 'platform', 'persistent', '2026-01-01T00:00:00Z')",
       );
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('blocked-1', 'B', 'todo', '2026-01-01T00:00:00Z')",
       );
       // No explicit state column — the DEFAULT 'filed' must apply.
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_asks (from_team, to_team, ask_type, blocking_artifact, created_at) VALUES ('payments', 'identity', 'schema-change', 'blocked-1', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{ state: string; to_team: string }>(
@@ -1531,16 +1531,16 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, lifetime, created_at) VALUES ('payments', 'stream_aligned', 'persistent', '2026-01-01T00:00:00Z')",
       );
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_teams (slug, team_type, lifetime, created_at) VALUES ('identity', 'platform', 'persistent', '2026-01-01T00:00:00Z')",
       );
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_tasks (id, title, status, created_at) VALUES ('blocked-1', 'B', 'todo', '2026-01-01T00:00:00Z')",
       );
-      await await raw.exec(
+      await raw.exec(
         "INSERT INTO scrum_asks (from_team, to_team, ask_type, blocking_artifact, created_at) VALUES ('payments', 'identity', 'schema-change', 'blocked-1', '2026-01-01T00:00:00Z')",
       );
       const row = await raw.all<{
