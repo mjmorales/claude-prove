@@ -733,6 +733,15 @@ export interface ScrumTask {
    */
   worker_id: string | null;
   run_id: string | null;
+  /**
+   * Provenance pointer to the `scrum_events` row (kind `status_changed`) that
+   * set the current `status`. Stamped in the same transaction as the status
+   * transition, with the same id the event carries, so it always points at the
+   * latest transition's event. NULL until the task's first transition. Pure
+   * provenance metadata on the authored status — the derived/rolled-up status a
+   * read computes ignores it.
+   */
+  status_event_id: string | null;
   deleted_at: string | null;
   /**
    * Reusable per-artifact provenance block, assembled at the row boundary by

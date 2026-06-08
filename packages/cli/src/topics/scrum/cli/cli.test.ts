@@ -636,9 +636,16 @@ describe('runTaskCmd', () => {
     await withCapture(() => runTaskCmd('create', [undefined, undefined], { title: 'S', id: 's' }));
     const res = await withCapture(() => runTaskCmd('status', ['s', 'ready'], {}));
     expect(res.exit).toBe(0);
-    const task = JSON.parse(res.stdout.trim()) as { id: string; status: string };
+    const task = JSON.parse(res.stdout.trim()) as {
+      id: string;
+      status: string;
+      status_event_id: string | null;
+    };
     expect(task.id).toBe('s');
     expect(task.status).toBe('ready');
+    // The transition stamps the status_event_id pointer and it surfaces on the
+    // decoded task read back through the CLI.
+    expect(task.status_event_id).not.toBeNull();
     expect(res.stderr).toContain('s -> ready');
   });
 
@@ -702,10 +709,14 @@ describe('runTaskCmd', () => {
       status: string;
       terminal_reason: string;
       terminal_detail: string;
+      status_event_id: string | null;
     };
     expect(task.status).toBe('cancelled');
     expect(task.terminal_reason).toBe('descoped');
     expect(task.terminal_detail).toBe('cut from v1');
+    // Cancel is a status transition: status_event_id points at the cancel's
+    // status_changed event, not the (NULL) pre-transition pointer.
+    expect(task.status_event_id).not.toBeNull();
   });
 
   test('cancel --cascade cancels the subtree and reports the ids', async () => {
