@@ -520,11 +520,12 @@ describe('scrum domain registration', () => {
         lifetime: string;
         status: string;
         terminates_on_milestone: string | null;
-      }>(
-        'SELECT lifetime, status, terminates_on_milestone FROM scrum_teams WHERE slug = ?',
-        ['platform-core'],
-      );
-      expect(row).toEqual([{ lifetime: 'persistent', status: 'active', terminates_on_milestone: null }]);
+      }>('SELECT lifetime, status, terminates_on_milestone FROM scrum_teams WHERE slug = ?', [
+        'platform-core',
+      ]);
+      expect(row).toEqual([
+        { lifetime: 'persistent', status: 'active', terminates_on_milestone: null },
+      ]);
     } finally {
       raw.close();
     }
@@ -613,11 +614,16 @@ describe('scrum domain registration', () => {
       await raw.exec(
         `INSERT INTO scrum_team_accepts (id, team_slug, ask_type, created_at) VALUES ('${ulid()}', 'payments', 'schema-change', '2026-01-01T00:00:00Z')`,
       );
-      const accepts = await raw.all<{ ask_type: string; status: string; superseded_by: string | null }>(
-        'SELECT ask_type, status, superseded_by FROM scrum_team_accepts WHERE team_slug = ?',
-        ['payments'],
-      );
-      expect(accepts).toEqual([{ ask_type: 'schema-change', status: 'active', superseded_by: null }]);
+      const accepts = await raw.all<{
+        ask_type: string;
+        status: string;
+        superseded_by: string | null;
+      }>('SELECT ask_type, status, superseded_by FROM scrum_team_accepts WHERE team_slug = ?', [
+        'payments',
+      ]);
+      expect(accepts).toEqual([
+        { ask_type: 'schema-change', status: 'active', superseded_by: null },
+      ]);
     } finally {
       raw.close();
     }
@@ -629,9 +635,9 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
-      const cols = (await raw.all<{ name: string; type: string }>('PRAGMA table_info(scrum_lores)')).map(
-        (c) => `${c.name}:${c.type}`,
-      );
+      const cols = (
+        await raw.all<{ name: string; type: string }>('PRAGMA table_info(scrum_lores)')
+      ).map((c) => `${c.name}:${c.type}`);
       expect(cols).toEqual([
         'id:TEXT',
         'team_slug:TEXT',
