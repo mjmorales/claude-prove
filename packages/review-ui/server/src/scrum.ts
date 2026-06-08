@@ -379,12 +379,15 @@ async function buildAlerts(store: ScrumStore): Promise<AlertsPayload> {
   const knownIds = new Set(allTasks.map((t) => t.id));
   const brokenDeps = await collectBrokenDeps(store, allTasks, knownIds);
 
-  // Each in-progress task's bundle is an independent read; resolve concurrently
-  // then filter out the ones that have a bundle.
-  const bundlePresence = await Promise.all(
-    inProgress.map(async (t) => ({ task: t, bundle: await store.loadContextBundle(t.id) })),
-  );
-  const missingContext = bundlePresence.filter((p) => p.bundle === null).map((p) => p.task);
+  // Read each in-progress task's bundle sequentially. The bundles must NOT be
+  // resolved with `Promise.all` over a shared store: concurrent reads collide on
+  // the single cached prepared statement that `ScrumStore.prep()` reuses, and the
+  // underlying driver binds params outside its exec lock, so a parallel `get()`
+  // race can non-deterministically misclassify which tasks lack a bundle.
+  const missingContext: ScrumTask[] = [];
+  for (const t of inProgress) {
+    if ((await store.loadContextBundle(t.id)) === null) missingContext.push(t);
+  }
 
   const orphanCutoff = Date.now() - ORPHAN_RUN_LOOKBACK_MS;
   const recentEvents = await store.listRecentEvents(RECENT_EVENTS_MAX_LIMIT);

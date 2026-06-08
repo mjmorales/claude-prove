@@ -265,6 +265,55 @@ describe('GET /api/scrum/alerts', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Alerts — missing_context across many in-progress tasks (concurrency guard)
+//
+// Regression for a shared-prepared-statement race: `buildAlerts` reads each
+// in-progress task's context bundle through ONE ScrumStore instance, so the
+// reads MUST be sequential — a `Promise.all` fan-out collides on the single
+// cached prepared statement and can misclassify which tasks lack a bundle.
+// With 6 in-progress tasks (3 bundled, 3 not) a racing read would drop or add
+// entries to `missing_context`; the sequential read yields the exact set.
+// ---------------------------------------------------------------------------
+
+describe('GET /api/scrum/alerts — missing_context with many in-progress tasks', () => {
+  test('returns exactly the bundle-less in-progress tasks', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'prove-scrum-missctx-'));
+    mkdirSync(join(root, '.prove'), { recursive: true });
+
+    const bundled = ['ip-1', 'ip-3', 'ip-5'];
+    const bundleless = ['ip-2', 'ip-4', 'ip-6'];
+
+    const store = await openScrumStore({ override: join(root, '.prove/prove.db') });
+    try {
+      for (const id of [...bundled, ...bundleless]) {
+        await store.createTask({ id, title: `WIP ${id}`, status: 'backlog' });
+        await store.updateTaskStatus(id, 'ready');
+        await store.updateTaskStatus(id, 'in_progress');
+      }
+      for (const id of bundled) {
+        await store.saveContextBundle(id, { hint: id });
+      }
+    } finally {
+      store.close();
+    }
+
+    const app = Fastify({ logger: false });
+    registerScrumRoutes(app, makeProjectResolver(root));
+    await app.ready();
+    try {
+      const res = await app.inject({ method: 'GET', url: '/api/scrum/alerts' });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { missing_context: Array<{ id: string }> };
+      const ids = body.missing_context.map((t) => t.id).sort();
+      expect(ids).toEqual([...bundleless].sort());
+    } finally {
+      await app.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Context bundles
 // ---------------------------------------------------------------------------
 
