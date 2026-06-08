@@ -37,6 +37,7 @@ export {
   registerSchema,
   type SchemaDef,
 } from './registry';
+export { isUlid, ulid } from './ulid';
 export {
   type GroupVerdict,
   type GroupVerdictRecord,
