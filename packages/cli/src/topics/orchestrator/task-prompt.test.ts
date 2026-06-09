@@ -147,6 +147,31 @@ describe('orchestrator task-prompt', () => {
     expect(stdoutBuf).toContain('token budget and subagent timeout remain the hard backstop');
   });
 
+  test('typed-findings protocol on the normal-completion path (curation sweep input)', () => {
+    writePlan(BASE_PLAN);
+    writePrd(BASE_PRD);
+    const code = runTaskPrompt({ runDir, taskId: '1', projectRoot: project });
+    expect(code).toBe(0);
+    expect(stdoutBuf).toContain('## Typed Findings — record before exiting');
+    // The four curation-swept entry types render with their required fields.
+    expect(stdoutBuf).toContain('- `hack` —');
+    expect(stdoutBuf).toContain('`cleanup_condition` (string)');
+    expect(stdoutBuf).toContain('- `risk` —');
+    expect(stdoutBuf).toContain('`"low"|"medium"|"high"|"critical"`');
+    expect(stdoutBuf).toContain('- `decision` —');
+    expect(stdoutBuf).toContain('`selected_rationale` (string)');
+    expect(stdoutBuf).toContain('- `assumption` —');
+    expect(stdoutBuf).toContain('`resolution_ref` (string or null)');
+    // Per-task agent provenance derived from the task id.
+    expect(stdoutBuf).toContain('`task-1`');
+    // Applies on normal completion — not only the cooperative-cancel path.
+    expect(stdoutBuf).toContain('NORMAL completion');
+    // The When Done contract leads with the findings step.
+    expect(stdoutBuf).toContain(
+      '1. Record every substantive finding as a typed reasoning-log entry',
+    );
+  });
+
   test('forbids opening the shared store from the worktree (no schema pollution)', () => {
     writePlan(BASE_PLAN);
     writePrd(BASE_PRD);
@@ -176,8 +201,11 @@ describe('orchestrator task-prompt', () => {
       const absRunDir = join(root, 'run');
       expect(stdoutBuf).toContain(`test -f "${join(absRunDir, 'CANCEL')}"`);
       expect(stdoutBuf).toContain(`claude-prove acb log append --run-dir "${absRunDir}"`);
-      // No bare relative flag path leaks into the emitted worker prompt.
+      // No bare relative flag path leaks into the emitted worker prompt —
+      // neither the cancel-flag read nor any append command (checkpoint
+      // handoff AND typed-findings sections share the absolutized run dir).
       expect(stdoutBuf).not.toContain('test -f "run/CANCEL"');
+      expect(stdoutBuf).not.toContain('--run-dir "run"');
     } finally {
       process.chdir(prevCwd);
     }

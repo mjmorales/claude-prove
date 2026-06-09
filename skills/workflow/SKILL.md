@@ -105,8 +105,11 @@ Then drive the standard full-mode loop (`skills/orchestrator/SKILL.md`, "Full Mo
 over those batches: create a worktree per task → launch one `general-purpose` subagent
 per task, each prompted via `claude-prove orchestrator task-prompt --run-dir <dir>
 --task-id <id>` → run validators → `principal-architect` review loop → sequential
-merge-back. As in orchestrator full mode, subagents only commit and exit; you own every
-step and scrum write.
+merge-back. As in orchestrator full mode, subagents record typed findings, commit, and
+exit; you own every step and scrum write — including the findings backstop: when a
+worker's handoff message reports findings missing from the reasoning log, transcribe
+them as typed `hack`/`risk`/`decision`/`assumption` entries before writing `synthesis`,
+so milestone-close curation can sweep them.
 
 One delta this skill applies beyond the schedule:
 
