@@ -8,7 +8,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Unreleased — `add-dep`/`remove-dep` usage names the edge direction (`<blocker> <blocked>`)
+## v3.13.3 — `add-dep`/`remove-dep` usage names the edge direction (`<blocker> <blocked>`)
 
 *(No behavior change, no migration — usage text + docs only.)* `scrum task add-dep <A> <B>` records `A -blocks-> B`: the FIRST positional is the prerequisite, the opposite of the verb-name-natural "add a dependency to task A" reading, which silently inverted the dep-graph and corrupted wave-plan build order ([#53](https://github.com/mjmorales/claude-prove/issues/53)). The positionals are now documented as `<blocker> <blocked>` everywhere — usage-error strings, the file-top usage comment, the CLI reference, and the `scrum-master` agent — each stating the inverse spelling (`--kind blocked_by` flips the positional reading; both spellings normalize to one canonical `blocks` row). The `scrum-master` agent doc also drops a stale claim that `blocked_by` edges do not surface through `next-ready` — normalized edges surface identically. Argument order is unchanged; existing scripts keep working.
 
