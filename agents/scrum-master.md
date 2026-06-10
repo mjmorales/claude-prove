@@ -15,7 +15,7 @@ Subcommands: `claude-prove scrum init|status|next-ready|alerts|task|milestone|ta
 
 ## Dep-graph edits
 
-Add or remove edges via `claude-prove scrum task add-dep <from> <to> [--kind blocks|blocked_by]` and `claude-prove scrum task remove-dep <from> <to> [--kind ...]`. `--kind` defaults to `blocks` — the direction `next-ready` and `show` traverse. Use `blocked_by` only when the operator explicitly asks; edges written in that direction will not surface through `next-ready`. `add-dep` is idempotent; self-edges and unknown task ids are rejected. `scrum task show <id>` returns `blocked_by` and `blocking` arrays for graph verification.
+Add or remove edges via `claude-prove scrum task add-dep <blocker> <blocked> [--kind blocks|blocked_by]` and `claude-prove scrum task remove-dep <blocker> <blocked> [--kind ...]`. With the default kind (`blocks`) the FIRST positional blocks the SECOND — never the verb-name-natural reading "add a dependency to task A", which silently inverts the edge. To express "A depends on B", either write `add-dep <B> <A>` or pass `--kind blocked_by` with `add-dep <A> <B>`; both spellings normalize to the same canonical `blocks` row, so they surface identically through `next-ready` and `show`. `add-dep` is idempotent; self-edges and unknown task ids are rejected. After writing an edge, verify direction with `scrum task show <id>` (`blocked_by`/`blocking` arrays) — the stderr echo `A -blocks-> B` is the confirmation to read.
 
 ## When invoked
 

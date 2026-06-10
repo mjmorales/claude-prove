@@ -8,6 +8,14 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — `add-dep`/`remove-dep` usage names the edge direction (`<blocker> <blocked>`)
+
+*(No behavior change, no migration — usage text + docs only.)* `scrum task add-dep <A> <B>` records `A -blocks-> B`: the FIRST positional is the prerequisite, the opposite of the verb-name-natural "add a dependency to task A" reading, which silently inverted the dep-graph and corrupted wave-plan build order ([#53](https://github.com/mjmorales/claude-prove/issues/53)). The positionals are now documented as `<blocker> <blocked>` everywhere — usage-error strings, the file-top usage comment, the CLI reference, and the `scrum-master` agent — each stating the inverse spelling (`--kind blocked_by` flips the positional reading; both spellings normalize to one canonical `blocks` row). The `scrum-master` agent doc also drops a stale claim that `blocked_by` edges do not surface through `next-ready` — normalized edges surface identically. Argument order is unchanged; existing scripts keep working.
+
+Migration: none. Auto-adoption: full — new text ships with the plugin/binary.
+
+---
+
 ## v3.13.2 — Worker prompt lands typed findings; milestone-close curation sweeps them
 
 *(No `.claude/.prove.json` migration, no store migration — prompt template + skill behavior.)* Fixes the worker/driver protocol gap where milestone-close curation swept 0 candidates after orchestrator full-mode runs ([#51](https://github.com/mjmorales/claude-prove/issues/51)). The `orchestrator task-prompt` template documented `acb log append` only on the cooperative-cancel path, so worker findings reached the driver solely in handoff messages, got folded into driver `synthesis` entries, and never hit the typed kinds (`hack`/`risk`/`decision`/`assumption`) the curation reconciler sweeps.
