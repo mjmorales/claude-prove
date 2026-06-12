@@ -34,6 +34,12 @@ import {
 } from './criterion-verify';
 import { globsOverlap } from './glob-overlap';
 import { SCRUM_SCHEMA_VERSION, ensureScrumSchemaRegistered } from './schemas';
+
+// Re-exported so registry-dependent consumers outside this package (the
+// review-ui server's schema guard, cross-domain conformance tests) can
+// re-land the scrum domain after a `clearRegistry()` without reaching into
+// the unexported `./schemas` module path.
+export { ensureScrumSchemaRegistered } from './schemas';
 import type {
   Acceptance,
   AcceptanceCriterion,

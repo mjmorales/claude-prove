@@ -16,11 +16,11 @@
  * the snapshot is deterministic regardless of which store is opened.
  */
 
-import { describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { openAcbStore } from './acb/store';
-import { openScrumStore } from './scrum/store';
+import { ensureAcbSchemaRegistered, openAcbStore } from './acb/store';
+import { ensureScrumSchemaRegistered, openScrumStore } from './scrum/store';
 
 const GOLDEN = join(import.meta.dir, '__fixtures__', 'store-schema.golden.txt');
 
@@ -33,9 +33,19 @@ function snapshot(rows: Array<{ type: string; name: string; sql: string }>): str
 }
 
 describe('store schema — DDL byte-equality conformance', () => {
+  beforeEach(() => {
+    // Re-land BOTH domains before every open. Import-time registration is not
+    // enough: the registry is process-global and another test file's
+    // `clearRegistry()` wipes it after this module loaded — test-file ordering
+    // then decides whether the union schema carries the acb objects, which is
+    // exactly the cross-platform flake this golden exists to prevent.
+    ensureScrumSchemaRegistered();
+    ensureAcbSchemaRegistered();
+  });
+
   test('the emitted DDL matches the committed golden (no schema drift from the async port)', async () => {
-    // Importing openAcbStore registers the acb domain; openScrumStore then runs
-    // all registered domains, emitting the full union schema.
+    // Both domains are registered (beforeEach), so opening either store runs
+    // every registered domain's migration and emits the full union schema.
     const store = await openScrumStore({ path: ':memory:' });
     try {
       const rows = (await store.getStore().all(DUMP_SQL)) as Array<{

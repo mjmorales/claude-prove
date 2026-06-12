@@ -31,11 +31,14 @@
 import path from "node:path";
 import fs from "node:fs";
 import { type StoreOptions, getMigrations, listDomains, openStore } from "@claude-prove/store";
-// Side-effect imports: each domain's store module calls `registerSchema` at
-// module scope, so importing them populates the migration registry that
-// `registeredExpectedVersions` reads — independent of import order elsewhere.
-import "@claude-prove/cli/acb/store";
-import "@claude-prove/cli/scrum/store";
+// Value imports of the idempotent re-registration helpers, called at read time
+// in `registeredExpectedVersions`. A bare side-effect import is NOT enough: the
+// module-scope `registerSchema` runs once per process, so a later
+// `clearRegistry()` (test isolation helper) empties the registry and the
+// side effect never re-fires — the guard would then silently see fewer (or
+// zero) domains and report a behind store as compatible.
+import { ensureAcbSchemaRegistered } from "@claude-prove/cli/acb/store";
+import { ensureScrumSchemaRegistered } from "@claude-prove/cli/scrum/store";
 
 /** Per-project store schema state in the `GET /api/projects` response. */
 export interface ProjectStoreInfo {
@@ -59,8 +62,10 @@ export interface ProjectStoreInfo {
  * applied. Empty until the domain modules have registered.
  */
 export function registeredExpectedVersions(): Map<string, number> {
-  // Domains self-register via this module's side-effect imports above, so
-  // `listDomains()` already includes every shipped domain here.
+  // Re-land both shipped domains at read time so the expected-version map is
+  // complete regardless of registry churn earlier in the process.
+  ensureScrumSchemaRegistered();
+  ensureAcbSchemaRegistered();
   const expected = new Map<string, number>();
   for (const domain of listDomains()) {
     const migrations = getMigrations(domain);

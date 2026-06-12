@@ -503,13 +503,13 @@ describe('POST /api/scrum/tasks/:id/status', () => {
   test('behind-schema project → 409 with the structured body, no mutation', async () => {
     const root = mkdtempSync(join(tmpdir(), 'prove-scrum-behind-'));
     mkdirSync(join(root, '.prove'), { recursive: true });
-    // Re-land the live scrum domain so the guard's expected-version lookup sees
-    // scrum's real head — a prior test file's `clearRegistry()` may have wiped
-    // it. Opening an in-memory scrum store calls `ensureScrumSchemaRegistered`.
-    (await openScrumStore({ path: ':memory:' })).close();
-    // Seed a `_migrations_log` at scrum@1 (below the live scrum head) so the db
-    // reads as behind. The guard refuses before opening the writable store, so
-    // no scrum tables are needed for the refusal.
+    // Seed a `_migrations_log` at scrum@0 (below the live v1 head) so the db
+    // reads as behind via the scrum domain itself. The guard re-lands both
+    // shipped domains at read time (`registeredExpectedVersions` calls the
+    // idempotent ensure helpers), so no registry pre-warming is needed here
+    // and a prior test file's `clearRegistry()` cannot skew the verdict. The
+    // guard refuses before opening the writable store, so no scrum tables are
+    // needed for the refusal.
     await seedBehindScrumDb(root);
 
     const app = Fastify({ logger: false });
@@ -535,9 +535,12 @@ describe('POST /api/scrum/tasks/:id/status', () => {
 });
 
 /**
- * Seed `<root>/.prove/prove.db` with only a `_migrations_log` row at scrum@1.
- * That sits below the live scrum head, so the guard reports the project behind
- * without the db carrying any scrum domain tables.
+ * Seed `<root>/.prove/prove.db` with only a `_migrations_log` row at scrum@0.
+ * The Turso-v1 chain's head is 1, so an applied version of 0 sits below the
+ * live scrum head and the guard reports the project behind — via the scrum
+ * domain itself, independent of which OTHER domains happen to be registered
+ * (an absent acb domain must not be what makes this fixture read behind).
+ * The db carries no scrum domain tables; the guard refuses before opening.
  */
 async function seedBehindScrumDb(root: string): Promise<void> {
   const db = await openStore({ path: join(root, '.prove/prove.db') });
@@ -551,7 +554,7 @@ async function seedBehindScrumDb(root: string): Promise<void> {
         PRIMARY KEY (domain, version)
       );
       INSERT INTO _migrations_log (domain, version, description, applied_at)
-        VALUES ('scrum', 1, 'create scrum domain tables', '2026-01-01T00:00:00Z');
+        VALUES ('scrum', 0, 'pre-v1 placeholder below the live head', '2026-01-01T00:00:00Z');
     `);
   } finally {
     db.close();
