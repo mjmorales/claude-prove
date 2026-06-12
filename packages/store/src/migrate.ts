@@ -108,22 +108,43 @@ export async function runMigrations(store: Store): Promise<MigrationResult> {
 }
 
 /**
- * Drop every domain table listed in `_migrations_log` plus the log
- * itself. Intended for `claude-prove store reset --confirm`; production code
- * should never call this implicitly.
+ * Drop every domain table and view plus the migrations log itself. Intended
+ * for `claude-prove store reset --confirm`; production code should never call
+ * this implicitly.
+ *
+ * Views are dropped alongside tables: the base DDL creates views with bare
+ * `CREATE VIEW`, so a leftover view would collide on the next migration.
+ *
+ * Foreign-key enforcement is suspended for the duration of the drop. The
+ * tables form an FK graph (self-references, cross-domain pointers), and
+ * `sqlite_master` yields them in arbitrary order — dropping a referenced
+ * table before its referrer trips an immediate FK violation. The PRAGMA is a
+ * no-op inside an open transaction, so it brackets the `withTx` rather than
+ * living inside it.
  */
 export async function dropAllDomainTables(store: Store): Promise<void> {
   // Log might not exist if reset runs on a never-migrated db.
   await store.run(MIGRATIONS_LOG_SQL);
+  const views = await store.all<{ name: string }>(
+    "SELECT name FROM sqlite_master WHERE type = 'view'",
+  );
   const tables = await store.all<{ name: string }>(
     "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != '_migrations_log'",
   );
-  await withTx(store, async () => {
-    for (const row of tables) {
-      await store.run(`DROP TABLE IF EXISTS ${escapeIdent(row.name)}`);
-    }
-    await store.run('DROP TABLE IF EXISTS _migrations_log');
-  });
+  await store.exec('PRAGMA foreign_keys = OFF');
+  try {
+    await withTx(store, async () => {
+      for (const row of views) {
+        await store.run(`DROP VIEW IF EXISTS ${escapeIdent(row.name)}`);
+      }
+      for (const row of tables) {
+        await store.run(`DROP TABLE IF EXISTS ${escapeIdent(row.name)}`);
+      }
+      await store.run('DROP TABLE IF EXISTS _migrations_log');
+    });
+  } finally {
+    await store.exec('PRAGMA foreign_keys = ON');
+  }
 }
 
 function escapeIdent(name: string): string {

@@ -266,4 +266,81 @@ describe('dropAllDomainTables', () => {
       store.close();
     }
   });
+
+  test('drops FK-linked tables with live rows regardless of sqlite_master order', async () => {
+    // The real store's tables form an FK graph (self-references, cross-domain
+    // pointers). sqlite_master yields creation order, so a referenced table
+    // can come up for DROP before its referrer — with enforcement on and
+    // dependent rows present, that throws FOREIGN KEY constraint failed.
+    registerSchema({
+      domain: 'fkgraph',
+      migrations: [
+        {
+          version: 1,
+          description: 'parent created before child so parent drops first',
+          up: async (store) => {
+            await store.run('CREATE TABLE fk_parent (id TEXT PRIMARY KEY)');
+            await store.run(
+              'CREATE TABLE fk_child (id TEXT PRIMARY KEY, parent_id TEXT REFERENCES fk_parent(id), prev_id TEXT REFERENCES fk_child(id))',
+            );
+          },
+        },
+      ],
+    });
+
+    const store = await makeStore();
+    try {
+      await runMigrations(store);
+      await store.exec('PRAGMA foreign_keys = ON');
+      await store.run("INSERT INTO fk_parent (id) VALUES ('p1')");
+      await store.run("INSERT INTO fk_child (id, parent_id, prev_id) VALUES ('c1', 'p1', NULL)");
+      await store.run("INSERT INTO fk_child (id, parent_id, prev_id) VALUES ('c2', 'p1', 'c1')");
+
+      await dropAllDomainTables(store);
+
+      const remaining = await store.all<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+      );
+      expect(remaining).toEqual([]);
+      // Enforcement is restored for whatever the connection does next.
+      const fk = await store.get<{ foreign_keys: number }>('PRAGMA foreign_keys');
+      expect(fk?.foreign_keys).toBe(1);
+    } finally {
+      store.close();
+    }
+  });
+
+  test('drops views so a re-migration can recreate them with bare CREATE VIEW', async () => {
+    registerSchema({
+      domain: 'viewful',
+      migrations: [
+        {
+          version: 1,
+          description: 'table + bare CREATE VIEW (no IF NOT EXISTS)',
+          up: async (store) => {
+            await store.run('CREATE TABLE view_rows (id TEXT PRIMARY KEY, v TEXT)');
+            await store.exec('CREATE VIEW view_rows_head AS SELECT MAX(id) AS id FROM view_rows');
+          },
+        },
+      ],
+    });
+
+    const store = await makeStore();
+    try {
+      await runMigrations(store);
+      await dropAllDomainTables(store);
+
+      const leftoverViews = await store.all<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'view'",
+      );
+      expect(leftoverViews).toEqual([]);
+
+      // The reset-then-reopen path re-runs the chain; a surviving view would
+      // collide on the bare CREATE VIEW.
+      const rerun = await runMigrations(store);
+      expect(rerun.applied.map((a) => `${a.domain}:${a.version}`)).toEqual(['viewful:1']);
+    } finally {
+      store.close();
+    }
+  });
 });
