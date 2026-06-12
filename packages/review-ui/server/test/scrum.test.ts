@@ -15,12 +15,13 @@
  *     missing context, orphaned runs)
  */
 
-import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { openStore } from '@claude-prove/store';
-import { openScrumStore } from '@claude-prove/cli/scrum/store';
+import { ensureAcbSchemaRegistered } from '@claude-prove/cli/acb/store';
+import { ensureScrumSchemaRegistered, openScrumStore } from '@claude-prove/cli/scrum/store';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { makeProjectResolver } from '../src/projects';
 import { registerScrumRoutes } from '../src/scrum';
@@ -33,7 +34,18 @@ const FRESH_WIP_ID = 'task-wip';
 const DONE_TASK_ID = 'task-done';
 const ORPHAN_DEP_TARGET = 'task-deleted-target';
 
+// Every store this file creates must carry BOTH shipped domains' migrations:
+// the route guard's expected-version map always sees scrum + acb (it re-lands
+// them at read time), so a fixture db created while a prior file's
+// `clearRegistry()` had wiped acb would read as behind and 409 every write.
+beforeEach(() => {
+  ensureScrumSchemaRegistered();
+  ensureAcbSchemaRegistered();
+});
+
 beforeAll(async () => {
+  ensureScrumSchemaRegistered();
+  ensureAcbSchemaRegistered();
   repoRoot = mkdtempSync(join(tmpdir(), 'prove-scrum-server-'));
   mkdirSync(join(repoRoot, '.prove'), { recursive: true });
 
