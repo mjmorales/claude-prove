@@ -35,14 +35,17 @@ afterEach(async () => {
 // Fixture helpers
 // ---------------------------------------------------------------------------
 
-async function seedTask(id: string, overrides: Partial<Parameters<ScrumStore['createTask']>[0]> = {}) : Promise<void> {
+async function seedTask(
+  id: string,
+  overrides: Partial<Parameters<ScrumStore['createTask']>[0]> = {},
+): Promise<void> {
   return await store.createTask({ id, title: `Task ${id}`, ...overrides });
 }
 
 async function seedMilestone(
   id: string,
   overrides: Partial<Parameters<ScrumStore['createMilestone']>[0]> = {},
-) : Promise<void> {
+): Promise<void> {
   return await store.createMilestone({ id, title: `Milestone ${id}`, ...overrides });
 }
 
@@ -80,7 +83,9 @@ describe('ScrumStore — tasks', () => {
   });
 
   test('createTask with milestoneId validates milestone existence', async () => {
-    await expect(seedTask('t1', { milestoneId: 'missing' })).rejects.toThrow(/unknown milestone_id/);
+    await expect(seedTask('t1', { milestoneId: 'missing' })).rejects.toThrow(
+      /unknown milestone_id/,
+    );
     await seedMilestone('m1');
     const task = await seedTask('t2', { milestoneId: 'm1' });
     expect(task.milestone_id).toBe('m1');
@@ -110,13 +115,17 @@ describe('ScrumStore — tasks', () => {
   });
 
   test('createTask rejects an unknown team_slug at the store boundary', async () => {
-    await expect(seedTask('t1', { teamSlug: 'ghost' })).rejects.toThrow(/unknown team_slug 'ghost'/);
+    await expect(seedTask('t1', { teamSlug: 'ghost' })).rejects.toThrow(
+      /unknown team_slug 'ghost'/,
+    );
   });
 
   test('createTask rejects a disbanded (inactive) team_slug', async () => {
     await store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
     await store.teamTerminate('payments', 'wound down');
-    await expect(seedTask('t1', { teamSlug: 'payments' })).rejects.toThrow(/team 'payments' is inactive/);
+    await expect(seedTask('t1', { teamSlug: 'payments' })).rejects.toThrow(
+      /team 'payments' is inactive/,
+    );
   });
 
   test('createTask with parentId persists the edge and validates parent existence', async () => {
@@ -141,16 +150,14 @@ describe('ScrumStore — tasks', () => {
     await seedTask('t2', { status: 'backlog', milestoneId: 'm1' });
     await seedTask('t3', { status: 'ready', milestoneId: 'm1' });
 
-    expect(
-      (await store.listTasks({ status: 'ready' }))
-        .map((t) => t.id)
-        .sort(),
-    ).toEqual(['t1', 't3']);
-    expect(
-      (await store.listTasks({ milestoneId: 'm1' }))
-        .map((t) => t.id)
-        .sort(),
-    ).toEqual(['t2', 't3']);
+    expect((await store.listTasks({ status: 'ready' })).map((t) => t.id).sort()).toEqual([
+      't1',
+      't3',
+    ]);
+    expect((await store.listTasks({ milestoneId: 'm1' })).map((t) => t.id).sort()).toEqual([
+      't2',
+      't3',
+    ]);
     expect((await store.listTasks({ milestoneId: null })).map((t) => t.id)).toEqual(['t1']);
   });
 
@@ -203,11 +210,10 @@ describe('ScrumStore — tasks', () => {
     await seedTask('t2');
     await store.softDeleteTask('t1');
     expect((await store.listTasks()).map((t) => t.id)).toEqual(['t2']);
-    expect(
-      (await store.listTasks({ excludeDeleted: false }))
-        .map((t) => t.id)
-        .sort(),
-    ).toEqual(['t1', 't2']);
+    expect((await store.listTasks({ excludeDeleted: false })).map((t) => t.id).sort()).toEqual([
+      't1',
+      't2',
+    ]);
   });
 
   test('softDeleteTask appends a task_deleted event recording the prior status', async () => {
@@ -406,7 +412,7 @@ describe('ScrumStore — containment tree', () => {
     // a's child is b; b's child is a (re-entered -> short-circuits to authored).
     // Must terminate rather than recurse forever; assertion is liveness.
     await expect(store.derivedStatus('a')).resolves.toBeDefined();
-    expect(typeof await store.derivedStatus('a')).toBe('string');
+    expect(typeof (await store.derivedStatus('a'))).toBe('string');
   });
 });
 
@@ -463,7 +469,9 @@ describe('ScrumStore — updateTaskMilestone', () => {
     await seedTask('t1', { milestoneId: 'm1' });
     const eventsBefore = (await store.listEventsForTask('t1')).length;
 
-    await expect(store.updateTaskMilestone('t1', 'missing')).rejects.toThrow(/unknown milestone_id/);
+    await expect(store.updateTaskMilestone('t1', 'missing')).rejects.toThrow(
+      /unknown milestone_id/,
+    );
 
     const task = await store.getTask('t1');
     expect(task?.milestone_id).toBe('m1');
@@ -578,7 +586,9 @@ describe('ScrumStore — updateTaskTeam', () => {
     await store.teamTerminate('identity', 'wound down');
     await seedTask('t1', { teamSlug: 'payments' });
 
-    await expect(store.updateTaskTeam('t1', 'identity')).rejects.toThrow(/team 'identity' is inactive/);
+    await expect(store.updateTaskTeam('t1', 'identity')).rejects.toThrow(
+      /team 'identity' is inactive/,
+    );
     expect((await store.getTask('t1'))?.team_slug).toBe('payments');
   });
 
@@ -616,15 +626,9 @@ describe('ScrumStore — milestones', () => {
     await seedMilestone('m2', { status: 'planned' });
     await seedMilestone('m3', { status: 'active' });
 
-    const active = (await store.listMilestones('active'))
-      .map((m) => m.id)
-      .sort();
+    const active = (await store.listMilestones('active')).map((m) => m.id).sort();
     expect(active).toEqual(['m1', 'm3']);
-    expect(
-      (await store.listMilestones())
-        .map((m) => m.id)
-        .sort(),
-    ).toEqual(['m1', 'm2', 'm3']);
+    expect((await store.listMilestones()).map((m) => m.id).sort()).toEqual(['m1', 'm2', 'm3']);
   });
 
   test('getMilestone returns null for missing id', async () => {
@@ -643,11 +647,10 @@ describe('ScrumStore — milestones', () => {
     await seedMilestone('m2', { initiative: 'q3-growth', status: 'planned' });
     await seedMilestone('m3', { initiative: 'infra', status: 'active' });
 
-    expect(
-      (await store.listMilestones(undefined, 'Q3-GROWTH'))
-        .map((m) => m.id)
-        .sort(),
-    ).toEqual(['m1', 'm2']);
+    expect((await store.listMilestones(undefined, 'Q3-GROWTH')).map((m) => m.id).sort()).toEqual([
+      'm1',
+      'm2',
+    ]);
     expect((await store.listMilestones('active', 'q3-growth')).map((m) => m.id)).toEqual(['m1']);
   });
 
@@ -698,7 +701,9 @@ describe('ScrumStore — setMilestoneStatus', () => {
   });
 
   test('throws on unknown id', async () => {
-    await expect(store.setMilestoneStatus('missing', 'active')).rejects.toThrow(/unknown milestone/);
+    await expect(store.setMilestoneStatus('missing', 'active')).rejects.toThrow(
+      /unknown milestone/,
+    );
   });
 
   test('throws when milestone is closed', async () => {
@@ -717,11 +722,7 @@ describe('ScrumStore — tags', () => {
     await seedTask('t1');
     await store.addTag('t1', 'p0');
     await store.addTag('t1', 'docs');
-    expect(
-      (await store.listTagsForTask('t1'))
-        .map((t) => t.tag)
-        .sort(),
-    ).toEqual(['docs', 'p0']);
+    expect((await store.listTagsForTask('t1')).map((t) => t.tag).sort()).toEqual(['docs', 'p0']);
   });
 
   test('addTag is idempotent on (task_id, tag)', async () => {
@@ -829,9 +830,7 @@ describe('ScrumStore — dependencies', () => {
   test('getBlocking returns tasks downstream of the input', async () => {
     await store.addDep('a', 'b', 'blocks');
     await store.addDep('a', 'c', 'blocks');
-    const edges = (await store.getBlocking('a'))
-      .map((d) => d.to_task_id)
-      .sort();
+    const edges = (await store.getBlocking('a')).map((d) => d.to_task_id).sort();
     expect(edges).toEqual(['b', 'c']);
   });
 });
@@ -849,7 +848,9 @@ describe('ScrumStore — events', () => {
   });
 
   test('appendEvent rejects unknown task', async () => {
-    await expect(store.appendEvent({ taskId: 'missing', kind: 'note' })).rejects.toThrow(/unknown task/);
+    await expect(store.appendEvent({ taskId: 'missing', kind: 'note' })).rejects.toThrow(
+      /unknown task/,
+    );
   });
 
   test('listEventsForTask orders newest-first and is monotonic by ts', async () => {
@@ -929,7 +930,9 @@ describe('ScrumStore — run links', () => {
   });
 
   test('linkRun rejects unknown task', async () => {
-    await expect(store.linkRun({ taskId: 'missing', runPath: '.prove/r' })).rejects.toThrow(/unknown task/);
+    await expect(store.linkRun({ taskId: 'missing', runPath: '.prove/r' })).rejects.toThrow(
+      /unknown task/,
+    );
   });
 
   test('unlinkRun removes a specific run_path', async () => {
@@ -1122,9 +1125,7 @@ describe('ScrumStore — nextReady', () => {
     await seedTask('t3');
     await store.updateTaskStatus('t3', 'ready');
     await store.updateTaskStatus('t3', 'in_progress');
-    const ids = (await store.nextReady())
-      .map((r) => r.task.id)
-      .sort();
+    const ids = (await store.nextReady()).map((r) => r.task.id).sort();
     expect(ids).toEqual(['backlog1', 'ready1']);
   });
 
@@ -1206,9 +1207,13 @@ describe('ScrumStore — acceptance criteria', () => {
 
   test('supersedeCriterion rejects unknown criterion and double-supersede', async () => {
     await seedTask('t1', { acceptance: { criteria: [ac('c1')] } });
-    await expect(store.supersedeCriterion('t1', 'nope', 'r')).rejects.toThrow(/unknown criterion 'nope'/);
+    await expect(store.supersedeCriterion('t1', 'nope', 'r')).rejects.toThrow(
+      /unknown criterion 'nope'/,
+    );
     await store.supersedeCriterion('t1', 'c1', 'first');
-    await expect(store.supersedeCriterion('t1', 'c1', 'again')).rejects.toThrow(/already superseded/);
+    await expect(store.supersedeCriterion('t1', 'c1', 'again')).rejects.toThrow(
+      /already superseded/,
+    );
   });
 
   test('shared_acceptance inheritance copies active parent criteria with inherited_from', async () => {
@@ -1298,9 +1303,9 @@ describe('ScrumStore — acceptance criteria', () => {
     await seedTask('t2');
     await expect(store.setAcceptance('t2', bad)).rejects.toThrow(/invalid scope 'children'/);
     await seedTask('t3');
-    await expect(store.addCriterion('t3', ac('c1', { scope: 'children' as never }))).rejects.toThrow(
-      /invalid scope 'children'/,
-    );
+    await expect(
+      store.addCriterion('t3', ac('c1', { scope: 'children' as never })),
+    ).rejects.toThrow(/invalid scope 'children'/);
   });
 
   test('policy validation rejects parallel/failed_only with a non-idempotent criterion', async () => {
@@ -1332,7 +1337,9 @@ describe('ScrumStore — acceptance criteria', () => {
       criteria: [ac('c1', { idempotent: false })],
       policy: { eval_order: 'fifo', rerun_policy: 'all' },
     };
-    await expect(store.createTask({ id: 't1', title: 'T1', acceptance: seq })).resolves.toBeDefined();
+    await expect(
+      store.createTask({ id: 't1', title: 'T1', acceptance: seq }),
+    ).resolves.toBeDefined();
   });
 });
 
@@ -1435,18 +1442,22 @@ describe('ScrumStore — gate-kind respond flow', () => {
 
   test('respond rejects an off-enum verdict (closed set)', async () => {
     await seedTask('t1', { acceptance: { criteria: [gateAc('g1')] } });
-    await expect(store.respondGate('t1', 'g1', 'maybe' as never, { responder: 'x' })).rejects.toThrow(
-      /invalid verdict 'maybe'/,
-    );
+    await expect(
+      store.respondGate('t1', 'g1', 'maybe' as never, { responder: 'x' }),
+    ).rejects.toThrow(/invalid verdict 'maybe'/);
   });
 
   test('an off-enum gate verdict is rejected at the acceptance write boundary', async () => {
     await seedTask('t1');
-    await expect(store.addCriterion('t1', gateAc('g1', { gate: { verdict: 'pending' as never } })),).rejects.toThrow(/invalid gate verdict 'pending'/);
+    await expect(
+      store.addCriterion('t1', gateAc('g1', { gate: { verdict: 'pending' as never } })),
+    ).rejects.toThrow(/invalid gate verdict 'pending'/);
   });
 
   test('an inherited gate criterion starts a fresh pending gate, not the parent verdict', async () => {
-    await seedTask('parent', { acceptance: { criteria: [gateAc('g1', { scope: 'descendants' })] } });
+    await seedTask('parent', {
+      acceptance: { criteria: [gateAc('g1', { scope: 'descendants' })] },
+    });
     await store.respondGate('parent', 'g1', 'approved', { responder: 'alice' });
     const child = await store.createTask({ id: 'child', title: 'Child', parentId: 'parent' });
     const inherited = child.acceptance?.criteria.find((c) => c.id === 'g1');
@@ -1693,8 +1704,12 @@ describe('ScrumStore — recordCriterionVerdict + record option', () => {
   });
 
   test('recordCriterionVerdict rejects unknown task/criterion ids', async () => {
-    await expect(store.recordCriterionVerdict('nope', 'c', true)).rejects.toThrow(/unknown task 'nope'/);
-    await seedTask('t', { acceptance: { criteria: [ac('a', { verifies_by: 'assert', check: 'x' })] } });
+    await expect(store.recordCriterionVerdict('nope', 'c', true)).rejects.toThrow(
+      /unknown task 'nope'/,
+    );
+    await seedTask('t', {
+      acceptance: { criteria: [ac('a', { verifies_by: 'assert', check: 'x' })] },
+    });
     await expect(store.recordCriterionVerdict('t', 'nope', true)).rejects.toThrow(
       /unknown criterion 'nope'/,
     );
@@ -1702,14 +1717,16 @@ describe('ScrumStore — recordCriterionVerdict + record option', () => {
 
   test('an off-enum verification verdict is rejected at the acceptance write boundary', async () => {
     await seedTask('t');
-    await expect(store.addCriterion(
+    await expect(
+      store.addCriterion(
         't',
         ac('a', {
           verifies_by: 'assert',
           check: 'x',
           verification: { verdict: 'maybe' as never },
         }),
-      ),).rejects.toThrow(/invalid verification verdict 'maybe'/);
+      ),
+    ).rejects.toThrow(/invalid verification verdict 'maybe'/);
   });
 
   test('an inherited criterion drops the parent recorded verdict (re-verifies fresh)', async () => {
@@ -1730,7 +1747,9 @@ describe('ScrumStore — recordCriterionVerdict + record option', () => {
       acceptance: { criteria: [ac('a', { verifies_by: 'agent', check: 'reviewer confirms' })] },
     });
     await store.recordCriterionVerdict('t', 'a', true, null, 'alice');
-    expect((await store.getTask('t'))?.acceptance?.criteria[0]?.verification?.verified_by).toBe('alice');
+    expect((await store.getTask('t'))?.acceptance?.criteria[0]?.verification?.verified_by).toBe(
+      'alice',
+    );
   });
 });
 
@@ -1819,10 +1838,17 @@ describe('ScrumStore — append-only criterion verdicts', () => {
     await seedTask('t', { acceptance: { criteria: [ac('c1'), ac('c2')] } });
     await store.supersedeCriterion('t', 'c1', 'replaced', 'c2');
     // The row is NOT deleted — it survives in the criteria table, flipped.
-    const rows = (await store.getStore().all(
-      'SELECT criterion_id, status, reason, superseded_by FROM scrum_acceptance_criteria WHERE task_id = ? ORDER BY criterion_id',
-      ['t'],
-    )) as Array<{ criterion_id: string; status: string; reason: string | null; superseded_by: string | null }>;
+    const rows = (await store
+      .getStore()
+      .all(
+        'SELECT criterion_id, status, reason, superseded_by FROM scrum_acceptance_criteria WHERE task_id = ? ORDER BY criterion_id',
+        ['t'],
+      )) as Array<{
+      criterion_id: string;
+      status: string;
+      reason: string | null;
+      superseded_by: string | null;
+    }>;
     expect(rows).toHaveLength(2);
     const c1 = rows.find((r) => r.criterion_id === 'c1');
     expect(c1?.status).toBe('superseded');
@@ -1879,7 +1905,9 @@ describe('ScrumStore — recordTaskVerdict', () => {
     });
     const { criterionIds } = await store.recordTaskVerdict('t', true);
     expect(criterionIds).toEqual(['keep']);
-    const byId = new Map(((await store.getTask('t'))?.acceptance?.criteria ?? []).map((c) => [c.id, c]));
+    const byId = new Map(
+      ((await store.getTask('t'))?.acceptance?.criteria ?? []).map((c) => [c.id, c]),
+    );
     expect(byId.get('g')?.verification).toBeUndefined();
     expect(byId.get('sub')?.verification).toBeUndefined();
   });
@@ -1915,7 +1943,9 @@ describe('ScrumStore — listPendingGates', () => {
   });
 
   test('a fresh gate-kind criterion surfaces with task + criterion id + text', async () => {
-    await seedTask('t1', { acceptance: { criteria: [gateAc('g1', { text: 'operator approves' })] } });
+    await seedTask('t1', {
+      acceptance: { criteria: [gateAc('g1', { text: 'operator approves' })] },
+    });
     const pending = await store.listPendingGates();
     expect(pending).toHaveLength(1);
     expect(pending[0]).toEqual({
@@ -2214,7 +2244,9 @@ describe('ScrumStore — acceptance freeze guard', () => {
 
   test('supersedeCriterion rejects while the task is in_progress', async () => {
     await seedTask('t1', { acceptance: { criteria: [ac('c1')] }, status: 'in_progress' });
-    await expect(store.supersedeCriterion('t1', 'c1', 'r')).rejects.toThrow(/frozen while task 't1'/);
+    await expect(store.supersedeCriterion('t1', 'c1', 'r')).rejects.toThrow(
+      /frozen while task 't1'/,
+    );
   });
 
   test('criteria are amendable in non-in_progress statuses', async () => {
@@ -2232,7 +2264,9 @@ describe('ScrumStore — acceptance freeze guard', () => {
 describe('ScrumStore — story acceptance floor (≥1 active criterion)', () => {
   test('story with no criteria cannot transition to ready / in_progress / done', async () => {
     await seedTask('s', { layer: 'story' });
-    await expect(store.updateTaskStatus('s', 'ready')).rejects.toThrow(/no active acceptance criteria/);
+    await expect(store.updateTaskStatus('s', 'ready')).rejects.toThrow(
+      /no active acceptance criteria/,
+    );
     await expect(store.updateTaskStatus('s', 'in_progress')).rejects.toThrow(
       /no active acceptance criteria/,
     );
@@ -2241,7 +2275,9 @@ describe('ScrumStore — story acceptance floor (≥1 active criterion)', () => 
   test('story with all-superseded criteria is still blocked (only active count)', async () => {
     await seedTask('s', { layer: 'story', acceptance: { criteria: [ac('c1')] } });
     await store.supersedeCriterion('s', 'c1', 'retired');
-    await expect(store.updateTaskStatus('s', 'ready')).rejects.toThrow(/no active acceptance criteria/);
+    await expect(store.updateTaskStatus('s', 'ready')).rejects.toThrow(
+      /no active acceptance criteria/,
+    );
   });
 
   test('story with ≥1 active criterion passes the floor', async () => {
@@ -2269,7 +2305,9 @@ describe('ScrumStore — story acceptance floor (≥1 active criterion)', () => 
       layer: 'story',
       acceptance: { criteria: [ac('d', { scope: 'descendants' })] },
     });
-    await expect(store.updateTaskStatus('s', 'ready')).rejects.toThrow(/no active acceptance criteria/);
+    await expect(store.updateTaskStatus('s', 'ready')).rejects.toThrow(
+      /no active acceptance criteria/,
+    );
   });
 });
 
@@ -2295,7 +2333,7 @@ describe('ScrumStore — story close-floor acceptance-satisfaction gate', () => 
   });
 
   /** An in_progress story with the given criteria, linked to a synthesized run. */
-  async function seedStoryForClose(criteria: AcceptanceCriterion[]) : Promise<void> {
+  async function seedStoryForClose(criteria: AcceptanceCriterion[]): Promise<void> {
     await seedTask('s', { layer: 'story', status: 'in_progress', acceptance: { criteria } });
     await store.linkRun({ taskId: 's', runPath: runDir });
   }
@@ -2324,7 +2362,9 @@ describe('ScrumStore — story close-floor acceptance-satisfaction gate', () => 
   });
 
   test('a heavy criterion recorded failed blocks the close', async () => {
-    await seedStoryForClose([ac('a', { verifies_by: 'assert', check: "task.review == 'approved'" })]);
+    await seedStoryForClose([
+      ac('a', { verifies_by: 'assert', check: "task.review == 'approved'" }),
+    ]);
     await store.recordCriterionVerdict('s', 'a', false, "task.review == 'approved'");
     await expect(store.updateTaskStatus('s', 'done')).rejects.toThrow(/cannot close.*a \(assert\)/);
   });
@@ -2352,7 +2392,9 @@ describe('ScrumStore — story close-floor acceptance-satisfaction gate', () => 
     // The orchestrator close-floor gap: an agent criterion stays pending (judged
     // driver-side, never auto-stamped), so the close is blocked until the driver
     // records the verdict — the `scrum task acceptance verify` path.
-    await seedStoryForClose([ac('j', { verifies_by: 'agent', check: 'reviewer confirms behavior' })]);
+    await seedStoryForClose([
+      ac('j', { verifies_by: 'agent', check: 'reviewer confirms behavior' }),
+    ]);
     await expect(store.updateTaskStatus('s', 'done')).rejects.toThrow(/cannot close.*j \(agent\)/);
     await store.recordTaskVerdict('s', true, null, 'reviewer');
     await expect(store.updateTaskStatus('s', 'done')).resolves.toBeDefined();
@@ -2370,7 +2412,7 @@ describe('ScrumStore — story synthesis floor', () => {
     rmSync(runDir, { recursive: true, force: true });
   });
 
-  async function seedStartedStory(id: string) : Promise<void> {
+  async function seedStartedStory(id: string): Promise<void> {
     // Story with a SATISFIED active criterion (clears both the acceptance-count
     // floor and the new acceptance-satisfaction gate) already in_progress, so the
     // only remaining gate for `done` is the synthesis floor under test. An
@@ -2402,7 +2444,9 @@ describe('ScrumStore — story synthesis floor', () => {
   test('story with a linked run but no synthesis entry is blocked', async () => {
     await seedStartedStory('s');
     await store.linkRun({ taskId: 's', runPath: runDir });
-    await expect(store.updateTaskStatus('s', 'done')).rejects.toThrow(/no synthesis reasoning-log entry/);
+    await expect(store.updateTaskStatus('s', 'done')).rejects.toThrow(
+      /no synthesis reasoning-log entry/,
+    );
   });
 
   test('story passes once its most-recent run carries a synthesis entry', async () => {
@@ -2438,26 +2482,32 @@ describe('ScrumStore — escalation typing', () => {
   test('appendEvent validates blocker_raised payload: accepts the four types, rejects unknown', async () => {
     await seedTask('t1');
     for (const type of ['blocked', 'ambiguous', 'conflict', 'missing_context'] as const) {
-      await expect(store.appendEvent({
+      await expect(
+        store.appendEvent({
           taskId: 't1',
           kind: 'blocker_raised',
           payload: { escalation_type: type, summary: 's' },
-        }),).resolves.toBeDefined();
+        }),
+      ).resolves.toBeDefined();
     }
-    await expect(store.appendEvent({
+    await expect(
+      store.appendEvent({
         taskId: 't1',
         kind: 'blocker_raised',
         payload: { escalation_type: 'bogus', summary: 's' },
-      }),).rejects.toThrow(/escalation_type must be one of/);
+      }),
+    ).rejects.toThrow(/escalation_type must be one of/);
   });
 
   test('appendEvent rejects a blocker_raised payload missing summary (domain error, not opaque)', async () => {
     await seedTask('t1');
-    await expect(store.appendEvent({
+    await expect(
+      store.appendEvent({
         taskId: 't1',
         kind: 'blocker_raised',
         payload: { escalation_type: 'blocked' },
-      }),).rejects.toThrow(/requires a non-empty 'summary'/);
+      }),
+    ).rejects.toThrow(/requires a non-empty 'summary'/);
   });
 
   test('blocker_raised escalation round-trips through listEventsForTask', async () => {
@@ -2828,9 +2878,9 @@ describe('ScrumStore — ambient write actor (defaultActor)', () => {
       idempotent: true,
     };
     expect((await store.addCriterion('t1', criterion)).last_modified_by).toBe('ct-operator');
-    expect((await store.setBounds('t1', { tools: { allow: ['Bash(go test *)'] } })).last_modified_by).toBe(
-      'ct-operator',
-    );
+    expect(
+      (await store.setBounds('t1', { tools: { allow: ['Bash(go test *)'] } })).last_modified_by,
+    ).toBe('ct-operator');
   });
 
   test('registerContributor and setOperatorOfRecord fall back to the ambient actor', async () => {
@@ -2919,14 +2969,18 @@ describe('ScrumStore — contributor registry (v12)', () => {
 
   test('reconcileContributor guards the identity: a matching id passes, a mismatch throws', async () => {
     await store.registerContributor({ slug: 'jane', id: 'ct-fixed' });
-    expect((await store.reconcileContributor({ slug: 'jane', id: 'ct-fixed' })).id).toBe('ct-fixed');
+    expect((await store.reconcileContributor({ slug: 'jane', id: 'ct-fixed' })).id).toBe(
+      'ct-fixed',
+    );
     await expect(store.reconcileContributor({ slug: 'jane', id: 'ct-other' })).rejects.toThrow(
       /minted once and never changed/,
     );
   });
 
   test('reconcileContributor throws on an unknown slug', async () => {
-    await expect(store.reconcileContributor({ slug: 'nobody' })).rejects.toThrow(/unknown contributor/);
+    await expect(store.reconcileContributor({ slug: 'nobody' })).rejects.toThrow(
+      /unknown contributor/,
+    );
   });
 
   test('listContributors orders by slug and filters by status', async () => {
@@ -2945,7 +2999,10 @@ describe('ScrumStore — contributor registry (v12)', () => {
       github: 'janedoe',
       email: 'jane@example.com',
     });
-    const match = await store.resolveContributor({ github: 'JaneDoe', email: 'someone-else@x.com' });
+    const match = await store.resolveContributor({
+      github: 'JaneDoe',
+      email: 'someone-else@x.com',
+    });
     expect(match?.id).toBe(jane.id);
   });
 
@@ -2957,9 +3014,9 @@ describe('ScrumStore — contributor registry (v12)', () => {
     });
     // github absent / non-matching, email matches case-insensitively.
     expect((await store.resolveContributor({ email: 'JANE@example.com' }))?.id).toBe(jane.id);
-    expect((await store.resolveContributor({ github: 'nobody', email: 'jane@example.com' }))?.id).toBe(
-      jane.id,
-    );
+    expect(
+      (await store.resolveContributor({ github: 'nobody', email: 'jane@example.com' }))?.id,
+    ).toBe(jane.id);
   });
 
   test('resolveContributor returns null on a miss and on an empty key', async () => {
@@ -2982,13 +3039,18 @@ describe('ScrumStore — operator-of-record position history (v13)', () => {
 
   test('setOperatorOfRecord appends an open interval and validates the contributor', async () => {
     const jane = await contributor('jane');
-    const row = await store.setOperatorOfRecord({ contributorId: jane, fromTs: '2026-01-01T00:00:00Z' });
+    const row = await store.setOperatorOfRecord({
+      contributorId: jane,
+      fromTs: '2026-01-01T00:00:00Z',
+    });
     expect(row.contributor_id).toBe(jane);
     expect(row.from_ts).toBe('2026-01-01T00:00:00Z');
     expect(row.to_ts).toBeNull();
 
     // An unregistered holder is rejected rather than recorded.
-    await expect(store.setOperatorOfRecord({ contributorId: 'ct-ghost' })).rejects.toThrow(/unknown/);
+    await expect(store.setOperatorOfRecord({ contributorId: 'ct-ghost' })).rejects.toThrow(
+      /unknown/,
+    );
   });
 
   test('transfer closes the prior interval at the new holder from_ts (one open row)', async () => {
@@ -3107,12 +3169,16 @@ describe('ScrumStore — team registry (v14)', () => {
 
   test('createTeam rejects an off-vocabulary team_type at the store boundary', async () => {
     // @ts-expect-error — exercising the runtime closed-enum guard with a bad value.
-    await expect(store.createTeam({ slug: 'rogue', teamType: 'wildcat' })).rejects.toThrow(/invalid team_type 'wildcat'/);
+    await expect(store.createTeam({ slug: 'rogue', teamType: 'wildcat' })).rejects.toThrow(
+      /invalid team_type 'wildcat'/,
+    );
   });
 
   test('createTeam rejects an off-vocabulary lifetime at the store boundary', async () => {
     // @ts-expect-error — exercising the runtime closed-enum guard with a bad value.
-    await expect(store.createTeam({ slug: 'rogue', teamType: 'platform', lifetime: 'forever' })).rejects.toThrow(/invalid lifetime 'forever'/);
+    await expect(
+      store.createTeam({ slug: 'rogue', teamType: 'platform', lifetime: 'forever' }),
+    ).rejects.toThrow(/invalid lifetime 'forever'/);
   });
 
   test('getTeam returns null for an unknown slug', async () => {
@@ -3197,9 +3263,9 @@ describe('ScrumStore — team scope globs (v15)', () => {
     await store.createTeam({ slug: 'identity', teamType: 'stream_aligned' });
     await store.setTeamScopes('payments', { read: [], write: ['src/shared/**'] });
 
-    await expect(store.setTeamScopes('identity', { read: [], write: ['src/shared/**'] })).rejects.toThrow(
-      /write-scope overlap.*'identity'.*'payments'.*'src\/shared\/\*\*'/,
-    );
+    await expect(
+      store.setTeamScopes('identity', { read: [], write: ['src/shared/**'] }),
+    ).rejects.toThrow(/write-scope overlap.*'identity'.*'payments'.*'src\/shared\/\*\*'/);
     // The rejected set never persisted.
     expect(await store.getTeamScopes('identity')).toEqual({ read: [], write: [] });
   });
@@ -3210,9 +3276,9 @@ describe('ScrumStore — team scope globs (v15)', () => {
     await store.setTeamScopes('platform', { read: [], write: ['src/**'] });
 
     // src/payments/** is a strict subtree of src/** → conflict.
-    await expect(store.setTeamScopes('payments', { read: [], write: ['src/payments/**'] })).rejects.toThrow(
-      /write-scope overlap.*'payments'.*'platform'/,
-    );
+    await expect(
+      store.setTeamScopes('payments', { read: [], write: ['src/payments/**'] }),
+    ).rejects.toThrow(/write-scope overlap.*'payments'.*'platform'/);
   });
 
   // --- permitted READ-overlap (read never conflicts with write either) ---
@@ -3223,7 +3289,10 @@ describe('ScrumStore — team scope globs (v15)', () => {
     await store.setTeamScopes('payments', { read: [], write: ['src/payments/**'] });
 
     // analytics READS what payments WRITES — read-vs-write is never a conflict.
-    await store.setTeamScopes('analytics', { read: ['src/payments/**'], write: ['src/analytics/**'] });
+    await store.setTeamScopes('analytics', {
+      read: ['src/payments/**'],
+      write: ['src/analytics/**'],
+    });
     expect((await store.getTeamScopes('analytics')).read).toEqual(['src/payments/**']);
     expect(await store.validateTeamWriteScopes()).toBeNull();
   });
@@ -3233,7 +3302,9 @@ describe('ScrumStore — team scope globs (v15)', () => {
     await store.setTeamScopes('payments', { read: [], write: ['src/payments/**'] });
     // Re-applying the identical set must not flag the team against its own
     // about-to-be-replaced rows.
-    await expect(store.setTeamScopes('payments', { read: [], write: ['src/payments/**'] }),).resolves.toBeDefined();
+    await expect(
+      store.setTeamScopes('payments', { read: [], write: ['src/payments/**'] }),
+    ).resolves.toBeDefined();
   });
 
   test('validateTeamWriteScopes reports the first cross-team write overlap (slug-ordered)', async () => {
@@ -3275,10 +3346,14 @@ describe('ScrumStore — team roster (v16)', () => {
     expect(warning).toBeNull();
 
     // An unknown team is rejected rather than recorded.
-    await expect(store.rotateTeamMember({ teamSlug: 'ghost', role: 'engineer', contributorId: 'ct-bob' }),).rejects.toThrow(/unknown team 'ghost'/);
+    await expect(
+      store.rotateTeamMember({ teamSlug: 'ghost', role: 'engineer', contributorId: 'ct-bob' }),
+    ).rejects.toThrow(/unknown team 'ghost'/);
     // An off-vocabulary role is rejected at the boundary.
     // @ts-expect-error — exercising the runtime closed-enum guard with a bad value.
-    await expect(store.rotateTeamMember({ teamSlug: 'payments', role: 'overlord', contributorId: 'ct-bob' })).rejects.toThrow(/invalid role 'overlord'/);
+    await expect(
+      store.rotateTeamMember({ teamSlug: 'payments', role: 'overlord', contributorId: 'ct-bob' }),
+    ).rejects.toThrow(/invalid role 'overlord'/);
   });
 
   test('rotate closes the prior interval at the new holder from_ts (one open row per slot)', async () => {
@@ -3311,8 +3386,16 @@ describe('ScrumStore — team roster (v16)', () => {
   });
 
   test('rotating different roles does not close each other (slots are independent)', async () => {
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-jane' });
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'engineer', contributorId: 'ct-bob' });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-jane',
+    });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'engineer',
+      contributorId: 'ct-bob',
+    });
 
     const roster = await store.getTeamRoster('payments');
     expect(roster.current.tech_lead?.contributor_id).toBe('ct-jane');
@@ -3321,7 +3404,11 @@ describe('ScrumStore — team roster (v16)', () => {
   });
 
   test('multi-slot WARNS but completes (team-of-one fills more than one slot)', async () => {
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-solo' });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-solo',
+    });
     const second = await store.rotateTeamMember({
       teamSlug: 'payments',
       role: 'engineer',
@@ -3341,7 +3428,11 @@ describe('ScrumStore — team roster (v16)', () => {
   });
 
   test('re-affirming the SAME slot with the same holder does not self-trigger the warning', async () => {
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-jane' });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-jane',
+    });
     const again = await store.rotateTeamMember({
       teamSlug: 'payments',
       role: 'tech_lead',
@@ -3360,7 +3451,11 @@ describe('ScrumStore — team roster (v16)', () => {
   });
 
   test('getTeamRoster current-only view omits history', async () => {
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'implementer', contributorId: 'ct-ann' });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'implementer',
+      contributorId: 'ct-ann',
+    });
     const roster = await store.getTeamRoster('payments');
     expect(roster.history).toBeUndefined();
     expect(roster.current.implementer?.contributor_id).toBe('ct-ann');
@@ -3404,15 +3499,23 @@ describe('ScrumStore — team interface (v17)', () => {
     expect(accept.reason).toBeNull();
 
     // An unknown team is rejected rather than recorded.
-    await expect(store.addTeamAccept('ghost', 'api-review')).rejects.toThrow(/unknown team 'ghost'/);
+    await expect(store.addTeamAccept('ghost', 'api-review')).rejects.toThrow(
+      /unknown team 'ghost'/,
+    );
   });
 
   test('addTeamAccept rejects a non-kebab-case ask type', async () => {
-    await expect(store.addTeamAccept('payments', 'SchemaChange')).rejects.toThrow(/invalid ask_type/);
-    await expect(store.addTeamAccept('payments', 'schema_change')).rejects.toThrow(/invalid ask_type/);
+    await expect(store.addTeamAccept('payments', 'SchemaChange')).rejects.toThrow(
+      /invalid ask_type/,
+    );
+    await expect(store.addTeamAccept('payments', 'schema_change')).rejects.toThrow(
+      /invalid ask_type/,
+    );
     await expect(store.addTeamAccept('payments', '-leading')).rejects.toThrow(/invalid ask_type/);
     await expect(store.addTeamAccept('payments', 'trailing-')).rejects.toThrow(/invalid ask_type/);
-    await expect(store.addTeamAccept('payments', 'double--hyphen')).rejects.toThrow(/invalid ask_type/);
+    await expect(store.addTeamAccept('payments', 'double--hyphen')).rejects.toThrow(
+      /invalid ask_type/,
+    );
     // Single-segment and multi-segment kebab are accepted.
     expect((await store.addTeamAccept('payments', 'db')).ask_type).toBe('db');
     expect((await store.addTeamAccept('payments', 'api-review-v2')).ask_type).toBe('api-review-v2');
@@ -3450,10 +3553,14 @@ describe('ScrumStore — team interface (v17)', () => {
   });
 
   test('supersedeTeamAccept rejects an unknown id and an already-superseded target', async () => {
-    await expect(store.supersedeTeamAccept(9999, 'gone')).rejects.toThrow(/unknown accept id '9999'/);
+    await expect(store.supersedeTeamAccept(9999, 'gone')).rejects.toThrow(
+      /unknown accept id '9999'/,
+    );
     const accept = await store.addTeamAccept('payments', 'api-review');
     await store.supersedeTeamAccept(accept.id, 'first');
-    await expect(store.supersedeTeamAccept(accept.id, 'again')).rejects.toThrow(/already superseded/);
+    await expect(store.supersedeTeamAccept(accept.id, 'again')).rejects.toThrow(
+      /already superseded/,
+    );
   });
 
   test('supersedeTeamExpose flips status + records reason, never deletes the row', async () => {
@@ -3468,10 +3575,14 @@ describe('ScrumStore — team interface (v17)', () => {
   });
 
   test('supersedeTeamExpose rejects an unknown id and an already-superseded target', async () => {
-    await expect(store.supersedeTeamExpose(9999, 'gone')).rejects.toThrow(/unknown expose id '9999'/);
+    await expect(store.supersedeTeamExpose(9999, 'gone')).rejects.toThrow(
+      /unknown expose id '9999'/,
+    );
     const expose = await store.addTeamExpose('payments', { name: 'E', schemaRef: 'e.json' });
     await store.supersedeTeamExpose(expose.id, 'first');
-    await expect(store.supersedeTeamExpose(expose.id, 'again')).rejects.toThrow(/already superseded/);
+    await expect(store.supersedeTeamExpose(expose.id, 'again')).rejects.toThrow(
+      /already superseded/,
+    );
   });
 
   test('getTeamInterface returns active-by-default, full history on request', async () => {
@@ -3549,20 +3660,24 @@ describe('ScrumStore — getManifest (cross-team contracts)', () => {
 
 describe('ScrumStore — team lifecycle consistency guard (v18)', () => {
   test('createTeam rejects a terminates_on_milestone team with no target', async () => {
-    await expect(store.createTeam({
+    await expect(
+      store.createTeam({
         slug: 'squad',
         teamType: 'enabling',
         lifetime: 'terminates_on_milestone',
-      }),).rejects.toThrow(/'terminates_on_milestone' team requires a terminates_on_milestone target/);
+      }),
+    ).rejects.toThrow(/'terminates_on_milestone' team requires a terminates_on_milestone target/);
   });
 
   test('createTeam rejects a persistent team carrying a target', async () => {
-    await expect(store.createTeam({
+    await expect(
+      store.createTeam({
         slug: 'core',
         teamType: 'platform',
         lifetime: 'persistent',
         terminatesOnMilestone: 'm1',
-      }),).rejects.toThrow(/'persistent' team must not carry a terminates_on_milestone target/);
+      }),
+    ).rejects.toThrow(/'persistent' team must not carry a terminates_on_milestone target/);
   });
 
   test('createTeam accepts a persistent team with no target (the default)', async () => {
@@ -3612,8 +3727,16 @@ describe('ScrumStore — teamTerminate (v18)', () => {
   beforeEach(async () => {
     await store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
     await store.setTeamScopes('payments', { read: ['src/shared/**'], write: ['src/payments/**'] });
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-jane' });
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'engineer', contributorId: 'ct-bob' });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-jane',
+    });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'engineer',
+      contributorId: 'ct-bob',
+    });
     await store.addTeamAccept('payments', 'schema-change');
     await store.addTeamExpose('payments', { name: 'PaymentEvent', schemaRef: 'pe.json' });
   });
@@ -3640,7 +3763,9 @@ describe('ScrumStore — teamTerminate (v18)', () => {
 
     // Accepts are deliberately left active — superseding accepts is a separate
     // policy not part of the team-local disband.
-    expect((await store.listTeamAccepts('payments')).map((a) => a.ask_type)).toEqual(['schema-change']);
+    expect((await store.listTeamAccepts('payments')).map((a) => a.ask_type)).toEqual([
+      'schema-change',
+    ]);
 
     // 3. Roster vacated — every open slot closed with no successor.
     const roster = await store.getTeamRoster('payments', { includeHistory: true });
@@ -3666,9 +3791,9 @@ describe('ScrumStore — teamTerminate (v18)', () => {
   test('releasing scope frees a path for another team to claim', async () => {
     // A second team cannot claim the path while payments holds the write glob.
     await store.createTeam({ slug: 'identity', teamType: 'stream_aligned' });
-    await expect(store.setTeamScopes('identity', { read: [], write: ['src/payments/**'] })).rejects.toThrow(
-      /write-scope overlap/,
-    );
+    await expect(
+      store.setTeamScopes('identity', { read: [], write: ['src/payments/**'] }),
+    ).rejects.toThrow(/write-scope overlap/);
     // After the disband releases payments' scope, the path is claimable.
     await store.teamTerminate('payments', 'done');
     const saved = await store.setTeamScopes('identity', { read: [], write: ['src/payments/**'] });
@@ -3685,7 +3810,11 @@ describe('ScrumStore — milestone-close termination trigger (v18)', () => {
       lifetime: 'terminates_on_milestone',
       terminatesOnMilestone: 'migrate-v2',
     });
-    await store.rotateTeamMember({ teamSlug: 'squad', role: 'tech_lead', contributorId: 'ct-jane' });
+    await store.rotateTeamMember({
+      teamSlug: 'squad',
+      role: 'tech_lead',
+      contributorId: 'ct-jane',
+    });
     await store.addTeamExpose('squad', { name: 'Guide', schemaRef: 'g.json' });
     // A persistent team and a team pinned to a DIFFERENT milestone are untouched.
     await store.createTeam({ slug: 'core', teamType: 'platform' });
@@ -3735,7 +3864,11 @@ describe('ScrumStore — team Lore layer (v19)', () => {
   });
 
   test('recordLore appends an entry authored by the seated tech_lead', async () => {
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-lead',
+    });
     const { row, warning } = await store.recordLore({
       teamSlug: 'payments',
       body: 'prefer idempotent migrations',
@@ -3752,12 +3885,18 @@ describe('ScrumStore — team Lore layer (v19)', () => {
   });
 
   test('recordLore rejects a non-tech_lead author, naming the expected tech_lead', async () => {
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
-    await expect(store.recordLore({
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-lead',
+    });
+    await expect(
+      store.recordLore({
         teamSlug: 'payments',
         body: 'sneaky note',
         authorContributorId: 'ct-impostor',
-      }),).rejects.toThrow(/not the current tech_lead.*only ct-lead may author/);
+      }),
+    ).rejects.toThrow(/not the current tech_lead.*only ct-lead may author/);
     // The rejected write is never persisted.
     expect(await store.listLores('payments')).toEqual([]);
   });
@@ -3777,21 +3916,45 @@ describe('ScrumStore — team Lore layer (v19)', () => {
 
   test('an engineer/implementer holder is still not allowed to author Lore', async () => {
     // Only the tech_lead slot authorizes; another seated role does not.
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'engineer', contributorId: 'ct-eng' });
-    await expect(store.recordLore({
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-lead',
+    });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'engineer',
+      contributorId: 'ct-eng',
+    });
+    await expect(
+      store.recordLore({
         teamSlug: 'payments',
         body: 'engineer cannot author',
         authorContributorId: 'ct-eng',
-      }),).rejects.toThrow(/not the current tech_lead/);
+      }),
+    ).rejects.toThrow(/not the current tech_lead/);
   });
 
   test('authorship guard follows tech_lead rotation (only the CURRENT holder may write)', async () => {
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-old' });
-    await store.recordLore({ teamSlug: 'payments', body: 'old wisdom', authorContributorId: 'ct-old' });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-old',
+    });
+    await store.recordLore({
+      teamSlug: 'payments',
+      body: 'old wisdom',
+      authorContributorId: 'ct-old',
+    });
     // Rotate the lead. The prior holder may no longer author; the new one may.
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-new' });
-    await expect(store.recordLore({ teamSlug: 'payments', body: 'stale', authorContributorId: 'ct-old' }),).rejects.toThrow(/only ct-new may author/);
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-new',
+    });
+    await expect(
+      store.recordLore({ teamSlug: 'payments', body: 'stale', authorContributorId: 'ct-old' }),
+    ).rejects.toThrow(/only ct-new may author/);
     const { row } = await store.recordLore({
       teamSlug: 'payments',
       body: 'new wisdom',
@@ -3801,11 +3964,17 @@ describe('ScrumStore — team Lore layer (v19)', () => {
   });
 
   test('recordLore rejects an unknown team', async () => {
-    await expect(store.recordLore({ teamSlug: 'ghost', body: 'x', authorContributorId: 'ct-lead' }),).rejects.toThrow(/unknown team 'ghost'/);
+    await expect(
+      store.recordLore({ teamSlug: 'ghost', body: 'x', authorContributorId: 'ct-lead' }),
+    ).rejects.toThrow(/unknown team 'ghost'/);
   });
 
   test('listLores returns a team entries oldest-first; unknown team yields empty', async () => {
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-lead',
+    });
     await store.recordLore({
       teamSlug: 'payments',
       body: 'first',
@@ -3825,7 +3994,11 @@ describe('ScrumStore — team Lore layer (v19)', () => {
   });
 
   test('Lore is append-only: a correction is a new entry, not an edit', async () => {
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-lead',
+    });
     const first = await store.recordLore({
       teamSlug: 'payments',
       body: 'use tabs',
@@ -3847,7 +4020,11 @@ describe('ScrumStore — team Lore layer (v19)', () => {
   });
 
   test('getLore fetches one entry by id, or null when unknown', async () => {
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-lead',
+    });
     const { row } = await store.recordLore({
       teamSlug: 'payments',
       body: 'pin the schema version',
@@ -3877,7 +4054,9 @@ describe('ScrumStore — Annotation layer (v20)', () => {
 
   test('addAnnotation rejects a target_kind outside the closed enum, naming the set', async () => {
     // @ts-expect-error — exercising the runtime boundary guard with an off-enum kind.
-    await expect(store.addAnnotation({ targetKind: 'milestone', targetRef: 'm1', body: 'x', author: 'CT-a' })).rejects.toThrow(/invalid target_kind 'milestone'; expected one of: task, team, decision/);
+    await expect(
+      store.addAnnotation({ targetKind: 'milestone', targetRef: 'm1', body: 'x', author: 'CT-a' }),
+    ).rejects.toThrow(/invalid target_kind 'milestone'; expected one of: task, team, decision/);
     expect(await store.listAnnotations('task', 'm1')).toEqual([]);
   });
 
@@ -3919,8 +4098,18 @@ describe('ScrumStore — Annotation layer (v20)', () => {
   });
 
   test('listAnnotations scopes by (target_kind, target_ref) — same ref, different kind, no collision', async () => {
-    await store.addAnnotation({ targetKind: 'task', targetRef: 'x', body: 'task note', author: 'CT-a' });
-    await store.addAnnotation({ targetKind: 'team', targetRef: 'x', body: 'team note', author: 'CT-b' });
+    await store.addAnnotation({
+      targetKind: 'task',
+      targetRef: 'x',
+      body: 'task note',
+      author: 'CT-a',
+    });
+    await store.addAnnotation({
+      targetKind: 'team',
+      targetRef: 'x',
+      body: 'team note',
+      author: 'CT-b',
+    });
     expect((await store.listAnnotations('task', 'x')).map((a) => a.body)).toEqual(['task note']);
     expect((await store.listAnnotations('team', 'x')).map((a) => a.body)).toEqual(['team note']);
   });
@@ -3963,7 +4152,9 @@ describe('ScrumStore — gated Codex write protocol (v21)', () => {
     expect(row.status).toBe('draft');
     expect(row.write_status).toBe('draft');
     // It is NOT in the accepted set yet.
-    expect((await store.listDecisions({ status: 'accepted' })).map((d) => d.id)).not.toContain('a1');
+    expect((await store.listDecisions({ status: 'accepted' })).map((d) => d.id)).not.toContain(
+      'a1',
+    );
   });
 
   test('adr draft -> approve -> accepted (human gate, any responder)', async () => {
@@ -3985,7 +4176,11 @@ describe('ScrumStore — gated Codex write protocol (v21)', () => {
 
   test('glossary draft -> approve by a tech_lead -> accepted', async () => {
     await store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-lead',
+    });
     await store.recordDecision({ id: 'g1', title: 'G', content: 'body', kind: 'glossary' });
     const approved = await store.approveDecision('g1', 'ct-lead');
     expect(approved.status).toBe('accepted');
@@ -3995,7 +4190,11 @@ describe('ScrumStore — gated Codex write protocol (v21)', () => {
 
   test('glossary approve by a NON-tech_lead is rejected, decision stays a draft', async () => {
     await store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'engineer', contributorId: 'ct-eng' });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'engineer',
+      contributorId: 'ct-eng',
+    });
     await store.recordDecision({ id: 'g1', title: 'G', content: 'body', kind: 'glossary' });
     await expect(store.approveDecision('g1', 'ct-eng')).rejects.toThrow(
       /requires a tech_lead review.*holds no current tech_lead slot/,
@@ -4008,18 +4207,32 @@ describe('ScrumStore — gated Codex write protocol (v21)', () => {
 
   test('a tech_lead on ANY team may approve a glossary (cross-team review)', async () => {
     await store.createTeam({ slug: 'other', teamType: 'platform' });
-    await store.rotateTeamMember({ teamSlug: 'other', role: 'tech_lead', contributorId: 'ct-lead' });
+    await store.rotateTeamMember({
+      teamSlug: 'other',
+      role: 'tech_lead',
+      contributorId: 'ct-lead',
+    });
     await store.recordDecision({ id: 'g1', title: 'G', content: 'body', kind: 'glossary' });
     expect((await store.approveDecision('g1', 'ct-lead')).status).toBe('accepted');
   });
 
   test('a former tech_lead (rotated out) may NOT approve a glossary', async () => {
     await store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-old' });
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-new' });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-old',
+    });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-new',
+    });
     await store.recordDecision({ id: 'g1', title: 'G', content: 'body', kind: 'glossary' });
     // The closed (rotated-out) slot does not count; only the open holder does.
-    await expect(store.approveDecision('g1', 'ct-old')).rejects.toThrow(/requires a tech_lead review/);
+    await expect(store.approveDecision('g1', 'ct-old')).rejects.toThrow(
+      /requires a tech_lead review/,
+    );
     expect((await store.approveDecision('g1', 'ct-new')).status).toBe('accepted');
   });
 
@@ -4031,7 +4244,9 @@ describe('ScrumStore — gated Codex write protocol (v21)', () => {
     expect(rejected.status).toBe('draft');
     expect(rejected.reason).toBe('duplicate of existing ADR');
     expect(rejected.gate_responder).toBe('ct-reviewer');
-    expect((await store.listDecisions({ status: 'accepted' })).map((d) => d.id)).not.toContain('a1');
+    expect((await store.listDecisions({ status: 'accepted' })).map((d) => d.id)).not.toContain(
+      'a1',
+    );
   });
 
   test('re-deciding an already-approved gate is refused', async () => {
@@ -4040,7 +4255,9 @@ describe('ScrumStore — gated Codex write protocol (v21)', () => {
     await expect(store.approveDecision('a1', 'ct-other')).rejects.toThrow(
       /already resolved \('approved'\)/,
     );
-    await expect(store.rejectDecision('a1', 'ct-other')).rejects.toThrow(/already resolved \('approved'\)/);
+    await expect(store.rejectDecision('a1', 'ct-other')).rejects.toThrow(
+      /already resolved \('approved'\)/,
+    );
   });
 
   test('re-deciding an already-rejected gate is refused', async () => {
@@ -4049,7 +4266,9 @@ describe('ScrumStore — gated Codex write protocol (v21)', () => {
     await expect(store.approveDecision('a1', 'ct-other')).rejects.toThrow(
       /already resolved \('rejected'\)/,
     );
-    await expect(store.rejectDecision('a1', 'ct-other')).rejects.toThrow(/already resolved \('rejected'\)/);
+    await expect(store.rejectDecision('a1', 'ct-other')).rejects.toThrow(
+      /already resolved \('rejected'\)/,
+    );
   });
 
   test('approve/reject refuse a non-gated decision (no write-gate to resolve)', async () => {
@@ -4059,13 +4278,20 @@ describe('ScrumStore — gated Codex write protocol (v21)', () => {
   });
 
   test('approve/reject refuse an unknown decision id', async () => {
-    await expect(store.approveDecision('ghost', 'ct-x')).rejects.toThrow(/unknown decision 'ghost'/);
+    await expect(store.approveDecision('ghost', 'ct-x')).rejects.toThrow(
+      /unknown decision 'ghost'/,
+    );
     await expect(store.rejectDecision('ghost', 'ct-x')).rejects.toThrow(/unknown decision 'ghost'/);
   });
 
   test('a re-record of a gated draft re-enters the draft gate (not auto-accepted)', async () => {
     await store.recordDecision({ id: 'a1', title: 'A', content: 'v1', kind: 'adr' });
-    const reRecorded = await store.recordDecision({ id: 'a1', title: 'A', content: 'v2', kind: 'adr' });
+    const reRecorded = await store.recordDecision({
+      id: 'a1',
+      title: 'A',
+      content: 'v2',
+      kind: 'adr',
+    });
     expect(reRecorded.status).toBe('draft');
     expect(reRecorded.write_status).toBe('draft');
   });
@@ -4094,12 +4320,17 @@ describe('ScrumStore — gated Codex write protocol (v21)', () => {
 describe('ScrumStore — promoteLoreToCodex (v22)', () => {
   beforeEach(async () => {
     await store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-lead',
+    });
   });
 
   /** Append one Lore entry to `payments` and return its row. */
-  async function seedLore(body: string) : Promise<void> {
-    return (await store.recordLore({ teamSlug: 'payments', body, authorContributorId: 'ct-lead' })).row;
+  async function seedLore(body: string): Promise<void> {
+    return (await store.recordLore({ teamSlug: 'payments', body, authorContributorId: 'ct-lead' }))
+      .row;
   }
 
   test('promotes a Lore entry to a Codex DRAFT with provenance, NOT accepted', async () => {
@@ -4117,7 +4348,9 @@ describe('ScrumStore — promoteLoreToCodex (v22)', () => {
     expect(decision.content).toContain("team 'payments'");
     expect(decision.content).toContain('prefer idempotent migrations');
     // It is NOT in the accepted set yet.
-    expect((await store.listDecisions({ status: 'accepted' })).map((d) => d.id)).not.toContain(decision.id);
+    expect((await store.listDecisions({ status: 'accepted' })).map((d) => d.id)).not.toContain(
+      decision.id,
+    );
   });
 
   test('the source Lore survives the promotion untouched (append-only)', async () => {
@@ -4188,19 +4421,26 @@ describe('ScrumStore — promoteLoreToCodex (v22)', () => {
   });
 
   test('rejects an unknown lore id', async () => {
-    await expect(store.promoteLoreToCodex({ loreId: 99999 })).rejects.toThrow(/unknown lore id '99999'/);
+    await expect(store.promoteLoreToCodex({ loreId: 99999 })).rejects.toThrow(
+      /unknown lore id '99999'/,
+    );
   });
 });
 
 describe('ScrumStore — Lore supersession (v28)', () => {
   beforeEach(async () => {
     await store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-lead',
+    });
   });
 
   /** Append one Lore entry to `payments` and return its row. */
-  async function seedLore(body: string) : Promise<void> {
-    return (await store.recordLore({ teamSlug: 'payments', body, authorContributorId: 'ct-lead' })).row;
+  async function seedLore(body: string): Promise<void> {
+    return (await store.recordLore({ teamSlug: 'payments', body, authorContributorId: 'ct-lead' }))
+      .row;
   }
 
   test('a fresh Lore entry is LIVE (no supersession pointer)', async () => {
@@ -4255,12 +4495,14 @@ describe('ScrumStore — Lore supersession (v28)', () => {
   test('a draft decision cannot replace Lore (it could still be rejected)', async () => {
     const lore = await seedLore('x');
     const draft = await store.promoteLoreToCodex({ loreId: lore.id });
-    await expect(store.supersedeLore({
+    await expect(
+      store.supersedeLore({
         loreId: lore.id,
         byDecisionId: draft.id,
         reason: 'premature',
         authorContributorId: 'ct-lead',
-      }),).rejects.toThrow(/not accepted/);
+      }),
+    ).rejects.toThrow(/not accepted/);
   });
 
   test('a supersession is resolved ONCE (one-shot, mirroring the write-gate rule)', async () => {
@@ -4272,66 +4514,88 @@ describe('ScrumStore — Lore supersession (v28)', () => {
       reason: 'folded',
       authorContributorId: 'ct-lead',
     });
-    await expect(store.supersedeLore({
+    await expect(
+      store.supersedeLore({
         loreId: old.id,
         byLoreId: head.id,
         reason: 'again',
         authorContributorId: 'ct-lead',
-      }),).rejects.toThrow(/already superseded/);
+      }),
+    ).rejects.toThrow(/already superseded/);
   });
 
   test('guards: unknown ids, self, exactly-one replacement form, empty reason', async () => {
     const lore = await seedLore('a');
-    await expect(store.supersedeLore({
+    await expect(
+      store.supersedeLore({
         loreId: 999,
         byLoreId: lore.id,
         reason: 'r',
         authorContributorId: 'ct-lead',
-      }),).rejects.toThrow(/unknown lore id '999'/);
-    await expect(store.supersedeLore({
+      }),
+    ).rejects.toThrow(/unknown lore id '999'/);
+    await expect(
+      store.supersedeLore({
         loreId: lore.id,
         byLoreId: 999,
         reason: 'r',
         authorContributorId: 'ct-lead',
-      }),).rejects.toThrow(/unknown replacement lore id '999'/);
-    await expect(store.supersedeLore({
+      }),
+    ).rejects.toThrow(/unknown replacement lore id '999'/);
+    await expect(
+      store.supersedeLore({
         loreId: lore.id,
         byLoreId: lore.id,
         reason: 'r',
         authorContributorId: 'ct-lead',
-      }),).rejects.toThrow(/cannot supersede itself/);
-    await expect(store.supersedeLore({ loreId: lore.id, reason: 'r', authorContributorId: 'ct-lead' }),).rejects.toThrow(/exactly one of/);
-    await expect(store.supersedeLore({
+      }),
+    ).rejects.toThrow(/cannot supersede itself/);
+    await expect(
+      store.supersedeLore({ loreId: lore.id, reason: 'r', authorContributorId: 'ct-lead' }),
+    ).rejects.toThrow(/exactly one of/);
+    await expect(
+      store.supersedeLore({
         loreId: lore.id,
         byLoreId: 1,
         byDecisionId: 'd',
         reason: 'r',
         authorContributorId: 'ct-lead',
-      }),).rejects.toThrow(/exactly one of/);
+      }),
+    ).rejects.toThrow(/exactly one of/);
     const other = await seedLore('b');
-    await expect(store.supersedeLore({
+    await expect(
+      store.supersedeLore({
         loreId: lore.id,
         byLoreId: other.id,
         reason: '   ',
         authorContributorId: 'ct-lead',
-      }),).rejects.toThrow(/non-empty reason/);
+      }),
+    ).rejects.toThrow(/non-empty reason/);
   });
 
   test('a consolidation stays within its team', async () => {
     const lore = await seedLore('payments wisdom');
     await store.createTeam({ slug: 'shipping', teamType: 'stream_aligned' });
-    await store.rotateTeamMember({ teamSlug: 'shipping', role: 'tech_lead', contributorId: 'ct-ship' });
-    const foreign = (await store.recordLore({
+    await store.rotateTeamMember({
       teamSlug: 'shipping',
-      body: 'shipping wisdom',
-      authorContributorId: 'ct-ship',
-    })).row;
-    await expect(store.supersedeLore({
+      role: 'tech_lead',
+      contributorId: 'ct-ship',
+    });
+    const foreign = (
+      await store.recordLore({
+        teamSlug: 'shipping',
+        body: 'shipping wisdom',
+        authorContributorId: 'ct-ship',
+      })
+    ).row;
+    await expect(
+      store.supersedeLore({
         loreId: lore.id,
         byLoreId: foreign.id,
         reason: 'wrong team',
         authorContributorId: 'ct-lead',
-      }),).rejects.toThrow(/belongs to team 'shipping'/);
+      }),
+    ).rejects.toThrow(/belongs to team 'shipping'/);
   });
 
   test('the replacement must be the LIVE head, not a retired entry', async () => {
@@ -4344,29 +4608,37 @@ describe('ScrumStore — Lore supersession (v28)', () => {
       reason: 'folded',
       authorContributorId: 'ct-lead',
     });
-    await expect(store.supersedeLore({
+    await expect(
+      store.supersedeLore({
         loreId: a.id,
         byLoreId: b.id,
         reason: 'points at history',
         authorContributorId: 'ct-lead',
-      }),).rejects.toThrow(/itself superseded.*live head/);
+      }),
+    ).rejects.toThrow(/itself superseded.*live head/);
   });
 
   test('authorship: only the seated tech_lead may retire; vacant seat warns and allows', async () => {
     const old = await seedLore('x');
     const head = await seedLore('y');
-    await expect(store.supersedeLore({
+    await expect(
+      store.supersedeLore({
         loreId: old.id,
         byLoreId: head.id,
         reason: 'r',
         authorContributorId: 'ct-impostor',
-      }),).rejects.toThrow(/only ct-lead may retire/);
+      }),
+    ).rejects.toThrow(/only ct-lead may retire/);
     // The rejected write never lands.
     expect((await store.getLore(old.id))?.superseded_by).toBeNull();
     // Vacate the seat: the write is allowed with a warning (bootstrapping).
     await store.createTeam({ slug: 'solo', teamType: 'stream_aligned' });
-    const a = (await store.recordLore({ teamSlug: 'solo', body: 'a', authorContributorId: 'ct-solo' })).row;
-    const b = (await store.recordLore({ teamSlug: 'solo', body: 'b', authorContributorId: 'ct-solo' })).row;
+    const a = (
+      await store.recordLore({ teamSlug: 'solo', body: 'a', authorContributorId: 'ct-solo' })
+    ).row;
+    const b = (
+      await store.recordLore({ teamSlug: 'solo', body: 'b', authorContributorId: 'ct-solo' })
+    ).row;
     const { row, warning } = await store.supersedeLore({
       loreId: a.id,
       byLoreId: b.id,
@@ -4429,20 +4701,28 @@ describe('ScrumStore — Lore supersession (v28)', () => {
 describe('ScrumStore — teamTerminate Lore→Codex promotion (v22)', () => {
   beforeEach(async () => {
     await store.createTeam({ slug: 'payments', teamType: 'stream_aligned' });
-    await store.rotateTeamMember({ teamSlug: 'payments', role: 'tech_lead', contributorId: 'ct-lead' });
+    await store.rotateTeamMember({
+      teamSlug: 'payments',
+      role: 'tech_lead',
+      contributorId: 'ct-lead',
+    });
   });
 
   test('disbanding a team promotes its Lore to Codex DRAFTS before going inactive', async () => {
-    const l1 = (await store.recordLore({
-      teamSlug: 'payments',
-      body: 'lore one',
-      authorContributorId: 'ct-lead',
-    })).row;
-    const l2 = (await store.recordLore({
-      teamSlug: 'payments',
-      body: 'lore two',
-      authorContributorId: 'ct-lead',
-    })).row;
+    const l1 = (
+      await store.recordLore({
+        teamSlug: 'payments',
+        body: 'lore one',
+        authorContributorId: 'ct-lead',
+      })
+    ).row;
+    const l2 = (
+      await store.recordLore({
+        teamSlug: 'payments',
+        body: 'lore two',
+        authorContributorId: 'ct-lead',
+      })
+    ).row;
 
     await store.teamTerminate('payments', 'work complete');
 
@@ -4467,7 +4747,9 @@ describe('ScrumStore — teamTerminate Lore→Codex promotion (v22)', () => {
   test('re-disband cannot double-promote (terminate throws on an inactive team)', async () => {
     await store.recordLore({ teamSlug: 'payments', body: 'lore', authorContributorId: 'ct-lead' });
     await store.teamTerminate('payments', 'first');
-    const afterFirst = (await store.listDecisions()).filter((d) => d.source_lore_id !== null).length;
+    const afterFirst = (await store.listDecisions()).filter(
+      (d) => d.source_lore_id !== null,
+    ).length;
     expect(afterFirst).toBe(1);
     // A second disband throws — the promotion never runs twice.
     await expect(store.teamTerminate('payments', 'second')).rejects.toThrow(/already inactive/);
@@ -4483,7 +4765,11 @@ describe('ScrumStore — teamTerminate Lore→Codex promotion (v22)', () => {
       terminatesOnMilestone: 'm1',
     });
     await store.rotateTeamMember({ teamSlug: 'squad', role: 'tech_lead', contributorId: 'ct-sq' });
-    await store.recordLore({ teamSlug: 'squad', body: 'squad wisdom', authorContributorId: 'ct-sq' });
+    await store.recordLore({
+      teamSlug: 'squad',
+      body: 'squad wisdom',
+      authorContributorId: 'ct-sq',
+    });
 
     await store.closeMilestone('m1');
 
@@ -4551,61 +4837,75 @@ describe('ScrumStore — cross-team ask protocol (v23)', () => {
   });
 
   test('fileAsk rejects an unknown to_team (exit-bearing domain error)', async () => {
-    await expect(store.fileAsk({
+    await expect(
+      store.fileAsk({
         fromTeam: 'payments',
         toTeam: 'ghost',
         askType: 'schema-change',
         blockingArtifact: 'blocked-1',
-      }),).rejects.toThrow(/unknown to_team 'ghost'/);
+      }),
+    ).rejects.toThrow(/unknown to_team 'ghost'/);
   });
 
   test('fileAsk rejects an ask_type the to_team does not accept', async () => {
-    await expect(store.fileAsk({
+    await expect(
+      store.fileAsk({
         fromTeam: 'payments',
         toTeam: 'identity',
         askType: 'api-review',
         blockingArtifact: 'blocked-1',
-      }),).rejects.toThrow(/ask_type 'api-review' is not accepted by to_team 'identity'/);
+      }),
+    ).rejects.toThrow(/ask_type 'api-review' is not accepted by to_team 'identity'/);
   });
 
   test('fileAsk rejects a missing blocking_artifact', async () => {
-    await expect(store.fileAsk({
+    await expect(
+      store.fileAsk({
         fromTeam: 'payments',
         toTeam: 'identity',
         askType: 'schema-change',
         blockingArtifact: 'no-such-task',
-      }),).rejects.toThrow(/unknown blocking_artifact 'no-such-task'/);
+      }),
+    ).rejects.toThrow(/unknown blocking_artifact 'no-such-task'/);
   });
 
   test('fileAsk rejects an unknown from_team', async () => {
-    await expect(store.fileAsk({
+    await expect(
+      store.fileAsk({
         fromTeam: 'phantom',
         toTeam: 'identity',
         askType: 'schema-change',
         blockingArtifact: 'blocked-1',
-      }),).rejects.toThrow(/unknown from_team 'phantom'/);
+      }),
+    ).rejects.toThrow(/unknown from_team 'phantom'/);
   });
 
   test('fileAsk ignores a superseded accept (only ACTIVE accepts qualify)', async () => {
     const accept = await store.addTeamAccept('identity', 'api-review');
     await store.supersedeTeamAccept(accept.id, 'retired');
-    await expect(store.fileAsk({
+    await expect(
+      store.fileAsk({
         fromTeam: 'payments',
         toTeam: 'identity',
         askType: 'api-review',
         blockingArtifact: 'blocked-1',
-      }),).rejects.toThrow(/not accepted by to_team 'identity'/);
+      }),
+    ).rejects.toThrow(/not accepted by to_team 'identity'/);
   });
 
   test('a failed fileAsk leaves no ask row and no event (transactional)', async () => {
-    await expect(store.fileAsk({
+    await expect(
+      store.fileAsk({
         fromTeam: 'payments',
         toTeam: 'identity',
         askType: 'schema-change',
         blockingArtifact: 'no-such-task',
-      }),).rejects.toThrow();
+      }),
+    ).rejects.toThrow();
     expect(await store.getAsk(1)).toBeNull();
-    const filed = (await store.listEventsForTask('blocked-1')).filter((e) => e.kind === 'ask_filed');
+    const filed = (await store.listEventsForTask('blocked-1')).filter(
+      (e) => e.kind === 'ask_filed',
+    );
     expect(filed).toHaveLength(0);
   });
 
@@ -4650,7 +4950,9 @@ describe('ScrumStore — ask triage/respond (v25)', () => {
     expect(child).not.toBeNull();
     // It is a story tagged with the to-team slug (the team-tree linkage).
     expect(child?.layer).toBe('story');
-    expect((await store.listTagsForTask(child?.id as string)).map((t) => t.tag)).toContain('identity');
+    expect((await store.listTagsForTask(child?.id as string)).map((t) => t.tag)).toContain(
+      'identity',
+    );
   });
 
   test('accept wires a blocked_by dep from the blocking artifact onto the child', async () => {
@@ -4666,7 +4968,11 @@ describe('ScrumStore — ask triage/respond (v25)', () => {
 
   test('accept fires an ask_responded event on the blocking artifact', async () => {
     const ask = await fileFixtureAsk();
-    const responded = await store.respondAsk({ id: ask.id, verdict: 'accept', respondedBy: 'tl-1' });
+    const responded = await store.respondAsk({
+      id: ask.id,
+      verdict: 'accept',
+      respondedBy: 'tl-1',
+    });
     const events = await store.listEventsForTask('blocked-1');
     const event = events.find((e) => e.kind === 'ask_responded');
     expect(event).toBeDefined();
@@ -4698,7 +5004,9 @@ describe('ScrumStore — ask triage/respond (v25)', () => {
     expect((await store.listTasks({})).length).toBe(before);
     expect(await store.getBlockedBy('blocked-1')).toHaveLength(0);
     // The event still fires.
-    expect((await store.listEventsForTask('blocked-1')).some((e) => e.kind === 'ask_responded')).toBe(true);
+    expect(
+      (await store.listEventsForTask('blocked-1')).some((e) => e.kind === 'ask_responded'),
+    ).toBe(true);
   });
 
   test('counter records counter_proposal, fires ask_responded, and mutates no tree/deps', async () => {
@@ -4717,7 +5025,9 @@ describe('ScrumStore — ask triage/respond (v25)', () => {
     expect(responded.rejected_reason).toBeNull();
     expect((await store.listTasks({})).length).toBe(before);
     expect(await store.getBlockedBy('blocked-1')).toHaveLength(0);
-    expect((await store.listEventsForTask('blocked-1')).some((e) => e.kind === 'ask_responded')).toBe(true);
+    expect(
+      (await store.listEventsForTask('blocked-1')).some((e) => e.kind === 'ask_responded'),
+    ).toBe(true);
   });
 
   test('respondAsk honors an explicit childId, childTitle, and epic layer on accept', async () => {
@@ -4835,7 +5145,10 @@ describe('ScrumStore — awaitAsk (team-as-workflow-kind sugar)', () => {
   test('ready outputs exclude a superseded expose (only ACTIVE outputs surface)', async () => {
     const ask = await fileFixtureAsk();
     // Retire one of identity's exposes before the child completes.
-    const stale = await store.addTeamExpose('identity', { name: 'LegacyView', schemaRef: 'old.json' });
+    const stale = await store.addTeamExpose('identity', {
+      name: 'LegacyView',
+      schemaRef: 'old.json',
+    });
     await store.supersedeTeamExpose(stale.id, 'replaced by UserRecord');
     const responded = await store.respondAsk({ id: ask.id, verdict: 'accept', childLayer: 'epic' });
     await driveToDone(responded.mapped_artifact as string);
@@ -4847,7 +5160,11 @@ describe('ScrumStore — awaitAsk (team-as-workflow-kind sugar)', () => {
 
   test('a rejected ask reports phase=rejected, terminal, reason=rejected_reason, no outputs', async () => {
     const ask = await fileFixtureAsk();
-    await store.respondAsk({ id: ask.id, verdict: 'reject', comment: 'out of scope this milestone' });
+    await store.respondAsk({
+      id: ask.id,
+      verdict: 'reject',
+      comment: 'out of scope this milestone',
+    });
     const report = await store.awaitAsk(ask.id);
     expect(report.phase).toBe('rejected');
     expect(report.terminal).toBe(true);
@@ -4922,25 +5239,29 @@ describe('ScrumStore — escalation protocol (v24)', () => {
   });
 
   test('raiseEscalation rejects an escalation_type outside the closed enum, naming the set', async () => {
-    await expect(store.raiseEscalation({
+    await expect(
+      store.raiseEscalation({
         taskId: 't1',
         // @ts-expect-error — exercising the runtime boundary guard with an off-enum type.
         escalationType: 'bogus',
         summary: 'x',
-      }),).rejects.toThrow(
+      }),
+    ).rejects.toThrow(
       /invalid escalation_type 'bogus'; expected one of: blocked, ambiguous, conflict, missing_context/,
     );
     expect(await store.listEscalationsForTask('t1')).toEqual([]);
   });
 
   test('raiseEscalation rejects a layer outside the closed walk-up chain, naming the set', async () => {
-    await expect(store.raiseEscalation({
+    await expect(
+      store.raiseEscalation({
         taskId: 't1',
         escalationType: 'blocked',
         summary: 'x',
         // @ts-expect-error — exercising the runtime boundary guard with an off-chain layer.
         layer: 'ceo',
-      }),).rejects.toThrow(
+      }),
+    ).rejects.toThrow(
       /invalid layer 'ceo'; expected one of: implementer, engineer, tech_lead, pm, strategy, human/,
     );
     expect(await store.listEscalationsForTask('t1')).toEqual([]);
@@ -5066,9 +5387,15 @@ describe('ScrumStore — escalation protocol (v24)', () => {
   // --- state-machine guards -----------------------------------------------
 
   test('resolveEscalation rejects a mode outside the closed enum, naming the set', async () => {
-    const raised = await store.raiseEscalation({ taskId: 't1', escalationType: 'blocked', summary: 'x' });
+    const raised = await store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'x',
+    });
     // @ts-expect-error — exercising the runtime boundary guard with an off-enum mode.
-    await expect(store.resolveEscalation({ id: raised.id, mode: 'ignore' })).rejects.toThrow(/invalid mode 'ignore'; expected one of: resolve, re_decompose, re_escalate/);
+    await expect(store.resolveEscalation({ id: raised.id, mode: 'ignore' })).rejects.toThrow(
+      /invalid mode 'ignore'; expected one of: resolve, re_decompose, re_escalate/,
+    );
     expect((await store.getEscalation(raised.id))?.state).toBe('open');
   });
 
@@ -5079,7 +5406,11 @@ describe('ScrumStore — escalation protocol (v24)', () => {
   });
 
   test('an already-terminal escalation cannot be resolved again (one-shot transitions)', async () => {
-    const raised = await store.raiseEscalation({ taskId: 't1', escalationType: 'blocked', summary: 'x' });
+    const raised = await store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'x',
+    });
     await store.resolveEscalation({ id: raised.id, mode: 'resolve' });
     await expect(store.resolveEscalation({ id: raised.id, mode: 'resolve' })).rejects.toThrow(
       /is 'resolved', not 'open'/,
@@ -5140,8 +5471,9 @@ describe('ScrumStore — escalation protocol (v24)', () => {
       summary: 'no receiver acted',
     });
     await store.autoBubbleEscalation(raised.id, '2026-03-01T00:00:00Z');
-    const blockerEvents = (await store.listEventsForTask('real-task'))
-      .filter((e) => e.kind === 'blocker_raised');
+    const blockerEvents = (await store.listEventsForTask('real-task')).filter(
+      (e) => e.kind === 'blocker_raised',
+    );
     expect(blockerEvents).toHaveLength(1);
     expect(blockerEvents[0]?.payload).toMatchObject({
       escalation_type: 'ambiguous',
@@ -5171,10 +5503,12 @@ describe('ScrumStore — escalation protocol (v24)', () => {
       summary: 'walk it up',
     });
     const r1 = (await store.resolveEscalation({ id: root.id, mode: 're_escalate' })).walkedUpTo;
-    const r2 = (await store.resolveEscalation({
-      id: (r1 as EscalationRowT).id,
-      mode: 're_escalate',
-    })).walkedUpTo;
+    const r2 = (
+      await store.resolveEscalation({
+        id: (r1 as EscalationRowT).id,
+        mode: 're_escalate',
+      })
+    ).walkedUpTo;
     // From the topmost rung, the chain reads bottom-to-top across the three rungs.
     const chain = await store.getEscalationChain((r2 as EscalationRowT).id);
     expect(chain.map((e) => e.layer)).toEqual(['implementer', 'engineer', 'tech_lead']);
@@ -5185,7 +5519,11 @@ describe('ScrumStore — escalation protocol (v24)', () => {
   });
 
   test('listOpenEscalationRows surfaces only open rows across the walk-up', async () => {
-    const a = await store.raiseEscalation({ taskId: 't1', escalationType: 'blocked', summary: 'a' });
+    const a = await store.raiseEscalation({
+      taskId: 't1',
+      escalationType: 'blocked',
+      summary: 'a',
+    });
     await store.raiseEscalation({ taskId: 't2', escalationType: 'conflict', summary: 'b' });
     // Walk `a` up once: its root row closes, a fresh open row appears at engineer.
     await store.resolveEscalation({ id: a.id, mode: 're_escalate' });
@@ -5194,4 +5532,4 @@ describe('ScrumStore — escalation protocol (v24)', () => {
     expect(open.map((e) => e.summary).sort()).toEqual(['a', 'b']);
     expect(open.find((e) => e.summary === 'a')?.layer).toBe('engineer');
   });
-}); 
+});
