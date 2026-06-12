@@ -8,6 +8,30 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — Turso store: async driver port + sync-safe v1 schema (BREAKING store reset)
+
+*(Store migration: **breaking — the schema chain resets to a clean v1 per domain**. A store written by any earlier plugin version is refused on write-open with a reset-or-migrate message; see Migration below. No `.claude/.prove.json` migration.)*
+
+The `.prove/prove.db` store moves off `bun:sqlite` onto the Turso stack (`@tursodatabase/database`, async NAPI) and onto a schema redesigned to survive Turso sync (`REBASE_LOCAL` — whole-transaction replay with a winner, not a CRDT): two offline writers only merge cleanly if their writes commute. Two changes, shipped together:
+
+**Async driver port** (`@claude-prove/store` extraction): all store reads/writes are async end-to-end — `openStore`/`openScrumStore`/`openAcbStore`, every CLI handler, and the review-ui server. The scrum + ACB write services live in `@claude-prove/store` with async signatures; a single `withTx` helper (BEGIN IMMEDIATE at depth 0, savepoints when re-entrant) replaces every `db.transaction()` closure; recursive status rollups batch-fetch the subtree in one query instead of one query per node.
+
+**Sync-safe v1 schema**: every primary key is a monotonic ULID TEXT id — no `AUTOINCREMENT` anywhere (rowid PKs silently lose a row under two-writer sync; distinct ULIDs commute — proven by a regression test). The contended blobs become append-only logs read through SQL head views: `scrum_tasks.acceptance_json` normalizes into `scrum_acceptance_criteria` + append-only `scrum_criterion_verdicts` (+ `scrum_criterion_head` view), and the ACB document/review-state/group-verdict blobs become append-only revision tables with `_head` views. `scrum_tasks` gains a `status_event_id` provenance pointer to the event that set its status. Shared `scrum_ready_eligible` / `scrum_current_operator` views feed both the CLI and the review-ui server, so both surfaces read one definition. `scrum_decisions`/`scrum_lores` gain nullable `embedding F32_BLOB(32)` columns (unpopulated — a later semantic-search phase fills them). A schema-version write guard refuses write-opens on a legacy (pre-v1) or ahead-of-binary store instead of silently migrating or corrupting; readonly opens are exempt.
+
+Also in this change:
+
+- **`store reset --confirm` fixed for FK-bearing stores**: the drop path now suspends `foreign_keys` for the drop transaction and drops views alongside tables — previously it failed with `FOREIGN KEY constraint failed` on exactly the legacy stores the write guard directs at it, and a leftover view would collide with the bare `CREATE VIEW` on re-migration.
+- **Install test deadlock fix**: the `install latest`/`install upgrade` suites spawned the CLI with `spawnSync` while serving their HTTP stubs from the same process — the blocked event loop deadlocked the stub. Async spawn; the suites run in milliseconds instead of riding 300s timeouts.
+
+Migration (manual — `/prove:update` does not auto-apply a destructive reset):
+
+1. **Fresh start (recommended for most projects):** `claude-prove store reset --confirm`, then reopen — the v1 schema bootstraps cleanly and `scrum init` can re-import `planning/`. All prior scrum/ACB rows are discarded.
+2. **Preserve data:** wait for the `store migrate-to-turso` one-shot migrator (tracked upstream) that lifts a legacy store's rows onto v1.
+
+Auto-adoption: none — the write guard makes the incompatibility explicit on first write-open and prints exactly these options.
+
+---
+
 ## v3.13.0 — Lore supersession + `scrum lore promote`/`supersede` (store v28)
 
 *(Store migration v28 — auto-applies on the next `claude-prove scrum` open; no `.claude/.prove.json` migration.)* `scrum_lores` gains the compaction lifecycle: `superseded_by` (a typed soft reference — `lore:<id>` for a consolidation, `decision:<id>` for a promotion) plus `reason`. Rows are never edited or deleted — a retired entry keeps its body, author, and timestamp; only the pointer lands, and a supersession is resolved once. New CLI surface:
