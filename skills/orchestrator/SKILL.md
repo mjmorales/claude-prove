@@ -167,7 +167,9 @@ The SubagentStop hook auto-completes the step with the subagent's latest commit 
   scripts/prove-run report <step_id> --status completed --commit <SHA>
   ```
 
-Sub-agents themselves must NOT call `scripts/prove-run step-complete` — the orchestrator owns step transitions and the hook is the safety net. Their contract is: commit, exit.
+Sub-agents themselves must NOT call `scripts/prove-run step-complete` — the orchestrator owns step transitions and the hook is the safety net. Their contract is: record typed findings, commit, exit.
+
+**Findings backstop (per completed task).** The task prompt instructs each worker to land its substantive findings as typed reasoning-log entries — `hack`/`risk`/`decision`/`assumption`, the kinds milestone-close curation mechanically sweeps. A finding that exists only in the worker's handoff message is invisible to curation. When a handoff message reports findings, verify they landed: `claude-prove acb log list --run-dir "$RUN_DIR"` (worker entries carry `agent: "task-<task-id>"`). Transcribe any missing finding yourself as a typed entry (`agent: "driver"`, the finding prose in `body`, plus the type's required fields) via `claude-prove acb log append --run-dir "$RUN_DIR" --file <entry.json>`. Never fold worker findings into `synthesis` prose alone — `synthesis` is not swept.
 
 #### 2c. Validation Gate (per task)
 

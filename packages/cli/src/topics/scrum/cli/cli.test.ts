@@ -1071,10 +1071,13 @@ describe('runTaskCmd', () => {
     expect(res.stderr).toContain("invalid --kind 'bogus'");
   });
 
-  test('add-dep: missing <from>/<to> exits 1 with a usage hint', async () => {
+  test('add-dep: missing <blocker>/<blocked> exits 1 with a usage hint naming the edge direction', async () => {
     const res = await withCapture(() => runTaskCmd('add-dep', [undefined, undefined], {}));
     expect(res.exit).toBe(1);
-    expect(res.stderr).toContain('<from> and <to> positional arguments required');
+    // The hint must disambiguate blocker vs blocked — the verb-name-natural
+    // reading inverts the edge and otherwise succeeds silently.
+    expect(res.stderr).toContain('<blocker> and <blocked> positional arguments required');
+    expect(res.stderr).toContain('the FIRST task blocks the SECOND');
   });
 
   test('add-dep: --kind blocked_by stores the inverse edge', async () => {
@@ -1083,10 +1086,16 @@ describe('runTaskCmd', () => {
     expect(res.exit).toBe(0);
     const payload = JSON.parse(res.stdout.trim()) as { kind: string };
     expect(payload.kind).toBe('blocked_by');
-    // `blocks`-keyed reads ignore blocked_by rows, so show payload stays empty for both tasks.
-    const shown = await withCapture(() => runTaskCmd('show', ['b', undefined], {}));
-    const parsed = JSON.parse(shown.stdout.trim()) as { blocked_by: unknown[] };
-    expect(parsed.blocked_by).toEqual([]);
+    // "a blocked_by b" normalizes to the canonical row "b blocks a": the edge
+    // lands flipped, not dropped, so it surfaces through every blocks-keyed read.
+    const shownA = await withCapture(() => runTaskCmd('show', ['a', undefined], {}));
+    const parsedA = JSON.parse(shownA.stdout.trim()) as {
+      blocked_by: Array<{ from_task_id: string }>;
+    };
+    expect(parsedA.blocked_by.map((d) => d.from_task_id)).toEqual(['b']);
+    const shownB = await withCapture(() => runTaskCmd('show', ['b', undefined], {}));
+    const parsedB = JSON.parse(shownB.stdout.trim()) as { blocked_by: unknown[] };
+    expect(parsedB.blocked_by).toEqual([]);
   });
 
   test('remove-dep: deletes the edge and show payload goes back to empty', async () => {

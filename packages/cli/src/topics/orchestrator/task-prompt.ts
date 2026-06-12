@@ -143,6 +143,12 @@ function renderTaskPrompt(input: RenderInput): string {
   const ac = task.acceptance_criteria ?? [];
   const steps = task.steps ?? [];
   const prdAc = prd.acceptance_criteria ?? [];
+  // A relative run dir is absolutized against projectRoot (the main worktree
+  // root) — the worker cd's into its task worktree, where `.prove/` is
+  // gitignored and absent, so a relative path would silently miss the run dir.
+  const resolvedRunDir = isAbsolute(opts.runDir)
+    ? opts.runDir
+    : join(opts.projectRoot, opts.runDir);
 
   const sections: string[] = [];
 
@@ -256,7 +262,9 @@ function renderTaskPrompt(input: RenderInput): string {
     ].join('\n'),
   );
   sections.push('');
-  sections.push(renderCheckpointInterrupt(opts.runDir, opts.projectRoot));
+  sections.push(renderCheckpointInterrupt(resolvedRunDir));
+  sections.push('');
+  sections.push(renderTypedFindings(resolvedRunDir, taskIdStr));
   sections.push('');
   sections.push('## When Done');
   sections.push('');
@@ -270,8 +278,9 @@ function renderTaskPrompt(input: RenderInput): string {
   sections.push('');
   sections.push(
     [
-      '1. Produce at least one commit on this worktree branch containing the intended change.',
-      '2. Exit.',
+      '1. Record every substantive finding as a typed reasoning-log entry (see "Typed Findings" above).',
+      '2. Produce at least one commit on this worktree branch containing the intended change.',
+      '3. Exit.',
     ].join('\n'),
   );
   sections.push('');
@@ -294,13 +303,12 @@ function renderTaskPrompt(input: RenderInput): string {
  * or stuck worker will not stop here — the token budget / subagent timeout
  * (Layer 1) remains the hard backstop.
  *
- * A relative run dir is absolutized against `projectRoot` (the main worktree
- * root), so the embedded flag path and handoff-append command target the main
- * worktree's `.prove/runs/...` tree — never the worker's own task worktree,
- * where `.prove/` is gitignored and absent.
+ * Receives the already-absolutized run dir, so the embedded flag path and
+ * handoff-append command target the main worktree's `.prove/runs/...` tree —
+ * never the worker's own task worktree, where `.prove/` is gitignored and
+ * absent.
  */
-function renderCheckpointInterrupt(runDir: string, projectRoot: string): string {
-  const resolvedRunDir = isAbsolute(runDir) ? runDir : join(projectRoot, runDir);
+function renderCheckpointInterrupt(resolvedRunDir: string): string {
   const cancelFlag = join(resolvedRunDir, 'CANCEL');
   return [
     '## Cooperative checkpoint-interrupt (Layer 2)',
@@ -318,6 +326,45 @@ function renderCheckpointInterrupt(runDir: string, projectRoot: string): string 
     '3. Self-exit; do not continue past the checkpoint.',
     '',
     'This path is best-effort and layers ON TOP of the Layer-1 cancel-and-redispatch floor — it never replaces it. When you are mid-step or cannot stop cleanly, keep working: the token budget and subagent timeout remain the hard backstop.',
+  ].join('\n');
+}
+
+/**
+ * Typed-findings protocol for the normal-completion path.
+ *
+ * Without this section, worker findings reach the driver only inside the
+ * final handoff message, get folded into driver `synthesis` entries, and
+ * milestone-close curation — which mechanically sweeps only the typed kinds
+ * `hack`/`risk`/`decision`/`assumption` — proposes zero candidates. Workers
+ * CAN write these entries from a worktree: `acb log append` is a file append
+ * into the main worktree's run dir, not a store-opening command, so the
+ * shared-store ban in Resource Constraints does not apply to it.
+ *
+ * The `agent` value `task-<id>` keeps per-worker provenance in the
+ * `log/<agent>/` layout, matching the `task/<slug>/<id>` branch convention.
+ */
+function renderTypedFindings(resolvedRunDir: string, taskIdStr: string): string {
+  return [
+    '## Typed Findings — record before exiting',
+    '',
+    'Findings that should outlive this run MUST land in the reasoning log as typed entries — these are file appends into the main worktree run dir, not store-opening commands, so the shared-store ban in Resource Constraints does not apply. A finding mentioned only in your final handoff message is dropped: milestone-close curation sweeps typed entries, never handoff prose. This applies on NORMAL completion, not just on cancel.',
+    '',
+    'Record one entry per substantive finding, choosing the type by what you found:',
+    '',
+    '- `hack` — a shortcut or temporary workaround you shipped. Extra fields: `file_refs` (string[]), `cleanup_condition` (string).',
+    '- `risk` — fragility or danger you saw but did not fix. Extra fields: `severity` (`"low"|"medium"|"high"|"critical"`), `mitigation` (string).',
+    '- `decision` — a choice between defensible options. Extra fields: `alternatives` (string[]), `selected_rationale` (string).',
+    '- `assumption` — something you proceeded on without verifying. Extra fields: `resolved` (boolean), `resolution_ref` (string or null).',
+    '',
+    `Each entry is one JSON object with the envelope fields — \`id\` (fresh UUID), \`ts\` (ISO-8601), \`type\`, \`agent\` (use \`task-${taskIdStr}\`), \`run_path\` (the run dir below), \`body\` (the finding itself, in prose) — plus the type's extra fields. Validation is strict and closed: unknown types or extra keys are rejected, so put detail in \`body\`, never in new keys.`,
+    '',
+    'Compose each entry file with the Write tool (Bash heredocs mangle multi-line prose), then land it:',
+    '',
+    '```bash',
+    `claude-prove acb log append --run-dir "${resolvedRunDir}" --file <entry.json>`,
+    '```',
+    '',
+    'A clean run with nothing worth recording appends nothing — do not invent findings. Still summarize your findings in the final handoff message; the typed entries are the durable record, the handoff is for the driver.',
   ].join('\n');
 }
 

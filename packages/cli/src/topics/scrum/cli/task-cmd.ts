@@ -11,8 +11,11 @@
  *   cancel <id>    [--cascade] [--reason R] [--detail D]
  *   move <id>      (--milestone M | --unassign | --milestone="") [--team SLUG | --team=""]
  *   delete <id>
- *   add-dep <from> <to>     [--kind blocks|blocked_by]   (default: blocks)
- *   remove-dep <from> <to>  [--kind blocks|blocked_by]   (default: blocks)
+ *   add-dep <blocker> <blocked>     [--kind blocks|blocked_by]   (default: blocks)
+ *   remove-dep <blocker> <blocked>  [--kind blocks|blocked_by]   (default: blocks)
+ *     With the default kind the FIRST positional blocks the SECOND; --kind
+ *     blocked_by inverts the positional reading (<blocked> <blocker>), and the
+ *     store normalizes both spellings to one canonical 'blocks' row.
  *   acceptance add <id>     --text T --verifies-by K --check C [--idempotent]
  *                              [--scope descendants|self|both] [--timeout 30s] [--criterion ID]
  *   acceptance list <id>
@@ -538,6 +541,11 @@ async function doLinkDecision(
  * with stderr carrying the store's message. Idempotent at the store
  * layer; repeat calls are a no-op (stdout reports `added: true`
  * regardless, matching the `scrum task tag` convention).
+ *
+ * Positional semantics follow the edge, not the verb name: with the
+ * default kind the FIRST positional is the blocker. The usage error
+ * spells this out because the verb-name-natural reading ("add a dep TO
+ * task A") inverts the edge and would otherwise succeed silently.
  */
 async function doAddDep(
   store: ScrumStore,
@@ -546,7 +554,9 @@ async function doAddDep(
   flags: TaskCmdFlags,
 ): Promise<number> {
   if (from === undefined || from.length === 0 || to === undefined || to.length === 0) {
-    process.stderr.write('scrum task add-dep: <from> and <to> positional arguments required\n');
+    process.stderr.write(
+      'scrum task add-dep: <blocker> and <blocked> positional arguments required — the FIRST task blocks the SECOND (pass --kind blocked_by to write <blocked> <blocker> instead)\n',
+    );
     return 1;
   }
   const kind = resolveDepKind(flags.kind, 'add-dep');
@@ -566,7 +576,9 @@ async function doRemoveDep(
   flags: TaskCmdFlags,
 ): Promise<number> {
   if (from === undefined || from.length === 0 || to === undefined || to.length === 0) {
-    process.stderr.write('scrum task remove-dep: <from> and <to> positional arguments required\n');
+    process.stderr.write(
+      'scrum task remove-dep: <blocker> and <blocked> positional arguments required — the FIRST task blocks the SECOND (pass --kind blocked_by to write <blocked> <blocker> instead)\n',
+    );
     return 1;
   }
   const kind = resolveDepKind(flags.kind, 'remove-dep');
