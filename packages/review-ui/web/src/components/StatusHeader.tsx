@@ -6,6 +6,7 @@ import { useSelection } from "../lib/store";
 import { useConnection } from "../hooks/useConnection";
 import { useActiveProject } from "../lib/active-project";
 import { cn } from "../lib/cn";
+import { tallyVerdicts } from "../lib/tally";
 import { PALETTE } from "./review/verdictTokens";
 import { WorkspaceSwitcher } from "./WorkspaceSwitcher";
 
@@ -69,7 +70,7 @@ export function StatusHeader({
   const connLabel =
     state === "live" ? "Live" : state === "stale" ? "Stale" : state === "down" ? "Offline" : "Idle";
 
-  const tally = computeTally(intents?.groups.length ?? 0, review?.verdicts ?? []);
+  const tally = tallyVerdicts(review?.verdicts ?? [], intents?.groups.length ?? 0);
   const hasReviewable = (intents?.groups.length ?? 0) > 0;
 
   return (
@@ -284,25 +285,4 @@ function VerdictChip({
       </span>
     </button>
   );
-}
-
-function computeTally(
-  totalGroups: number,
-  verdicts: Array<{ groupId: string; verdict: GroupVerdict }>,
-) {
-  const base = {
-    accepted: 0,
-    rejected: 0,
-    needs_discussion: 0,
-    rework: 0,
-    pending: 0,
-    decided: 0,
-  };
-  for (const v of verdicts) {
-    if (v.verdict === "pending") continue;
-    base[v.verdict as VerdictKey] += 1;
-    base.decided += 1;
-  }
-  base.pending = Math.max(0, totalGroups - base.decided);
-  return base;
 }

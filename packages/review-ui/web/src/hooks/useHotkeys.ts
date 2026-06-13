@@ -2,7 +2,16 @@ import { useEffect } from "react";
 import type { RightTab } from "../lib/store";
 import { useSelection, type StructureTab } from "../lib/store";
 
-const STRUCTURE_ORDER: StructureTab[] = ["branches", "steps", "commits", "docs", "decisions"];
+// Slot order must mirror `useUrlState.ts::STRUCTURE_TABS` so number keys and the
+// URL `?st=` round-trip address the same tab. `intents` lives in slot 4.
+const STRUCTURE_ORDER: StructureTab[] = [
+  "branches",
+  "steps",
+  "commits",
+  "intents",
+  "docs",
+  "decisions",
+];
 
 type HotkeyOptions = {
   onOpenPalette: () => void;
@@ -32,8 +41,8 @@ export function useHotkeys({ onOpenPalette }: HotkeyOptions) {
         s.setReviewMode(true);
         return;
       }
-      // Tab switching 1-5 → structure tabs
-      if (!mod && /^[1-5]$/.test(e.key)) {
+      // Tab switching 1-6 → structure tabs
+      if (!mod && /^[1-6]$/.test(e.key)) {
         s.setStructureTab(STRUCTURE_ORDER[Number(e.key) - 1]);
         return;
       }

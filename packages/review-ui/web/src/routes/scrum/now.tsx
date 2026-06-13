@@ -29,8 +29,19 @@ export function ScrumNowView() {
     staleTime: STALE_MS,
   });
 
-  const inFlightRuns = (recent.data?.events ?? []).filter(
-    (e) => e.kind === "run_started",
+  // A run that started and completed within the recent-event tail must drop
+  // from the in-flight list immediately. Both event kinds carry `run_path` (and
+  // a `slug` fallback) in their payload, so key the completed set on that
+  // identifier and subtract it from the started events.
+  const events = recent.data?.events ?? [];
+  const completedRuns = new Set(
+    events
+      .filter((e) => e.kind === "run_completed")
+      .map(runIdentifier)
+      .filter((id): id is string => id !== null),
+  );
+  const inFlightRuns = events.filter(
+    (e) => e.kind === "run_started" && !completedRuns.has(runIdentifier(e) ?? ""),
   );
 
   return (
@@ -84,6 +95,14 @@ export function ScrumNowView() {
       </section>
     </div>
   );
+}
+
+/** Stable identifier shared by `run_started`/`run_completed` payloads, used to
+ * match a started run against its completion. Prefers `run_path`, falls back to
+ * `slug`; null when neither is present. */
+function runIdentifier(event: ScrumEvent): string | null {
+  const payload = event.payload as { run_path?: string; slug?: string } | null;
+  return payload?.run_path ?? payload?.slug ?? null;
 }
 
 function RunRow({ event }: { event: ScrumEvent }) {

@@ -9,6 +9,7 @@ import {
 import { useActiveProject } from "../../lib/active-project";
 import { useSelection } from "../../lib/store";
 import { computeQueue, nextActive, prevActive } from "../../lib/queue";
+import { tallyVerdicts } from "../../lib/tally";
 import { GroupCard } from "./GroupCard";
 import { ReviewQueue } from "./ReviewQueue";
 import { ReviewContext } from "./ReviewContext";
@@ -112,20 +113,11 @@ export function ReviewSession() {
     return m;
   }, [verdicts]);
 
-  const tally = useMemo(() => {
-    const base: Record<VerdictKey, number> = {
-      accepted: 0,
-      rejected: 0,
-      needs_discussion: 0,
-      rework: 0,
-    };
-    for (const v of verdicts) {
-      if (v.verdict !== "pending") base[v.verdict as VerdictKey] += 1;
-    }
-    return base;
-  }, [verdicts]);
-
-  const decided = verdicts.filter((v) => v.verdict !== "pending").length;
+  const tally = useMemo(
+    () => tallyVerdicts(verdicts, groups.length),
+    [verdicts, groups.length],
+  );
+  const decided = tally.decided;
   const allDone =
     groups.length > 0 && queue.ready.length === 0 && queue.stale.length === 0 && waitingCount === 0;
 
@@ -181,20 +173,25 @@ export function ReviewSession() {
     if (id) jumpTo(id);
   }, [queue, activeIntentId, jumpTo]);
 
+  // Set to the just-decided intent id when auto-advance should fire. The actual
+  // jump is deferred to an effect keyed on `queue` (below) so it runs against
+  // the FRESH post-refetch queue rather than a stale closure-captured one — no
+  // timer race against `invalidateReview()`.
+  const pendingAdvanceRef = useRef<string | null>(null);
+
   const advanceAfterVerdict = useCallback(() => {
-    if (!autoAdvance) return;
-    setTimeout(() => {
-      // Recompute queue lazily — the verdict write will invalidate and the
-      // next render will have the updated queue. Use the current reference
-      // to pick head-of-active-order; if empty, null = standby.
-      const currentQueue = computeQueue(groups, verdicts);
-      const id =
-        currentQueue.activeOrder.find((q) => q !== activeIntentId) ??
-        currentQueue.activeOrder[0] ??
-        null;
-      jumpTo(id);
-    }, 250);
-  }, [autoAdvance, groups, verdicts, activeIntentId, jumpTo]);
+    if (!autoAdvance || !current) return;
+    pendingAdvanceRef.current = current.id;
+  }, [autoAdvance, current]);
+
+  useEffect(() => {
+    const decidedId = pendingAdvanceRef.current;
+    if (decidedId === null) return;
+    pendingAdvanceRef.current = null;
+    // The decided item has left `activeOrder` in the refreshed queue, so
+    // `nextActive` falls through to the new head (or null → standby).
+    jumpTo(nextActive(queue, decidedId));
+  }, [queue, jumpTo]);
 
   const submitVerdict = useCallback(
     async (v: VerdictKey, note?: string) => {

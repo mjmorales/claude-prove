@@ -7,6 +7,7 @@ import { DOCS, renderDoc } from "../lib/run-doc-render";
 import { cn } from "../lib/cn";
 import { Markdown } from "./Markdown";
 import { PanelLoading } from "./PanelLoading";
+import { Empty } from "./Empty";
 
 export function DocsPanel() {
   const slug = useSelection((s) => s.slug);
@@ -116,8 +117,4 @@ export function DocsPanel() {
       </div>
     </div>
   );
-}
-
-function Empty({ text }: { text: string }) {
-  return <div className="flex h-full items-center justify-center text-fg-dim text-[13px]">{text}</div>;
 }

@@ -1,6 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { listAllBranches, listWorktrees, resolveBaselineBranch } from "./git.js";
+import {
+  listAllBranches,
+  listWorktrees,
+  resolveBaselineBranch,
+  type BranchRef,
+  type Worktree,
+} from "./git.js";
 import { listManifestsForSlug } from "./acb.js";
 import {
   extractRunProgress,
@@ -61,7 +67,7 @@ export async function listRuns(repoRoot: string): Promise<RunSummary[]> {
       const hasManifests = live || (await slugHasManifests(repoRoot, slug));
       if (!live && !hasManifests) continue;
 
-      const summary = await readRunSummary(repoRoot, branchNs, slug);
+      const summary = await readRunSummary(repoRoot, branchNs, slug, allBranches, worktrees);
       if (summary) out.push(summary);
     }
   }
@@ -75,10 +81,18 @@ export async function listRuns(repoRoot: string): Promise<RunSummary[]> {
   return out;
 }
 
+/**
+ * `allBranches`/`worktrees` let `listRuns` pass the values it already fetched
+ * once at the top, avoiding a redundant `listAllBranches` + `listWorktrees`
+ * pair per run; omitted, they are fetched internally for standalone callers
+ * (e.g. routes that read a single run).
+ */
 export async function readRunSummary(
   repoRoot: string,
   branch: string,
   slug: string,
+  allBranches?: BranchRef[],
+  worktrees?: Worktree[],
 ): Promise<RunSummary | null> {
   const dir = runDir(repoRoot, branch, slug);
   const planPath = path.join(dir, "plan.json");
@@ -105,11 +119,11 @@ export async function readRunSummary(
 
   // Worktree path: live git worktree wins over any declared path.
   let worktree: string | null = null;
-  const wts = await listWorktrees(repoRoot).catch(() => []);
+  const wts = worktrees ?? (await listWorktrees(repoRoot).catch(() => []));
   const match = wts.find((w) => w.branch === orchestratorBranch);
   if (match) worktree = match.path;
 
-  const branches = await listAllBranches(repoRoot).catch(() => []);
+  const branches = allBranches ?? (await listAllBranches(repoRoot).catch(() => []));
   const branchExists = branches.some((b) => b.name === orchestratorBranch);
   const hasEvidence = hasPlan || hasPrd || hasState || worktree !== null || branchExists;
   if (!hasEvidence) return null;

@@ -66,7 +66,20 @@ function splitHash(url: string): [string, string] {
 
 export async function getJSON<T>(url: string): Promise<T> {
   const r = await fetch(withProject(url));
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}: ${url}`);
+  if (!r.ok) {
+    // Surface the server's JSON error body (e.g. {error:'project not
+    // registered'}) so callers show actionable detail, not a bare status line —
+    // mirroring postJSON's body-read.
+    let detail = "";
+    try {
+      detail = await r.text();
+    } catch {
+      /* body unreadable — fall back to the status line alone */
+    }
+    throw new Error(
+      `${r.status} ${r.statusText}: ${url}${detail ? ` — ${detail.slice(0, 500)}` : ""}`,
+    );
+  }
   return r.json() as Promise<T>;
 }
 

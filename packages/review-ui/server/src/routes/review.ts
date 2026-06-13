@@ -114,6 +114,9 @@ export function registerReviewRoutes(app: FastifyInstance, resolveProject: Proje
       if (!groupId) return reply.code(400).send({ error: "missing groupId" });
 
       const note = typeof req.body?.note === "string" ? req.body.note.trim() : "";
+      // An empty note mints a content-free rework brief and loses the
+      // reviewer's intent — reject it the same way `/discuss` does.
+      if (note.length === 0) return reply.code(400).send({ error: "note required" });
       const files = isStringArray(req.body?.files) ? req.body.files : [];
       const commits = isStringArray(req.body?.commits) ? req.body.commits : [];
       const title = typeof req.body?.title === "string" ? req.body.title : groupId;

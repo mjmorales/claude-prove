@@ -42,6 +42,9 @@ export function gitAt(cwd: string): SimpleGit {
  * Memoized per repoRoot for the server process lifetime: the default branch
  * doesn't change between orchestrator runs, and the git invocation is cheap
  * but called on every /api/runs request.
+ *
+ * Unbounded by design: keys are repo roots, so the cache is O(projects ever
+ * served) tiny immutable strings — negligible growth with no eviction needed.
  */
 const baselineCache = new Map<string, string>();
 export async function resolveBaselineBranch(repoRoot: string): Promise<string> {
@@ -59,11 +62,19 @@ export async function resolveBaselineBranch(repoRoot: string): Promise<string> {
   return baseline;
 }
 
-export async function listAllBranches(repoRoot: string): Promise<BranchRef[]> {
+/**
+ * `preWorktrees` lets a caller that already holds the worktree list (e.g.
+ * `branchesForRun`) pass it in to avoid a redundant `git worktree list`
+ * subprocess; omitted, it is fetched internally for standalone callers.
+ */
+export async function listAllBranches(
+  repoRoot: string,
+  preWorktrees?: Worktree[],
+): Promise<BranchRef[]> {
   const git = gitAt(repoRoot);
   const [raw, worktrees, currentRaw] = await Promise.all([
     git.raw(["for-each-ref", "--format=%(refname:short)%09%(objectname:short)", "refs/heads"]),
-    listWorktrees(repoRoot),
+    preWorktrees ?? listWorktrees(repoRoot),
     git.raw(["rev-parse", "--abbrev-ref", "HEAD"]).catch(() => ""),
   ]);
   const current = currentRaw.trim();
@@ -89,7 +100,7 @@ export async function listAllBranches(repoRoot: string): Promise<BranchRef[]> {
   return refs;
 }
 
-type Worktree = { path: string; branch: string | null; head: string };
+export type Worktree = { path: string; branch: string | null; head: string };
 
 export async function listWorktrees(repoRoot: string): Promise<Worktree[]> {
   const git = gitAt(repoRoot);
@@ -148,7 +159,10 @@ function remapWorktreePath(p: string, repoRoot: string): string {
 }
 
 export async function branchesForRun(repoRoot: string, slug: string): Promise<BranchRef[]> {
-  const all = await listAllBranches(repoRoot);
+  // Fetch the worktree list once and reuse it for both `listAllBranches`
+  // (which would otherwise spawn its own) and the worktree scan below.
+  const wts = await listWorktrees(repoRoot);
+  const all = await listAllBranches(repoRoot, wts);
   const orchestratorName = `orchestrator/${slug}`;
   const orch = all.find((b) => b.name === orchestratorName) ?? null;
   const ordered: BranchRef[] = [];
@@ -167,7 +181,6 @@ export async function branchesForRun(repoRoot: string, slug: string): Promise<Br
   }
 
   // Worktrees rooted under .claude/worktrees/<slug>-*, regardless of branch name.
-  const wts = await listWorktrees(repoRoot);
   const wtSegment = `/.claude/worktrees/${slug}-`;
   for (const w of wts) {
     if (!w.branch || !w.path.includes(wtSegment)) continue;

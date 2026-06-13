@@ -23,6 +23,11 @@ import { readRunSummary } from "../runs.js";
 import { branchesForRun, diffFiles, gitAt, resolveWorktreePath } from "../git.js";
 import type { ProjectResolver } from "../projects.js";
 
+// Max git subprocesses the /api/runs/:slug/intents handler spawns at once.
+// Each helper uses an independent simpleGit instance, so parallelism is safe;
+// the cap bounds fan-out so a large run can't flood the box with subprocesses.
+const GIT_CONCURRENCY = 8;
+
 type FileRef = { path: string; ranges: string[] };
 type Annotation = { id: string; type: string; body: string };
 type NegativeSpaceEntry = { path: string; reason: string; note: string };
@@ -129,10 +134,16 @@ export function registerProveRoutes(app: FastifyInstance, resolveProject: Projec
     // Collect every commit in any run branch range (base..branch). Dedup by sha.
     // Empty when all run branches have been deleted (cleaned-up run) — the
     // manifest-slug backfill below recovers that case.
+    //
+    // Each git helper spawns a fresh subprocess against an independent simpleGit
+    // instance, so the per-branch listCommits calls run with bounded concurrency.
+    // Results are merged into commitByHead AFTER the parallel resolve, walking
+    // runBranches in input order, to keep first-writer-wins dedup deterministic.
     const commitByHead = new Map<string, Commit>();
-    for (const b of runBranches) {
-      const cwd = b.worktreePath ?? undefined;
-      const commits = await listCommits(repoRoot, base, b.name, cwd).catch(() => []);
+    const commitsPerBranch = await mapLimit(runBranches, GIT_CONCURRENCY, (b) =>
+      listCommits(repoRoot, base, b.name, b.worktreePath ?? undefined).catch(() => []),
+    );
+    for (const commits of commitsPerBranch) {
       for (const c of commits) {
         if (!commitByHead.has(c.sha)) commitByHead.set(c.sha, c);
       }
@@ -150,11 +161,13 @@ export function registerProveRoutes(app: FastifyInstance, resolveProject: Projec
 
     // Backfill commit metadata for manifest SHAs that weren't discovered in
     // any run-branch range (merged-run case). Uses `git show` so we tolerate
-    // stale worktree paths and deleted branches.
-    for (const sha of manifestByCommit.keys()) {
-      if (commitByHead.has(sha)) continue;
-      const c = await showCommit(repoRoot, sha);
-      if (c) commitByHead.set(sha, c);
+    // stale worktree paths and deleted branches. Resolved in parallel, then
+    // merged in key-iteration order so insertion order stays deterministic.
+    const missingShas = [...manifestByCommit.keys()].filter((sha) => !commitByHead.has(sha));
+    const backfilled = await mapLimit(missingShas, GIT_CONCURRENCY, (sha) => showCommit(repoRoot, sha));
+    for (let i = 0; i < missingShas.length; i++) {
+      const c = backfilled[i];
+      if (c) commitByHead.set(missingShas[i], c);
     }
 
     const groups = new Map<string, IntentGroupAgg>();
@@ -163,12 +176,25 @@ export function registerProveRoutes(app: FastifyInstance, resolveProject: Projec
     const openQuestions = new Map<string, OpenQuestion>();
 
     const runBranchNames = new Set(runBranches.map((b) => b.name));
+
+    // Pre-resolve `git branch --contains` labels for commits without a manifest
+    // (the only ones whose branch falls back to commitBranch). Done in parallel
+    // before the aggregation loop so the loop itself stays synchronous.
+    const orphanShas = [...commitByHead.keys()].filter((sha) => !manifestByCommit.has(sha));
+    const orphanBranchLabels = await mapLimit(orphanShas, GIT_CONCURRENCY, (sha) =>
+      commitBranch(repoRoot, sha, runBranchNames),
+    );
+    const branchBySha = new Map<string, string>();
+    for (let i = 0; i < orphanShas.length; i++) {
+      branchBySha.set(orphanShas[i], orphanBranchLabels[i] ?? "");
+    }
+
     for (const [sha, commit] of commitByHead) {
       const m = manifestByCommit.get(sha);
       const ref = {
         sha,
         shortSha: commit.shortSha,
-        branch: m?.branch ?? (await commitBranch(repoRoot, sha, runBranchNames)) ?? "",
+        branch: m?.branch ?? branchBySha.get(sha) ?? "",
         subject: commit.subject,
         timestamp: commit.timestamp,
       };
@@ -193,10 +219,6 @@ export function registerProveRoutes(app: FastifyInstance, resolveProject: Projec
           } satisfies IntentGroupAgg);
 
         agg.commits.push(ref);
-
-        // classification + title: first-writer-wins (already set above); upgrade
-        // if we find a richer title later.
-        if (!agg.title && ig.title) agg.title = ig.title;
 
         // ambiguity_tags — union.
         const tagSet = new Set(agg.ambiguityTags);
@@ -249,9 +271,10 @@ export function registerProveRoutes(app: FastifyInstance, resolveProject: Projec
     const coveredPaths = new Set<string>();
     for (const g of groups.values()) for (const p of g.files) coveredPaths.add(p);
     const diffPaths = new Set<string>();
-    for (const b of runBranches) {
-      const cwd = b.worktreePath ?? undefined;
-      const out = await listChangedPaths(repoRoot, base, b.name, cwd);
+    const changedPerBranch = await mapLimit(runBranches, GIT_CONCURRENCY, (b) =>
+      listChangedPaths(repoRoot, base, b.name, b.worktreePath ?? undefined),
+    );
+    for (const out of changedPerBranch) {
       for (const p of out) diffPaths.add(p);
     }
     const uncoveredFiles = [...diffPaths].filter((p) => !coveredPaths.has(p)).sort();
@@ -472,6 +495,29 @@ function extractManifest(data: unknown): ParsedManifest {
   }
 
   return { groups, negativeSpace, openQuestions };
+}
+
+/**
+ * Map `fn` over `items` with at most `limit` calls in flight at once, returning
+ * results in input order (like `Promise.all`, but bounded). A pool of `limit`
+ * workers pulls from a shared cursor until the items are exhausted.
+ */
+async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  const worker = async (): Promise<void> => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      results[index] = await fn(items[index], index);
+    }
+  };
+  const poolSize = Math.max(1, Math.min(limit, items.length));
+  await Promise.all(Array.from({ length: poolSize }, worker));
+  return results;
 }
 
 function asArray(v: unknown): unknown[] {

@@ -23,6 +23,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { runningFromCompiledBinary } from '@claude-prove/installer';
@@ -80,9 +81,7 @@ function readEmbeddedBundle(): Buffer | null {
 
 /** Short content hash keying the per-bundle cache dir. */
 function bundleHash(bytes: Buffer): string {
-  const hasher = new Bun.CryptoHasher('sha256');
-  hasher.update(bytes);
-  return hasher.digest('hex').slice(0, 16);
+  return createHash('sha256').update(bytes).digest('hex').slice(0, 16);
 }
 
 /**

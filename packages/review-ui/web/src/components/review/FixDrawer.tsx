@@ -26,7 +26,10 @@ export function FixDrawer({
   // clickable no-op. The drawer's triggers are gated, but a stale record could
   // still open it.
   const writesDisabled = useWriteAffordancesDisabled();
-  const canCompose = !generating && !writesDisabled;
+  // An empty note mints a content-free brief and silently drops the reviewer's
+  // intent, so require a non-empty note before compose can fire — mirroring the
+  // server's `/fix` empty-note guard.
+  const canCompose = !generating && !writesDisabled && note.trim().length > 0;
 
   useEffect(() => {
     if (open) {

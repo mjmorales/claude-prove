@@ -8,14 +8,9 @@
 import type { RunStatus } from "./api";
 import { cn } from "./cn";
 
-/** Render an ISO timestamp as a coarse "Ns/m/h/d ago" relative string. */
-export function relTime(iso: string): string {
-  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return `${Math.round(s)}s ago`;
-  if (s < 3600) return `${Math.round(s / 60)}m ago`;
-  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
-  return `${Math.round(s / 86400)}d ago`;
-}
+// Re-exported so the run-list panels keep importing the relative-time formatter
+// from this presentation module while its single definition lives in lib/time.
+export { relTime } from "./time";
 
 export type StatusMeta = { label: string; dot: string; text: string };
 

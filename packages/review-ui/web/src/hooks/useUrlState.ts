@@ -16,6 +16,7 @@ import { useSelection, type Selection, type StructureTab, type RightTab } from "
 type UrlShape = {
   run: string | null;
   branch: string | null;
+  base: string | null;
   file: string | null;
   commit: string | null;
   pending: boolean;
@@ -39,6 +40,7 @@ function parse(search: string): UrlShape {
   return {
     run: p.get("run"),
     branch: p.get("branch"),
+    base: p.get("base"),
     file: p.get("file"),
     commit: p.get("commit"),
     pending: p.get("pending") === "1",
@@ -56,6 +58,9 @@ function serialize(s: Selection): string {
   const p = new URLSearchParams();
   if (s.slug) p.set("run", s.slug);
   if (s.branch) p.set("branch", s.branch);
+  // Only serialize a non-default base — 'main' is the implicit default on
+  // restore, so omitting it keeps the common-case URL clean.
+  if (s.base && s.base !== "main") p.set("base", s.base);
   if (s.filePath) p.set("file", s.filePath);
   if (s.commitSha) p.set("commit", s.commitSha);
   if (s.pendingMode) p.set("pending", "1");
@@ -78,7 +83,7 @@ export function useUrlState() {
     const s = useSelection.getState();
 
     if (url.run) s.selectRun(url.run);
-    if (url.branch) s.selectBranch(url.branch, "main");
+    if (url.branch) s.selectBranch(url.branch, url.base ?? "main");
     if (url.commit) s.selectCommit(url.commit);
     if (url.pending) s.togglePending(true);
     if (url.file) s.selectFile(url.file);
