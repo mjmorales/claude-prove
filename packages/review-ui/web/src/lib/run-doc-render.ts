@@ -7,9 +7,8 @@
  *
  * Shared by every surface that renders prove docs (the ACB DocsPanel and the
  * project-scoped runs DocsPanel) so the render contract has exactly one
- * definition. The runs and ACB selection stores each declare their own
- * structurally-identical `DocView` alias; `DocView` here is that same string
- * union, so either store's alias satisfies it without a cross-store import.
+ * definition. `DocView` is the single source for the doc-view union — the runs
+ * and ACB selection stores both import it from here rather than redeclaring it.
  */
 
 export type DocView = "PRD" | "PLAN" | "STATE";

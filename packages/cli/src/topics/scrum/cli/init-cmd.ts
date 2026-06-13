@@ -38,12 +38,12 @@ interface ImportSummary {
   deletedFiles: string[];
 }
 
-export function runInitCmd(flags: InitCmdFlags): number {
+export async function runInitCmd(flags: InitCmdFlags): Promise<number> {
   const workspaceRoot = resolveWorkspaceRoot(flags.workspaceRoot);
 
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
-    if (hasExistingTasks(store)) {
+    if (await hasExistingTasks(store)) {
       process.stdout.write(`${JSON.stringify({ seeded: false, reason: 'already-seeded' })}\n`);
       process.stderr.write('scrum init: store already has tasks, skipping import\n');
       return 0;
@@ -61,7 +61,7 @@ export function runInitCmd(flags: InitCmdFlags): number {
     // so the import stays retryable instead of permanently half-seeded.
     // cleanupLegacyFiles stays OUTSIDE the transaction — it runs only after a
     // successful commit, so a rolled-back seed never deletes planning/ files.
-    const summary = store.transaction(() => importPlanning(store, planningDir));
+    const summary = await store.transaction(() => importPlanning(store, planningDir));
     cleanupLegacyFiles(workspaceRoot, summary);
 
     process.stdout.write(
@@ -87,8 +87,8 @@ function resolveWorkspaceRoot(flag: string | undefined): string {
   return mainWorktreeRoot() ?? process.cwd();
 }
 
-function hasExistingTasks(store: ScrumStore): boolean {
-  return store.listTasks().length > 0;
+async function hasExistingTasks(store: ScrumStore): Promise<boolean> {
+  return (await store.listTasks()).length > 0;
 }
 
 /**
@@ -109,7 +109,7 @@ function hasPlanningContent(planningDir: string): boolean {
   );
 }
 
-function importPlanning(store: ScrumStore, planningDir: string): ImportSummary {
+async function importPlanning(store: ScrumStore, planningDir: string): Promise<ImportSummary> {
   const summary: ImportSummary = { milestones: 0, tasks: 0, events: 0, deletedFiles: [] };
   const declaredMilestones = new Set<string>();
   const roadmapIces = new Set<number>();
@@ -118,18 +118,18 @@ function importPlanning(store: ScrumStore, planningDir: string): ImportSummary {
   if (existsSync(roadmapPath)) {
     const roadmap = parseRoadmap(readFileSync(roadmapPath, 'utf8'));
     for (const milestone of roadmap.milestones) {
-      store.createMilestone({ id: milestone.id, title: milestone.title, status: 'planned' });
+      await store.createMilestone({ id: milestone.id, title: milestone.title, status: 'planned' });
       declaredMilestones.add(milestone.id);
       summary.milestones += 1;
     }
     for (const task of roadmap.tasks) {
-      const resolvedMilestoneId = ensureMilestone(
+      const resolvedMilestoneId = await ensureMilestone(
         store,
         task.milestoneId,
         declaredMilestones,
         summary,
       );
-      store.createTask({
+      await store.createTask({
         id: task.id,
         title: task.title,
         milestoneId: resolvedMilestoneId,
@@ -150,8 +150,13 @@ function importPlanning(store: ScrumStore, planningDir: string): ImportSummary {
       if (ice !== null && roadmapIces.has(ice)) continue; // dedup ROADMAP <> BACKLOG
       const id = slugifyWithIndex('backlog', title, idx);
       const milestoneRef = extractMilestoneRef(title);
-      const resolvedMilestoneId = ensureMilestone(store, milestoneRef, declaredMilestones, summary);
-      store.createTask({ id, title, milestoneId: resolvedMilestoneId, status: 'backlog' });
+      const resolvedMilestoneId = await ensureMilestone(
+        store,
+        milestoneRef,
+        declaredMilestones,
+        summary,
+      );
+      await store.createTask({ id, title, milestoneId: resolvedMilestoneId, status: 'backlog' });
       summary.tasks += 1;
     }
     summary.deletedFiles.push('planning/BACKLOG.md');
@@ -162,12 +167,12 @@ function importPlanning(store: ScrumStore, planningDir: string): ImportSummary {
     const items = parseBulletList(readFileSync(shipLogPath, 'utf8'));
     for (const [idx, title] of items.entries()) {
       const id = slugifyWithIndex('shipped', title, idx);
-      store.createTask({ id, title, status: 'backlog' });
+      await store.createTask({ id, title, status: 'backlog' });
       // Transition backlog -> ready -> in_progress -> done so the lifecycle
       // guard in updateTaskStatus is satisfied and we emit real events.
-      store.updateTaskStatus(id, 'ready');
-      store.updateTaskStatus(id, 'in_progress');
-      store.updateTaskStatus(id, 'done');
+      await store.updateTaskStatus(id, 'ready');
+      await store.updateTaskStatus(id, 'in_progress');
+      await store.updateTaskStatus(id, 'done');
       summary.tasks += 1;
       summary.events += 3;
     }
@@ -180,12 +185,12 @@ function importPlanning(store: ScrumStore, planningDir: string): ImportSummary {
     // land as free-floating log lines we can't attach without a task id.
     // We skip persistence in that case so the FK stays honest, but warn
     // loudly so the drop is not silent.
-    const tasks = store.listTasks();
+    const tasks = await store.listTasks();
     const firstTaskId = tasks[0]?.id;
     const decisionFiles = readdirSync(decisionsDir).filter((f) => f.endsWith('.md'));
     if (firstTaskId !== undefined) {
       for (const file of decisionFiles) {
-        store.appendEvent({
+        await store.appendEvent({
           taskId: firstTaskId,
           kind: 'decision_linked',
           payload: { decision_path: join('planning', 'decisions', file) },
@@ -342,15 +347,15 @@ function extractMilestoneRef(title: string): string | null {
  * counter so it surfaces in the import report. Returns the id as-is,
  * or null when `id` itself was null.
  */
-function ensureMilestone(
+async function ensureMilestone(
   store: ScrumStore,
   id: string | null,
   declared: Set<string>,
   summary: ImportSummary,
-): string | null {
+): Promise<string | null> {
   if (id === null) return null;
   if (declared.has(id)) return id;
-  store.createMilestone({ id, title: id.toUpperCase(), status: 'planned' });
+  await store.createMilestone({ id, title: id.toUpperCase(), status: 'planned' });
   declared.add(id);
   summary.milestones += 1;
   return id;

@@ -145,9 +145,11 @@ function resolveLocal(): { value: LocalPlugin | null; error?: string } {
   candidates.sort((a, b) => {
     const byVersion = compareSemver(b.version, a.version);
     if (byVersion !== 0) return byVersion;
-    // Tie-break on installPath (deterministic; recency isn't exposed in this
-    // shape). Callers can still override via CLAUDE_PLUGIN_ROOT.
-    return a.installPath.localeCompare(b.installPath);
+    // Tie-break on installPath, code-point ordered so the result is identical
+    // on every machine (localeCompare collation is locale-sensitive; recency
+    // isn't exposed in this shape). Callers can still override via
+    // CLAUDE_PLUGIN_ROOT.
+    return a.installPath < b.installPath ? -1 : a.installPath > b.installPath ? 1 : 0;
   });
 
   return { value: candidates[0] ?? null };

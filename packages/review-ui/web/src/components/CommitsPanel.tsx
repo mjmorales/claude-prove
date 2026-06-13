@@ -76,7 +76,7 @@ export function CommitsPanel() {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <span className="text-phos text-[10.5px]">{c.shortSha}</span>
-                  <span className="text-fg-dim text-[10px]">{relTime(c.timestamp)}</span>
+                  <span className="text-fg-dim text-[10px]">{countdownLabel(c.timestamp)}</span>
                 </div>
                 <div className="truncate text-[12px] mt-0.5">{stripType(c.subject)}</div>
                 <div className="text-[10px] text-fg-dim truncate">{c.author}</div>
@@ -121,7 +121,9 @@ function typeColor(t: string): string {
   }
 }
 
-function relTime(iso: string): string {
+// Distinct `T-` countdown format for the commit timeline, deliberately separate
+// from the shared "Ns ago" relTime — renamed so the divergence reads as intent.
+function countdownLabel(iso: string): string {
   const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
   if (s < 60) return `T-${Math.round(s)}s`;
   if (s < 3600) return `T-${Math.round(s / 60)}m`;

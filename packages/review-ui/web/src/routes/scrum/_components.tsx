@@ -7,11 +7,16 @@ import type {
 } from "@claude-prove/cli/scrum/types";
 import { useScrumSelection } from "../../lib/scrumStore";
 import { cn } from "../../lib/cn";
+import { relTime } from "../../lib/time";
 
 /**
  * Presentational bits shared across scrum views. Kept private to the scrum
  * route module (underscore prefix) — not part of the broader component lib.
  */
+
+// Re-exported so scrum route siblings keep importing the relative-time
+// formatter from this module while its single definition lives in lib/time.
+export { relTime };
 
 const STATUS_META: Record<TaskStatus, { label: string; color: string }> = {
   backlog: { label: "Backlog", color: "#6272a4" },
@@ -234,22 +239,4 @@ function criterionVerdictTone(criterion: AcceptanceCriterion): { label: string; 
   if (verdict === "verified") return { label: "verified", color: "#50fa7b" };
   if (verdict === "failed") return { label: "failed", color: "#ff5555" };
   return { label: "pending", color: "#6272a4" };
-}
-
-/**
- * Relative time formatter for event timestamps. Keeps the dashboard compact
- * — exact timestamps live in the task detail timeline.
- */
-export function relTime(iso: string): string {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return iso;
-  const diff = Date.now() - t;
-  const s = Math.round(diff / 1000);
-  if (s < 60) return `${s}s ago`;
-  const m = Math.round(s / 60);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.round(m / 60);
-  if (h < 24) return `${h}h ago`;
-  const d = Math.round(h / 24);
-  return `${d}d ago`;
 }

@@ -37,13 +37,13 @@ function readStdinSync(): string {
  * Exit is always 0 — the `{decision:"block"}` JSON on stdout is Claude
  * Code's block signal; exit code is not the channel.
  */
-export function runHookCmd(flags: HookCmdFlags): number {
+export async function runHookCmd(flags: HookCmdFlags): Promise<number> {
   const workspaceRoot =
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
 
-  ensureLegacyImported(workspaceRoot);
+  await ensureLegacyImported(workspaceRoot);
 
   const raw = readStdinSync();
   if (raw.length === 0) return 0;
@@ -55,7 +55,7 @@ export function runHookCmd(flags: HookCmdFlags): number {
     return 0;
   }
 
-  const result = runHookPostCommit({ workspaceRoot, payload });
+  const result = await runHookPostCommit({ workspaceRoot, payload });
   if (result.stdout.length > 0) process.stdout.write(result.stdout);
   return result.exit;
 }

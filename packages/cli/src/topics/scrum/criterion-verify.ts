@@ -115,11 +115,16 @@ export type ShellRunner = (
 /**
  * Production runner: spawn the check as a Bash command in the isolated
  * worktree, capped by Bun's `timeout`. A timeout kills the process with
- * SIGKILL; we detect that via `signalCode` rather than trusting the exit code,
- * because a killed process reports a synthetic non-zero code that is
- * indistinguishable from a legitimate failure.
+ * SIGKILL, but SIGKILL is not exclusively ours — OOM, a manual kill, or a
+ * worktree teardown can deliver the same signal. We therefore classify a kill
+ * as a timeout only when it lands at or after the wall-clock budget; an earlier
+ * SIGKILL is reported as an ordinary (non-timeout) failure so the transcript
+ * doesn't misattribute external kills to the timeout cap.
  */
+const TIMEOUT_CLASSIFY_SLACK_MS = 50;
+
 export const realShellRunner: ShellRunner = async (command, cwd, timeoutMs) => {
+  const startedAt = Date.now();
   const proc = Bun.spawn({
     cmd: ['bash', '-c', command],
     cwd,
@@ -131,7 +136,9 @@ export const realShellRunner: ShellRunner = async (command, cwd, timeoutMs) => {
   const exitCode = await proc.exited;
   const stdout = await new Response(proc.stdout).text();
   const stderr = await new Response(proc.stderr).text();
-  const timedOut = proc.signalCode === 'SIGKILL';
+  const elapsedMs = Date.now() - startedAt;
+  const timedOut =
+    proc.signalCode === 'SIGKILL' && elapsedMs >= timeoutMs - TIMEOUT_CLASSIFY_SLACK_MS;
   return { exitCode, stdout, stderr, timedOut };
 };
 

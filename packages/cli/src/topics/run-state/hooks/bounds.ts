@@ -73,7 +73,7 @@ export interface ActiveBounds {
  * Tests pass a stub; production wires `resolveActiveBoundsFromStore`.
  */
 export interface BoundsHookDeps {
-  resolveActiveBounds: (cwd: string) => ActiveBounds | null;
+  resolveActiveBounds: (cwd: string) => Promise<ActiveBounds | null>;
 }
 
 /** Production dependency wiring: resolve bounds from the on-disk scrum store. */
@@ -81,10 +81,10 @@ export const DEFAULT_BOUNDS_DEPS: BoundsHookDeps = {
   resolveActiveBounds: resolveActiveBoundsFromStore,
 };
 
-export function runBoundsHook(
+export async function runBoundsHook(
   payload: Record<string, unknown> | null,
   deps: BoundsHookDeps = DEFAULT_BOUNDS_DEPS,
-): HookResult {
+): Promise<HookResult> {
   if (!payload) return EMPTY_HOOK_RESULT;
 
   const toolName = readToolName(payload);
@@ -97,7 +97,7 @@ export function runBoundsHook(
 
   let active: ActiveBounds | null;
   try {
-    active = deps.resolveActiveBounds(cwd);
+    active = await deps.resolveActiveBounds(cwd);
   } catch {
     // Resolution failure (no git root, locked db, parse error) is permissive —
     // a broken lookup must never wall off an otherwise-valid tool call.
@@ -375,7 +375,7 @@ function block(reason: string): HookResult {
  * `null` — the permissive path. The store path is the enclosing main
  * worktree's `<main-root>/.prove/prove.db`; a missing store yields `null`.
  */
-export function resolveActiveBoundsFromStore(cwd: string): ActiveBounds | null {
+export async function resolveActiveBoundsFromStore(cwd: string): Promise<ActiveBounds | null> {
   const projectRoot = mainWorktreeRoot(cwd);
   if (!projectRoot) return null;
 
@@ -386,11 +386,12 @@ export function resolveActiveBoundsFromStore(cwd: string): ActiveBounds | null {
   // process's uncheckpointed WAL, so it would read stale state while a writer
   // session holds the latest committed rows in `prove.db-wal`. A RW handle sees
   // the live committed state. The hook only reads.
-  const store = openScrumStore({ override: dbPath });
+  const store = await openScrumStore({ override: dbPath });
   try {
-    const bounded = store
-      .listTasks({ status: 'in_progress' })
-      .filter((t) => t.bounds !== null && hasEnforceableBound(t.bounds));
+    // Await the read before the sync close so no pending prepared statement
+    // runs after the connection finalizes.
+    const tasks = await store.listTasks({ status: 'in_progress' });
+    const bounded = tasks.filter((t) => t.bounds !== null && hasEnforceableBound(t.bounds));
     if (bounded.length !== 1) return null;
     const task = bounded[0];
     if (!task || !task.bounds) return null;

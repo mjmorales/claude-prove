@@ -98,8 +98,8 @@ function makeManifest(sha: string): Record<string, unknown> {
 // ---------------------------------------------------------------------------
 
 describe('runHookPostCommit — filter layer', () => {
-  test('non-Bash tool returns silent', () => {
-    const result = runHookPostCommit({
+  test('non-Bash tool returns silent', async () => {
+    const result = await runHookPostCommit({
       workspaceRoot: '/tmp/nope',
       payload: { tool_name: 'Read', tool_input: {} },
     });
@@ -107,25 +107,25 @@ describe('runHookPostCommit — filter layer', () => {
     expect(result.exit).toBe(0);
   });
 
-  test('Bash but non-commit command returns silent', () => {
-    const result = runHookPostCommit({
+  test('Bash but non-commit command returns silent', async () => {
+    const result = await runHookPostCommit({
       workspaceRoot: '/tmp/nope',
       payload: { tool_name: 'Bash', tool_input: { command: 'git push origin main' } },
     });
     expect(result.stdout).toBe('');
   });
 
-  test('Bash with git log is not git commit', () => {
-    const result = runHookPostCommit({
+  test('Bash with git log is not git commit', async () => {
+    const result = await runHookPostCommit({
       workspaceRoot: '/tmp/nope',
       payload: { tool_name: 'Bash', tool_input: { command: 'git log --oneline' } },
     });
     expect(result.stdout).toBe('');
   });
 
-  test('git commit --amend matches', () => {
+  test('git commit --amend matches', async () => {
     // Failure path keeps it silent because tool_response says exit_code=1.
-    const result = runHookPostCommit({
+    const result = await runHookPostCommit({
       workspaceRoot: '/tmp/nope',
       payload: {
         tool_name: 'Bash',
@@ -277,11 +277,11 @@ describe('runHookPostCommit — integration with real repo', () => {
     if (ctx.root) rmSync(ctx.root, { recursive: true, force: true });
   });
 
-  test('main branch -> silent pass', () => {
+  test('main branch -> silent pass', async () => {
     const root = makeTmp('main-skip');
     initRepo(root, 'main');
     mkdirSync(join(root, '.prove'));
-    const result = runHookPostCommit({
+    const result = await runHookPostCommit({
       workspaceRoot: root,
       payload: {
         tool_name: 'Bash',
@@ -294,10 +294,10 @@ describe('runHookPostCommit — integration with real repo', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test('master branch -> silent pass', () => {
+  test('master branch -> silent pass', async () => {
     const root = makeTmp('master-skip');
     initRepo(root, 'master');
-    const result = runHookPostCommit({
+    const result = await runHookPostCommit({
       workspaceRoot: root,
       payload: {
         tool_name: 'Bash',
@@ -310,13 +310,13 @@ describe('runHookPostCommit — integration with real repo', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test('feature branch + manifest missing -> block with MANIFEST_PROMPT', () => {
+  test('feature branch + manifest missing -> block with MANIFEST_PROMPT', async () => {
     const root = makeTmp('miss');
     initRepo(root, 'feature/auth');
     mkdirSync(join(root, '.prove'));
     const sha = runStdout(['git', 'rev-parse', 'HEAD'], root);
 
-    const result = runHookPostCommit({
+    const result = await runHookPostCommit({
       workspaceRoot: root,
       payload: {
         tool_name: 'Bash',
@@ -342,7 +342,7 @@ describe('runHookPostCommit — integration with real repo', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test('tools.acb.enabled:false -> silent pass even when manifest missing', () => {
+  test('tools.acb.enabled:false -> silent pass even when manifest missing', async () => {
     const root = makeTmp('disabled');
     initRepo(root, 'feature/auth');
     mkdirSync(join(root, '.prove'));
@@ -354,7 +354,7 @@ describe('runHookPostCommit — integration with real repo', () => {
     );
     // Same shape as the manifest-missing block case above; the only difference
     // is the disabled toggle, so a non-silent result would prove the gate fired.
-    const result = runHookPostCommit({
+    const result = await runHookPostCommit({
       workspaceRoot: root,
       payload: {
         tool_name: 'Bash',
@@ -367,7 +367,7 @@ describe('runHookPostCommit — integration with real repo', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test('feature branch + manifest present -> silent pass', () => {
+  test('feature branch + manifest present -> silent pass', async () => {
     const root = makeTmp('hit');
     initRepo(root, 'feature/auth');
     mkdirSync(join(root, '.prove'));
@@ -375,11 +375,11 @@ describe('runHookPostCommit — integration with real repo', () => {
 
     // Seed manifest via the store.
     const dbPath = join(root, '.prove', 'prove.db');
-    const store = openAcbStore({ override: dbPath });
-    store.saveManifest('feature/auth', sha, makeManifest(sha));
+    const store = await openAcbStore({ override: dbPath });
+    await store.saveManifest('feature/auth', sha, makeManifest(sha));
     store.close();
 
-    const result = runHookPostCommit({
+    const result = await runHookPostCommit({
       workspaceRoot: root,
       payload: {
         tool_name: 'Bash',
@@ -392,11 +392,11 @@ describe('runHookPostCommit — integration with real repo', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test('failed commit (exit_code=1) -> silent regardless of manifest state', () => {
+  test('failed commit (exit_code=1) -> silent regardless of manifest state', async () => {
     const root = makeTmp('fail');
     initRepo(root, 'feature/auth');
     mkdirSync(join(root, '.prove'));
-    const result = runHookPostCommit({
+    const result = await runHookPostCommit({
       workspaceRoot: root,
       payload: {
         tool_name: 'Bash',
@@ -409,11 +409,11 @@ describe('runHookPostCommit — integration with real repo', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test('orchestrator/* branch without slug -> block with guard text', () => {
+  test('orchestrator/* branch without slug -> block with guard text', async () => {
     const root = makeTmp('orchestrator-guard');
     initRepo(root, 'orchestrator/demo');
     mkdirSync(join(root, '.prove'));
-    const result = runHookPostCommit({
+    const result = await runHookPostCommit({
       workspaceRoot: root,
       payload: {
         tool_name: 'Bash',
@@ -431,11 +431,11 @@ describe('runHookPostCommit — integration with real repo', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test('task/* branch without slug -> block with guard text', () => {
+  test('task/* branch without slug -> block with guard text', async () => {
     const root = makeTmp('task-guard');
     initRepo(root, 'task/demo/1.1');
     mkdirSync(join(root, '.prove'));
-    const result = runHookPostCommit({
+    const result = await runHookPostCommit({
       workspaceRoot: root,
       payload: {
         tool_name: 'Bash',
@@ -451,12 +451,12 @@ describe('runHookPostCommit — integration with real repo', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test('orchestrator/* with .prove-wt-slug.txt falls through to manifest check', () => {
+  test('orchestrator/* with .prove-wt-slug.txt falls through to manifest check', async () => {
     const root = makeTmp('orchestrator-ok');
     initRepo(root, 'orchestrator/demo');
     mkdirSync(join(root, '.prove'));
     writeFileSync(join(root, '.prove-wt-slug.txt'), 'demo\n', 'utf8');
-    const result = runHookPostCommit({
+    const result = await runHookPostCommit({
       workspaceRoot: root,
       payload: {
         tool_name: 'Bash',
@@ -473,7 +473,7 @@ describe('runHookPostCommit — integration with real repo', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test('manifest tagged with slug satisfies hasManifestForSha(sha, slug)', () => {
+  test('manifest tagged with slug satisfies hasManifestForSha(sha, slug)', async () => {
     const root = makeTmp('slug-hit');
     initRepo(root, 'orchestrator/demo');
     mkdirSync(join(root, '.prove'));
@@ -481,11 +481,11 @@ describe('runHookPostCommit — integration with real repo', () => {
     const sha = runStdout(['git', 'rev-parse', 'HEAD'], root);
 
     const dbPath = join(root, '.prove', 'prove.db');
-    const store = openAcbStore({ override: dbPath });
-    store.saveManifest('orchestrator/demo', sha, makeManifest(sha), 'demo');
+    const store = await openAcbStore({ override: dbPath });
+    await store.saveManifest('orchestrator/demo', sha, makeManifest(sha), 'demo');
     store.close();
 
-    const result = runHookPostCommit({
+    const result = await runHookPostCommit({
       workspaceRoot: root,
       payload: {
         tool_name: 'Bash',
@@ -498,7 +498,7 @@ describe('runHookPostCommit — integration with real repo', () => {
     rmSync(root, { recursive: true, force: true });
   });
 
-  test('cd X && git commit flows cwd to git helpers (session cwd ignored)', () => {
+  test('cd X && git commit flows cwd to git helpers (session cwd ignored)', async () => {
     const outer = makeTmp('cd-flow');
     // Main session cwd: a plain non-repo dir so if the hook used IT, git
     // helpers return null and the path would silent-pass. We want the
@@ -509,7 +509,7 @@ describe('runHookPostCommit — integration with real repo', () => {
     initRepo(wt, 'feature/auth');
 
     mkdirSync(join(wt, '.prove'));
-    const result = runHookPostCommit({
+    const result = await runHookPostCommit({
       workspaceRoot: wt,
       payload: {
         tool_name: 'Bash',
@@ -526,10 +526,10 @@ describe('runHookPostCommit — integration with real repo', () => {
     rmSync(outer, { recursive: true, force: true });
   });
 
-  test('HEAD unresolvable (no git repo at cwd) -> silent', () => {
+  test('HEAD unresolvable (no git repo at cwd) -> silent', async () => {
     const root = makeTmp('no-repo');
     // Not a git repo — currentBranch returns null.
-    const result = runHookPostCommit({
+    const result = await runHookPostCommit({
       workspaceRoot: root,
       payload: {
         tool_name: 'Bash',
@@ -653,14 +653,14 @@ describe('generateManifestPrompt — golden fixtures', () => {
 // ---------------------------------------------------------------------------
 
 describe('ClaudeCodeHookPayload shape', () => {
-  test('extra fields are tolerated (unknown shape for tool_response)', () => {
+  test('extra fields are tolerated (unknown shape for tool_response)', async () => {
     const payload: ClaudeCodeHookPayload = {
       tool_name: 'Bash',
       tool_input: { command: 'git commit' },
       tool_response: { whatever: 'yes' },
     };
     // No assertion beyond compilation + call not throwing.
-    const result = runHookPostCommit({ workspaceRoot: '/tmp/nope', payload });
+    const result = await runHookPostCommit({ workspaceRoot: '/tmp/nope', payload });
     expect(typeof result.stdout).toBe('string');
   });
 });

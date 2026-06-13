@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { DocView } from "../../lib/run-doc-render";
 
 /**
  * Selection store for the project-scoped Runs surface. Independent from the ACB
@@ -7,8 +8,10 @@ import { create } from "zustand";
  * detail tab, and the doc sub-view the docs tab shows.
  */
 export type RunDetailTab = "docs" | "brief" | "decisions";
-/** Run doc kinds the docs tab can render — maps to prove JSON artifacts. */
-export type DocView = "PRD" | "PLAN" | "STATE";
+
+// Re-exported so callers can keep importing the doc-view union from the store
+// while its single declaration lives in run-doc-render.
+export type { DocView };
 
 type RunsSelection = {
   /** Composite run key `<branch>/<slug>`, or null when nothing is selected. */

@@ -86,9 +86,12 @@ export async function resolveDecisionById(
   // scrum.ts short-circuit policy).
   const dbFile = path.join(repoRoot, ".prove/prove.db");
   if (fsSync.existsSync(dbFile)) {
-    const store = openScrumStore({ override: dbFile });
+    const store = await openScrumStore({ override: dbFile });
     try {
-      const row = store.getDecision(id);
+      // Await BEFORE close: the async driver finalizes the prepared statement
+      // on `close()`, so a pending query would throw "statement has been
+      // finalized".
+      const row = await store.getDecision(id);
       if (row) {
         return { id, path: diskPath, content: row.content, source: "db" };
       }

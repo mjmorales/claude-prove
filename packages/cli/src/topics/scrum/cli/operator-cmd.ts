@@ -13,11 +13,14 @@
  *                              and syncs `charter.md`'s `operator_of_record`
  *                              frontmatter field to the new holder. Prints the
  *                              new open interval row.
- *   resolve --at ISO           Resolve the contributor who held the role AT the
- *                              given instant (the interval `[from_ts, to_ts)`
- *                              containing it) — NOT the current holder. Prints
- *                              the matched contributor JSON row, or exits 1 on a
- *                              miss (no holder in effect at that instant).
+ *   resolve [--at ISO]         With `--at`: resolve the contributor who held the
+ *                              role AT the given instant (the interval
+ *                              `[from_ts, to_ts)` containing it) — point-in-time
+ *                              attribution. Without `--at`: resolve the CURRENT
+ *                              holder (the open `to_ts IS NULL` interval) via the
+ *                              shared `scrum_current_operator` view. Prints the
+ *                              matched contributor JSON row, or exits 1 on a miss
+ *                              (no holder in effect, or the role is unset).
  *   history                    [--human]
  *                              Print the full position history, oldest first.
  *
@@ -48,7 +51,7 @@ export type OperatorAction = 'set' | 'resolve' | 'history';
 
 const OPERATOR_ACTIONS: OperatorAction[] = ['set', 'resolve', 'history'];
 
-export function runOperatorCmd(action: string, flags: OperatorCmdFlags): number {
+export async function runOperatorCmd(action: string, flags: OperatorCmdFlags): Promise<number> {
   if (!isOperatorAction(action)) {
     process.stderr.write(
       `error: unknown operator action '${action}'. expected one of: ${OPERATOR_ACTIONS.join(', ')}\n`,
@@ -60,15 +63,15 @@ export function runOperatorCmd(action: string, flags: OperatorCmdFlags): number 
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'set':
-        return doSet(store, workspaceRoot, flags);
+        return await doSet(store, workspaceRoot, flags);
       case 'resolve':
-        return doResolve(store, flags);
+        return await doResolve(store, flags);
       case 'history':
-        return doHistory(store, flags);
+        return await doHistory(store, flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -87,13 +90,17 @@ function isOperatorAction(value: string): value is OperatorAction {
 // set — transfer the role + sync the charter frontmatter
 // ---------------------------------------------------------------------------
 
-function doSet(store: ScrumStore, workspaceRoot: string, flags: OperatorCmdFlags): number {
+async function doSet(
+  store: ScrumStore,
+  workspaceRoot: string,
+  flags: OperatorCmdFlags,
+): Promise<number> {
   if (flags.contributor === undefined || flags.contributor.length === 0) {
     process.stderr.write('scrum operator set: --contributor <CT-UUID> is required\n');
     return 1;
   }
 
-  const row = store.setOperatorOfRecord({
+  const row = await store.setOperatorOfRecord({
     contributorId: flags.contributor,
     fromTs: emptyToUndef(flags.fromTs),
   });
@@ -136,21 +143,20 @@ function syncCharterOperator(workspaceRoot: string, contributorId: string): bool
 // resolve — point-in-time holder, NOT the current holder
 // ---------------------------------------------------------------------------
 
-function doResolve(store: ScrumStore, flags: OperatorCmdFlags): number {
-  if (flags.at === undefined || flags.at.length === 0) {
-    process.stderr.write('scrum operator resolve: --at <ISO-8601 instant> is required\n');
-    return 1;
-  }
-
-  const row = store.operatorOfRecordAt(flags.at);
+async function doResolve(store: ScrumStore, flags: OperatorCmdFlags): Promise<number> {
+  // `--at` selects point-in-time attribution (the interval scan); omitting it
+  // resolves the CURRENT holder via the shared `scrum_current_operator` view.
+  const at = flags.at !== undefined && flags.at.length > 0 ? flags.at : undefined;
+  const row = at !== undefined ? await store.operatorOfRecordAt(at) : await store.currentOperator();
+  const at_label = at ?? 'now';
   if (row === null) {
     process.stdout.write('null\n');
-    process.stderr.write(`scrum operator resolve: no holder in effect at ${flags.at}\n`);
+    process.stderr.write(`scrum operator resolve: no holder in effect at ${at_label}\n`);
     return 1;
   }
 
   process.stdout.write(`${JSON.stringify(row)}\n`);
-  process.stderr.write(`scrum operator resolve: ${row.id} (${row.slug}) at ${flags.at}\n`);
+  process.stderr.write(`scrum operator resolve: ${row.id} (${row.slug}) at ${at_label}\n`);
   return 0;
 }
 
@@ -158,8 +164,8 @@ function doResolve(store: ScrumStore, flags: OperatorCmdFlags): number {
 // history
 // ---------------------------------------------------------------------------
 
-function doHistory(store: ScrumStore, flags: OperatorCmdFlags): number {
-  const rows = store.operatorHistory();
+async function doHistory(store: ScrumStore, flags: OperatorCmdFlags): Promise<number> {
+  const rows = await store.operatorHistory();
   if (flags.human === true) {
     process.stdout.write(renderHumanTable(rows));
   } else {

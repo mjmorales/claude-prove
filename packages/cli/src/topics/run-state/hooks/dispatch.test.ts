@@ -135,15 +135,17 @@ describe('run-state hook <event> CLI', () => {
 describe('run-state hook bounds CLI — against a seeded store', () => {
   let dir: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dir = mkdtempSync(join(tmpdir(), 'bounds-cli-'));
     mkdirSync(join(dir, '.git'), { recursive: true });
-    const store = openScrumStore({ override: join(dir, '.prove', 'prove.db') });
+    const store = await openScrumStore({ override: join(dir, '.prove', 'prove.db') });
     try {
-      store.createTask({ id: 't1', title: 'bounded', bounds: { write: ['src/**'] } });
-      store.updateTaskStatus('t1', 'ready');
-      store.updateTaskStatus('t1', 'in_progress');
+      await store.createTask({ id: 't1', title: 'bounded', bounds: { write: ['src/**'] } });
+      await store.updateTaskStatus('t1', 'ready');
+      await store.updateTaskStatus('t1', 'in_progress');
     } finally {
+      // Await every seed write before the sync close so no pending prepared
+      // statement runs after the connection finalizes.
       store.close();
     }
   });

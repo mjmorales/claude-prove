@@ -246,15 +246,15 @@ export const STALENESS_THRESHOLD_HOURS = 24;
  *   auto_bubbled       — true on a row advanced by the staleness clock (the
  *                        engine), distinguishing it from a receiver-driven
  *                        `re_escalate` without reading `resolution_mode`.
- *   linked_escalation  — the `scrum_escalations.id` of the fresh `open` row this
- *                        row was bubbled UP to. The FORWARD pointer (original →
- *                        new), the inverse of the new row's `walked_up_from`
- *                        BACK-pointer, so the staleness walk-up is traversable
- *                        in either direction.
+ *   linked_escalation  — the `scrum_escalations.id` (a ULID) of the fresh `open`
+ *                        row this row was bubbled UP to. The FORWARD pointer
+ *                        (original → new), the inverse of the new row's
+ *                        `walked_up_from` BACK-pointer, so the staleness walk-up
+ *                        is traversable in either direction.
  */
 export interface EscalationAttributes {
   auto_bubbled?: boolean;
-  linked_escalation?: number;
+  linked_escalation?: string;
 }
 
 /**
@@ -265,7 +265,9 @@ export interface EscalationAttributes {
  * `walked_up_from`. The whole chain a single escalation climbed is therefore
  * reconstructable by following `walked_up_from` back to the root (`null`).
  *
- *   id              — AUTOINCREMENT surrogate.
+ *   id              — a ULID surrogate (a collision-free TEXT id the minting
+ *                     writer decides, so two concurrent inserts both survive
+ *                     whole-transaction sync replay; lexicographically ordered).
  *   task_id         — the owning task; a SOFT reference (no FK) so an escalation
  *                     may name a task the store does not verify, matching how the
  *                     roster and annotations hold their referents.
@@ -293,7 +295,7 @@ export interface EscalationAttributes {
  *   resolved_at     — when this row left `open` (ISO-8601), or NULL while open.
  */
 export interface EscalationRow {
-  id: number;
+  id: string;
   task_id: string;
   escalation_type: EscalationType;
   layer: EscalationLayer;
@@ -303,7 +305,7 @@ export interface EscalationRow {
   resolution_mode: EscalationResolutionMode | null;
   resolution_note: string | null;
   resolved_by: string | null;
-  walked_up_from: number | null;
+  walked_up_from: string | null;
   attributes: EscalationAttributes | null;
   created_at: string;
   resolved_at: string | null;
@@ -333,7 +335,7 @@ export interface RaiseEscalationInput {
  * `resolvedAt` defaults to now().
  */
 export interface ResolveEscalationInput {
-  id: number;
+  id: string;
   mode: EscalationResolutionMode;
   note?: string | null;
   resolvedBy?: string | null;
@@ -370,8 +372,8 @@ export interface ResolveEscalationResult {
  *   gate   — `check` is a prompt shown to the operator via `AskUserQuestion`
  *   agent  — `check` is a prompt judged by the `validation-agent`
  *
- * Closed vocabulary documented here, not pinned by a SQL CHECK — the value
- * lives inside `acceptance_json`, so the schema stays forward-compatible.
+ * The criterion's verification channel is pinned by a SQL CHECK on the
+ * `scrum_acceptance_criteria.verifies_by` column (closed enum, byte-stable).
  */
 export type AcceptanceVerifiesBy = 'bash' | 'assert' | 'gate' | 'agent';
 
@@ -381,7 +383,8 @@ export type AcceptanceCriterionStatus = 'active' | 'superseded';
 /**
  * Copy-down scope of a criterion when a child task inherits its parent's
  * shared acceptance. Closed vocabulary documented here, not pinned by a SQL
- * CHECK — the value lives inside `acceptance_json`, so the schema stays
+ * CHECK — the value rides the nullable `scrum_acceptance_criteria.scope`
+ * column, validated at the store write boundary, so the schema stays
  * forward-compatible.
  *
  *   descendants — copy to inheriting children; not a goalpost on the parent
@@ -400,9 +403,11 @@ export const ACCEPTANCE_SCOPES: AcceptanceScope[] = ['descendants', 'self', 'bot
 
 /**
  * Persisted verdict of a `gate`-kind criterion — a HUMAN decision recorded as
- * standing state on the criterion, never a process that blocks waiting for it.
- * Closed vocabulary documented here, not pinned by a SQL CHECK — the value
- * lives inside `acceptance_json`, so the schema stays forward-compatible.
+ * the latest `gate`-channel row in the append-only `scrum_criterion_verdicts`
+ * log (surfaced by the criterion-head view), never a process that blocks waiting
+ * for it. Closed vocabulary documented here; the stored verdict string is the
+ * raw `approved`/`rejected` (a never-decided gate reads `gate_pending` as the
+ * absent-verdict default).
  *
  *   gate_pending — the default a fresh gate-kind criterion carries: a human
  *                  has not yet decided. NOT satisfied; NOT a failure either.
@@ -426,8 +431,9 @@ export const GATE_VERDICTS: GateVerdict[] = ['gate_pending', 'approved', 'reject
  * `bash` check) and the run/plan context (for an `assert` expression) — so it
  * RUNS the heavy verification and STAMPS the result here. The close floor then
  * READS this standing verdict instead of re-running the worktree it cannot run.
- * Closed vocabulary documented here, not pinned by a SQL CHECK — the value lives
- * inside `acceptance_json`, so the schema stays forward-compatible.
+ * Recorded as the latest `verification`-channel row in the append-only
+ * `scrum_criterion_verdicts` log (surfaced by the criterion-head view); a
+ * never-recorded criterion reads `pending` as the absent-verdict default.
  *
  *   pending  — the default a fresh criterion carries: the gate has not recorded
  *              an outcome yet. NOT satisfied; NOT a failure either.
@@ -442,8 +448,9 @@ export const VERIFICATION_VERDICTS: VerificationVerdict[] = ['pending', 'verifie
 
 /**
  * Recorded verification state for a criterion whose verdict the orchestrator
- * validation gate decides and the close floor reads. Carried inside the
- * criterion's `verification` field in `acceptance_json` (no DB migration).
+ * validation gate decides and the close floor reads. Reconstructed on read from
+ * the criterion's latest `verification`-channel row in
+ * `scrum_criterion_verdicts`; absent (no row) reads as `pending`.
  *
  *   verdict     — the current recorded outcome (see `VerificationVerdict`).
  *   reason      — short detail of the outcome: the offending sub-expression on a
@@ -461,10 +468,11 @@ export interface VerificationRecord {
 }
 
 /**
- * Persisted decision state for a `gate`-kind criterion, carried inside the
- * criterion's `gate` field in `acceptance_json` (no DB migration). A fresh
- * gate-kind criterion starts `{ verdict: 'gate_pending' }`; `scrum gate respond`
- * transitions it to `approved`/`rejected` and stamps the human responder.
+ * Persisted decision state for a `gate`-kind criterion, reconstructed on read
+ * from the criterion's latest `gate`-channel row in `scrum_criterion_verdicts`.
+ * A fresh gate-kind criterion (no verdict row) reads `{ verdict: 'gate_pending' }`;
+ * `scrum gate respond` APPENDS an `approved`/`rejected` verdict row stamping the
+ * human responder.
  *
  *   verdict      — the current persisted decision (see `GateVerdict`).
  *   responder    — the human (or agent acting on a human's behalf) who resolved
@@ -553,9 +561,12 @@ export interface AcceptancePolicy {
 }
 
 /**
- * Decoded `scrum_tasks.acceptance_json`. NULL column → `null` on
- * `ScrumTask.acceptance`. `policy` is optional; absent = default
- * sequential, re-run-all behavior at story-close time.
+ * A task's acceptance, reconstructed on read from the normalized
+ * `scrum_acceptance_criteria` rows (each criterion's gate/verification folded in
+ * from the `scrum_criterion_head` view) plus the task-level `policy` carried in
+ * `scrum_tasks.acceptance_policy_json`. No criteria AND no policy → `null` on
+ * `ScrumTask.acceptance`. `policy` is optional; absent = default sequential,
+ * re-run-all behavior at story-close time.
  */
 export interface Acceptance {
   criteria: AcceptanceCriterion[];
@@ -675,9 +686,11 @@ export interface ScrumTask {
   /** Containment tier. NULL = untiered/flat task. */
   layer: TaskLayer | null;
   /**
-   * Decoded from `scrum_tasks.acceptance_json` at the row boundary (v5).
-   * NULL = no authored acceptance. Criteria are append-only (supersede,
-   * never remove).
+   * Reconstructed from the normalized `scrum_acceptance_criteria` +
+   * `scrum_criterion_verdicts` (head view) tables and the task's
+   * `acceptance_policy_json` at the row boundary. NULL = no authored acceptance.
+   * Criteria are append-only (supersede, never remove); verdicts are append-only
+   * (re-verify appends, the head reads the latest).
    */
   acceptance: Acceptance | null;
   /**
@@ -720,6 +733,15 @@ export interface ScrumTask {
    */
   worker_id: string | null;
   run_id: string | null;
+  /**
+   * Provenance pointer to the `scrum_events` row (kind `status_changed`) that
+   * set the current `status`. Stamped in the same transaction as the status
+   * transition, with the same id the event carries, so it always points at the
+   * latest transition's event. NULL until the task's first transition. Pure
+   * provenance metadata on the authored status — the derived/rolled-up status a
+   * read computes ignores it.
+   */
+  status_event_id: string | null;
   deleted_at: string | null;
   /**
    * Reusable per-artifact provenance block, assembled at the row boundary by
@@ -761,7 +783,7 @@ export interface ScrumDep {
 }
 
 export interface ScrumEvent {
-  id: number;
+  id: string;
   task_id: string;
   ts: string;
   kind: EventKind;
@@ -886,10 +908,10 @@ export interface DecisionRow {
    * case). Set ONLY by `promoteLoreToCodex`, which lifts a generally-applicable
    * team Lore entry into the Codex as a gated DRAFT carrying this back-pointer.
    * The Lore row is append-only and never hard-deleted, so the pointer always
-   * resolves. INTEGER column — not pinned by a CHECK, matching the
-   * forward-compatible convention on `status`/`kind`/`write_status`.
+   * resolves. TEXT column (a ULID `scrum_lores.id`) — not pinned by a CHECK,
+   * matching the forward-compatible convention on `status`/`kind`/`write_status`.
    */
-  source_lore_id: number | null;
+  source_lore_id: string | null;
 }
 
 /**
@@ -961,7 +983,7 @@ export interface Contributor {
  * later multi-role roster generalizes.
  */
 export interface OperatorHistoryRow {
-  id: number;
+  id: string;
   contributor_id: string;
   from_ts: string;
   to_ts: string | null;
@@ -1215,7 +1237,7 @@ export const TEAM_ROLES: TeamRole[] = ['tech_lead', 'engineer', 'implementer'];
  * except to stamp its `to_ts` once on rotation.
  */
 export interface TeamMemberRow {
-  id: number;
+  id: string;
   team_slug: string;
   role: TeamRole;
   contributor_id: string;
@@ -1299,7 +1321,7 @@ export const TEAM_INTERFACE_STATUSES: TeamInterfaceStatus[] = ['active', 'supers
  * supersession: a retired ask type is never removed; its `status` flips to
  * `superseded` with a `reason` and an optional `superseded_by` pointer.
  *
- *   id            — AUTOINCREMENT surrogate; the replacement target a later
+ *   id            — ULID surrogate; the replacement target a later
  *                   entry's `superseded_by` references.
  *   team_slug     — the owning team, a `scrum_teams.slug`.
  *   ask_type      — the kebab-case ask type. Format `^[a-z0-9]+(-[a-z0-9]+)*$`,
@@ -1312,11 +1334,11 @@ export const TEAM_INTERFACE_STATUSES: TeamInterfaceStatus[] = ['active', 'supers
  *   created_at    — when the row was appended (ISO-8601).
  */
 export interface TeamAcceptRow {
-  id: number;
+  id: string;
   team_slug: string;
   ask_type: string;
   status: TeamInterfaceStatus;
-  superseded_by: number | null;
+  superseded_by: string | null;
   reason: string | null;
   created_at: string;
 }
@@ -1326,7 +1348,7 @@ export interface TeamAcceptRow {
  * for other teams to consume. Append-only with supersession, mirroring
  * `TeamAcceptRow`.
  *
- *   id            — AUTOINCREMENT surrogate; the replacement target a later
+ *   id            — ULID surrogate; the replacement target a later
  *                   entry's `superseded_by` references.
  *   team_slug     — the owning team, a `scrum_teams.slug`.
  *   name          — the output's handle (free text).
@@ -1338,12 +1360,12 @@ export interface TeamAcceptRow {
  *   created_at    — when the row was appended (ISO-8601).
  */
 export interface TeamExposeRow {
-  id: number;
+  id: string;
   team_slug: string;
   name: string;
   schema_ref: string;
   status: TeamInterfaceStatus;
-  superseded_by: number | null;
+  superseded_by: string | null;
   reason: string | null;
   created_at: string;
 }
@@ -1491,7 +1513,7 @@ export const ASK_VERDICT_STATE: Record<AskVerdict, AskState> = {
  * on another team's published interface: `from_team` needs `to_team` to handle
  * `ask_type`, and `blocking_artifact` stays blocked until it does.
  *
- *   id                — AUTOINCREMENT surrogate.
+ *   id                — ULID surrogate.
  *   from_team         — the requesting team's slug, a `scrum_teams.slug`.
  *   to_team           — the target team's slug, a `scrum_teams.slug`. At filing
  *                       time `ask_type` MUST be one of this team's ACTIVE
@@ -1514,7 +1536,7 @@ export const ASK_VERDICT_STATE: Record<AskVerdict, AskState> = {
  *   created_at        — when the ask was filed (ISO-8601).
  */
 export interface AskRow {
-  id: number;
+  id: string;
   from_team: string;
   to_team: string;
   ask_type: string;
@@ -1563,7 +1585,7 @@ export interface FileAskInput {
  *                 event for provenance). Optional.
  */
 export interface RespondAskInput {
-  id: number;
+  id: string;
   verdict: AskVerdict;
   comment?: string | null;
   childTitle?: string;
@@ -1641,7 +1663,7 @@ export const ASK_AWAIT_TERMINAL_PHASES: AskAwaitPhase[] = ['ready', 'rejected', 
  *                     that prevents a silent hang.
  */
 export interface AskAwaitReport {
-  ask_id: number;
+  ask_id: string;
   phase: AskAwaitPhase;
   terminal: boolean;
   state: AskState;
@@ -1659,7 +1681,7 @@ export interface AskAwaitReport {
  * correction is a NEW entry, never an edit to an existing one, so the full
  * history of what a team believed at each point survives.
  *
- *   id                    — AUTOINCREMENT surrogate.
+ *   id                    — ULID surrogate.
  *   team_slug             — the owning team, a `scrum_teams.slug`.
  *   body                  — the entry's free-text content (a convention, a
  *                           lesson, a standing note).
@@ -1683,7 +1705,7 @@ export interface AskAwaitReport {
  *                           required on every supersession write.
  */
 export interface LoreRow {
-  id: number;
+  id: string;
   team_slug: string;
   body: string;
   author_contributor_id: string;
@@ -1733,9 +1755,9 @@ export interface RecordLoreResult {
  * (vacant seat = warn-and-allow, matching `recordLore`).
  */
 export interface SupersedeLoreInput {
-  loreId: number;
+  loreId: string;
   /** Replacement Lore entry id (consolidation). Mutually exclusive with `byDecisionId`. */
-  byLoreId?: number;
+  byLoreId?: string;
   /** Replacement Codex decision id (promotion / codex-duplicate retire). Mutually exclusive with `byLoreId`. */
   byDecisionId?: string;
   reason: string;
@@ -1776,7 +1798,7 @@ export interface SupersedeLoreResult {
  *   recordedByAgent — provenance for who promoted; threaded to `recordDecision`.
  */
 export interface PromoteLoreToCodexInput {
-  loreId: number;
+  loreId: string;
   decisionId?: string;
   kind?: string;
   title?: string;
@@ -1806,7 +1828,7 @@ export const ANNOTATION_TARGET_KINDS: AnnotationTargetKind[] = ['task', 'team', 
  * Lore (team-scoped, tech_lead-gated), an Annotation hangs off a single target
  * artifact and carries no authorship gate beyond recording who wrote it.
  *
- *   id          — AUTOINCREMENT surrogate.
+ *   id          — ULID surrogate.
  *   target_kind — which artifact class the note attaches to (`task` | `team` |
  *                 `decision`). A closed enum, guarded at the store boundary.
  *   target_ref  — the specific target's identifier within that class: a task id,
@@ -1821,7 +1843,7 @@ export const ANNOTATION_TARGET_KINDS: AnnotationTargetKind[] = ['task', 'team', 
  *   created_at  — when the note was appended (ISO-8601).
  */
 export interface AnnotationRow {
-  id: number;
+  id: string;
   target_kind: AnnotationTargetKind;
   target_ref: string;
   body: string;

@@ -20,6 +20,7 @@ import {
   type ShellRunner,
   parseTimeoutMs,
   prepareAgentWorktree,
+  realShellRunner,
   verifyBashCriterion,
 } from './criterion-verify';
 import type { AcceptanceCriterion } from './types';
@@ -169,6 +170,22 @@ describe('verifyBashCriterion — timeout (real shell)', () => {
     });
     expect(calls[0]?.timeoutMs).toBe(45_000);
   });
+
+  // A SIGKILL that lands well before the wall-clock budget is an external kill
+  // (OOM, manual, worktree teardown) — not a timeout. The runner must report it
+  // as an ordinary failure so the transcript doesn't misattribute it.
+  test('an external SIGKILL well before the budget is not a timeout', async () => {
+    const res = await realShellRunner('kill -KILL $$', repo, 30_000);
+    expect(res.timedOut).toBe(false);
+    expect(res.exitCode).not.toBe(0);
+  }, 10_000);
+
+  // The real timeout path: a hung check killed at the budget classifies as a
+  // timeout, exercising realShellRunner directly (not via the verify harness).
+  test('a kill at the budget classifies as a timeout', async () => {
+    const res = await realShellRunner('sleep 30', repo, 200);
+    expect(res.timedOut).toBe(true);
+  }, 10_000);
 });
 
 describe('verifyBashCriterion — failure persistence', () => {

@@ -1,4 +1,4 @@
-export { openStore, Store, type StoreOptions } from './connection';
+export { openStore, type SqlParam, Store, type StoreOptions, withTx } from './connection';
 export {
   dropAllDomainTables,
   runMigrations,
@@ -37,10 +37,12 @@ export {
   registerSchema,
   type SchemaDef,
 } from './registry';
+export { assertStoreSchemaCompatible, SchemaIncompatibleError } from './schema-guard';
+export { isUlid, ulid } from './ulid';
 export {
   type GroupVerdict,
   type GroupVerdictRecord,
-  upsertGroupVerdict,
+  appendGroupVerdict,
   VERDICT_VALUES,
   type VerdictValue,
 } from './services/acb-writes';
@@ -53,6 +55,9 @@ export {
   type AcceptanceVerifiesBy,
   type GateState,
   type GateVerdict,
+  SCAN_ENTRY_TYPES,
+  type ScanFieldSpec,
+  SCAN_TYPE_SPECS,
   type TaskLayer,
   type TaskStatus,
   type TransitionTask,

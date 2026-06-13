@@ -80,19 +80,19 @@ interface AlertsReport {
   orphan_runs: OrphanRun[];
 }
 
-export function runAlertsCmd(flags: AlertsCmdFlags): number {
+export async function runAlertsCmd(flags: AlertsCmdFlags): Promise<number> {
   const workspaceRoot =
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
   const stalledAfterDays = resolveStalledAfterDays(flags.stalledAfterDays);
 
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
-    const stalled = findStalledWip(store, stalledAfterDays);
-    const escalations = findStaleEscalations(store);
-    const pendingGates = findPendingGates(store);
-    const orphans = findOrphanRuns(store, workspaceRoot);
+    const stalled = await findStalledWip(store, stalledAfterDays);
+    const escalations = await findStaleEscalations(store);
+    const pendingGates = await findPendingGates(store);
+    const orphans = await findOrphanRuns(store, workspaceRoot);
     const report: AlertsReport = {
       stalled_after_days: stalledAfterDays,
       stalled_wip: stalled,
@@ -120,12 +120,15 @@ function resolveStalledAfterDays(raw: number | string | undefined): number {
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_STALLED_AFTER_DAYS;
 }
 
-function findStalledWip(store: ScrumStore, stalledAfterDays: number): StalledEntry[] {
+async function findStalledWip(
+  store: ScrumStore,
+  stalledAfterDays: number,
+): Promise<StalledEntry[]> {
   const now = Date.now();
   const thresholdMs = stalledAfterDays * 24 * 60 * 60 * 1000;
   const stalled: StalledEntry[] = [];
   for (const status of STALLED_STATUSES) {
-    for (const task of store.listTasks({ status })) {
+    for (const task of await store.listTasks({ status })) {
       const lastEvent = pickLastEventTs(task);
       if (lastEvent === null) continue;
       const ageMs = now - lastEvent.getTime();
@@ -150,9 +153,9 @@ function findStalledWip(store: ScrumStore, stalledAfterDays: number): StalledEnt
  * the most overdue float to the top (the same staleness signal `nextReady`
  * auto-bubbles into its ranking).
  */
-function findStaleEscalations(store: ScrumStore): StaleEscalation[] {
+async function findStaleEscalations(store: ScrumStore): Promise<StaleEscalation[]> {
   const now = Date.now();
-  return store.listOpenEscalations().map((e) => {
+  return (await store.listOpenEscalations()).map((e) => {
     const ms = Date.parse(e.ts);
     const escalated_days = Number.isNaN(ms) ? 0 : Math.floor((now - ms) / (24 * 60 * 60 * 1000));
     return {
@@ -170,8 +173,8 @@ function findStaleEscalations(store: ScrumStore): StaleEscalation[] {
  * resolves it (criterion id positional, `--task` scoping the lookup), so the
  * operator can act without re-deriving the invocation.
  */
-function findPendingGates(store: ScrumStore): PendingGate[] {
-  return store.listPendingGates().map((g) => ({
+async function findPendingGates(store: ScrumStore): Promise<PendingGate[]> {
+  return (await store.listPendingGates()).map((g) => ({
     task_id: g.task_id,
     title: g.title,
     criterion_id: g.criterion_id,
@@ -187,7 +190,7 @@ function pickLastEventTs(task: ScrumTask): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function findOrphanRuns(store: ScrumStore, workspaceRoot: string): OrphanRun[] {
+async function findOrphanRuns(store: ScrumStore, workspaceRoot: string): Promise<OrphanRun[]> {
   const runsDir = join(workspaceRoot, '.prove', 'runs');
   if (!existsSync(runsDir) || !safeIsDir(runsDir)) return [];
 
@@ -198,7 +201,7 @@ function findOrphanRuns(store: ScrumStore, workspaceRoot: string): OrphanRun[] {
     for (const slug of readdirSync(branchDir)) {
       const runDir = join(branchDir, slug);
       if (!safeIsDir(runDir)) continue;
-      if (!isRunOrphan(runDir, store)) continue;
+      if (!(await isRunOrphan(runDir, store))) continue;
       const runPath = join('.prove', 'runs', branch, slug);
       orphans.push({ branch, slug, run_path: runPath });
     }

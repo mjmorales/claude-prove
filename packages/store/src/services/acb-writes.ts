@@ -1,15 +1,23 @@
 /**
  * ACB group-verdict write service.
  *
- * Canonical home for the `acb_group_verdicts` upsert. Takes a
+ * Canonical home for the `acb_group_verdicts` APPEND. Takes a
  * `@claude-prove/store` `Store` handle directly so any caller — the CLI's
  * `AcbStore`, the review-ui server, or a future consumer — drives the same
- * SQL and the same `updated_at` stamp through one code path.
+ * append SQL and the same `created_at` stamp through one code path.
+ *
+ * `acb_group_verdicts` is an append-only revision log: every verdict on a
+ * `(slug, group_id)` adds a new ULID-keyed row, and the latest revision per key
+ * is read through the `acb_group_verdicts_head` view. Two writers each append a
+ * distinct row that both survive whole-transaction sync replay, where an
+ * in-place upsert on a UNIQUE key would let one writer clobber the other.
  *
  * `acb_group_verdicts` carries no event-log row, so this service emits none.
  */
 
 import type { Store } from '../connection';
+import { ulid } from '../ulid';
+import { isoNow } from './util';
 
 /**
  * Canonical verdict vocabulary for `acb_group_verdicts.verdict`.
@@ -22,9 +30,7 @@ import type { Store } from '../connection';
  * The dependency graph runs `@claude-prove/cli` → `@claude-prove/store`, so
  * this module cannot import the matching `VerdictValue` from the CLI's
  * `acb/schemas.ts` without a cycle. The vocabulary therefore lives here as
- * the canonical copy. Follow-up: the CLI should re-import `VERDICT_VALUES` /
- * `VerdictValue` / `GroupVerdict` / `GroupVerdictRecord` from this module
- * rather than keep a parallel definition, so the two never drift.
+ * the canonical copy, and the CLI re-imports it rather than redeclaring it.
  */
 export const VERDICT_VALUES = [
   'accepted',
@@ -49,34 +55,27 @@ export interface GroupVerdictRecord {
 }
 
 /**
- * Upsert a verdict on `(slug, groupId)`. Bumps `updated_at` to now().
+ * Append a new verdict revision for `(slug, groupId)`, stamped `created_at` =
+ * now() and keyed by a fresh ULID id. A re-verify of the same pair APPENDS a
+ * second row rather than updating in place; the `acb_group_verdicts_head` view
+ * surfaces the latest revision (max id) per key.
  *
- * The conflict target `(slug, group_id)` matches the table's composite
- * primary key, so a re-upsert on the same pair updates in place rather than
- * inserting a second row.
+ * The returned `updatedAt` mirrors the new revision's `created_at`, preserving
+ * the field name every caller already reads.
  */
-export function upsertGroupVerdict(
+export async function appendGroupVerdict(
   store: Store,
   slug: string,
   groupId: string,
   verdict: GroupVerdict,
   note: string | null,
   fixPrompt: string | null,
-): GroupVerdictRecord {
+): Promise<GroupVerdictRecord> {
   const updatedAt = isoNow();
-  store.run(
-    `INSERT INTO acb_group_verdicts (slug, group_id, verdict, note, fix_prompt, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(slug, group_id) DO UPDATE SET
-         verdict    = excluded.verdict,
-         note       = excluded.note,
-         fix_prompt = excluded.fix_prompt,
-         updated_at = excluded.updated_at`,
-    [slug, groupId, verdict, note, fixPrompt, updatedAt],
+  await store.run(
+    `INSERT INTO acb_group_verdicts (id, slug, group_id, verdict, note, fix_prompt, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    [ulid(), slug, groupId, verdict, note, fixPrompt, updatedAt],
   );
   return { slug, groupId, verdict, note, fixPrompt, updatedAt };
-}
-
-function isoNow(): string {
-  return new Date().toISOString();
 }

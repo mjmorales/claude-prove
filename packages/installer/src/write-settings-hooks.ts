@@ -120,6 +120,9 @@ export const PROVE_HOOK_BLOCKS: readonly ProveHookSpec[] = [
     commandSuffix: 'run-state hook bounds',
     timeout: 5000,
   },
+  // `startup` is intentionally omitted: no in-flight run exists at cold
+  // startup, so the run summary this hook emits is only meaningful on
+  // resume/compact (when a run may already be underway).
   {
     event: 'SessionStart',
     matcher: 'resume|compact',
@@ -334,7 +337,7 @@ export function writeSettingsHooks(
   if (!mutated) return false;
 
   const serialized = `${JSON.stringify(settings, null, 2)}\n`;
-  const tmp = `${settingsPath}.tmp`;
+  const tmp = `${settingsPath}.tmp.${process.pid}`;
   writeFileSync(tmp, serialized, 'utf8');
   renameSync(tmp, settingsPath);
   return true;

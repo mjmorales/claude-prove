@@ -140,11 +140,11 @@ const VALID_STATUSES: TaskStatus[] = [
   'cancelled',
 ];
 
-export function runTaskCmd(
+export async function runTaskCmd(
   action: string,
   positional: (string | undefined)[],
   flags: TaskCmdFlags,
-): number {
+): Promise<number> {
   if (!isTaskAction(action)) {
     process.stderr.write(
       `error: unknown task action '${action}'. expected one of: ${TASK_ACTIONS.join(', ')}\n`,
@@ -156,35 +156,35 @@ export function runTaskCmd(
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'create':
-        return doCreate(store, flags);
+        return await doCreate(store, flags);
       case 'show':
-        return doShow(store, positional[0]);
+        return await doShow(store, positional[0]);
       case 'list':
-        return doList(store, flags);
+        return await doList(store, flags);
       case 'tag':
-        return doTag(store, positional[0], positional[1]);
+        return await doTag(store, positional[0], positional[1]);
       case 'link-decision':
-        return doLinkDecision(store, positional[0], positional[1]);
+        return await doLinkDecision(store, positional[0], positional[1]);
       case 'status':
-        return doStatus(store, positional[0], positional[1]);
+        return await doStatus(store, positional[0], positional[1]);
       case 'cancel':
-        return doCancel(store, positional[0], flags);
+        return await doCancel(store, positional[0], flags);
       case 'move':
-        return doMove(store, positional[0], flags);
+        return await doMove(store, positional[0], flags);
       case 'delete':
-        return doDelete(store, positional[0]);
+        return await doDelete(store, positional[0]);
       case 'add-dep':
-        return doAddDep(store, positional[0], positional[1], flags);
+        return await doAddDep(store, positional[0], positional[1], flags);
       case 'remove-dep':
-        return doRemoveDep(store, positional[0], positional[1], flags);
+        return await doRemoveDep(store, positional[0], positional[1], flags);
       case 'acceptance':
-        return doAcceptance(store, positional[0], positional[1], flags);
+        return await doAcceptance(store, positional[0], positional[1], flags);
       case 'bounds':
-        return doBounds(store, positional[0], positional[1], flags);
+        return await doBounds(store, positional[0], positional[1], flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -199,7 +199,7 @@ function isTaskAction(value: string): value is TaskAction {
   return (TASK_ACTIONS as string[]).includes(value);
 }
 
-function doCreate(store: ScrumStore, flags: TaskCmdFlags): number {
+async function doCreate(store: ScrumStore, flags: TaskCmdFlags): Promise<number> {
   if (flags.title === undefined || flags.title.length === 0) {
     process.stderr.write('scrum task create: --title is required\n');
     return 1;
@@ -235,7 +235,7 @@ function doCreate(store: ScrumStore, flags: TaskCmdFlags): number {
     bounds = parsed;
   }
 
-  const task = store.createTask({
+  const task = await store.createTask({
     id,
     title: flags.title,
     description: flags.description ?? null,
@@ -250,31 +250,31 @@ function doCreate(store: ScrumStore, flags: TaskCmdFlags): number {
   return 0;
 }
 
-function doShow(store: ScrumStore, id: string | undefined): number {
+async function doShow(store: ScrumStore, id: string | undefined): Promise<number> {
   if (id === undefined || id.length === 0) {
     process.stderr.write('scrum task show: <id> positional argument required\n');
     return 1;
   }
-  const task = store.getTask(id);
+  const task = await store.getTask(id);
   if (task === null) {
     process.stderr.write(`scrum task show: task '${id}' not found\n`);
     return 1;
   }
-  const tags = store.listTagsForTask(id);
-  const events = store.listEventsForTask(id, 50);
-  const runs = store.listRunsForTask(id);
+  const tags = await store.listTagsForTask(id);
+  const events = await store.listEventsForTask(id, 50);
+  const runs = await store.listRunsForTask(id);
   // Dep edges are additive keys on the show payload so operators can
   // see the graph without a second subcommand. Storage is canonical:
   // every edge is a 'blocks' row (add-dep normalizes 'blocked_by' to its
   // inverse), so both arrays read the 'blocks' kind exclusively.
-  const blocked_by = store.getBlockedBy(id);
-  const blocking = store.getBlocking(id);
+  const blocked_by = await store.getBlockedBy(id);
+  const blocking = await store.getBlocking(id);
   process.stdout.write(`${JSON.stringify({ task, tags, events, runs, blocked_by, blocking })}\n`);
   process.stderr.write(`scrum task show: ${id} (${task.status})\n`);
   return 0;
 }
 
-function doList(store: ScrumStore, flags: TaskCmdFlags): number {
+async function doList(store: ScrumStore, flags: TaskCmdFlags): Promise<number> {
   const options: ListTasksOptions = {};
   if (flags.status !== undefined && flags.status.length > 0) {
     if (!VALID_STATUSES.includes(flags.status as TaskStatus)) {
@@ -294,8 +294,8 @@ function doList(store: ScrumStore, flags: TaskCmdFlags): number {
   // least-surprise path.
   let tasks =
     flags.tag !== undefined && flags.tag.length > 0
-      ? store.listTasksForTag(flags.tag)
-      : store.listTasks(options);
+      ? await store.listTasksForTag(flags.tag)
+      : await store.listTasks(options);
 
   if (flags.tag !== undefined && flags.tag.length > 0) {
     if (options.status !== undefined) tasks = tasks.filter((t) => t.status === options.status);
@@ -309,12 +309,16 @@ function doList(store: ScrumStore, flags: TaskCmdFlags): number {
   return 0;
 }
 
-function doTag(store: ScrumStore, id: string | undefined, tag: string | undefined): number {
+async function doTag(
+  store: ScrumStore,
+  id: string | undefined,
+  tag: string | undefined,
+): Promise<number> {
   if (id === undefined || id.length === 0 || tag === undefined || tag.length === 0) {
     process.stderr.write('scrum task tag: <id> and <tag> positional arguments required\n');
     return 1;
   }
-  store.addTag(id, tag);
+  await store.addTag(id, tag);
   // Stdout contract matches `scrum tag add` (`{added: true, task_id, tag}`)
   // so downstream consumers can parse either entry point identically.
   process.stdout.write(`${JSON.stringify({ added: true, task_id: id, tag })}\n`);
@@ -322,7 +326,11 @@ function doTag(store: ScrumStore, id: string | undefined, tag: string | undefine
   return 0;
 }
 
-function doStatus(store: ScrumStore, id: string | undefined, next: string | undefined): number {
+async function doStatus(
+  store: ScrumStore,
+  id: string | undefined,
+  next: string | undefined,
+): Promise<number> {
   if (id === undefined || id.length === 0 || next === undefined || next.length === 0) {
     process.stderr.write(
       'scrum task status: <id> and <new-status> positional arguments required\n',
@@ -335,7 +343,7 @@ function doStatus(store: ScrumStore, id: string | undefined, next: string | unde
     );
     return 1;
   }
-  const task = store.updateTaskStatus(id, next as TaskStatus);
+  const task = await store.updateTaskStatus(id, next as TaskStatus);
   process.stdout.write(`${JSON.stringify(task)}\n`);
   process.stderr.write(`scrum task status: ${id} -> ${next}\n`);
   return 0;
@@ -350,7 +358,11 @@ function doStatus(store: ScrumStore, id: string | undefined, next: string | unde
  * `--reason`/`--detail` annotate the root's terminal provenance. Store-level
  * rejections (unknown id, already-terminal) surface as exit 1.
  */
-function doCancel(store: ScrumStore, id: string | undefined, flags: TaskCmdFlags): number {
+async function doCancel(
+  store: ScrumStore,
+  id: string | undefined,
+  flags: TaskCmdFlags,
+): Promise<number> {
   if (id === undefined || id.length === 0) {
     process.stderr.write('scrum task cancel: <id> positional argument required\n');
     return 1;
@@ -361,7 +373,7 @@ function doCancel(store: ScrumStore, id: string | undefined, flags: TaskCmdFlags
   };
 
   if (flags.cascade === true) {
-    const result = store.cancelTaskCascade(id, opts);
+    const result = await store.cancelTaskCascade(id, opts);
     process.stdout.write(`${JSON.stringify(result)}\n`);
     process.stderr.write(
       `scrum task cancel: ${result.cancelled.length} task(s) cancelled (root ${id})\n`,
@@ -369,18 +381,18 @@ function doCancel(store: ScrumStore, id: string | undefined, flags: TaskCmdFlags
     return 0;
   }
 
-  const task = store.cancelTask(id, opts);
+  const task = await store.cancelTask(id, opts);
   process.stdout.write(`${JSON.stringify(task)}\n`);
   process.stderr.write(`scrum task cancel: ${id} -> cancelled (${task.terminal_reason})\n`);
   return 0;
 }
 
-function doDelete(store: ScrumStore, id: string | undefined): number {
+async function doDelete(store: ScrumStore, id: string | undefined): Promise<number> {
   if (id === undefined || id.length === 0) {
     process.stderr.write('scrum task delete: <id> positional argument required\n');
     return 1;
   }
-  store.softDeleteTask(id);
+  await store.softDeleteTask(id);
   process.stdout.write(`${JSON.stringify({ deleted: true, task_id: id })}\n`);
   process.stderr.write(`scrum task delete: ${id}\n`);
   return 0;
@@ -405,7 +417,11 @@ function doDelete(store: ScrumStore, id: string | undefined): number {
  * operators can intentionally move tasks into a closed milestone when
  * reviving scope.
  */
-function doMove(store: ScrumStore, id: string | undefined, flags: TaskCmdFlags): number {
+async function doMove(
+  store: ScrumStore,
+  id: string | undefined,
+  flags: TaskCmdFlags,
+): Promise<number> {
   if (id === undefined || id.length === 0) {
     process.stderr.write('scrum task move: <id> positional argument required\n');
     return 1;
@@ -422,7 +438,7 @@ function doMove(store: ScrumStore, id: string | undefined, flags: TaskCmdFlags):
     return 1;
   }
 
-  let task: ReturnType<ScrumStore['updateTaskMilestone']> | undefined;
+  let task: Awaited<ReturnType<ScrumStore['updateTaskMilestone']>> | undefined;
 
   if (unassignRequested || milestoneFlagProvided) {
     let target: string | null;
@@ -434,10 +450,10 @@ function doMove(store: ScrumStore, id: string | undefined, flags: TaskCmdFlags):
       target = flags.milestone;
     }
 
-    task = store.updateTaskMilestone(id, target);
+    task = await store.updateTaskMilestone(id, target);
 
     if (target !== null) {
-      const milestone = store.getMilestone(target);
+      const milestone = await store.getMilestone(target);
       if (milestone?.status === 'closed') {
         process.stderr.write(`scrum task move: warning — target milestone '${target}' is closed\n`);
       }
@@ -447,7 +463,7 @@ function doMove(store: ScrumStore, id: string | undefined, flags: TaskCmdFlags):
 
   if (teamFlagProvided) {
     const teamTarget = flags.team !== undefined && flags.team.length > 0 ? flags.team : null;
-    task = store.updateTaskTeam(id, teamTarget);
+    task = await store.updateTaskTeam(id, teamTarget);
     process.stderr.write(`scrum task move: ${id} team -> ${teamTarget ?? 'unbound'}\n`);
   }
 
@@ -468,11 +484,11 @@ function doMove(store: ScrumStore, id: string | undefined, flags: TaskCmdFlags):
  *      `{ decision_id, decision_path }`. Legacy path-only payloads remain
  *      readable — see `reconcile.ts::collectDecisions`.
  */
-function doLinkDecision(
+async function doLinkDecision(
   store: ScrumStore,
   id: string | undefined,
   decisionPath: string | undefined,
-): number {
+): Promise<number> {
   if (
     id === undefined ||
     id.length === 0 ||
@@ -484,7 +500,7 @@ function doLinkDecision(
     );
     return 1;
   }
-  if (store.getTask(id) === null) {
+  if ((await store.getTask(id)) === null) {
     process.stderr.write(`scrum task link-decision: unknown task '${id}'\n`);
     return 1;
   }
@@ -497,11 +513,11 @@ function doLinkDecision(
 
   const content = readFileSync(abs, 'utf8');
   const parsed = parseDecisionFile(content, decisionPath);
-  if (store.getDecision(parsed.id) === null) {
-    store.recordDecision(parsed);
+  if ((await store.getDecision(parsed.id)) === null) {
+    await store.recordDecision(parsed);
   }
 
-  const eventId = store.appendEvent({
+  const eventId = await store.appendEvent({
     taskId: id,
     kind: 'decision_linked',
     payload: { decision_id: parsed.id, decision_path: decisionPath },
@@ -531,12 +547,12 @@ function doLinkDecision(
  * spells this out because the verb-name-natural reading ("add a dep TO
  * task A") inverts the edge and would otherwise succeed silently.
  */
-function doAddDep(
+async function doAddDep(
   store: ScrumStore,
   from: string | undefined,
   to: string | undefined,
   flags: TaskCmdFlags,
-): number {
+): Promise<number> {
   if (from === undefined || from.length === 0 || to === undefined || to.length === 0) {
     process.stderr.write(
       'scrum task add-dep: <blocker> and <blocked> positional arguments required — the FIRST task blocks the SECOND (pass --kind blocked_by to write <blocked> <blocker> instead)\n',
@@ -545,7 +561,7 @@ function doAddDep(
   }
   const kind = resolveDepKind(flags.kind, 'add-dep');
   if (kind === null) return 1;
-  store.addDep(from, to, kind);
+  await store.addDep(from, to, kind);
   process.stdout.write(
     `${JSON.stringify({ added: true, from_task_id: from, to_task_id: to, kind })}\n`,
   );
@@ -553,12 +569,12 @@ function doAddDep(
   return 0;
 }
 
-function doRemoveDep(
+async function doRemoveDep(
   store: ScrumStore,
   from: string | undefined,
   to: string | undefined,
   flags: TaskCmdFlags,
-): number {
+): Promise<number> {
   if (from === undefined || from.length === 0 || to === undefined || to.length === 0) {
     process.stderr.write(
       'scrum task remove-dep: <blocker> and <blocked> positional arguments required — the FIRST task blocks the SECOND (pass --kind blocked_by to write <blocked> <blocker> instead)\n',
@@ -567,7 +583,7 @@ function doRemoveDep(
   }
   const kind = resolveDepKind(flags.kind, 'remove-dep');
   if (kind === null) return 1;
-  store.removeDep(from, to, kind);
+  await store.removeDep(from, to, kind);
   process.stdout.write(
     `${JSON.stringify({ removed: true, from_task_id: from, to_task_id: to, kind })}\n`,
   );
@@ -607,12 +623,12 @@ type AcceptanceSubAction = 'add' | 'list' | 'verify' | 'supersede';
 
 const ACCEPTANCE_SUB_ACTIONS: AcceptanceSubAction[] = ['add', 'list', 'verify', 'supersede'];
 
-function doAcceptance(
+async function doAcceptance(
   store: ScrumStore,
   sub: string | undefined,
   taskId: string | undefined,
   flags: TaskCmdFlags,
-): number {
+): Promise<number> {
   if (sub === undefined || !(ACCEPTANCE_SUB_ACTIONS as string[]).includes(sub)) {
     process.stderr.write(
       `scrum task acceptance: sub-action required (one of: ${ACCEPTANCE_SUB_ACTIONS.join(' | ')})\n`,
@@ -625,17 +641,21 @@ function doAcceptance(
   }
   switch (sub as AcceptanceSubAction) {
     case 'add':
-      return doAcceptanceAdd(store, taskId, flags);
+      return await doAcceptanceAdd(store, taskId, flags);
     case 'list':
-      return doAcceptanceList(store, taskId);
+      return await doAcceptanceList(store, taskId);
     case 'verify':
-      return doAcceptanceVerify(store, taskId, flags);
+      return await doAcceptanceVerify(store, taskId, flags);
     case 'supersede':
-      return doAcceptanceSupersede(store, taskId, flags);
+      return await doAcceptanceSupersede(store, taskId, flags);
   }
 }
 
-function doAcceptanceAdd(store: ScrumStore, taskId: string, flags: TaskCmdFlags): number {
+async function doAcceptanceAdd(
+  store: ScrumStore,
+  taskId: string,
+  flags: TaskCmdFlags,
+): Promise<number> {
   if (flags.text === undefined || flags.text.length === 0) {
     process.stderr.write('scrum task acceptance add: --text is required\n');
     return 1;
@@ -678,14 +698,14 @@ function doAcceptanceAdd(store: ScrumStore, taskId: string, flags: TaskCmdFlags)
   if (flags.scope !== undefined) criterion.scope = flags.scope as AcceptanceScope;
   if (flags.timeout !== undefined && flags.timeout.length > 0) criterion.timeout = flags.timeout;
 
-  const task = store.addCriterion(taskId, criterion);
+  const task = await store.addCriterion(taskId, criterion);
   process.stdout.write(`${JSON.stringify(task)}\n`);
   process.stderr.write(`scrum task acceptance add: ${taskId} += ${criterion.id}\n`);
   return 0;
 }
 
-function doAcceptanceList(store: ScrumStore, taskId: string): number {
-  const task = store.getTask(taskId);
+async function doAcceptanceList(store: ScrumStore, taskId: string): Promise<number> {
+  const task = await store.getTask(taskId);
   if (task === null) {
     process.stderr.write(`scrum task acceptance list: task '${taskId}' not found\n`);
     return 1;
@@ -705,7 +725,11 @@ function doAcceptanceList(store: ScrumStore, taskId: string): number {
  * failing detail. Store rejections (unknown task/criterion, `gate` criterion)
  * surface via the caller's try/catch as exit 1.
  */
-function doAcceptanceVerify(store: ScrumStore, taskId: string, flags: TaskCmdFlags): number {
+async function doAcceptanceVerify(
+  store: ScrumStore,
+  taskId: string,
+  flags: TaskCmdFlags,
+): Promise<number> {
   const verdict = flags.verdict;
   if (verdict === undefined || !(VALID_VERIFY_VERDICTS as readonly string[]).includes(verdict)) {
     process.stderr.write(
@@ -718,7 +742,7 @@ function doAcceptanceVerify(store: ScrumStore, taskId: string, flags: TaskCmdFla
   const by = flags.by && flags.by.length > 0 ? flags.by : null;
 
   if (flags.criterion !== undefined && flags.criterion.length > 0) {
-    const task = store.recordCriterionVerdict(taskId, flags.criterion, ok, reason, by);
+    const task = await store.recordCriterionVerdict(taskId, flags.criterion, ok, reason, by);
     process.stdout.write(`${JSON.stringify(task)}\n`);
     process.stderr.write(
       `scrum task acceptance verify: ${taskId} / ${flags.criterion} -> ${verdict}${by ? ` (by ${by})` : ''}\n`,
@@ -726,7 +750,7 @@ function doAcceptanceVerify(store: ScrumStore, taskId: string, flags: TaskCmdFla
     return 0;
   }
 
-  const { task, criterionIds } = store.recordTaskVerdict(taskId, ok, reason, by);
+  const { task, criterionIds } = await store.recordTaskVerdict(taskId, ok, reason, by);
   if (criterionIds.length === 0) {
     process.stderr.write(
       `scrum task acceptance verify: ${taskId} has no active non-gate criterion to verify (gate criteria resolve via \`scrum gate respond\`); pass --criterion to target one explicitly\n`,
@@ -741,7 +765,11 @@ function doAcceptanceVerify(store: ScrumStore, taskId: string, flags: TaskCmdFla
   return 0;
 }
 
-function doAcceptanceSupersede(store: ScrumStore, taskId: string, flags: TaskCmdFlags): number {
+async function doAcceptanceSupersede(
+  store: ScrumStore,
+  taskId: string,
+  flags: TaskCmdFlags,
+): Promise<number> {
   if (flags.criterion === undefined || flags.criterion.length === 0) {
     process.stderr.write('scrum task acceptance supersede: --criterion <id> is required\n');
     return 1;
@@ -750,7 +778,7 @@ function doAcceptanceSupersede(store: ScrumStore, taskId: string, flags: TaskCmd
     process.stderr.write('scrum task acceptance supersede: --reason <text> is required\n');
     return 1;
   }
-  const task = store.supersedeCriterion(
+  const task = await store.supersedeCriterion(
     taskId,
     flags.criterion,
     flags.reason,
@@ -778,12 +806,12 @@ type BoundsSubAction = 'set' | 'show';
 
 const BOUNDS_SUB_ACTIONS: BoundsSubAction[] = ['set', 'show'];
 
-function doBounds(
+async function doBounds(
   store: ScrumStore,
   sub: string | undefined,
   taskId: string | undefined,
   flags: TaskCmdFlags,
-): number {
+): Promise<number> {
   if (sub === undefined || !(BOUNDS_SUB_ACTIONS as string[]).includes(sub)) {
     process.stderr.write(
       `scrum task bounds: sub-action required (one of: ${BOUNDS_SUB_ACTIONS.join(' | ')})\n`,
@@ -796,9 +824,9 @@ function doBounds(
   }
   switch (sub as BoundsSubAction) {
     case 'set':
-      return doBoundsSet(store, taskId, flags);
+      return await doBoundsSet(store, taskId, flags);
     case 'show':
-      return doBoundsShow(store, taskId);
+      return await doBoundsShow(store, taskId);
   }
 }
 
@@ -807,7 +835,11 @@ function doBounds(
  * pass `--bounds ''` to clear (→ unbounded). Store-side `validateBounds`
  * rejects unknown top-level keys, surfaced here as exit-1 with the message.
  */
-function doBoundsSet(store: ScrumStore, taskId: string, flags: TaskCmdFlags): number {
+async function doBoundsSet(
+  store: ScrumStore,
+  taskId: string,
+  flags: TaskCmdFlags,
+): Promise<number> {
   if (flags.bounds === undefined) {
     process.stderr.write(
       "scrum task bounds set: --bounds <json> is required (pass --bounds '' to clear)\n",
@@ -821,7 +853,7 @@ function doBoundsSet(store: ScrumStore, taskId: string, flags: TaskCmdFlags): nu
     if (parsed === null) return 1;
     bounds = parsed;
   }
-  const task = store.setBounds(taskId, bounds);
+  const task = await store.setBounds(taskId, bounds);
   process.stdout.write(`${JSON.stringify(task)}\n`);
   process.stderr.write(
     `scrum task bounds set: ${taskId} -> ${bounds === null ? 'cleared' : 'set'}\n`,
@@ -829,8 +861,8 @@ function doBoundsSet(store: ScrumStore, taskId: string, flags: TaskCmdFlags): nu
   return 0;
 }
 
-function doBoundsShow(store: ScrumStore, taskId: string): number {
-  const task = store.getTask(taskId);
+async function doBoundsShow(store: ScrumStore, taskId: string): Promise<number> {
+  const task = await store.getTask(taskId);
   if (task === null) {
     process.stderr.write(`scrum task bounds show: task '${taskId}' not found\n`);
     return 1;

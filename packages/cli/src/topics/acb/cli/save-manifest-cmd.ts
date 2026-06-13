@@ -25,10 +25,10 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { currentBranch, headSha, mainWorktreeRoot, resolveRunSlug } from '@claude-prove/shared';
-import { isoSeconds } from '../hook';
 import { ensureLegacyImported } from '../importer';
 import { validateManifest } from '../schemas';
 import { openAcbStore } from '../store';
+import { isoSeconds } from '../time';
 
 export interface SaveManifestOpts {
   branch?: string;
@@ -37,7 +37,7 @@ export interface SaveManifestOpts {
   workspaceRoot?: string;
 }
 
-export function runSaveManifest(opts: SaveManifestOpts): number {
+export async function runSaveManifest(opts: SaveManifestOpts): Promise<number> {
   const branch = opts.branch ?? currentBranch() ?? 'unknown';
 
   const sha = opts.sha ?? headSha();
@@ -87,12 +87,12 @@ export function runSaveManifest(opts: SaveManifestOpts): number {
     return 1;
   }
 
-  ensureLegacyImported(workspaceRoot);
+  await ensureLegacyImported(workspaceRoot);
 
-  const store = openAcbStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
-  let rowId: number;
+  const store = await openAcbStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
+  let rowId: string;
   try {
-    rowId = store.saveManifest(branch, sha, data, runSlug ?? undefined);
+    rowId = await store.saveManifest(branch, sha, data, runSlug ?? undefined);
   } finally {
     store.close();
   }

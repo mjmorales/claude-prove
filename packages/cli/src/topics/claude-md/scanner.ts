@@ -8,7 +8,7 @@
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { basename, extname, join, resolve, sep } from 'node:path';
+import { basename, extname, join, resolve } from 'node:path';
 import { TEAM_ROLES } from '../scrum/types';
 
 // ---------------------------------------------------------------------------
@@ -812,7 +812,3 @@ function isDir(path: string): boolean {
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
-
-// sep is referenced by the walker depth calc indirectly via `join`; keep the
-// import pinned so biome doesn't flag it as unused.
-void sep;

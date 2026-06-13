@@ -28,7 +28,7 @@ import type { StoryBriefInput } from '../acb/milestone-brief';
 import type { LogEntry } from '../acb/reasoning-log';
 import { listEntries } from '../acb/reasoning-log-store';
 import type { ScrumStore } from './store';
-import { STALENESS_THRESHOLD_HOURS, TEAM_ROLES } from './types';
+import { STALENESS_THRESHOLD_HOURS, TEAM_ROLES, nextEscalationLayer } from './types';
 import type { EscalationRow, ScrumEvent, ScrumTask, TaskStatus, TeamRole } from './types';
 
 // ---------------------------------------------------------------------------
@@ -117,17 +117,17 @@ export interface ContributionMissResult {
  * `isTeamRoleAgent: false` so the floor never fires for general-purpose,
  * task-planner, or other non-team agents.
  */
-export function detectContributionMiss(
+export async function detectContributionMiss(
   store: ScrumStore,
   agentName: string,
   taskId: string,
   windowStartTs: string,
   windowEndTs: string,
-): ContributionMissResult {
+): Promise<ContributionMissResult> {
   const parsed = parseTeamAgentName(agentName);
   if (parsed === null) return { isTeamRoleAgent: false, missed: false };
 
-  const events = store.listEventsForTask(taskId);
+  const events = await store.listEventsForTask(taskId);
   const contributed = events.some(
     (event) => event.agent === agentName && windowStartTs <= event.ts && event.ts < windowEndTs,
   );
@@ -180,10 +180,10 @@ export interface SweepResult {
 
 /** One escalation the staleness floor auto-bubbled, as a flat audit ref. */
 export interface AutoBubbledEscalation {
-  /** The closed (`auto_bubbled`) row's id. */
-  from_id: number;
-  /** The freshly-appended `open` row's id one rung up. */
-  to_id: number;
+  /** The closed (`auto_bubbled`) row's id (a ULID). */
+  from_id: string;
+  /** The freshly-appended `open` row's id (a ULID) one rung up. */
+  to_id: string;
   task_id: string;
   /** The rung the closed row sat at. */
   from_layer: EscalationRow['layer'];
@@ -252,14 +252,14 @@ export function triggerBindingsForStatus(
  * driver should take. Capped at `limit`; ordered by binding order then the
  * store's task order. An empty `triggers` table yields no actions.
  */
-export function computeBoundActions(
+export async function computeBoundActions(
   store: ScrumStore,
   triggers: TriggerBinding[],
   limit: number,
-): BoundAction[] {
+): Promise<BoundAction[]> {
   const out: BoundAction[] = [];
   for (const binding of triggers) {
-    for (const task of store.listTasks({ status: binding.on as TaskStatus })) {
+    for (const task of await store.listTasks({ status: binding.on as TaskStatus })) {
       if (out.length >= limit) return out;
       out.push({
         task_id: task.id,
@@ -325,7 +325,7 @@ export interface MilestoneCurationResult {
    * that leaves the per-task curation flow unchanged). Idempotent: a re-close
    * skips a team that already carries the compaction summary.
    */
-  compactedTeams: Array<{ teamSlug: string; loreId: number; candidateCount: number }>;
+  compactedTeams: Array<{ teamSlug: string; loreId: string; candidateCount: number }>;
   /** Terminating teams skipped because their compaction Lore already exists. */
   skippedAlreadyCompacted: number;
 }
@@ -370,11 +370,11 @@ interface PlanJsonLite {
  * resolved from the Claude Code payload so the rebuild stays correct when the
  * reconcile runs from a subdirectory or a linked worktree.
  */
-export function reconcileRunCompleted(
+export async function reconcileRunCompleted(
   runStatePath: string,
   store: ScrumStore,
   projectRoot: string = process.cwd(),
-): ReconcileRunResult {
+): Promise<ReconcileRunResult> {
   const runDir = dirname(runStatePath);
   const planPath = join(runDir, 'plan.json');
 
@@ -389,17 +389,23 @@ export function reconcileRunCompleted(
   }
 
   const plan = readJsonOrNull<PlanJsonLite>(planPath);
-  const taskId = resolveLinkedTaskId(plan, store, runDir);
+  const taskId = await resolveLinkedTaskId(plan, store, runDir, projectRoot);
 
   if (taskId === null) {
-    emitOrphanEvent(store, runDir, state);
+    await emitOrphanEvent(store, runDir, state, projectRoot);
     return { kind: 'orphan', taskId: null, runPath: runDir };
   }
 
   // Tracked run — guard missing task via a null check before mutating.
-  const task = store.getTask(taskId);
+  const task = await store.getTask(taskId);
   if (!task) {
-    emitOrphanEvent(store, runDir, state, `task '${taskId}' not found in scrum store`);
+    await emitOrphanEvent(
+      store,
+      runDir,
+      state,
+      projectRoot,
+      `task '${taskId}' not found in scrum store`,
+    );
     return {
       kind: 'orphan',
       taskId,
@@ -408,11 +414,11 @@ export function reconcileRunCompleted(
     };
   }
 
-  linkRunForTask(store, taskId, runDir, state);
-  appendRunCompletedEvent(store, taskId, runDir, state);
-  appendStewardVerdictIfPresent(store, taskId, state);
-  const blockedReason = transitionTaskIfTerminal(store, task, state);
-  rebuildContextBundle(store, taskId, projectRoot);
+  await linkRunForTask(store, taskId, runDir, state, projectRoot);
+  await appendRunCompletedEvent(store, taskId, runDir, state, projectRoot);
+  await appendStewardVerdictIfPresent(store, taskId, state);
+  const blockedReason = await transitionTaskIfTerminal(store, task, state);
+  await rebuildContextBundle(store, taskId, projectRoot);
 
   return { kind: 'reconciled', taskId, runPath: runDir, reason: blockedReason ?? undefined };
 }
@@ -435,16 +441,16 @@ export function reconcileRunCompleted(
  * may differ from cwd) pass it so bundle aggregation stays correct when the
  * reconcile runs from a subdirectory or a linked worktree.
  */
-export function buildContextBundle(
+export async function buildContextBundle(
   taskId: string,
   store: ScrumStore,
   projectRoot: string = process.cwd(),
-): ContextBundle {
-  const runs = store.listRunsForTask(taskId);
-  const events = store.listEventsForTask(taskId, 200);
+): Promise<ContextBundle> {
+  const runs = await store.listRunsForTask(taskId);
+  const events = await store.listEventsForTask(taskId, 200);
 
   const files = collectFilesTouched(runs, projectRoot);
-  const decisions = collectDecisions(events, store);
+  const decisions = await collectDecisions(events, store);
   const runSummaries = summarizeRuns(runs, projectRoot).slice(-5);
   const summary_text = buildSummaryText(events);
 
@@ -471,11 +477,11 @@ export function buildContextBundle(
  * from the Claude Code payload's `cwd`); this keeps the walker correct
  * even when the sweep is invoked from a subdirectory.
  */
-export function sweepUnreconciled(
+export async function sweepUnreconciled(
   store: ScrumStore,
   sinceTs: number,
   projectDir?: string,
-): SweepResult {
+): Promise<SweepResult> {
   const root = projectDir ?? process.cwd();
   const runsRoot = join(root, '.prove', 'runs');
   const result: SweepResult = { scanned: 0, reconciled: 0, errors: [] };
@@ -492,7 +498,7 @@ export function sweepUnreconciled(
     if (mtimeMs <= sinceTs) continue;
 
     try {
-      const outcome = reconcileRunCompleted(statePath, store, root);
+      const outcome = await reconcileRunCompleted(statePath, store, root);
       if (outcome.kind === 'reconciled' || outcome.kind === 'orphan') {
         result.reconciled++;
       }
@@ -529,11 +535,11 @@ export function sweepUnreconciled(
  * mutated. Each bubble reuses {@link ScrumStore.autoBubbleEscalation}, so the
  * marker / forward pointer / event surface are written there.
  */
-export function bubbleStaleEscalations(
+export async function bubbleStaleEscalations(
   store: ScrumStore,
   nowMs: number,
   thresholdHours: number = STALENESS_THRESHOLD_HOURS,
-): StaleEscalationSweepResult {
+): Promise<StaleEscalationSweepResult> {
   const thresholdMs = thresholdHours * 60 * 60 * 1000;
   const result: StaleEscalationSweepResult = {
     threshold_hours: thresholdHours,
@@ -545,18 +551,18 @@ export function bubbleStaleEscalations(
   // Snapshot the open rows BEFORE bubbling: an auto-bubble appends a fresh open
   // row, and we must not re-evaluate that brand-new (un-aged) row in the same
   // pass. Iterating the snapshot keeps the sweep single-rung-per-escalation.
-  for (const escalation of store.listOpenEscalationRows()) {
+  for (const escalation of await store.listOpenEscalationRows()) {
     result.inspected++;
     const ageMs = ageMillis(escalation.created_at, nowMs);
     if (ageMs === null || ageMs <= thresholdMs) continue;
 
-    const nextLayer = nextLayerOf(escalation);
+    const nextLayer = nextEscalationLayer(escalation.layer);
     if (nextLayer === null) {
       result.atTopOfChain++;
       continue;
     }
 
-    const bubbled = store.autoBubbleEscalation(escalation.id, new Date(nowMs).toISOString());
+    const bubbled = await store.autoBubbleEscalation(escalation.id, new Date(nowMs).toISOString());
     result.bubbled.push({
       from_id: escalation.id,
       to_id: bubbled.id,
@@ -576,27 +582,6 @@ function ageMillis(createdAt: string, nowMs: number): number | null {
   if (Number.isNaN(ms)) return null;
   return Math.max(0, nowMs - ms);
 }
-
-/** The rung one above an escalation's, or null when it already sits at the top. */
-function nextLayerOf(escalation: EscalationRow): EscalationRow['layer'] | null {
-  const idx = ESCALATION_CHAIN_ORDER.indexOf(escalation.layer);
-  if (idx < 0 || idx + 1 >= ESCALATION_CHAIN_ORDER.length) return null;
-  return ESCALATION_CHAIN_ORDER[idx + 1] ?? null;
-}
-
-/**
- * Bottom-to-top rung order, mirroring the store's `ESCALATION_CHAIN`. Inlined as
- * a local const so this module's top-of-chain check needs no store round-trip;
- * the store boundary remains the authority that rejects a bubble past `human`.
- */
-const ESCALATION_CHAIN_ORDER: EscalationRow['layer'][] = [
-  'implementer',
-  'engineer',
-  'tech_lead',
-  'pm',
-  'strategy',
-  'human',
-];
 
 // ---------------------------------------------------------------------------
 // reconcileMilestoneClosed — Forced Bubble-Up of curation candidates
@@ -627,11 +612,11 @@ const ESCALATION_CHAIN_ORDER: EscalationRow['layer'][] = [
  * unchanged. The rollup is a deterministic concatenation the engine surfaces; the
  * model refines it later.
  */
-export function reconcileMilestoneClosed(
+export async function reconcileMilestoneClosed(
   milestoneId: string,
   store: ScrumStore,
   projectDir?: string,
-): MilestoneCurationResult {
+): Promise<MilestoneCurationResult> {
   const root = projectDir ?? process.cwd();
   const result: MilestoneCurationResult = {
     milestoneId,
@@ -647,10 +632,10 @@ export function reconcileMilestoneClosed(
   // per-terminating-team Lore compaction below.
   const journal: CurationCandidate[] = [];
 
-  for (const task of store.listTasks({ milestoneId })) {
-    const candidates = collectCurationCandidates(store, task.id, root);
+  for (const task of await store.listTasks({ milestoneId })) {
+    const candidates = await collectCurationCandidates(store, task.id, root);
     journal.push(...candidates);
-    if (hasCurationEventForMilestone(store, task.id, milestoneId)) {
+    if (await hasCurationEventForMilestone(store, task.id, milestoneId)) {
       result.skippedAlreadyEmitted++;
       continue;
     }
@@ -659,11 +644,11 @@ export function reconcileMilestoneClosed(
       continue;
     }
     const payload: CurationProposedPayload = { milestone_id: milestoneId, candidates };
-    store.appendEvent({ taskId: task.id, kind: 'curation_proposed', payload });
+    await store.appendEvent({ taskId: task.id, kind: 'curation_proposed', payload });
     result.emitted.push({ taskId: task.id, candidateCount: candidates.length });
   }
 
-  compactJournalForTerminatingTeams(milestoneId, journal, store, result);
+  await compactJournalForTerminatingTeams(milestoneId, journal, store, result);
 
   return result;
 }
@@ -701,24 +686,24 @@ const COMPACTION_AUTHOR_ID = 'ct-engine-compaction';
  * journal's candidate bodies — the engine surfaces a faithful starting point;
  * the model refines it later.
  */
-function compactJournalForTerminatingTeams(
+async function compactJournalForTerminatingTeams(
   milestoneId: string,
   journal: CurationCandidate[],
   store: ScrumStore,
   result: MilestoneCurationResult,
-): void {
+): Promise<void> {
   const marker = compactionMarker(milestoneId);
-  const terminating = store
-    .listTeams()
-    .filter((team) => team.terminates_on_milestone === milestoneId);
+  const terminating = (await store.listTeams()).filter(
+    (team) => team.terminates_on_milestone === milestoneId,
+  );
 
   for (const team of terminating) {
-    if (store.listLores(team.slug).some((lore) => lore.body.startsWith(marker))) {
+    if ((await store.listLores(team.slug)).some((lore) => lore.body.startsWith(marker))) {
       result.skippedAlreadyCompacted++;
       continue;
     }
     const body = renderCompactionLore(marker, team.slug, journal);
-    const { row } = store.recordLore({
+    const { row } = await store.recordLore({
       teamSlug: team.slug,
       body,
       authorContributorId: COMPACTION_AUTHOR_ID,
@@ -773,16 +758,16 @@ function renderCompactionLore(
  * repo-relative run paths (defaults to `process.cwd()`); the CLI passes the
  * workspace root.
  */
-export function gatherMilestoneStories(
+export async function gatherMilestoneStories(
   milestoneId: string,
   store: ScrumStore,
   projectDir?: string,
-): StoryBriefInput[] {
+): Promise<StoryBriefInput[]> {
   const root = projectDir ?? process.cwd();
   const stories: StoryBriefInput[] = [];
 
-  for (const task of store.listTasks({ milestoneId })) {
-    const entries = collectStoryEntries(store, task.id, root);
+  for (const task of await store.listTasks({ milestoneId })) {
+    const entries = await collectStoryEntries(store, task.id, root);
     stories.push({
       story_id: task.id,
       title: task.title,
@@ -802,11 +787,15 @@ export function gatherMilestoneStories(
  * same entry can surface through more than one linked run-path form). Sorted by
  * `ts` so attention/decision derivation reads in chronological order.
  */
-function collectStoryEntries(store: ScrumStore, taskId: string, projectDir: string): LogEntry[] {
+async function collectStoryEntries(
+  store: ScrumStore,
+  taskId: string,
+  projectDir: string,
+): Promise<LogEntry[]> {
   const merged: LogEntry[] = [];
   const seen = new Set<string>();
 
-  for (const run of store.listRunsForTask(taskId)) {
+  for (const run of await store.listRunsForTask(taskId)) {
     const runDir = isAbsolute(run.run_path) ? run.run_path : join(projectDir, run.run_path);
     let entries: LogEntry[];
     try {
@@ -844,12 +833,12 @@ function cmpAsc(a: string, b: string): number {
  * curated under more than one milestone over its life, but never twice for
  * the same close.
  */
-function hasCurationEventForMilestone(
+async function hasCurationEventForMilestone(
   store: ScrumStore,
   taskId: string,
   milestoneId: string,
-): boolean {
-  for (const event of store.listEventsForTask(taskId, 1000)) {
+): Promise<boolean> {
+  for (const event of await store.listEventsForTask(taskId, 1000)) {
     if (event.kind !== 'curation_proposed') continue;
     const payload = event.payload;
     if (isRecord(payload) && payload.milestone_id === milestoneId) return true;
@@ -864,15 +853,15 @@ function hasCurationEventForMilestone(
  * rather than aborting the whole milestone curation — a corrupt log file must
  * not block a milestone from closing.
  */
-function collectCurationCandidates(
+async function collectCurationCandidates(
   store: ScrumStore,
   taskId: string,
   projectDir: string,
-): CurationCandidate[] {
+): Promise<CurationCandidate[]> {
   const candidates: CurationCandidate[] = [];
   const seen = new Set<string>();
 
-  for (const run of store.listRunsForTask(taskId)) {
+  for (const run of await store.listRunsForTask(taskId)) {
     const runDir = isAbsolute(run.run_path) ? run.run_path : join(projectDir, run.run_path);
     let entries: LogEntry[];
     try {
@@ -924,11 +913,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  *
  * Returns null only when no layer knows the link — a genuine orphan.
  */
-function resolveLinkedTaskId(
+async function resolveLinkedTaskId(
   plan: PlanJsonLite | null,
   store: ScrumStore,
   runDir: string,
-): string | null {
+  projectRoot: string,
+): Promise<string | null> {
   if (plan && typeof plan.task_id === 'string' && plan.task_id.length > 0) {
     return plan.task_id;
   }
@@ -939,18 +929,19 @@ function resolveLinkedTaskId(
       }
     }
   }
-  const linked = store.getTaskForRun(toRunPath(runDir));
+  const linked = await store.getTaskForRun(toRunPath(runDir, projectRoot));
   return linked?.id ?? null;
 }
 
-function linkRunForTask(
+async function linkRunForTask(
   store: ScrumStore,
   taskId: string,
   runDir: string,
   state: StateJsonLite,
-): void {
-  const runPath = toRunPath(runDir);
-  store.linkRun({
+  projectRoot: string,
+): Promise<void> {
+  const runPath = toRunPath(runDir, projectRoot);
+  await store.linkRun({
     taskId,
     runPath,
     branch: typeof state.branch === 'string' ? state.branch : null,
@@ -958,17 +949,18 @@ function linkRunForTask(
   });
 }
 
-function appendRunCompletedEvent(
+async function appendRunCompletedEvent(
   store: ScrumStore,
   taskId: string,
   runDir: string,
   state: StateJsonLite,
-): void {
-  store.appendEvent({
+  projectRoot: string,
+): Promise<void> {
+  await store.appendEvent({
     taskId,
     kind: 'run_completed',
     payload: {
-      run_path: toRunPath(runDir),
+      run_path: toRunPath(runDir, projectRoot),
       run_status: state.run_status ?? 'unknown',
       branch: state.branch ?? null,
       slug: state.slug ?? null,
@@ -977,14 +969,14 @@ function appendRunCompletedEvent(
   });
 }
 
-function appendStewardVerdictIfPresent(
+async function appendStewardVerdictIfPresent(
   store: ScrumStore,
   taskId: string,
   state: StateJsonLite,
-): void {
+): Promise<void> {
   const verdict = state.steward_verdict ?? state.review_verdict;
   if (!verdict) return;
-  store.appendEvent({
+  await store.appendEvent({
     taskId,
     kind: 'steward_verdict',
     payload: { verdict },
@@ -1009,16 +1001,16 @@ function appendStewardVerdictIfPresent(
  *     result instead of losing it, rather than reporting a clean reconcile that
  *     masks a story stuck short of `done`.
  */
-function transitionTaskIfTerminal(
+async function transitionTaskIfTerminal(
   store: ScrumStore,
   task: ScrumTask,
   state: StateJsonLite,
-): string | null {
+): Promise<string | null> {
   if (state.run_status !== 'completed') return null;
   if (task.status === 'done' || task.status === 'cancelled') return null;
 
   try {
-    store.updateTaskStatus(task.id, 'done');
+    await store.updateTaskStatus(task.id, 'done');
     return null;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -1027,9 +1019,13 @@ function transitionTaskIfTerminal(
   }
 }
 
-function rebuildContextBundle(store: ScrumStore, taskId: string, projectRoot: string): void {
-  const bundle = buildContextBundle(taskId, store, projectRoot);
-  store.saveContextBundle(taskId, bundle);
+async function rebuildContextBundle(
+  store: ScrumStore,
+  taskId: string,
+  projectRoot: string,
+): Promise<void> {
+  const bundle = await buildContextBundle(taskId, store, projectRoot);
+  await store.saveContextBundle(taskId, bundle);
 }
 
 // ---------------------------------------------------------------------------
@@ -1045,10 +1041,13 @@ function rebuildContextBundle(store: ScrumStore, taskId: string, projectRoot: st
  * both surfaces in sync. Reads `plan.json` from `runDir` (non-throwing; a missing or
  * malformed file is treated as no plan-side link and falls through to the store lookup).
  */
-export function isRunOrphan(runDir: string, store: ScrumStore): boolean {
+export async function isRunOrphan(runDir: string, store: ScrumStore): Promise<boolean> {
   const planPath = join(runDir, 'plan.json');
   const plan = readJsonOrNull<PlanJsonLite>(planPath);
-  return resolveLinkedTaskId(plan, store, runDir) === null;
+  // `alerts-cmd` builds `runDir` under the workspace root it runs from, so the
+  // store reverse-lookup anchor is that same cwd. The predicate's result does
+  // not depend on the anchor when a plan-side link exists (the common case).
+  return (await resolveLinkedTaskId(plan, store, runDir, process.cwd())) === null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1069,21 +1068,26 @@ export function isRunOrphan(runDir: string, store: ScrumStore): boolean {
  * window-bounded; it stays correct regardless of how many orphan events have
  * accumulated on the sentinel task.
  */
-function hasOrphanEventForRun(store: ScrumStore, runPath: string, reason: string): boolean {
-  return store.hasOrphanEventForRunPath(runPath, reason);
+async function hasOrphanEventForRun(
+  store: ScrumStore,
+  runPath: string,
+  reason: string,
+): Promise<boolean> {
+  return await store.hasOrphanEventForRunPath(runPath, reason);
 }
 
-function emitOrphanEvent(
+async function emitOrphanEvent(
   store: ScrumStore,
   runDir: string,
   state: StateJsonLite,
+  projectRoot: string,
   extraReason?: string,
-): void {
-  ensureOrphanTask(store);
-  const runPath = toRunPath(runDir);
+): Promise<void> {
+  await ensureOrphanTask(store);
+  const runPath = toRunPath(runDir, projectRoot);
   const reason = extraReason ?? 'plan.json missing task_id';
-  if (hasOrphanEventForRun(store, runPath, reason)) return;
-  store.appendEvent({
+  if (await hasOrphanEventForRun(store, runPath, reason)) return;
+  await store.appendEvent({
     taskId: ORPHAN_TASK_ID,
     kind: 'unlinked_run_detected',
     payload: {
@@ -1106,13 +1110,13 @@ function emitOrphanEvent(
  *     instead of re-inserting.
  *   - absent       → create it.
  */
-function ensureOrphanTask(store: ScrumStore): void {
-  if (store.getTask(ORPHAN_TASK_ID)) return;
-  if (store.getTaskIncludingDeleted(ORPHAN_TASK_ID)) {
-    store.undeleteTask(ORPHAN_TASK_ID);
+async function ensureOrphanTask(store: ScrumStore): Promise<void> {
+  if (await store.getTask(ORPHAN_TASK_ID)) return;
+  if (await store.getTaskIncludingDeleted(ORPHAN_TASK_ID)) {
+    await store.undeleteTask(ORPHAN_TASK_ID);
     return;
   }
-  store.createTask({
+  await store.createTask({
     id: ORPHAN_TASK_ID,
     title: ORPHAN_TASK_TITLE,
     description: 'Sentinel task collecting unlinked_run_detected events.',
@@ -1125,7 +1129,7 @@ function ensureOrphanTask(store: ScrumStore): void {
 // ---------------------------------------------------------------------------
 
 function collectFilesTouched(
-  runs: ReturnType<ScrumStore['listRunsForTask']>,
+  runs: Awaited<ReturnType<ScrumStore['listRunsForTask']>>,
   projectRoot: string,
 ): string[] {
   const seen = new Set<string>();
@@ -1160,10 +1164,10 @@ function collectFilesTouched(
  * `decision_id` is the new canonical key; consumers that want the slug
  * should prefer it. `path` stays on the output shape for UI continuity.
  */
-function collectDecisions(
+async function collectDecisions(
   events: ScrumEvent[],
   store?: ScrumStore,
-): Array<{ path: string; title: string }> {
+): Promise<Array<{ path: string; title: string }>> {
   const out: Array<{ path: string; title: string }> = [];
   for (const event of events) {
     if (event.kind !== 'decision_linked') continue;
@@ -1178,7 +1182,7 @@ function collectDecisions(
     const path = decisionPath || legacyPath;
     let title = legacyTitle;
     if (!title && decisionId && store) {
-      title = store.getDecision(decisionId)?.title ?? '';
+      title = (await store.getDecision(decisionId))?.title ?? '';
     }
 
     if (path) out.push({ path, title });
@@ -1187,7 +1191,7 @@ function collectDecisions(
 }
 
 function summarizeRuns(
-  runs: ReturnType<ScrumStore['listRunsForTask']>,
+  runs: Awaited<ReturnType<ScrumStore['listRunsForTask']>>,
   projectRoot: string,
 ): ContextBundle['runs'] {
   return runs.map((run) => {
@@ -1258,16 +1262,19 @@ function isDir(path: string): boolean {
 }
 
 /**
- * Normalize `runDir` into a repo-relative path (matches Task 1's
- * `linkRun(runPath: '.prove/runs/...')` convention). Falls back to the
- * absolute path when `runDir` lives outside `process.cwd()`. Uses
- * realpath on both sides so macOS tmpdir symlinks (/var vs /private/var)
- * don't produce spurious `../../..` traversals.
+ * Normalize `runDir` into a `projectRoot`-relative path (matches the
+ * `linkRun(runPath: '.prove/runs/...')` convention). Anchoring on `projectRoot`
+ * — NOT `process.cwd()` — keeps the stored path correct when reconcile fires
+ * from a linked worktree or a subdirectory where `cwd != projectRoot`; it also
+ * stays the exact inverse of `resolveRunStatePath`, which joins the stored value
+ * against the same `projectRoot`. Falls back to the absolute path when `runDir`
+ * lives outside `projectRoot`. Uses realpath on both sides so macOS tmpdir
+ * symlinks (/var vs /private/var) don't produce spurious `../../..` traversals.
  */
-function toRunPath(runDir: string): string {
-  const cwdReal = safeRealpath(process.cwd());
+function toRunPath(runDir: string, projectRoot: string): string {
+  const rootReal = safeRealpath(projectRoot);
   const dirReal = safeRealpath(runDir);
-  const rel = relative(cwdReal, dirReal);
+  const rel = relative(rootReal, dirReal);
   if (rel && !rel.startsWith('..')) return rel;
   return runDir;
 }

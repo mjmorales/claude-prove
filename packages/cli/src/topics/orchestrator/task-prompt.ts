@@ -13,9 +13,9 @@
  * implementation rules / code quality checklist / resource constraints).
  */
 
-import { readFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { teamAgentNames } from '../scrum/team-agent-names';
+import { readJson } from './read-json';
 
 export interface TaskPromptOpts {
   runDir: string;
@@ -404,12 +404,4 @@ function formatCriteriaList(criteria: PlanCriterion[]): string {
       return `- ${text} (${c.verifies_by}${check})`;
     })
     .join('\n');
-}
-
-function readJson<T>(path: string): T | null {
-  try {
-    return JSON.parse(readFileSync(path, 'utf8')) as T;
-  } catch {
-    return null;
-  }
 }

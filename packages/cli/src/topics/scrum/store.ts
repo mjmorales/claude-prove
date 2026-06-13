@@ -13,15 +13,19 @@
  * `clearRegistry()` test helper still works.
  */
 
-import type { Database, Statement } from 'bun:sqlite';
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  type SqlParam,
   type Store,
   type StoreOptions,
+  assertStoreSchemaCompatible,
   openStore,
   runMigrations,
+  ulid,
   updateTaskStatus as updateTaskStatusViaService,
+  withTx,
 } from '@claude-prove/store';
+import type { Database } from '@tursodatabase/database';
 import { type AssertContext, type CriterionVerification, verifyCriterion } from './assert-grammar';
 import {
   type BashVerifyResult,
@@ -30,9 +34,16 @@ import {
 } from './criterion-verify';
 import { globsOverlap } from './glob-overlap';
 import { SCRUM_SCHEMA_VERSION, ensureScrumSchemaRegistered } from './schemas';
+
+// Re-exported so registry-dependent consumers outside this package (the
+// review-ui server's schema guard, cross-domain conformance tests) can
+// re-land the scrum domain after a `clearRegistry()` without reaching into
+// the unexported `./schemas` module path.
+export { ensureScrumSchemaRegistered } from './schemas';
 import type {
   Acceptance,
   AcceptanceCriterion,
+  AcceptancePolicy,
   AcceptanceScope,
   AddAnnotationInput,
   AnnotationRow,
@@ -101,7 +112,7 @@ import type {
   TeamTerminateResult,
   TeamType,
   TeamWriteScopeConflict,
-  VerificationRecord,
+  VerificationVerdict,
 } from './types';
 import type { AddTeamExposeInput, CreateTeamInput } from './types';
 import {
@@ -123,6 +134,14 @@ import {
   nextEscalationLayer,
 } from './types';
 
+/**
+ * Resolved prepared-statement type for the async driver. Derived from the
+ * public `Database.prepare()` surface — `prepare(sql)` returns a
+ * `Promise<Statement>`, so `Awaited<ReturnType<...>>` yields the Statement
+ * type without importing the driver's internal `database-common` module.
+ */
+type Statement = Awaited<ReturnType<Database['prepare']>>;
+
 // ---------------------------------------------------------------------------
 // Public openers
 // ---------------------------------------------------------------------------
@@ -132,10 +151,21 @@ import {
  * migration, and returns the wrapped `ScrumStore`. Pass `{ path: ':memory:' }`
  * in tests for isolation.
  */
-export function openScrumStore(opts: StoreOptions = {}): ScrumStore {
+export async function openScrumStore(opts: StoreOptions = {}): Promise<ScrumStore> {
   ensureScrumSchemaRegistered();
-  const store = openStore(opts);
-  runMigrations(store);
+  const store = await openStore(opts);
+  // Refuse a write-open against a legacy (pre-Turso-v1) or ahead store BEFORE
+  // running migrations, so an incompatible store is never silently migrated or
+  // written. A readonly open skips the guard — inspecting an old store is fine.
+  if (!opts.readonly) {
+    try {
+      await assertStoreSchemaCompatible(store);
+    } catch (err) {
+      store.close();
+      throw err;
+    }
+  }
+  await runMigrations(store);
   return new ScrumStore(store);
 }
 
@@ -162,10 +192,10 @@ export interface CreateTaskInput {
   /** Containment tier; NULL = flat. */
   layer?: TaskLayer | null;
   /**
-   * Acceptance criteria authored at create time (v5). Validated for the
-   * idempotent/policy invariant before insert. When omitted, the task's
-   * `acceptance_json` stays NULL unless `parentId` carries inheritable
-   * criteria (see `inheritAcceptance`).
+   * Acceptance criteria authored at create time. Validated for the
+   * idempotent/policy invariant before insert. When omitted, the task gets no
+   * criteria unless `parentId` carries inheritable ones (see
+   * `inheritAcceptance`).
    */
   acceptance?: Acceptance | null;
   /**
@@ -318,15 +348,23 @@ export interface ResolveContributorKey {
 
 /**
  * Canonical `scrum_tasks` column list, in declaration order. Every SELECT
- * routes through this so the v3 `parent_id`/`layer`, v5 `acceptance_json`,
- * v6 `bounds_json`, and v11 `worker_id`/`run_id` columns stay in lockstep with
- * the `ScrumTaskRow` shape. Raw rows carry `acceptance_json`/`bounds_json:
- * string | null`; `decodeTask` turns them into the decoded
- * `ScrumTask.acceptance`/`.bounds` fields and assembles the `provenance` block
- * at the public boundary.
+ * routes through this so the `parent_id`/`layer`, `acceptance_policy_json`,
+ * `bounds_json`, and `worker_id`/`run_id` columns stay in lockstep with the
+ * `ScrumTaskRow` shape. The acceptance CRITERIA are normalized out into
+ * `scrum_acceptance_criteria` (verdicts append-only in
+ * `scrum_criterion_verdicts`); only the task-level acceptance POLICY rides the
+ * task row as `acceptance_policy_json`. Raw rows carry
+ * `acceptance_policy_json`/`bounds_json: string | null`; `decodeTask` joins the
+ * hydrated criteria back onto the policy to rebuild the public
+ * `ScrumTask.acceptance` object and assembles the `provenance` block.
  */
 const TASK_COLUMNS =
-  'id, title, description, status, milestone_id, team_slug, parent_id, layer, acceptance_json, bounds_json, terminal_reason, terminal_detail, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, deleted_at';
+  'id, title, description, status, milestone_id, team_slug, parent_id, layer, acceptance_policy_json, bounds_json, terminal_reason, terminal_detail, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, status_event_id, deleted_at';
+
+/** `TASK_COLUMNS` qualified with the `t.` alias, for joins that disambiguate `scrum_tasks t`. */
+const T_COLS = TASK_COLUMNS.split(', ')
+  .map((c) => `t.${c}`)
+  .join(', ');
 
 /** Canonical `scrum_milestones` SELECT column list; includes the v10 `initiative` grouping. */
 const MILESTONE_COLUMNS =
@@ -395,15 +433,59 @@ const DECISION_COLUMNS =
 const ASK_TYPE_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 
 /**
- * Raw `scrum_tasks` SELECT shape — identical to `ScrumTask` except the v5
- * acceptance and v6 bounds columns arrive as their on-disk JSON strings and the
- * derived `provenance` block is absent (assembled by `decodeTask`).
- * `decodeTask` is the sole bridge from this to the public `ScrumTask`.
+ * Raw `scrum_tasks` SELECT shape — identical to `ScrumTask` except the bounds
+ * column arrives as its on-disk JSON string, the acceptance CRITERIA are NOT on
+ * the row (they live in `scrum_acceptance_criteria`, hydrated separately) — only
+ * the task-level acceptance POLICY rides as `acceptance_policy_json` — and the
+ * derived `provenance` block is absent (assembled by `decodeTask`). `decodeTask`
+ * is the sole bridge from this (plus the hydrated criteria) to the public
+ * `ScrumTask`.
  */
 type ScrumTaskRow = Omit<ScrumTask, 'acceptance' | 'bounds' | 'provenance'> & {
-  acceptance_json: string | null;
+  acceptance_policy_json: string | null;
   bounds_json: string | null;
 };
+
+/**
+ * Raw `scrum_acceptance_criteria` SELECT shape — the criterion DEFINITION. `id`
+ * is the minted ULID surrogate PK (and the verdict-log FK target);
+ * `criterion_id` is the author-given external id, unique only within a task.
+ */
+interface AcceptanceCriterionRow {
+  id: string;
+  task_id: string;
+  criterion_id: string;
+  ord: string;
+  text: string;
+  verifies_by: AcceptanceCriterion['verifies_by'];
+  check_payload: string;
+  status: AcceptanceCriterion['status'];
+  idempotent: number;
+  scope: string | null;
+  timeout: string | null;
+  superseded_by: string | null;
+  reason: string | null;
+  inherited_from: string | null;
+}
+
+/**
+ * Raw `scrum_criterion_head` view row — the latest verdict per criterion. Its
+ * `criterion_id` is the criterion-row SURROGATE id (`scrum_acceptance_criteria.id`),
+ * not the external author id.
+ */
+interface CriterionHeadRow {
+  criterion_id: string;
+  channel: 'gate' | 'verification';
+  verdict: string;
+  reason: string | null;
+  by_whom: string | null;
+  comment: string | null;
+  at: string;
+}
+
+/** Canonical `scrum_acceptance_criteria` SELECT column list. */
+const ACCEPTANCE_CRITERION_COLUMNS =
+  'id, task_id, criterion_id, ord, text, verifies_by, check_payload, status, idempotent, scope, timeout, superseded_by, reason, inherited_from';
 
 // Tags that boost priority in nextReady ranking.
 const PRIORITY_TAGS = new Set(['p0', 'p1', 'urgent', 'blocker']);
@@ -483,8 +565,14 @@ export interface VerifyTaskAcceptanceOptions {
  */
 export class ScrumStore {
   private readonly store: Store;
-  private readonly db: Database;
-  private readonly statements: Map<string, Statement> = new Map();
+  /**
+   * Prepared-statement cache keyed by SQL text. Caches the `prepare()` PROMISE
+   * (not the resolved Statement) so a hot SQL string is prepared exactly once:
+   * the first caller seeds the async prepare, every later caller awaits the
+   * same in-flight or settled promise. Re-preparing on each hot-path call would
+   * cost a driver round-trip per node in graph walks like nextReady.
+   */
+  private readonly statements: Map<string, Promise<Statement>> = new Map();
 
   /**
    * Ambient write actor — the identity stamped into `created_by` /
@@ -499,7 +587,6 @@ export class ScrumStore {
 
   constructor(store: Store) {
     this.store = store;
-    this.db = store.getDb();
   }
 
   /**
@@ -531,8 +618,8 @@ export class ScrumStore {
    * calls) atomic: a mid-sequence failure leaves the store untouched rather
    * than half-written. The inner per-method transactions nest as savepoints.
    */
-  transaction<T>(fn: () => T): T {
-    return this.db.transaction(fn)();
+  transaction<T>(fn: () => Promise<T>): Promise<T> {
+    return withTx(this.store, fn);
   }
 
   // ==========================================================================
@@ -546,7 +633,7 @@ export class ScrumStore {
    * enforce FKs without `PRAGMA foreign_keys = ON`, which file-backed
    * stores set but `:memory:` does not).
    */
-  createTask(input: CreateTaskInput): ScrumTask {
+  async createTask(input: CreateTaskInput): Promise<ScrumTask> {
     const createdAt = input.createdAt ?? isoNow();
     const status: TaskStatus = input.status ?? 'backlog';
     const milestoneId = input.milestoneId ?? null;
@@ -554,20 +641,20 @@ export class ScrumStore {
     const teamSlug = input.teamSlug ?? null;
 
     if (milestoneId !== null) {
-      const exists = this.getMilestone(milestoneId);
+      const exists = await this.getMilestone(milestoneId);
       if (!exists) {
         throw new Error(`createTask: unknown milestone_id '${milestoneId}'`);
       }
     }
 
     if (parentId !== null) {
-      const parent = this.getTask(parentId);
+      const parent = await this.getTask(parentId);
       if (!parent) {
         throw new Error(`createTask: unknown parent_id '${parentId}'`);
       }
     }
 
-    if (teamSlug !== null) this.assertBindableTeam('createTask', teamSlug);
+    if (teamSlug !== null) await this.assertBindableTeam('createTask', teamSlug);
 
     // Resolve acceptance: explicit input wins; otherwise inherit the parent's
     // shared_acceptance criteria (independent copies tagged `inherited_from`).
@@ -575,7 +662,7 @@ export class ScrumStore {
     const authored = input.acceptance ?? null;
     let acceptance: Acceptance | null = authored;
     if (authored === null && parentId !== null) {
-      const inherited = this.inheritAcceptance(parentId);
+      const inherited = await this.inheritAcceptance(parentId);
       acceptance = inherited.length > 0 ? { criteria: inherited } : null;
     }
     // Seed `gate_pending` on any gate-kind criterion that arrived without an
@@ -619,6 +706,10 @@ export class ScrumStore {
       last_modified_at: createdAt,
       worker_id: workerId,
       run_id: runId,
+      // No transition has fired yet — the authored status is the creation status,
+      // not one set by a status_changed event. The pointer is stamped on the
+      // first transition (see updateTaskStatus), so a fresh task reads NULL.
+      status_event_id: null,
       deleted_at: null,
       provenance: {
         created_by: createdBy,
@@ -631,10 +722,9 @@ export class ScrumStore {
       },
     };
 
-    const tx = this.db.transaction(() => {
-      this.prep(
-        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, team_slug, parent_id, layer, acceptance_json, bounds_json, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
-      ).run(
+    const tx = async () => {
+      await this.exec(
+        'INSERT INTO scrum_tasks (id, title, description, status, milestone_id, team_slug, parent_id, layer, acceptance_policy_json, bounds_json, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)',
         row.id,
         row.title,
         row.description,
@@ -643,7 +733,7 @@ export class ScrumStore {
         row.team_slug,
         row.parent_id,
         row.layer,
-        acceptance === null ? null : JSON.stringify(acceptance),
+        acceptance?.policy ? JSON.stringify(acceptance.policy) : null,
         bounds === null ? null : JSON.stringify(bounds),
         row.created_by_agent,
         row.created_at,
@@ -654,34 +744,120 @@ export class ScrumStore {
         row.run_id,
       );
 
+      // Acceptance CRITERIA are normalized into their own table — insert each
+      // criterion's DEFINITION row in authored array order. A fresh task carries
+      // no verdicts; the gate seed (`gate_pending`) is a decode artifact, not a
+      // verdict row, so nothing lands in scrum_criterion_verdicts here.
+      for (const criterion of acceptance?.criteria ?? []) {
+        await this.insertCriterionRow(row.id, criterion, createdAt);
+      }
+
       if (input.tags && input.tags.length > 0) {
-        const stmt = this.prep('INSERT INTO scrum_tags (task_id, tag, added_at) VALUES (?, ?, ?)');
+        const stmt = await this.prep(
+          'INSERT INTO scrum_tags (task_id, tag, added_at) VALUES (?, ?, ?)',
+        );
         for (const tag of input.tags) {
-          stmt.run(row.id, tag, createdAt);
+          await stmt.run(row.id, tag, createdAt);
         }
       }
 
-      this.prep(
-        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
-      ).run(
+      await this.exec(
+        'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+        ulid(),
         row.id,
         createdAt,
         'task_created',
         row.created_by_agent,
         JSON.stringify({ title: row.title }),
       );
-    });
-    tx();
+    };
+    await withTx(this.store, tx);
 
     return row;
   }
 
+  /**
+   * Decode a batch of raw task rows into public `ScrumTask`s, hydrating each
+   * row's `acceptance` from the normalized criteria + head-verdict tables. The
+   * hydration is BATCHED: it loads every criterion and head verdict for the
+   * whole row set in two queries (not one per task), so a `listTasks`/`nextReady`
+   * walk stays query-bounded rather than N+1. The criteria are grouped by
+   * `task_id` and the head verdicts keyed by `criterion_id` in memory, then
+   * `reconstructAcceptance` folds them onto each task's `policy` column.
+   */
+  private async hydrateRows(rows: ScrumTaskRow[]): Promise<ScrumTask[]> {
+    if (rows.length === 0) return [];
+    const taskIds = rows.map((r) => r.id);
+    const criteriaByTask = await this.loadCriteriaByTask(taskIds);
+    const headByCriterion = await this.loadHeadVerdicts(taskIds);
+    return rows.map((row) =>
+      decodeTask(
+        row,
+        reconstructAcceptance(
+          criteriaByTask.get(row.id) ?? [],
+          headByCriterion,
+          row.acceptance_policy_json,
+          row.id,
+        ),
+      ),
+    );
+  }
+
+  /** Hydrate a single raw row (the one-task read path). */
+  private async hydrateRow(row: ScrumTaskRow): Promise<ScrumTask> {
+    const [task] = await this.hydrateRows([row]);
+    if (!task) throw new Error(`hydrateRow: task '${row.id}' vanished mid-hydrate`);
+    return task;
+  }
+
+  /**
+   * Load every criterion DEFINITION row for the given task ids, grouped by
+   * `task_id`. One query over an expanded placeholder list keeps the read
+   * bounded regardless of the task count.
+   */
+  private async loadCriteriaByTask(
+    taskIds: string[],
+  ): Promise<Map<string, AcceptanceCriterionRow[]>> {
+    const placeholders = taskIds.map(() => '?').join(', ');
+    const rows = (await this.many(
+      `SELECT ${ACCEPTANCE_CRITERION_COLUMNS} FROM scrum_acceptance_criteria WHERE task_id IN (${placeholders})`,
+      ...taskIds,
+    )) as AcceptanceCriterionRow[];
+    const byTask = new Map<string, AcceptanceCriterionRow[]>();
+    for (const row of rows) {
+      const bucket = byTask.get(row.task_id);
+      if (bucket) bucket.push(row);
+      else byTask.set(row.task_id, [row]);
+    }
+    return byTask;
+  }
+
+  /**
+   * Load the latest verdict per criterion (the criterion-head view) for every
+   * criterion belonging to the given task ids, keyed by `criterion_id`. The join
+   * to `scrum_acceptance_criteria` scopes the head read to just these tasks.
+   */
+  private async loadHeadVerdicts(taskIds: string[]): Promise<Map<string, CriterionHeadRow>> {
+    const placeholders = taskIds.map(() => '?').join(', ');
+    const rows = (await this.many(
+      `SELECT h.criterion_id, h.channel, h.verdict, h.reason, h.by_whom, h.comment, h.at
+       FROM scrum_criterion_head h
+       INNER JOIN scrum_acceptance_criteria c ON c.id = h.criterion_id
+       WHERE c.task_id IN (${placeholders})`,
+      ...taskIds,
+    )) as CriterionHeadRow[];
+    const byCriterion = new Map<string, CriterionHeadRow>();
+    for (const row of rows) byCriterion.set(row.criterion_id, row);
+    return byCriterion;
+  }
+
   /** Fetch one task by id, or null if missing or soft-deleted. */
-  getTask(id: string): ScrumTask | null {
-    const row = this.prep(
+  async getTask(id: string): Promise<ScrumTask | null> {
+    const row = (await this.one(
       `SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE id = ? AND deleted_at IS NULL`,
-    ).get(id) as ScrumTaskRow | null;
-    return row ? decodeTask(row) : null;
+      id,
+    )) as ScrumTaskRow | null;
+    return row ? await this.hydrateRow(row) : null;
   }
 
   /**
@@ -691,16 +867,17 @@ export class ScrumStore {
    * sentinel (see `ensureOrphanTask`) can be revived rather than re-inserted
    * into a PK conflict.
    */
-  getTaskIncludingDeleted(id: string): ScrumTask | null {
-    const row = this.prep(`SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE id = ?`).get(
+  async getTaskIncludingDeleted(id: string): Promise<ScrumTask | null> {
+    const row = (await this.one(
+      `SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE id = ?`,
       id,
-    ) as ScrumTaskRow | null;
-    return row ? decodeTask(row) : null;
+    )) as ScrumTaskRow | null;
+    return row ? await this.hydrateRow(row) : null;
   }
 
   /** Clear `deleted_at`, reviving a soft-deleted task. No-op on a live row. */
-  undeleteTask(id: string): void {
-    this.prep('UPDATE scrum_tasks SET deleted_at = NULL WHERE id = ?').run(id);
+  async undeleteTask(id: string): Promise<void> {
+    await this.exec('UPDATE scrum_tasks SET deleted_at = NULL WHERE id = ?', id);
   }
 
   /**
@@ -712,7 +889,7 @@ export class ScrumStore {
    * statement cache reuses the parsed plan across calls — matching the
    * caching discipline of every other method on this class.
    */
-  listTasks(options: ListTasksOptions = {}): ScrumTask[] {
+  async listTasks(options: ListTasksOptions = {}): Promise<ScrumTask[]> {
     const excludeDeleted = options.excludeDeleted !== false;
     const clauses: string[] = [];
     const params: (string | null)[] = [];
@@ -733,7 +910,7 @@ export class ScrumStore {
 
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const sql = `SELECT ${TASK_COLUMNS} FROM scrum_tasks ${where} ORDER BY created_at ASC`;
-    return (this.prep(sql).all(...params) as ScrumTaskRow[]).map(decodeTask);
+    return await this.hydrateRows((await this.many(sql, ...params)) as ScrumTaskRow[]);
   }
 
   /**
@@ -750,12 +927,12 @@ export class ScrumStore {
    * method re-reads the full decoded `ScrumTask` for callers that depend on
    * the wider shape.
    */
-  updateTaskStatus(id: string, next: TaskStatus, agent?: string | null): ScrumTask {
+  async updateTaskStatus(id: string, next: TaskStatus, agent?: string | null): Promise<ScrumTask> {
     // Ambient-actor resolution (explicit -> PROVE_AGENT -> defaultActor ->
     // NULL) happens HERE so the shared service keeps its narrow `agent ?? null`
     // stamping while cold CLI writes still attribute to the mapped operator.
-    updateTaskStatusViaService(this.store, id, next, this.actor(agent));
-    const updated = this.getTask(id);
+    await updateTaskStatusViaService(this.store, id, next, this.actor(agent));
+    const updated = await this.getTask(id);
     if (!updated) throw new Error(`updateTaskStatus: task '${id}' vanished mid-update`);
     return updated;
   }
@@ -770,16 +947,16 @@ export class ScrumStore {
    * (CLI) are responsible for surfacing a warning so operators can re-open
    * closed milestones without fighting the store.
    */
-  updateTaskMilestone(
+  async updateTaskMilestone(
     id: string,
     nextMilestoneId: string | null,
     agent?: string | null,
-  ): ScrumTask {
-    const task = this.getTask(id);
+  ): Promise<ScrumTask> {
+    const task = await this.getTask(id);
     if (!task) throw new Error(`updateTaskMilestone: unknown task '${id}'`);
 
     if (nextMilestoneId !== null) {
-      const target = this.getMilestone(nextMilestoneId);
+      const target = await this.getMilestone(nextMilestoneId);
       if (!target) {
         throw new Error(`updateTaskMilestone: unknown milestone_id '${nextMilestoneId}'`);
       }
@@ -792,23 +969,30 @@ export class ScrumStore {
     const ts = isoNow();
     const { workerId, runId } = resolveRunContext();
     const by = this.actor(agent);
-    const tx = this.db.transaction(() => {
-      this.prep(
+    const tx = async () => {
+      await this.exec(
         'UPDATE scrum_tasks SET milestone_id = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
-      ).run(nextMilestoneId, ts, by, ts, workerId, runId, id);
-      this.prep(
-        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
-      ).run(
+        nextMilestoneId,
+        ts,
+        by,
+        ts,
+        workerId,
+        runId,
+        id,
+      );
+      await this.exec(
+        'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+        ulid(),
         id,
         ts,
         'milestone_changed',
         by,
         JSON.stringify({ from: task.milestone_id, to: nextMilestoneId }),
       );
-    });
-    tx();
+    };
+    await withTx(this.store, tx);
 
-    const updated = this.getTask(id);
+    const updated = await this.getTask(id);
     if (!updated) throw new Error(`updateTaskMilestone: task '${id}' vanished mid-update`);
     return updated;
   }
@@ -819,8 +1003,8 @@ export class ScrumStore {
    * `updateTaskTeam` so the two write paths reject identically. `context` names
    * the caller for the thrown message.
    */
-  private assertBindableTeam(context: string, slug: string): void {
-    const team = this.getTeam(slug);
+  private async assertBindableTeam(context: string, slug: string): Promise<void> {
+    const team = await this.getTeam(slug);
     if (team === null) {
       throw new Error(`${context}: unknown team_slug '${slug}'`);
     }
@@ -836,11 +1020,15 @@ export class ScrumStore {
    * disbanded team identically. Appends a `team_changed` event with payload
    * `{ from, to }` inside the same transaction and bumps `last_event_at`.
    */
-  updateTaskTeam(id: string, nextTeamSlug: string | null, agent?: string | null): ScrumTask {
-    const task = this.getTask(id);
+  async updateTaskTeam(
+    id: string,
+    nextTeamSlug: string | null,
+    agent?: string | null,
+  ): Promise<ScrumTask> {
+    const task = await this.getTask(id);
     if (!task) throw new Error(`updateTaskTeam: unknown task '${id}'`);
 
-    if (nextTeamSlug !== null) this.assertBindableTeam('updateTaskTeam', nextTeamSlug);
+    if (nextTeamSlug !== null) await this.assertBindableTeam('updateTaskTeam', nextTeamSlug);
 
     if (task.team_slug === nextTeamSlug) {
       return task;
@@ -849,17 +1037,30 @@ export class ScrumStore {
     const ts = isoNow();
     const { workerId, runId } = resolveRunContext();
     const by = this.actor(agent);
-    const tx = this.db.transaction(() => {
-      this.prep(
+    const tx = async () => {
+      await this.exec(
         'UPDATE scrum_tasks SET team_slug = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
-      ).run(nextTeamSlug, ts, by, ts, workerId, runId, id);
-      this.prep(
-        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
-      ).run(id, ts, 'team_changed', by, JSON.stringify({ from: task.team_slug, to: nextTeamSlug }));
-    });
-    tx();
+        nextTeamSlug,
+        ts,
+        by,
+        ts,
+        workerId,
+        runId,
+        id,
+      );
+      await this.exec(
+        'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+        ulid(),
+        id,
+        ts,
+        'team_changed',
+        by,
+        JSON.stringify({ from: task.team_slug, to: nextTeamSlug }),
+      );
+    };
+    await withTx(this.store, tx);
 
-    const updated = this.getTask(id);
+    const updated = await this.getTask(id);
     if (!updated) throw new Error(`updateTaskTeam: task '${id}' vanished mid-update`);
     return updated;
   }
@@ -872,22 +1073,34 @@ export class ScrumStore {
    * an event under their write. Without this the events table — the sole
    * audit + reconcile signal — would have no trace of when a task was retired.
    */
-  softDeleteTask(id: string): void {
-    const task = this.getTask(id);
+  async softDeleteTask(id: string): Promise<void> {
+    const task = await this.getTask(id);
     if (!task) throw new Error(`softDeleteTask: unknown task '${id}'`);
 
     const ts = isoNow();
     const { workerId, runId } = resolveRunContext();
     const by = this.actor();
-    const tx = this.db.transaction(() => {
-      this.prep(
+    const tx = async () => {
+      await this.exec(
         'UPDATE scrum_tasks SET deleted_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
-      ).run(ts, by, ts, workerId, runId, id);
-      this.prep(
-        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
-      ).run(id, ts, 'task_deleted', by, JSON.stringify({ status: task.status }));
-    });
-    tx();
+        ts,
+        by,
+        ts,
+        workerId,
+        runId,
+        id,
+      );
+      await this.exec(
+        'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+        ulid(),
+        id,
+        ts,
+        'task_deleted',
+        by,
+        JSON.stringify({ status: task.status }),
+      );
+    };
+    await withTx(this.store, tx);
   }
 
   // ==========================================================================
@@ -901,19 +1114,24 @@ export class ScrumStore {
    * `detail` is free-text elaboration (NULL when omitted). Emits a
    * `status_changed` event whose payload carries the terminal fields.
    */
-  cancelTask(
+  async cancelTask(
     id: string,
     opts: { reason?: string; detail?: string | null; agent?: string | null } = {},
-  ): ScrumTask {
-    const task = this.getTask(id);
+  ): Promise<ScrumTask> {
+    const task = await this.getTask(id);
     if (!task) throw new Error(`cancelTask: unknown task '${id}'`);
     if (task.status === 'done' || task.status === 'cancelled') {
       throw new Error(`cancelTask: task '${id}' is already terminal ('${task.status}')`);
     }
-    this.transaction(() => {
-      this.cancelOne(id, opts.reason ?? 'cancelled', opts.detail ?? null, this.actor(opts.agent));
+    await this.transaction(async () => {
+      await this.cancelOne(
+        id,
+        opts.reason ?? 'cancelled',
+        opts.detail ?? null,
+        this.actor(opts.agent),
+      );
     });
-    return this.requireTask(id, 'cancelTask');
+    return await this.requireTask(id, 'cancelTask');
   }
 
   /**
@@ -927,31 +1145,35 @@ export class ScrumStore {
    * unfinished descendants from the sweep. A malformed `parent_id` cycle is
    * guarded by a `visited` set. Returns the ids actually transitioned.
    */
-  cancelTaskCascade(
+  async cancelTaskCascade(
     rootId: string,
     opts: { reason?: string; detail?: string | null; agent?: string | null } = {},
-  ): { cancelled: string[] } {
-    const root = this.getTask(rootId);
+  ): Promise<{ cancelled: string[] }> {
+    const root = await this.getTask(rootId);
     if (!root) throw new Error(`cancelTaskCascade: unknown task '${rootId}'`);
 
     const cancelled: string[] = [];
     const agent = this.actor(opts.agent);
     const childDetail = `parent '${rootId}' cancelled`;
 
-    this.transaction(() => {
-      if (this.cancelOne(rootId, opts.reason ?? 'cancelled', opts.detail ?? null, agent)) {
+    // Fetch the whole subtree once; the DFS below walks the adjacency map in
+    // memory rather than issuing one getChildren SELECT per node.
+    const childrenOf = await this.fetchSubtreeChildren(rootId);
+
+    await this.transaction(async () => {
+      if (await this.cancelOne(rootId, opts.reason ?? 'cancelled', opts.detail ?? null, agent)) {
         cancelled.push(rootId);
       }
       const visited = new Set<string>([rootId]);
-      const stack = this.getChildren(rootId).map((c) => c.id);
+      const stack = (childrenOf.get(rootId) ?? []).map((c) => c.id);
       while (stack.length > 0) {
         const id = stack.pop();
         if (id === undefined || visited.has(id)) continue;
         visited.add(id);
-        if (this.cancelOne(id, 'parent_cancelled', childDetail, agent)) {
+        if (await this.cancelOne(id, 'parent_cancelled', childDetail, agent)) {
           cancelled.push(id);
         }
-        for (const child of this.getChildren(id)) stack.push(child.id);
+        for (const child of childrenOf.get(id) ?? []) stack.push(child.id);
       }
     });
 
@@ -964,24 +1186,26 @@ export class ScrumStore {
    * false when the task was missing or already terminal. Must run inside a
    * caller-owned transaction (see `cancelTask`/`cancelTaskCascade`).
    */
-  private cancelOne(
+  private async cancelOne(
     id: string,
     reason: string,
     detail: string | null,
     agent: string | null,
-  ): boolean {
-    const task = this.getTask(id);
+  ): Promise<boolean> {
+    const task = await this.getTask(id);
     if (!task) return false;
     if (task.status === 'done' || task.status === 'cancelled') return false;
 
     const ts = isoNow();
     const { workerId, runId } = resolveRunContext();
-    this.prep(
-      'UPDATE scrum_tasks SET status = ?, terminal_reason = ?, terminal_detail = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
-    ).run('cancelled', reason, detail, ts, agent, ts, workerId, runId, id);
-    this.prep(
-      'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
-    ).run(
+    // Cancel is a status transition, so it stamps `status_event_id` with the id
+    // of the status_changed event it appends — same provenance invariant the
+    // service-level transition enforces. The event INSERT runs first so the
+    // pointer's FK target onto scrum_events(id) already exists at UPDATE time.
+    const statusEventId = ulid();
+    await this.exec(
+      'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+      statusEventId,
       id,
       ts,
       'status_changed',
@@ -992,6 +1216,19 @@ export class ScrumStore {
         terminal_reason: reason,
         terminal_detail: detail,
       }),
+    );
+    await this.exec(
+      'UPDATE scrum_tasks SET status = ?, status_event_id = ?, terminal_reason = ?, terminal_detail = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+      'cancelled',
+      statusEventId,
+      reason,
+      detail,
+      ts,
+      agent,
+      ts,
+      workerId,
+      runId,
+      id,
     );
     return true;
   }
@@ -1005,12 +1242,42 @@ export class ScrumStore {
    * Excludes soft-deleted rows. Returns `[]` for a leaf or unknown id —
    * callers treat both the same.
    */
-  getChildren(taskId: string): ScrumTask[] {
-    return (
-      this.prep(
+  async getChildren(taskId: string): Promise<ScrumTask[]> {
+    return await this.hydrateRows(
+      (await this.many(
         `SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE parent_id = ? AND deleted_at IS NULL ORDER BY created_at ASC`,
-      ).all(taskId) as ScrumTaskRow[]
-    ).map(decodeTask);
+        taskId,
+      )) as ScrumTaskRow[],
+    );
+  }
+
+  /**
+   * Build a `parent_id → children` adjacency map over every live task in ONE
+   * round-trip, with each child list ordered by `created_at ASC` (soft-deleted
+   * rows excluded by the SELECT). Both the derived-status fold and the cancel
+   * cascade walk this map in memory from a root, so they touch only the rows in
+   * that subtree while the query count stays bounded at 1 — not one
+   * `getChildren` SELECT per node. The driver engine has no recursive-CTE
+   * support, so the subtree is reconstructed in memory rather than walked in
+   * SQL. `rootId` is accepted for call-site symmetry; the map spans the whole
+   * forest, and a walk from `rootId` visits exactly its descendants.
+   */
+  private async fetchSubtreeChildren(_rootId: string): Promise<Map<string, ScrumTask[]>> {
+    const rows = (await this.many(
+      `SELECT ${TASK_COLUMNS} FROM scrum_tasks WHERE deleted_at IS NULL ORDER BY created_at ASC`,
+    )) as ScrumTaskRow[];
+
+    const byParent = new Map<string, ScrumTask[]>();
+    for (const row of await this.hydrateRows(rows)) {
+      const parent = row.parent_id;
+      if (parent === null) continue;
+      const bucket = byParent.get(parent);
+      // Rows arrive `created_at ASC`, so append preserves the ordering
+      // `getChildren` guaranteed without a second in-memory sort.
+      if (bucket) bucket.push(row);
+      else byParent.set(parent, [row]);
+    }
+    return byParent;
   }
 
   /**
@@ -1033,28 +1300,36 @@ export class ScrumStore {
    * a `visited` set guards a malformed `parent_id` cycle (returns the
    * authored status for the re-entered node rather than recursing forever).
    */
-  derivedStatus(taskId: string): TaskStatus {
-    const task = this.getTask(taskId);
+  async derivedStatus(taskId: string): Promise<TaskStatus> {
+    const task = await this.getTask(taskId);
     if (!task) throw new Error(`derivedStatus: unknown task '${taskId}'`);
-    return this.rollupStatus(task, new Set<string>());
+    // One query fetches the whole subtree; the recursive fold then runs in
+    // memory off the adjacency map — no per-node round-trip.
+    const childrenOf = await this.fetchSubtreeChildren(taskId);
+    return this.rollupStatus(task, childrenOf, new Set<string>());
   }
 
   /**
-   * Post-order fold backing `derivedStatus`. `visited` carries the ancestor
+   * Post-order fold backing `derivedStatus`, computed entirely in memory off a
+   * pre-fetched `parent_id → children` map. `visited` carries the ancestor
    * chain on the current DFS path; re-entering a node (a parent_id cycle)
    * short-circuits to its authored status instead of recursing.
    */
-  private rollupStatus(task: ScrumTask, visited: Set<string>): TaskStatus {
+  private rollupStatus(
+    task: ScrumTask,
+    childrenOf: Map<string, ScrumTask[]>,
+    visited: Set<string>,
+  ): TaskStatus {
     if (visited.has(task.id)) return task.status;
     visited.add(task.id);
 
-    const children = this.getChildren(task.id);
+    const children = childrenOf.get(task.id) ?? [];
     if (children.length === 0) {
       visited.delete(task.id);
       return task.status;
     }
 
-    const childStatuses = children.map((child) => this.rollupStatus(child, visited));
+    const childStatuses = children.map((child) => this.rollupStatus(child, childrenOf, visited));
     visited.delete(task.id);
     return foldChildStatuses(childStatuses);
   }
@@ -1082,23 +1357,24 @@ export class ScrumStore {
    * `failed_only` rerun_policy require every criterion to be
    * `idempotent: true`. Throws on an unknown task id. Pass `null` to clear.
    */
-  setAcceptance(taskId: string, acceptance: Acceptance | null): ScrumTask {
-    const task = this.getTask(taskId);
+  async setAcceptance(taskId: string, acceptance: Acceptance | null): Promise<ScrumTask> {
+    const task = await this.getTask(taskId);
     if (!task) throw new Error(`setAcceptance: unknown task '${taskId}'`);
     const seeded = acceptance === null ? null : withGateStatesSeeded(acceptance);
     if (seeded !== null) validateAcceptance(seeded);
-    this.writeAcceptance(taskId, seeded);
-    return this.requireTask(taskId, 'setAcceptance');
+    await this.writeAcceptance(taskId, seeded);
+    return await this.requireTask(taskId, 'setAcceptance');
   }
 
   /**
    * Append one criterion to a task's acceptance list. Creates
    * the acceptance object if the task had none. Rejects a duplicate criterion
    * id and re-validates the idempotent/policy invariant against any existing
-   * policy. Append-only — existing criteria are never mutated or removed.
+   * policy. A TARGETED insert (not a whole-list rewrite) so every existing
+   * criterion keeps its surrogate row and append-only verdict history.
    */
-  addCriterion(taskId: string, criterion: AcceptanceCriterion): ScrumTask {
-    const task = this.getTask(taskId);
+  async addCriterion(taskId: string, criterion: AcceptanceCriterion): Promise<ScrumTask> {
+    const task = await this.getTask(taskId);
     if (!task) throw new Error(`addCriterion: unknown task '${taskId}'`);
     assertAcceptanceUnfrozen(task, 'addCriterion');
     const current = task.acceptance;
@@ -1106,30 +1382,37 @@ export class ScrumStore {
     if (criteria.some((c) => c.id === criterion.id)) {
       throw new Error(`addCriterion: duplicate criterion id '${criterion.id}' on task '${taskId}'`);
     }
-    criteria.push(criterion);
-    const next: Acceptance = withGateStatesSeeded(
-      current?.policy ? { criteria, policy: current.policy } : { criteria },
+    // Validate the WHOLE resulting acceptance (the new criterion against any
+    // existing policy / scope-enum guard) before persisting just the new row.
+    const seeded = withGateStatesSeeded(
+      current?.policy
+        ? { criteria: [...criteria, criterion], policy: current.policy }
+        : { criteria: [...criteria, criterion] },
     );
-    validateAcceptance(next);
-    this.writeAcceptance(taskId, next);
-    return this.requireTask(taskId, 'addCriterion');
+    validateAcceptance(seeded);
+    const seededCriterion = seeded.criteria[seeded.criteria.length - 1] as AcceptanceCriterion;
+    await this.transaction(async () => {
+      await this.insertCriterionRow(taskId, seededCriterion, isoNow());
+      await this.bumpTaskTouch(taskId);
+    });
+    return await this.requireTask(taskId, 'addCriterion');
   }
 
   /**
-   * Supersede a criterion in place (append-only). Flips
-   * its `status` to `'superseded'`, records `reason`, and optionally points
-   * `superseded_by` at a replacement criterion id. Never removes the row —
-   * the retired criterion stays in the array for audit, mirroring
-   * `supersedeDecision`. Rejects unknown task/criterion ids and an
-   * already-superseded criterion.
+   * Supersede a criterion (append-only). Flips its `status` to `'superseded'`,
+   * records `reason`, and optionally points `superseded_by` at a replacement
+   * criterion id. Never removes the row — the retired criterion stays for audit,
+   * mirroring `supersedeDecision`. A TARGETED UPDATE of the one criterion's
+   * definition row, leaving its surrogate and verdict history intact. Rejects
+   * unknown task/criterion ids and an already-superseded criterion.
    */
-  supersedeCriterion(
+  async supersedeCriterion(
     taskId: string,
     criterionId: string,
     reason: string,
     supersededBy?: string | null,
-  ): ScrumTask {
-    const task = this.getTask(taskId);
+  ): Promise<ScrumTask> {
+    const task = await this.getTask(taskId);
     if (!task) throw new Error(`supersedeCriterion: unknown task '${taskId}'`);
     assertAcceptanceUnfrozen(task, 'supersedeCriterion');
     if (!task.acceptance) {
@@ -1143,25 +1426,45 @@ export class ScrumStore {
       throw new Error(`supersedeCriterion: criterion '${criterionId}' is already superseded`);
     }
 
-    const criteria = task.acceptance.criteria.map((c) =>
-      c.id === criterionId
-        ? { ...c, status: 'superseded' as const, reason, superseded_by: supersededBy ?? null }
-        : c,
-    );
-    const next: Acceptance = task.acceptance.policy
-      ? { criteria, policy: task.acceptance.policy }
-      : { criteria };
-    this.writeAcceptance(taskId, next);
-    return this.requireTask(taskId, 'supersedeCriterion');
+    await this.transaction(async () => {
+      await this.exec(
+        'UPDATE scrum_acceptance_criteria SET status = ?, reason = ?, superseded_by = ? WHERE task_id = ? AND criterion_id = ?',
+        'superseded',
+        reason,
+        supersededBy ?? null,
+        taskId,
+        criterionId,
+      );
+      await this.bumpTaskTouch(taskId);
+    });
+    return await this.requireTask(taskId, 'supersedeCriterion');
   }
 
   /**
-   * Resolve a `gate`-kind criterion's persisted verdict — the mechanical half of
-   * the human approve/reject decision. Transitions the criterion's `gate.verdict`
-   * from `gate_pending` to `approved` or `rejected`, stamps the human `responder`
-   * (the verification contributor of record) and optional `comment`, and appends
-   * a `gate_responded` event so the responder is recorded in the append-only
-   * audit log. The state round-trips through `acceptance_json` — no DB migration.
+   * Bump a task's last-touch provenance (`last_modified_*` + executing
+   * worker/run) after a criterion-table write that does not itself go through
+   * the task-row UPDATE in `writeAcceptance`. Mirrors that write's attribution.
+   */
+  private async bumpTaskTouch(taskId: string): Promise<void> {
+    const { workerId, runId } = resolveRunContext();
+    await this.exec(
+      'UPDATE scrum_tasks SET last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+      this.actor(),
+      isoNow(),
+      workerId,
+      runId,
+      taskId,
+    );
+  }
+
+  /**
+   * Resolve a `gate`-kind criterion's verdict — the mechanical half of the human
+   * approve/reject decision. APPENDS a `gate`-channel verdict row (the criterion
+   * head then reads `approved`/`rejected` with the human `responder` and optional
+   * `comment`) and appends a `gate_responded` event so the responder is recorded
+   * in the append-only audit log. The verdict is an append, not a mutation: a
+   * re-decision would land another row, so the gate is guarded to resolve once
+   * (supersede the criterion to re-decide).
    *
    * This is PULL-based resolution: a session (an interactive `AskUserQuestion`
    * turn, the `scrum gate respond` CLI, or a session-start surfacing of pending
@@ -1174,18 +1477,18 @@ export class ScrumStore {
    *     is decided once; re-deciding requires superseding the criterion
    *   - a `verdict` outside the closed `approved | rejected` respond set
    */
-  respondGate(
+  async respondGate(
     taskId: string,
     criterionId: string,
     verdict: 'approved' | 'rejected',
     opts: { responder: string; comment?: string | null } = { responder: '' },
-  ): ScrumTask {
+  ): Promise<ScrumTask> {
     if (verdict !== 'approved' && verdict !== 'rejected') {
       throw new Error(
         `respondGate: invalid verdict '${verdict}'; expected one of: approved, rejected`,
       );
     }
-    const task = this.getTask(taskId);
+    const task = await this.getTask(taskId);
     if (!task) throw new Error(`respondGate: unknown task '${taskId}'`);
     if (!task.acceptance) {
       throw new Error(`respondGate: task '${taskId}' has no acceptance criteria`);
@@ -1209,26 +1512,27 @@ export class ScrumStore {
     const respondedAt = isoNow();
     const responder = opts.responder.length > 0 ? opts.responder : null;
     const comment = opts.comment && opts.comment.length > 0 ? opts.comment : null;
-    const gate = { verdict, responder, comment, responded_at: respondedAt };
-    const criteria = task.acceptance.criteria.map((c) =>
-      c.id === criterionId ? { ...c, gate } : c,
-    );
-    const next: Acceptance = task.acceptance.policy
-      ? { criteria, policy: task.acceptance.policy }
-      : { criteria };
 
-    // Single transaction: persist the verdict AND record the human responder as
-    // the verification contributor in the append-only event log.
-    this.transaction(() => {
-      this.writeAcceptance(taskId, next);
-      this.appendEvent({
+    // Single transaction: APPEND the gate verdict (never mutate the criterion)
+    // AND record the human responder as the verification contributor in the
+    // append-only event log.
+    await this.transaction(async () => {
+      await this.appendCriterionVerdict(
+        taskId,
+        criterionId,
+        'gate',
+        verdict,
+        { by: responder, comment },
+        respondedAt,
+      );
+      await this.appendEvent({
         taskId,
         kind: 'gate_responded',
         agent: responder,
         payload: { criterion_id: criterionId, verdict, responder, comment },
       });
     });
-    return this.requireTask(taskId, 'respondGate');
+    return await this.requireTask(taskId, 'respondGate');
   }
 
   // ==========================================================================
@@ -1288,7 +1592,7 @@ export class ScrumStore {
     taskId: string,
     opts: VerifyTaskAcceptanceOptions = {},
   ): Promise<TaskAcceptanceResult> {
-    const task = this.getTask(taskId);
+    const task = await this.getTask(taskId);
     if (!task) throw new Error(`verifyTaskAcceptance: unknown task '${taskId}'`);
 
     const applicable = (task.acceptance?.criteria ?? []).filter(
@@ -1330,7 +1634,8 @@ export class ScrumStore {
         // In-process closed-grammar eval via the shared verifyCriterion dispatch.
         const verification: CriterionVerification = verifyCriterion(criterion, opts.assertContext);
         const reason = verification.ok ? '' : verification.reason;
-        if (opts.record) this.recordCriterionVerdict(taskId, criterion.id, verification.ok, reason);
+        if (opts.record)
+          await this.recordCriterionVerdict(taskId, criterion.id, verification.ok, reason);
         return { id: criterion.id, kind, ok: verification.ok, pending: false, reason };
       }
       case 'bash': {
@@ -1349,7 +1654,7 @@ export class ScrumStore {
         const reason = run.ok
           ? ''
           : `bash exit ${run.exitCode}${run.timedOut ? ' (timed out)' : ''}${run.transcriptPath ? ` — ${run.transcriptPath}` : ''}`;
-        if (opts.record) this.recordCriterionVerdict(taskId, criterion.id, run.ok, reason);
+        if (opts.record) await this.recordCriterionVerdict(taskId, criterion.id, run.ok, reason);
         return { id: criterion.id, kind, ok: run.ok, pending: false, reason };
       }
       case 'agent': {
@@ -1381,14 +1686,14 @@ export class ScrumStore {
    * run env (`PROVE_WORKER_ID`), else NULL. Rejects unknown task/criterion ids
    * and a `gate`-kind criterion (whose verdict lives in `gate.verdict`).
    */
-  recordCriterionVerdict(
+  async recordCriterionVerdict(
     taskId: string,
     criterionId: string,
     ok: boolean,
     reason: string | null = null,
     verifiedBy?: string | null,
-  ): ScrumTask {
-    const task = this.getTask(taskId);
+  ): Promise<ScrumTask> {
+    const task = await this.getTask(taskId);
     if (!task) throw new Error(`recordCriterionVerdict: unknown task '${taskId}'`);
     if (!task.acceptance) {
       throw new Error(`recordCriterionVerdict: task '${taskId}' has no acceptance criteria`);
@@ -1406,20 +1711,19 @@ export class ScrumStore {
     }
 
     const { workerId } = resolveRunContext();
-    const verification: VerificationRecord = {
-      verdict: ok ? 'verified' : 'failed',
-      reason: reason && reason.length > 0 ? reason : null,
-      verified_by: verifiedBy && verifiedBy.length > 0 ? verifiedBy : workerId,
-      verified_at: isoNow(),
-    };
-    const criteria = task.acceptance.criteria.map((c) =>
-      c.id === criterionId ? { ...c, verification } : c,
+    const verifiedByResolved = verifiedBy && verifiedBy.length > 0 ? verifiedBy : workerId;
+    // APPEND a verification verdict (never mutate the criterion). The
+    // criterion-head view reads the latest; a re-verify appends another row and
+    // the prior verdict is retained for audit.
+    await this.appendCriterionVerdict(
+      taskId,
+      criterionId,
+      'verification',
+      ok ? 'verified' : 'failed',
+      { reason: reason && reason.length > 0 ? reason : null, by: verifiedByResolved },
+      isoNow(),
     );
-    const next: Acceptance = task.acceptance.policy
-      ? { criteria, policy: task.acceptance.policy }
-      : { criteria };
-    this.writeAcceptance(taskId, next);
-    return this.requireTask(taskId, 'recordCriterionVerdict');
+    return await this.requireTask(taskId, 'recordCriterionVerdict');
   }
 
   /**
@@ -1433,20 +1737,20 @@ export class ScrumStore {
    * criterion to record. `verifiedBy` is forwarded per criterion. Throws on an
    * unknown task id.
    */
-  recordTaskVerdict(
+  async recordTaskVerdict(
     taskId: string,
     ok: boolean,
     reason: string | null = null,
     verifiedBy?: string | null,
-  ): { task: ScrumTask; criterionIds: string[] } {
-    const task = this.getTask(taskId);
+  ): Promise<{ task: ScrumTask; criterionIds: string[] }> {
+    const task = await this.getTask(taskId);
     if (!task) throw new Error(`recordTaskVerdict: unknown task '${taskId}'`);
     const targets = (task.acceptance?.criteria ?? []).filter(
       (c) => c.status === 'active' && c.verifies_by !== 'gate' && appliesToSelf(c.scope),
     );
     let current = task;
     for (const criterion of targets) {
-      current = this.recordCriterionVerdict(taskId, criterion.id, ok, reason, verifiedBy);
+      current = await this.recordCriterionVerdict(taskId, criterion.id, ok, reason, verifiedBy);
     }
     return { task: current, criterionIds: targets.map((c) => c.id) };
   }
@@ -1466,8 +1770,8 @@ export class ScrumStore {
    * Copies are intentionally independent: a later edit to the parent's
    * criterion does NOT retroactively change a child that already inherited it.
    */
-  inheritAcceptance(parentId: string): AcceptanceCriterion[] {
-    const parent = this.getTask(parentId);
+  async inheritAcceptance(parentId: string): Promise<AcceptanceCriterion[]> {
+    const parent = await this.getTask(parentId);
     if (!parent?.acceptance) return [];
     return parent.acceptance.criteria
       .filter((c) => c.status === 'active' && copiesDown(c.scope))
@@ -1496,22 +1800,220 @@ export class ScrumStore {
   }
 
   /**
-   * Persist an acceptance object (or NULL) to `scrum_tasks.acceptance_json`.
-   * Bumps last-touch provenance (v9): `last_modified_at = now()`,
-   * `last_modified_by` = the ambient actor (`PROVE_AGENT` env / `defaultActor`,
-   * NULL when neither is in scope) — these editors take no per-call agent, so
-   * the ambient resolution is the only attribution available. Still stamps the
-   * executing-worker/run attribution (v11) from the run env so the write's
-   * unit and run are recorded even when the agent is not.
+   * Persist an acceptance object's DEFINITION (criteria rows + the task-level
+   * `policy`), or clear it (NULL). The criteria are the authoring source — the
+   * whole-object setters (`setAcceptance`/`addCriterion`/`supersedeCriterion`/
+   * `createTask`) pass the full intended criteria list, so this replaces the
+   * task's criteria rows wholesale (delete-then-reinsert) inside one
+   * transaction. It does NOT touch `scrum_criterion_verdicts` — a verdict is an
+   * append, owned by `appendCriterionVerdict`; re-writing the definition does
+   * not erase recorded verdicts (their rows survive and the head view still
+   * resolves them onto the re-inserted criterion of the same id).
+   *
+   * The gate/verification fields carried on the in-memory criteria are decode
+   * artifacts (folded in from the head verdict on read), so they are
+   * intentionally ignored here — the verdict log, not the definition write, is
+   * their system of record.
+   *
+   * Bumps last-touch provenance: `last_modified_at = now()`, `last_modified_by`
+   * = the ambient actor (`PROVE_AGENT` env / `defaultActor`, NULL when neither
+   * is in scope), plus the executing-worker/run attribution from the run env.
    */
-  private writeAcceptance(taskId: string, acceptance: Acceptance | null): void {
+  private async writeAcceptance(taskId: string, acceptance: Acceptance | null): Promise<void> {
     const { workerId, runId } = resolveRunContext();
-    this.prep(
-      'UPDATE scrum_tasks SET acceptance_json = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
-    ).run(
-      acceptance === null ? null : JSON.stringify(acceptance),
+    const at = isoNow();
+    await this.transaction(async () => {
+      await this.exec(
+        'UPDATE scrum_tasks SET acceptance_policy_json = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+        acceptance?.policy ? JSON.stringify(acceptance.policy) : null,
+        this.actor(),
+        at,
+        workerId,
+        runId,
+        taskId,
+      );
+      // Replace-the-whole-object semantics: drop this task's criterion rows and
+      // re-insert fresh surrogates. The verdict rows of the dropped surrogates are
+      // intentionally left in scrum_criterion_verdicts (the append-only log is never
+      // pruned); the criterion-head view's INNER JOIN hides them once their
+      // definition row is gone, so they are inert history, not live state.
+      await this.exec('DELETE FROM scrum_acceptance_criteria WHERE task_id = ?', taskId);
+      const criteria = acceptance?.criteria ?? [];
+      for (const criterion of criteria) {
+        await this.insertCriterionRow(taskId, criterion, at);
+      }
+    });
+  }
+
+  /**
+   * Insert one criterion DEFINITION row. PK is the criterion's own author-given
+   * id (NOT a minted ULID — it is already unique per task). `ord` is a freshly
+   * minted ULID per insert so the authored array order is preserved on read
+   * (the criterion id is an external slug, not lexically insert-ordered, so it
+   * cannot carry the ordering itself).
+   *
+   * If the input criterion arrives carrying a RESOLVED verdict (an approved/
+   * rejected gate, or any recorded verification) AND no verdict row yet exists
+   * for it, seed the first verdict row so a caller establishing criteria from a
+   * pre-decided input (`createTask`/`setAcceptance` with an already-resolved
+   * gate) materializes that decision into the append-only log. The existence
+   * guard keeps this idempotent for the read-modify-write callers
+   * (`addCriterion`/`supersedeCriterion`) whose criteria carry the gate/
+   * verification as a decode artifact from a prior read — their verdict rows
+   * already exist and must NOT be re-appended.
+   */
+  private async insertCriterionRow(
+    taskId: string,
+    criterion: AcceptanceCriterion,
+    at: string,
+  ): Promise<void> {
+    const rowId = ulid();
+    await this.exec(
+      'INSERT INTO scrum_acceptance_criteria (id, task_id, criterion_id, ord, text, verifies_by, check_payload, status, idempotent, scope, timeout, superseded_by, reason, inherited_from, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      rowId,
+      taskId,
+      criterion.id,
+      ulid(),
+      criterion.text,
+      criterion.verifies_by,
+      criterion.check,
+      criterion.status,
+      criterion.idempotent ? 1 : 0,
+      criterion.scope ?? null,
+      criterion.timeout ?? null,
+      criterion.superseded_by ?? null,
+      criterion.reason ?? null,
+      criterion.inherited_from ?? null,
+      at,
+    );
+    await this.seedInputVerdict(taskId, rowId, criterion, at);
+  }
+
+  /**
+   * Seed the first verdict row for a freshly-inserted criterion-row (by SURROGATE
+   * id) that arrived with a resolved verdict on its input shape. This appends
+   * unconditionally — there is NO in-method existence guard. Safety against a
+   * double-append derives entirely from the call shape: every caller reaches a
+   * fresh, verdict-less surrogate (`createTask` builds new rows; `writeAcceptance`
+   * DELETEs the task's criteria and re-inserts new surrogates; `addCriterion`
+   * inserts a duplicate-id-guarded new criterion). A future read-modify-write
+   * caller that feeds an already-persisted verdict back through `insertCriterionRow`
+   * would double-append — do not wire one without adding a guard here. A pending
+   * gate seeds nothing (`gate_pending` is the absent-verdict default the head
+   * reconstruction supplies).
+   */
+  private async seedInputVerdict(
+    taskId: string,
+    rowId: string,
+    criterion: AcceptanceCriterion,
+    at: string,
+  ): Promise<void> {
+    const resolved =
+      criterion.verifies_by === 'gate'
+        ? criterion.gate && criterion.gate.verdict !== 'gate_pending'
+          ? {
+              channel: 'gate' as const,
+              verdict: criterion.gate.verdict,
+              fields: {
+                by: criterion.gate.responder ?? null,
+                comment: criterion.gate.comment ?? null,
+              },
+            }
+          : null
+        : criterion.verification && criterion.verification.verdict !== 'pending'
+          ? {
+              channel: 'verification' as const,
+              verdict: criterion.verification.verdict,
+              fields: {
+                reason: criterion.verification.reason ?? null,
+                by: criterion.verification.verified_by ?? null,
+              },
+            }
+          : null;
+    if (!resolved) return;
+    await this.appendVerdictRow(
+      taskId,
+      rowId,
+      resolved.channel,
+      resolved.verdict,
+      resolved.fields,
+      at,
+    );
+  }
+
+  /**
+   * Resolve a criterion's SURROGATE row id from `(taskId, externalId)`, or null
+   * when the task carries no such criterion. The verdict log keys on the
+   * surrogate, so the external-id-facing callers (`respondGate`/
+   * `recordCriterionVerdict`) resolve it before appending.
+   */
+  private async resolveCriterionRowId(taskId: string, externalId: string): Promise<string | null> {
+    const row = await this.one<{ id: string }>(
+      'SELECT id FROM scrum_acceptance_criteria WHERE task_id = ? AND criterion_id = ?',
+      taskId,
+      externalId,
+    );
+    return row?.id ?? null;
+  }
+
+  /**
+   * Append ONE gate/verification verdict row for the criterion identified by its
+   * EXTERNAL id on `taskId` — never an update. Resolves the criterion-row
+   * surrogate first, then delegates to `appendVerdictRow`. The external-id-facing
+   * public verdict paths (`respondGate`/`recordCriterionVerdict`) call this.
+   */
+  private async appendCriterionVerdict(
+    taskId: string,
+    externalCriterionId: string,
+    channel: 'gate' | 'verification',
+    verdict: string,
+    fields: { reason?: string | null; by?: string | null; comment?: string | null },
+    at: string,
+  ): Promise<void> {
+    const rowId = await this.resolveCriterionRowId(taskId, externalCriterionId);
+    if (rowId === null) {
+      throw new Error(
+        `appendCriterionVerdict: unknown criterion '${externalCriterionId}' on task '${taskId}'`,
+      );
+    }
+    await this.appendVerdictRow(taskId, rowId, channel, verdict, fields, at);
+  }
+
+  /**
+   * Append ONE verdict row to the append-only `scrum_criterion_verdicts` log,
+   * keyed by the criterion-row SURROGATE id — never an update. A `gate`-channel
+   * row records a human gate response; a `verification`-channel row records a
+   * bash/assert/agent verdict. Re-deciding a criterion appends another row; the
+   * criterion-head view (max ULID per surrogate) then reads the latest. The
+   * minted ULID PK makes two concurrent appends commute under whole-transaction
+   * sync replay — both rows survive the rebase, where a single mutable verdict
+   * column would have one writer clobber the other. Bumps the task's last-touch
+   * provenance.
+   */
+  private async appendVerdictRow(
+    taskId: string,
+    criterionRowId: string,
+    channel: 'gate' | 'verification',
+    verdict: string,
+    fields: { reason?: string | null; by?: string | null; comment?: string | null },
+    at: string,
+  ): Promise<void> {
+    const { workerId, runId } = resolveRunContext();
+    await this.exec(
+      'INSERT INTO scrum_criterion_verdicts (id, criterion_id, channel, verdict, reason, by_whom, comment, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      ulid(),
+      criterionRowId,
+      channel,
+      verdict,
+      fields.reason ?? null,
+      fields.by ?? null,
+      fields.comment ?? null,
+      at,
+    );
+    await this.exec(
+      'UPDATE scrum_tasks SET last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
       this.actor(),
-      isoNow(),
+      at,
       workerId,
       runId,
       taskId,
@@ -1519,8 +2021,8 @@ export class ScrumStore {
   }
 
   /** Re-fetch a task that must exist after a same-method write. */
-  private requireTask(taskId: string, method: string): ScrumTask {
-    const updated = this.getTask(taskId);
+  private async requireTask(taskId: string, method: string): Promise<ScrumTask> {
+    const updated = await this.getTask(taskId);
     if (!updated) throw new Error(`${method}: task '${taskId}' vanished mid-update`);
     return updated;
   }
@@ -1539,17 +2041,16 @@ export class ScrumStore {
    * shape (rejects unknown keys; all sub-fields optional) before the write.
    * Throws on an unknown task id. Pass `null` to clear (→ unbounded).
    */
-  setBounds(taskId: string, bounds: TaskBounds | null): ScrumTask {
-    const task = this.getTask(taskId);
+  async setBounds(taskId: string, bounds: TaskBounds | null): Promise<ScrumTask> {
+    const task = await this.getTask(taskId);
     if (!task) throw new Error(`setBounds: unknown task '${taskId}'`);
     if (bounds !== null) validateBounds(bounds);
     // Bump last-touch provenance (v9); no per-call agent flows here, so the
     // ambient actor (PROVE_AGENT env / defaultActor, else NULL) attributes the
     // write. Still stamps the executing-worker/run attribution (v11).
     const { workerId, runId } = resolveRunContext();
-    this.prep(
+    await this.exec(
       'UPDATE scrum_tasks SET bounds_json = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
-    ).run(
       bounds === null ? null : JSON.stringify(bounds),
       this.actor(),
       isoNow(),
@@ -1557,14 +2058,14 @@ export class ScrumStore {
       runId,
       taskId,
     );
-    return this.requireTask(taskId, 'setBounds');
+    return await this.requireTask(taskId, 'setBounds');
   }
 
   // ==========================================================================
   // Milestones
   // ==========================================================================
 
-  createMilestone(input: CreateMilestoneInput): ScrumMilestone {
+  async createMilestone(input: CreateMilestoneInput): Promise<ScrumMilestone> {
     const row: ScrumMilestone = {
       id: input.id,
       title: input.title,
@@ -1575,9 +2076,8 @@ export class ScrumStore {
       created_at: input.createdAt ?? isoNow(),
       closed_at: null,
     };
-    this.prep(
+    await this.exec(
       'INSERT INTO scrum_milestones (id, title, description, target_state, status, initiative, created_at, closed_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)',
-    ).run(
       row.id,
       row.title,
       row.description,
@@ -1594,7 +2094,7 @@ export class ScrumStore {
    * tier above milestone). The initiative match is case-insensitive, matching
    * the decision-kind filter style.
    */
-  listMilestones(status?: MilestoneStatus, initiative?: string): ScrumMilestone[] {
+  async listMilestones(status?: MilestoneStatus, initiative?: string): Promise<ScrumMilestone[]> {
     const clauses: string[] = [];
     const params: string[] = [];
     if (status !== undefined) {
@@ -1607,13 +2107,14 @@ export class ScrumStore {
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const sql = `SELECT ${MILESTONE_COLUMNS} FROM scrum_milestones ${where} ORDER BY created_at ASC`;
-    return this.prep(sql).all(...params) as ScrumMilestone[];
+    return (await this.many(sql, ...params)) as ScrumMilestone[];
   }
 
-  getMilestone(id: string): ScrumMilestone | null {
-    const row = this.prep(`SELECT ${MILESTONE_COLUMNS} FROM scrum_milestones WHERE id = ?`).get(
+  async getMilestone(id: string): Promise<ScrumMilestone | null> {
+    const row = (await this.one(
+      `SELECT ${MILESTONE_COLUMNS} FROM scrum_milestones WHERE id = ?`,
       id,
-    ) as ScrumMilestone | null;
+    )) as ScrumMilestone | null;
     return row ?? null;
   }
 
@@ -1627,14 +2128,14 @@ export class ScrumStore {
    * change; operators can follow the transition via the milestone row's
    * `status` column.
    */
-  setMilestoneStatus(id: string, status: 'planned' | 'active'): ScrumMilestone {
-    const existing = this.getMilestone(id);
+  async setMilestoneStatus(id: string, status: 'planned' | 'active'): Promise<ScrumMilestone> {
+    const existing = await this.getMilestone(id);
     if (!existing) throw new Error(`setMilestoneStatus: unknown milestone '${id}'`);
     if (existing.status === 'closed') {
       throw new Error(`setMilestoneStatus: cannot re-open closed milestone '${id}'`);
     }
-    this.prep('UPDATE scrum_milestones SET status = ? WHERE id = ?').run(status, id);
-    const updated = this.getMilestone(id);
+    await this.exec('UPDATE scrum_milestones SET status = ? WHERE id = ?', status, id);
+    const updated = await this.getMilestone(id);
     if (!updated) throw new Error(`setMilestoneStatus: milestone '${id}' vanished mid-update`);
     return updated;
   }
@@ -1657,19 +2158,20 @@ export class ScrumStore {
    * matching team is already `inactive` by then, so `terminateTeamsForMilestone`
    * finds no active matches and the close is an idempotent no-op for teams.
    */
-  closeMilestone(id: string): ScrumMilestone {
-    const existing = this.getMilestone(id);
+  async closeMilestone(id: string): Promise<ScrumMilestone> {
+    const existing = await this.getMilestone(id);
     if (!existing) throw new Error(`closeMilestone: unknown milestone '${id}'`);
     const closedAt = isoNow();
-    const close = this.db.transaction(() => {
-      this.prep('UPDATE scrum_milestones SET status = ?, closed_at = ? WHERE id = ?').run(
+    const close = async () => {
+      await this.exec(
+        'UPDATE scrum_milestones SET status = ?, closed_at = ? WHERE id = ?',
         'closed',
         closedAt,
         id,
       );
-      this.terminateTeamsForMilestone(id, `milestone '${id}' closed`);
-    });
-    close();
+      await this.terminateTeamsForMilestone(id, `milestone '${id}' closed`);
+    };
+    await withTx(this.store, close);
     return { ...existing, status: 'closed', closed_at: closedAt };
   }
 
@@ -1678,9 +2180,10 @@ export class ScrumStore {
   // ==========================================================================
 
   /** Upsert-style: no-op if the `(task_id, tag)` pair already exists. */
-  addTag(taskId: string, tag: string, addedAt?: string): void {
-    if (!this.getTask(taskId)) throw new Error(`addTag: unknown task '${taskId}'`);
-    this.prep('INSERT OR IGNORE INTO scrum_tags (task_id, tag, added_at) VALUES (?, ?, ?)').run(
+  async addTag(taskId: string, tag: string, addedAt?: string): Promise<void> {
+    if (!(await this.getTask(taskId))) throw new Error(`addTag: unknown task '${taskId}'`);
+    await this.exec(
+      'INSERT OR IGNORE INTO scrum_tags (task_id, tag, added_at) VALUES (?, ?, ?)',
       taskId,
       tag,
       addedAt ?? isoNow(),
@@ -1688,26 +2191,28 @@ export class ScrumStore {
   }
 
   /** Idempotent: removing a non-existent `(task_id, tag)` pair is a no-op. */
-  removeTag(taskId: string, tag: string): void {
-    this.prep('DELETE FROM scrum_tags WHERE task_id = ? AND tag = ?').run(taskId, tag);
+  async removeTag(taskId: string, tag: string): Promise<void> {
+    await this.exec('DELETE FROM scrum_tags WHERE task_id = ? AND tag = ?', taskId, tag);
   }
 
-  listTagsForTask(taskId: string): ScrumTag[] {
-    return this.prep(
+  async listTagsForTask(taskId: string): Promise<ScrumTag[]> {
+    return (await this.many(
       'SELECT task_id, tag, added_at FROM scrum_tags WHERE task_id = ? ORDER BY tag ASC',
-    ).all(taskId) as ScrumTag[];
+      taskId,
+    )) as ScrumTag[];
   }
 
-  listTasksForTag(tag: string): ScrumTask[] {
-    return (
-      this.prep(
-        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.team_slug, t.parent_id, t.layer, t.acceptance_json, t.bounds_json, t.terminal_reason, t.terminal_detail, t.created_by_agent, t.created_at, t.last_event_at, t.last_modified_by, t.last_modified_at, t.worker_id, t.run_id, t.deleted_at
+  async listTasksForTag(tag: string): Promise<ScrumTask[]> {
+    return await this.hydrateRows(
+      (await this.many(
+        `SELECT ${T_COLS}
        FROM scrum_tasks t
        INNER JOIN scrum_tags g ON g.task_id = t.id
        WHERE g.tag = ? AND t.deleted_at IS NULL
        ORDER BY t.created_at ASC`,
-      ).all(tag) as ScrumTaskRow[]
-    ).map(decodeTask);
+        tag,
+      )) as ScrumTaskRow[],
+    );
   }
 
   // ==========================================================================
@@ -1726,37 +2231,44 @@ export class ScrumStore {
    * swapping the endpoints before insert. Without this, `blocked_by`
    * rows would persist but never be read — a silent no-op (issue #22).
    */
-  addDep(fromTaskId: string, toTaskId: string, kind: DepKind): void {
+  async addDep(fromTaskId: string, toTaskId: string, kind: DepKind): Promise<void> {
     const [from, to] = normalizeDepEdge(fromTaskId, toTaskId, kind);
     if (from === to) {
       throw new Error(`addDep: self-dependency rejected for task '${fromTaskId}'`);
     }
-    if (!this.getTask(from)) throw new Error(`addDep: unknown from_task '${from}'`);
-    if (!this.getTask(to)) throw new Error(`addDep: unknown to_task '${to}'`);
-    this.prep(
+    if (!(await this.getTask(from))) throw new Error(`addDep: unknown from_task '${from}'`);
+    if (!(await this.getTask(to))) throw new Error(`addDep: unknown to_task '${to}'`);
+    await this.exec(
       'INSERT OR IGNORE INTO scrum_deps (from_task_id, to_task_id, kind) VALUES (?, ?, ?)',
-    ).run(from, to, 'blocks');
+      from,
+      to,
+      'blocks',
+    );
   }
 
-  removeDep(fromTaskId: string, toTaskId: string, kind: DepKind): void {
+  async removeDep(fromTaskId: string, toTaskId: string, kind: DepKind): Promise<void> {
     const [from, to] = normalizeDepEdge(fromTaskId, toTaskId, kind);
-    this.prep(
+    await this.exec(
       "DELETE FROM scrum_deps WHERE from_task_id = ? AND to_task_id = ? AND kind = 'blocks'",
-    ).run(from, to);
+      from,
+      to,
+    );
   }
 
   /** Tasks that *block* `taskId`. SELECT is keyed off `idx_scrum_deps_to_task`. */
-  getBlockedBy(taskId: string): ScrumDep[] {
-    return this.prep(
+  async getBlockedBy(taskId: string): Promise<ScrumDep[]> {
+    return (await this.many(
       "SELECT from_task_id, to_task_id, kind FROM scrum_deps WHERE to_task_id = ? AND kind = 'blocks'",
-    ).all(taskId) as ScrumDep[];
+      taskId,
+    )) as ScrumDep[];
   }
 
   /** Tasks that `taskId` blocks. */
-  getBlocking(taskId: string): ScrumDep[] {
-    return this.prep(
+  async getBlocking(taskId: string): Promise<ScrumDep[]> {
+    return (await this.many(
       "SELECT from_task_id, to_task_id, kind FROM scrum_deps WHERE from_task_id = ? AND kind = 'blocks'",
-    ).all(taskId) as ScrumDep[];
+      taskId,
+    )) as ScrumDep[];
   }
 
   // ==========================================================================
@@ -1766,10 +2278,10 @@ export class ScrumStore {
   /**
    * Append an event. Rejects unknown task ids up front so the caller sees
    * a domain error rather than an opaque FK violation. Returns the new
-   * row id.
+   * row's ULID id.
    */
-  appendEvent(input: AppendEventInput): number {
-    if (!this.getTask(input.taskId)) {
+  async appendEvent(input: AppendEventInput): Promise<string> {
+    if (!(await this.getTask(input.taskId))) {
       throw new Error(`appendEvent: unknown task '${input.taskId}'`);
     }
     // A `blocker_raised` event carries a typed escalation payload. Validate it
@@ -1782,22 +2294,31 @@ export class ScrumStore {
     const ts = input.ts ?? isoNow();
     const payload = input.payload === undefined ? null : input.payload;
 
-    const tx = this.db.transaction(() => {
-      const result = this.prep(
-        'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
-      ).run(input.taskId, ts, input.kind, this.actor(input.agent), JSON.stringify(payload));
-      this.prep('UPDATE scrum_tasks SET last_event_at = ? WHERE id = ?').run(ts, input.taskId);
-      return Number(result.lastInsertRowid);
-    });
-    return tx();
+    const id = ulid();
+    const tx = async () => {
+      await this.exec(
+        'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+        id,
+        input.taskId,
+        ts,
+        input.kind,
+        this.actor(input.agent),
+        JSON.stringify(payload),
+      );
+      await this.exec('UPDATE scrum_tasks SET last_event_at = ? WHERE id = ?', ts, input.taskId);
+      return id;
+    };
+    return await withTx(this.store, tx);
   }
 
   /** Events for one task, newest-first (matches `idx_scrum_events_task_ts`). */
-  listEventsForTask(taskId: string, limit = 100): ScrumEvent[] {
-    const rows = this.prep(
+  async listEventsForTask(taskId: string, limit = 100): Promise<ScrumEvent[]> {
+    const rows = (await this.many(
       'SELECT id, task_id, ts, kind, agent, payload_json FROM scrum_events WHERE task_id = ? ORDER BY ts DESC, id DESC LIMIT ?',
-    ).all(taskId, limit) as Array<{
-      id: number;
+      taskId,
+      limit,
+    )) as Array<{
+      id: string;
       task_id: string;
       ts: string;
       kind: string;
@@ -1813,21 +2334,22 @@ export class ScrumStore {
    * kind and JSON payload fields — not window-bounded — so it remains correct
    * regardless of how many orphan events have accumulated on the sentinel task.
    */
-  hasOrphanEventForRunPath(runPath: string, reason: string): boolean {
-    const row = this.prep(
+  async hasOrphanEventForRunPath(runPath: string, reason: string): Promise<boolean> {
+    const row = await this.one(
       "SELECT 1 FROM scrum_events WHERE kind = 'unlinked_run_detected' AND json_extract(payload_json, '$.run_path') = ? AND json_extract(payload_json, '$.reason') = ? LIMIT 1",
-    ).get(runPath, reason);
+      runPath,
+      reason,
+    );
     return row != null;
   }
 
   /** Cross-task recent events. Used by the UI feed. */
-  listRecentEvents(limit = 50): ScrumEvent[] {
-    const rows = this.db
-      .prepare(
-        'SELECT id, task_id, ts, kind, agent, payload_json FROM scrum_events ORDER BY ts DESC, id DESC LIMIT ?',
-      )
-      .all(limit) as Array<{
-      id: number;
+  async listRecentEvents(limit = 50): Promise<ScrumEvent[]> {
+    const rows = (await this.many(
+      'SELECT id, task_id, ts, kind, agent, payload_json FROM scrum_events ORDER BY ts DESC, id DESC LIMIT ?',
+      limit,
+    )) as Array<{
+      id: string;
       task_id: string;
       ts: string;
       kind: string;
@@ -1841,13 +2363,12 @@ export class ScrumStore {
   // Run links
   // ==========================================================================
 
-  linkRun(input: LinkRunInput): void {
-    if (!this.getTask(input.taskId)) {
+  async linkRun(input: LinkRunInput): Promise<void> {
+    if (!(await this.getTask(input.taskId))) {
       throw new Error(`linkRun: unknown task '${input.taskId}'`);
     }
-    this.prep(
+    await this.exec(
       'INSERT OR REPLACE INTO scrum_run_links (task_id, run_path, branch, slug, linked_at) VALUES (?, ?, ?, ?, ?)',
-    ).run(
       input.taskId,
       input.runPath,
       input.branch ?? null,
@@ -1856,46 +2377,53 @@ export class ScrumStore {
     );
   }
 
-  unlinkRun(taskId: string, runPath: string): void {
-    this.prep('DELETE FROM scrum_run_links WHERE task_id = ? AND run_path = ?').run(
+  async unlinkRun(taskId: string, runPath: string): Promise<void> {
+    await this.exec(
+      'DELETE FROM scrum_run_links WHERE task_id = ? AND run_path = ?',
       taskId,
       runPath,
     );
   }
 
-  listRunsForTask(taskId: string): ScrumRunLink[] {
-    return this.prep(
+  async listRunsForTask(taskId: string): Promise<ScrumRunLink[]> {
+    return (await this.many(
       'SELECT task_id, run_path, branch, slug, linked_at FROM scrum_run_links WHERE task_id = ? ORDER BY linked_at ASC',
-    ).all(taskId) as ScrumRunLink[];
+      taskId,
+    )) as ScrumRunLink[];
   }
 
   /** Reverse lookup: which task owns `runPath`? Null if none. */
-  getTaskForRun(runPath: string): ScrumTask | null {
-    const link = this.prep('SELECT task_id FROM scrum_run_links WHERE run_path = ? LIMIT 1').get(
+  async getTaskForRun(runPath: string): Promise<ScrumTask | null> {
+    const link = (await this.one(
+      'SELECT task_id FROM scrum_run_links WHERE run_path = ? LIMIT 1',
       runPath,
-    ) as { task_id: string } | null;
+    )) as { task_id: string } | null;
     if (!link) return null;
-    return this.getTask(link.task_id);
+    return await this.getTask(link.task_id);
   }
 
   // ==========================================================================
   // Context bundles
   // ==========================================================================
 
-  saveContextBundle(taskId: string, bundle: unknown, rebuiltAt?: string): void {
-    if (!this.getTask(taskId)) {
+  async saveContextBundle(taskId: string, bundle: unknown, rebuiltAt?: string): Promise<void> {
+    if (!(await this.getTask(taskId))) {
       throw new Error(`saveContextBundle: unknown task '${taskId}'`);
     }
-    this.prep(
+    await this.exec(
       `INSERT INTO scrum_context_bundles (task_id, rebuilt_at, bundle_json) VALUES (?, ?, ?)
        ON CONFLICT(task_id) DO UPDATE SET rebuilt_at = excluded.rebuilt_at, bundle_json = excluded.bundle_json`,
-    ).run(taskId, rebuiltAt ?? isoNow(), JSON.stringify(bundle));
+      taskId,
+      rebuiltAt ?? isoNow(),
+      JSON.stringify(bundle),
+    );
   }
 
-  loadContextBundle(taskId: string): ScrumContextBundle | null {
-    const row = this.prep(
+  async loadContextBundle(taskId: string): Promise<ScrumContextBundle | null> {
+    const row = (await this.one(
       'SELECT task_id, rebuilt_at, bundle_json FROM scrum_context_bundles WHERE task_id = ?',
-    ).get(taskId) as { task_id: string; rebuilt_at: string; bundle_json: string } | null;
+      taskId,
+    )) as { task_id: string; rebuilt_at: string; bundle_json: string } | null;
     if (!row) return null;
     return {
       task_id: row.task_id,
@@ -1907,6 +2435,21 @@ export class ScrumStore {
   // ==========================================================================
   // nextReady — ranked pick-list of actionable tasks
   // ==========================================================================
+
+  /**
+   * The base actionable task ids — every non-deleted task in `ready` or
+   * `backlog`, read straight from the shared `scrum_ready_eligible` view. This
+   * is the UNSCORED candidate floor `nextReady` ranks on top of, surfaced as a
+   * standalone reader so a second consumer (the review-ui boundary) shares the
+   * SAME view definition rather than re-deriving the predicate in TS. Ordered
+   * by id for a deterministic, comparable set.
+   */
+  async readyEligibleIds(): Promise<string[]> {
+    const rows = (await this.many('SELECT id FROM scrum_ready_eligible ORDER BY id ASC')) as Array<{
+      id: string;
+    }>;
+    return rows.map((r) => r.id);
+  }
 
   /**
    * Rank tasks in `ready` or `backlog` by composite priority:
@@ -1931,44 +2474,47 @@ export class ScrumStore {
    * Returns up to `limit` rows sorted by score DESC, then `created_at` ASC
    * for deterministic ordering on ties.
    */
-  nextReady(options: NextReadyOptions = {}): NextReadyRow[] {
+  async nextReady(options: NextReadyOptions = {}): Promise<NextReadyRow[]> {
     const limit = options.limit ?? 10;
     const nowMs = options.nowMs ?? Date.now();
 
-    // Two SQL shapes (with/without milestone filter) — both routed through
-    // the prep() cache so the plan is parsed once per process.
+    // The base actionable set (`status IN ('ready','backlog') AND deleted_at IS
+    // NULL`) is defined ONCE in the shared `scrum_ready_eligible` view, so the
+    // CLI ranking and the review-ui boundary share a single eligible predicate.
+    // The milestone filter stays a WHERE on top of the view (it is per-call, not
+    // part of the shared base). Two SQL shapes (with/without that filter) — both
+    // routed through the prep() cache so the plan is parsed once per process.
     const candidateRows = (
       options.milestoneId
-        ? this.prep(
+        ? await this.many(
             `SELECT ${TASK_COLUMNS}
              FROM scrum_tasks
-             WHERE deleted_at IS NULL AND status IN ('ready', 'backlog') AND milestone_id = ?
+             WHERE id IN (SELECT id FROM scrum_ready_eligible) AND milestone_id = ?
              ORDER BY created_at ASC`,
-          ).all(options.milestoneId)
-        : this.prep(
-            `SELECT ${TASK_COLUMNS}
+            options.milestoneId,
+          )
+        : await this.many(`SELECT ${TASK_COLUMNS}
              FROM scrum_tasks
-             WHERE deleted_at IS NULL AND status IN ('ready', 'backlog')
-             ORDER BY created_at ASC`,
-          ).all()
+             WHERE id IN (SELECT id FROM scrum_ready_eligible)
+             ORDER BY created_at ASC`)
     ) as ScrumTaskRow[];
-    const candidates = candidateRows.map(decodeTask);
+    const candidates = await this.hydrateRows(candidateRows);
 
     // Snapshot active and closed milestone ids in one pass each — both
     // sets feed `computeMilestoneBoost`. Per-invocation lookup keeps the
     // boost calculation O(1) per task without a per-task DB round trip.
-    const activeMilestones = new Set(this.listMilestones('active').map((m) => m.id));
-    const closedMilestones = new Set(this.listMilestones('closed').map((m) => m.id));
+    const activeMilestones = new Set((await this.listMilestones('active')).map((m) => m.id));
+    const closedMilestones = new Set((await this.listMilestones('closed')).map((m) => m.id));
 
     // Batch the per-candidate tag lookup into a single IN-query. Bun's sqlite
     // binds parameters positionally, so we expand placeholders to match the
     // candidate count. Per-invocation only — tags mutate between calls.
-    const tagBoostByTask = this.fetchTagBoosts(candidates.map((t) => t.id));
+    const tagBoostByTask = await this.fetchTagBoosts(candidates.map((t) => t.id));
 
     // Batch the per-candidate latest-escalation lookup. A task
     // with an open `blocker_raised` escalation auto-bubbles up, weighted by the
     // escalation's age. Per-invocation only — escalations mutate between calls.
-    const escalationByTask = this.fetchLatestEscalations(candidates.map((t) => t.id));
+    const escalationByTask = await this.fetchLatestEscalations(candidates.map((t) => t.id));
 
     // Memoize unblock_depth within this invocation. The BFS from task `A`
     // and task `B` can both traverse a shared descendant `C`; caching
@@ -1976,9 +2522,16 @@ export class ScrumStore {
     // Scope is intentionally this single call — task deps can change
     // between invocations.
     const unblockDepthCache = new Map<string, number>();
+    // Warm the unblock-depth cache sequentially before the synchronous scoring
+    // map below: computeUnblockDepth is async (one dep-graph BFS per root), so
+    // it cannot run inside the .map callback. The shared cache collapses the
+    // repeated DFS sweeps across the candidate set.
+    for (const task of candidates) {
+      await this.computeUnblockDepth(task.id, unblockDepthCache);
+    }
 
     const scored: NextReadyRow[] = candidates.map((task) => {
-      const unblockDepth = this.computeUnblockDepth(task.id, unblockDepthCache);
+      const unblockDepth = unblockDepthCache.get(task.id) ?? 0;
       const milestoneBoost = computeMilestoneBoost(
         task,
         options.milestoneId,
@@ -2054,7 +2607,7 @@ export class ScrumStore {
    * `content_sha` uses node:crypto sha256 — same std-lib primitive every
    * other prove domain uses; no new dependency.
    */
-  recordDecision(input: RecordDecisionInput): DecisionRow {
+  async recordDecision(input: RecordDecisionInput): Promise<DecisionRow> {
     const recordedAt = isoNow();
     const contentSha = createHash('sha256').update(input.content).digest('hex');
     // A decision file body never encodes the terminal `'superseded'` status
@@ -2103,7 +2656,7 @@ export class ScrumStore {
     // All binds are named ($-prefixed) so the supersession-preserve flag
     // ($assertsStatus) and every column value survive a future reorder of the
     // INSERT column list — no positional `?N` to silently misalign.
-    this.prep(
+    await this.execNamed(
       `INSERT INTO scrum_decisions (id, title, topic, status, content, source_path, content_sha, recorded_at, recorded_by_agent, superseded_by, reason, kind, write_status, gate_responder, gate_responded_at, source_lore_id)
        VALUES ($id, $title, $topic, $status, $content, $source_path, $content_sha, $recorded_at, $recorded_by_agent, $superseded_by, $reason, $kind, $write_status, $gate_responder, $gate_responded_at, $source_lore_id)
        ON CONFLICT(id) DO UPDATE SET
@@ -2161,30 +2714,31 @@ export class ScrumStore {
              THEN scrum_decisions.source_lore_id
            ELSE excluded.source_lore_id
          END`,
-    ).run({
-      $id: row.id,
-      $title: row.title,
-      $topic: row.topic,
-      $status: row.status,
-      $content: row.content,
-      $source_path: row.source_path,
-      $content_sha: row.content_sha,
-      $recorded_at: row.recorded_at,
-      $recorded_by_agent: row.recorded_by_agent,
-      $superseded_by: row.superseded_by,
-      $reason: row.reason,
-      $kind: row.kind,
-      $write_status: row.write_status,
-      $gate_responder: row.gate_responder,
-      $gate_responded_at: row.gate_responded_at,
-      $source_lore_id: row.source_lore_id,
-      $assertsStatus: assertsStatus,
-    });
+      {
+        id: row.id,
+        title: row.title,
+        topic: row.topic,
+        status: row.status,
+        content: row.content,
+        source_path: row.source_path,
+        content_sha: row.content_sha,
+        recorded_at: row.recorded_at,
+        recorded_by_agent: row.recorded_by_agent,
+        superseded_by: row.superseded_by,
+        reason: row.reason,
+        kind: row.kind,
+        write_status: row.write_status,
+        gate_responder: row.gate_responder,
+        gate_responded_at: row.gate_responded_at,
+        source_lore_id: row.source_lore_id,
+        assertsStatus: assertsStatus,
+      },
+    );
 
     // Re-fetch so the returned row reflects any preserved supersession rather
     // than the in-memory `row` (whose status/superseded_by/reason may have
     // been overridden by the CASE branches above).
-    const persisted = this.getDecision(row.id);
+    const persisted = await this.getDecision(row.id);
     if (!persisted) throw new Error(`recordDecision: row '${row.id}' vanished mid-write`);
     return persisted;
   }
@@ -2199,8 +2753,12 @@ export class ScrumStore {
    * replacement is the decision itself, or the decision is already terminal
    * (`status` already `'superseded'`). Returns the updated old row.
    */
-  supersedeDecision(id: string, supersededById: string, reason: string): DecisionRow {
-    const existing = this.getDecision(id);
+  async supersedeDecision(
+    id: string,
+    supersededById: string,
+    reason: string,
+  ): Promise<DecisionRow> {
+    const existing = await this.getDecision(id);
     if (!existing) throw new Error(`supersedeDecision: unknown decision '${id}'`);
     if (existing.status === 'superseded') {
       throw new Error(`supersedeDecision: decision '${id}' is already superseded`);
@@ -2208,24 +2766,28 @@ export class ScrumStore {
     if (id === supersededById) {
       throw new Error(`supersedeDecision: decision '${id}' cannot supersede itself`);
     }
-    if (!this.getDecision(supersededById)) {
+    if (!(await this.getDecision(supersededById))) {
       throw new Error(`supersedeDecision: unknown replacement decision '${supersededById}'`);
     }
 
-    this.prep(
+    await this.exec(
       "UPDATE scrum_decisions SET status = 'superseded', superseded_by = ?, reason = ? WHERE id = ?",
-    ).run(supersededById, reason, id);
+      supersededById,
+      reason,
+      id,
+    );
 
-    const updated = this.getDecision(id);
+    const updated = await this.getDecision(id);
     if (!updated) throw new Error(`supersedeDecision: decision '${id}' vanished mid-update`);
     return updated;
   }
 
   /** Fetch one decision by id, or null if missing. */
-  getDecision(id: string): DecisionRow | null {
-    const row = this.prep(`SELECT ${DECISION_COLUMNS} FROM scrum_decisions WHERE id = ?`).get(
+  async getDecision(id: string): Promise<DecisionRow | null> {
+    const row = (await this.one(
+      `SELECT ${DECISION_COLUMNS} FROM scrum_decisions WHERE id = ?`,
       id,
-    ) as DecisionRow | null;
+    )) as DecisionRow | null;
     return row ?? null;
   }
 
@@ -2236,7 +2798,7 @@ export class ScrumStore {
    * so the plan cache reuses parsed statements across calls (matches the
    * discipline of `listTasks`).
    */
-  listDecisions(filter: ListDecisionsFilter = {}): DecisionRow[] {
+  async listDecisions(filter: ListDecisionsFilter = {}): Promise<DecisionRow[]> {
     const clauses: string[] = [];
     const params: string[] = [];
     if (filter.topic !== undefined) {
@@ -2260,7 +2822,7 @@ export class ScrumStore {
     }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const sql = `SELECT ${DECISION_COLUMNS} FROM scrum_decisions ${where} ORDER BY recorded_at DESC`;
-    return this.prep(sql).all(...params) as DecisionRow[];
+    return (await this.many(sql, ...params)) as DecisionRow[];
   }
 
   // ==========================================================================
@@ -2299,26 +2861,32 @@ export class ScrumStore {
    * superseded (e.g. folded into a consolidation between record and approve) is
    * left as-is — its supersession was resolved once, elsewhere.
    */
-  approveDecision(id: string, responder: string): DecisionRow {
-    const existing = this.requireGatedDraft(id, 'approveDecision');
-    if (existing.kind === TECH_LEAD_REVIEW_KIND && !this.holdsTechLeadAnywhere(responder)) {
+  async approveDecision(id: string, responder: string): Promise<DecisionRow> {
+    const existing = await this.requireGatedDraft(id, 'approveDecision');
+    if (existing.kind === TECH_LEAD_REVIEW_KIND && !(await this.holdsTechLeadAnywhere(responder))) {
       throw new Error(
         `approveDecision: glossary decision '${id}' requires a tech_lead review; '${responder}' holds no current tech_lead slot on any team`,
       );
     }
     const respondedAt = isoNow();
-    const approve = this.db.transaction(() => {
-      this.prep(
+    const approve = async () => {
+      await this.exec(
         "UPDATE scrum_decisions SET status = 'accepted', write_status = 'approved', gate_responder = ?, gate_responded_at = ? WHERE id = ?",
-      ).run(responder, respondedAt, id);
+        responder,
+        respondedAt,
+        id,
+      );
       if (existing.source_lore_id !== null) {
-        this.prep(
+        await this.exec(
           'UPDATE scrum_lores SET superseded_by = ?, reason = ? WHERE id = ? AND superseded_by IS NULL',
-        ).run(`decision:${id}`, 'promoted to codex', existing.source_lore_id);
+          `decision:${id}`,
+          'promoted to codex',
+          existing.source_lore_id,
+        );
       }
-      return this.requireDecision(id, 'approveDecision');
-    });
-    return approve();
+      return await this.requireDecision(id, 'approveDecision');
+    };
+    return await withTx(this.store, approve);
   }
 
   /**
@@ -2331,13 +2899,21 @@ export class ScrumStore {
    * its gate is already resolved — mirroring `approveDecision`. There is no
    * role constraint on rejection: any responder may reject any gated kind.
    */
-  rejectDecision(id: string, responder: string, reason: string | null = null): DecisionRow {
-    this.requireGatedDraft(id, 'rejectDecision');
+  async rejectDecision(
+    id: string,
+    responder: string,
+    reason: string | null = null,
+  ): Promise<DecisionRow> {
+    await this.requireGatedDraft(id, 'rejectDecision');
     const respondedAt = isoNow();
-    this.prep(
+    await this.exec(
       "UPDATE scrum_decisions SET write_status = 'rejected', gate_responder = ?, gate_responded_at = ?, reason = ? WHERE id = ?",
-    ).run(responder, respondedAt, reason, id);
-    return this.requireDecision(id, 'rejectDecision');
+      responder,
+      respondedAt,
+      reason,
+      id,
+    );
+    return await this.requireDecision(id, 'rejectDecision');
   }
 
   /**
@@ -2347,8 +2923,8 @@ export class ScrumStore {
    * `approveDecision`/`rejectDecision`, mirroring `respondGate`'s
    * already-resolved check.
    */
-  private requireGatedDraft(id: string, method: string): DecisionRow {
-    const existing = this.getDecision(id);
+  private async requireGatedDraft(id: string, method: string): Promise<DecisionRow> {
+    const existing = await this.getDecision(id);
     if (!existing) throw new Error(`${method}: unknown decision '${id}'`);
     if (existing.write_status === null) {
       throw new Error(
@@ -2364,8 +2940,8 @@ export class ScrumStore {
   }
 
   /** Re-fetch a decision after a gate write, asserting it survived. */
-  private requireDecision(id: string, method: string): DecisionRow {
-    const row = this.getDecision(id);
+  private async requireDecision(id: string, method: string): Promise<DecisionRow> {
+    const row = await this.getDecision(id);
     if (!row) throw new Error(`${method}: decision '${id}' vanished mid-update`);
     return row;
   }
@@ -2376,10 +2952,11 @@ export class ScrumStore {
    * open (`to_ts IS NULL`) tech_lead rows across every team, matching how
    * `getTeamRoster` reads the open slot for a single team.
    */
-  private holdsTechLeadAnywhere(contributorId: string): boolean {
-    const row = this.prep(
+  private async holdsTechLeadAnywhere(contributorId: string): Promise<boolean> {
+    const row = await this.one(
       "SELECT 1 FROM scrum_team_members WHERE role = 'tech_lead' AND contributor_id = ? AND to_ts IS NULL LIMIT 1",
-    ).get(contributorId);
+      contributorId,
+    );
     return row !== null && row !== undefined;
   }
 
@@ -2400,7 +2977,7 @@ export class ScrumStore {
    * `created_at`/`last_modified_at` to the same instant, mirroring how the
    * on-disk `contributor.md` identity artifact seeds its provenance block.
    */
-  registerContributor(input: RegisterContributorInput): Contributor {
+  async registerContributor(input: RegisterContributorInput): Promise<Contributor> {
     const createdAt = input.createdAt ?? isoNow();
     const createdBy = this.actor(input.createdBy);
     const row: Contributor = {
@@ -2415,9 +2992,8 @@ export class ScrumStore {
       last_modified_by: createdBy,
       last_modified_at: createdAt,
     };
-    this.prep(
+    await this.exec(
       `INSERT INTO scrum_contributors (${CONTRIBUTOR_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
       row.id,
       row.slug,
       row.status,
@@ -2433,18 +3009,20 @@ export class ScrumStore {
   }
 
   /** Fetch one contributor by CT-UUID, or null if missing. */
-  getContributor(id: string): Contributor | null {
-    const row = this.prep(`SELECT ${CONTRIBUTOR_COLUMNS} FROM scrum_contributors WHERE id = ?`).get(
+  async getContributor(id: string): Promise<Contributor | null> {
+    const row = (await this.one(
+      `SELECT ${CONTRIBUTOR_COLUMNS} FROM scrum_contributors WHERE id = ?`,
       id,
-    ) as Contributor | null;
+    )) as Contributor | null;
     return row ?? null;
   }
 
   /** Fetch one contributor by slug (the UNIQUE registry key), or null if missing. */
-  getContributorBySlug(slug: string): Contributor | null {
-    const row = this.prep(
+  async getContributorBySlug(slug: string): Promise<Contributor | null> {
+    const row = (await this.one(
       `SELECT ${CONTRIBUTOR_COLUMNS} FROM scrum_contributors WHERE slug = ?`,
-    ).get(slug) as Contributor | null;
+      slug,
+    )) as Contributor | null;
     return row ?? null;
   }
 
@@ -2459,8 +3037,8 @@ export class ScrumStore {
    * a mismatch throws, since silently re-keying would orphan all attribution
    * history stamped under the original id.
    */
-  reconcileContributor(input: ReconcileContributorInput): Contributor {
-    const existing = this.getContributorBySlug(input.slug);
+  async reconcileContributor(input: ReconcileContributorInput): Promise<Contributor> {
+    const existing = await this.getContributorBySlug(input.slug);
     if (existing === null) {
       throw new Error(`unknown contributor slug '${input.slug}' — register it first`);
     }
@@ -2478,12 +3056,11 @@ export class ScrumStore {
       last_modified_by: this.actor(input.modifiedBy),
       last_modified_at: input.modifiedAt ?? isoNow(),
     };
-    this.prep(
+    await this.exec(
       `UPDATE scrum_contributors
          SET status = ?, display_name = ?, github = ?, email = ?,
              last_modified_by = ?, last_modified_at = ?
        WHERE slug = ?`,
-    ).run(
       row.status,
       row.display_name,
       row.github,
@@ -2500,15 +3077,16 @@ export class ScrumStore {
    * filter returns all rows (active and inactive) — a retired contributor stays
    * in the registry so past attribution still resolves.
    */
-  listContributors(status?: ContributorStatus): Contributor[] {
+  async listContributors(status?: ContributorStatus): Promise<Contributor[]> {
     if (status !== undefined) {
-      return this.prep(
+      return (await this.many(
         `SELECT ${CONTRIBUTOR_COLUMNS} FROM scrum_contributors WHERE status = ? ORDER BY slug ASC`,
-      ).all(status) as Contributor[];
+        status,
+      )) as Contributor[];
     }
-    return this.prep(
+    return (await this.many(
       `SELECT ${CONTRIBUTOR_COLUMNS} FROM scrum_contributors ORDER BY slug ASC`,
-    ).all() as Contributor[];
+    )) as Contributor[];
   }
 
   /**
@@ -2520,20 +3098,22 @@ export class ScrumStore {
    * key carries neither field). An inactive contributor still resolves — a
    * worker dispatched under a since-retired identity must still attribute.
    */
-  resolveContributor(key: ResolveContributorKey): Contributor | null {
+  async resolveContributor(key: ResolveContributorKey): Promise<Contributor | null> {
     const github = key.github && key.github.length > 0 ? key.github : null;
     if (github !== null) {
-      const byGithub = this.prep(
+      const byGithub = (await this.one(
         `SELECT ${CONTRIBUTOR_COLUMNS} FROM scrum_contributors WHERE lower(github) = lower(?) LIMIT 1`,
-      ).get(github) as Contributor | null;
+        github,
+      )) as Contributor | null;
       if (byGithub) return byGithub;
     }
 
     const email = key.email && key.email.length > 0 ? key.email : null;
     if (email !== null) {
-      const byEmail = this.prep(
+      const byEmail = (await this.one(
         `SELECT ${CONTRIBUTOR_COLUMNS} FROM scrum_contributors WHERE lower(email) = lower(?) LIMIT 1`,
-      ).get(email) as Contributor | null;
+        email,
+      )) as Contributor | null;
       if (byEmail) return byEmail;
     }
 
@@ -2559,27 +3139,50 @@ export class ScrumStore {
    * `contributorId` must be a registered contributor — an unknown id throws
    * rather than recording an unresolvable holder.
    */
-  setOperatorOfRecord(input: SetOperatorOfRecordInput): OperatorHistoryRow {
-    if (this.getContributor(input.contributorId) === null) {
+  async setOperatorOfRecord(input: SetOperatorOfRecordInput): Promise<OperatorHistoryRow> {
+    if ((await this.getContributor(input.contributorId)) === null) {
       throw new Error(`unknown contributor '${input.contributorId}' — register it first`);
     }
     const fromTs = input.fromTs ?? isoNow();
     const createdBy = this.actor(input.createdBy);
 
-    const append = this.db.transaction(() => {
+    const id = ulid();
+    const append = async () => {
       // Close the current open interval (if any) at the new holder's from_ts.
-      this.prep('UPDATE scrum_operator_history SET to_ts = ? WHERE to_ts IS NULL').run(fromTs);
-      const result = this.prep(
-        'INSERT INTO scrum_operator_history (contributor_id, from_ts, to_ts, created_at, created_by) VALUES (?, ?, NULL, ?, ?)',
-      ).run(input.contributorId, fromTs, isoNow(), createdBy);
-      return Number(result.lastInsertRowid);
-    });
-    const id = append();
+      await this.exec('UPDATE scrum_operator_history SET to_ts = ? WHERE to_ts IS NULL', fromTs);
+      await this.exec(
+        'INSERT INTO scrum_operator_history (id, contributor_id, from_ts, to_ts, created_at, created_by) VALUES (?, ?, ?, NULL, ?, ?)',
+        id,
+        input.contributorId,
+        fromTs,
+        isoNow(),
+        createdBy,
+      );
+    };
+    await withTx(this.store, append);
 
-    const row = this.prep(
+    const row = (await this.one(
       `SELECT ${OPERATOR_HISTORY_COLUMNS} FROM scrum_operator_history WHERE id = ?`,
-    ).get(id) as OperatorHistoryRow;
+      id,
+    )) as OperatorHistoryRow;
     return row;
+  }
+
+  /**
+   * Resolve the contributor who CURRENTLY holds operator-of-record — the single
+   * open interval (`to_ts IS NULL`), of which the set-then-append invariant
+   * guarantees at most one. Returns the `scrum_contributors` row, or null when
+   * the role is unset (no open interval). Reads the shared `scrum_current_operator`
+   * view so the CLI and the review-ui boundary share ONE current-holder
+   * definition; point-in-time-at-an-instant stays the parameterized
+   * `operatorOfRecordAt` scan.
+   */
+  async currentOperator(): Promise<Contributor | null> {
+    const open = (await this.one('SELECT contributor_id FROM scrum_current_operator LIMIT 1')) as {
+      contributor_id: string;
+    } | null;
+    if (open === null) return null;
+    return await this.getContributor(open.contributor_id);
   }
 
   /**
@@ -2595,12 +3198,14 @@ export class ScrumStore {
    * Ties on a shared boundary instant resolve to the LATER interval: the upper
    * bound is exclusive (`at < to_ts`), the lower inclusive (`from_ts <= at`).
    */
-  operatorOfRecordAt(at: string): Contributor | null {
-    const interval = this.prep(
+  async operatorOfRecordAt(at: string): Promise<Contributor | null> {
+    const interval = (await this.one(
       'SELECT contributor_id FROM scrum_operator_history WHERE from_ts <= ? AND (to_ts IS NULL OR ? < to_ts) ORDER BY from_ts DESC LIMIT 1',
-    ).get(at, at) as { contributor_id: string } | null;
+      at,
+      at,
+    )) as { contributor_id: string } | null;
     if (interval === null) return null;
-    return this.getContributor(interval.contributor_id);
+    return await this.getContributor(interval.contributor_id);
   }
 
   /**
@@ -2608,10 +3213,10 @@ export class ScrumStore {
    * last row carries `to_ts: null` when a current holder is set. Empty when the
    * role was never set.
    */
-  operatorHistory(): OperatorHistoryRow[] {
-    return this.prep(
+  async operatorHistory(): Promise<OperatorHistoryRow[]> {
+    return (await this.many(
       `SELECT ${OPERATOR_HISTORY_COLUMNS} FROM scrum_operator_history ORDER BY from_ts ASC, id ASC`,
-    ).all() as OperatorHistoryRow[];
+    )) as OperatorHistoryRow[];
   }
 
   // ==========================================================================
@@ -2637,7 +3242,7 @@ export class ScrumStore {
    * with `setTeamTerminatesOn` (the create-then-set flow); creation with a
    * mismatched pair throws rather than landing an inconsistent row.
    */
-  createTeam(input: CreateTeamInput): Team {
+  async createTeam(input: CreateTeamInput): Promise<Team> {
     const lifetime = input.lifetime ?? 'persistent';
     if (!(TEAM_TYPES as string[]).includes(input.teamType)) {
       throw new Error(
@@ -2660,7 +3265,8 @@ export class ScrumStore {
       status: 'active',
       created_at: input.createdAt ?? isoNow(),
     };
-    this.prep(`INSERT INTO scrum_teams (${TEAM_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+    await this.exec(
+      `INSERT INTO scrum_teams (${TEAM_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       row.slug,
       row.team_type,
       row.charter,
@@ -2673,16 +3279,17 @@ export class ScrumStore {
   }
 
   /** Fetch one team by slug, or null if missing. */
-  getTeam(slug: string): Team | null {
-    const row = this.prep(`SELECT ${TEAM_COLUMNS} FROM scrum_teams WHERE slug = ?`).get(
+  async getTeam(slug: string): Promise<Team | null> {
+    const row = (await this.one(
+      `SELECT ${TEAM_COLUMNS} FROM scrum_teams WHERE slug = ?`,
       slug,
-    ) as Team | null;
+    )) as Team | null;
     return row ?? null;
   }
 
   /** List every team, ordered by slug. */
-  listTeams(): Team[] {
-    return this.prep(`SELECT ${TEAM_COLUMNS} FROM scrum_teams ORDER BY slug ASC`).all() as Team[];
+  async listTeams(): Promise<Team[]> {
+    return (await this.many(`SELECT ${TEAM_COLUMNS} FROM scrum_teams ORDER BY slug ASC`)) as Team[];
   }
 
   /**
@@ -2695,13 +3302,14 @@ export class ScrumStore {
    * which is only valid for a `persistent` team. Throws on an unknown slug and on
    * a rule violation. Returns the updated row.
    */
-  setTeamTerminatesOn(slug: string, milestoneId: string | null): Team {
-    const existing = this.getTeam(slug);
+  async setTeamTerminatesOn(slug: string, milestoneId: string | null): Promise<Team> {
+    const existing = await this.getTeam(slug);
     if (existing === null) {
       throw new Error(`setTeamTerminatesOn: unknown team '${slug}'`);
     }
     assertLifetimeTargetConsistent('setTeamTerminatesOn', existing.lifetime, milestoneId);
-    this.prep('UPDATE scrum_teams SET terminates_on_milestone = ? WHERE slug = ?').run(
+    await this.exec(
+      'UPDATE scrum_teams SET terminates_on_milestone = ? WHERE slug = ?',
       milestoneId,
       slug,
     );
@@ -2730,8 +3338,8 @@ export class ScrumStore {
    * deduped before write; `kind` values are guarded against the closed
    * `TeamScopeKind` set.
    */
-  setTeamScopes(slug: string, scopes: TeamScopes): TeamScopes {
-    if (this.getTeam(slug) === null) {
+  async setTeamScopes(slug: string, scopes: TeamScopes): Promise<TeamScopes> {
+    if ((await this.getTeam(slug)) === null) {
       throw new Error(`setTeamScopes: unknown team '${slug}'`);
     }
     const read = dedupeGlobs(scopes.read);
@@ -2739,22 +3347,22 @@ export class ScrumStore {
 
     // Validate the candidate write set against every OTHER team's write set
     // before mutating, so a rejected set leaves the store untouched.
-    const conflict = this.findWriteScopeConflict(slug, write);
+    const conflict = await this.findWriteScopeConflict(slug, write);
     if (conflict !== null) {
       throw new Error(formatWriteScopeConflict(conflict));
     }
 
-    const replace = this.db.transaction(() => {
-      this.prep('DELETE FROM scrum_team_scopes WHERE team_slug = ?').run(slug);
-      const insert = this.prep(
+    const replace = async () => {
+      await this.exec('DELETE FROM scrum_team_scopes WHERE team_slug = ?', slug);
+      const insert = await this.prep(
         'INSERT INTO scrum_team_scopes (team_slug, kind, glob) VALUES (?, ?, ?)',
       );
-      for (const glob of read) insert.run(slug, 'read' satisfies TeamScopeKind, glob);
-      for (const glob of write) insert.run(slug, 'write' satisfies TeamScopeKind, glob);
-    });
-    replace();
+      for (const glob of read) await insert.run(slug, 'read' satisfies TeamScopeKind, glob);
+      for (const glob of write) await insert.run(slug, 'write' satisfies TeamScopeKind, glob);
+    };
+    await withTx(this.store, replace);
 
-    return this.getTeamScopes(slug);
+    return await this.getTeamScopes(slug);
   }
 
   /**
@@ -2763,10 +3371,11 @@ export class ScrumStore {
    * unknown slug — the absence reads as "no scopes" rather than an error, matching
    * the unscoped default). Both arrays are sorted for a canonical shape.
    */
-  getTeamScopes(slug: string): TeamScopes {
-    const rows = this.prep(
+  async getTeamScopes(slug: string): Promise<TeamScopes> {
+    const rows = (await this.many(
       'SELECT kind, glob FROM scrum_team_scopes WHERE team_slug = ? ORDER BY kind ASC, glob ASC',
-    ).all(slug) as Array<{ kind: string; glob: string }>;
+      slug,
+    )) as Array<{ kind: string; glob: string }>;
     const read: string[] = [];
     const write: string[] = [];
     for (const row of rows) {
@@ -2785,10 +3394,10 @@ export class ScrumStore {
    * Teams are compared in slug order so the returned conflict is deterministic.
    * READ scopes are never inspected — only write-vs-write overlap matters.
    */
-  validateTeamWriteScopes(): TeamWriteScopeConflict | null {
-    const teams = this.listTeams().map((t) => t.slug);
+  async validateTeamWriteScopes(): Promise<TeamWriteScopeConflict | null> {
+    const teams = (await this.listTeams()).map((t) => t.slug);
     const writeBySlug = new Map<string, string[]>();
-    for (const slug of teams) writeBySlug.set(slug, this.getTeamScopes(slug).write);
+    for (const slug of teams) writeBySlug.set(slug, (await this.getTeamScopes(slug)).write);
 
     for (let i = 0; i < teams.length; i++) {
       for (let j = i + 1; j < teams.length; j++) {
@@ -2815,13 +3424,13 @@ export class ScrumStore {
    * team's existing rows (about to be replaced) never conflict with its own
    * proposed set.
    */
-  private findWriteScopeConflict(
+  private async findWriteScopeConflict(
     candidateSlug: string,
     candidateWrite: string[],
-  ): TeamWriteScopeConflict | null {
-    for (const team of this.listTeams()) {
+  ): Promise<TeamWriteScopeConflict | null> {
+    for (const team of await this.listTeams()) {
       if (team.slug === candidateSlug) continue;
-      const otherWrite = this.getTeamScopes(team.slug).write;
+      const otherWrite = (await this.getTeamScopes(team.slug)).write;
       const conflict = firstGlobOverlap(candidateSlug, candidateWrite, team.slug, otherWrite);
       if (conflict !== null) return conflict;
     }
@@ -2857,8 +3466,8 @@ export class ScrumStore {
    * person fills multiple slots. The open-slot check reads the state BEFORE the
    * rotation so re-affirming the same role does not self-trigger the warning.
    */
-  rotateTeamMember(input: RotateTeamMemberInput): RotateTeamMemberResult {
-    if (this.getTeam(input.teamSlug) === null) {
+  async rotateTeamMember(input: RotateTeamMemberInput): Promise<RotateTeamMemberResult> {
+    if ((await this.getTeam(input.teamSlug)) === null) {
       throw new Error(`rotateTeamMember: unknown team '${input.teamSlug}'`);
     }
     if (!(TEAM_ROLES as string[]).includes(input.role)) {
@@ -2871,26 +3480,37 @@ export class ScrumStore {
 
     // Read the multi-slot state BEFORE mutating, so re-affirming the same role
     // is never mistaken for occupying a second slot.
-    const otherOpenRoles = this.openRolesHeldBy(input.teamSlug, input.contributorId).filter(
+    const otherOpenRoles = (await this.openRolesHeldBy(input.teamSlug, input.contributorId)).filter(
       (role) => role !== input.role,
     );
 
-    const append = this.db.transaction(() => {
+    const id = ulid();
+    const append = async () => {
       // Close the current open interval for THIS (team, role) at the new
       // holder's from_ts.
-      this.prep(
+      await this.exec(
         'UPDATE scrum_team_members SET to_ts = ? WHERE team_slug = ? AND role = ? AND to_ts IS NULL',
-      ).run(fromTs, input.teamSlug, input.role);
-      const result = this.prep(
-        'INSERT INTO scrum_team_members (team_slug, role, contributor_id, from_ts, to_ts, reason, created_at) VALUES (?, ?, ?, ?, NULL, ?, ?)',
-      ).run(input.teamSlug, input.role, input.contributorId, fromTs, reason, isoNow());
-      return Number(result.lastInsertRowid);
-    });
-    const id = append();
+        fromTs,
+        input.teamSlug,
+        input.role,
+      );
+      await this.exec(
+        'INSERT INTO scrum_team_members (id, team_slug, role, contributor_id, from_ts, to_ts, reason, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)',
+        id,
+        input.teamSlug,
+        input.role,
+        input.contributorId,
+        fromTs,
+        reason,
+        isoNow(),
+      );
+    };
+    await withTx(this.store, append);
 
-    const row = this.prep(`SELECT ${TEAM_MEMBER_COLUMNS} FROM scrum_team_members WHERE id = ?`).get(
+    const row = (await this.one(
+      `SELECT ${TEAM_MEMBER_COLUMNS} FROM scrum_team_members WHERE id = ?`,
       id,
-    ) as TeamMemberRow;
+    )) as TeamMemberRow;
 
     const warning =
       otherOpenRoles.length > 0
@@ -2909,10 +3529,12 @@ export class ScrumStore {
    * (team, role) whose open row (`to_ts IS NULL`) names this contributor.
    * Backs the multi-slot warning in `rotateTeamMember`.
    */
-  private openRolesHeldBy(teamSlug: string, contributorId: string): TeamRole[] {
-    const rows = this.prep(
+  private async openRolesHeldBy(teamSlug: string, contributorId: string): Promise<TeamRole[]> {
+    const rows = (await this.many(
       'SELECT role FROM scrum_team_members WHERE team_slug = ? AND contributor_id = ? AND to_ts IS NULL',
-    ).all(teamSlug, contributorId) as Array<{ role: string }>;
+      teamSlug,
+      contributorId,
+    )) as Array<{ role: string }>;
     return rows.map((r) => r.role as TeamRole);
   }
 
@@ -2927,11 +3549,12 @@ export class ScrumStore {
    * `includeHistory: true`, `history` carries every interval for the team,
    * oldest-first, grouped by role.
    */
-  getTeamRoster(slug: string, opts: { includeHistory?: boolean } = {}): TeamRoster {
+  async getTeamRoster(slug: string, opts: { includeHistory?: boolean } = {}): Promise<TeamRoster> {
     const current = this.emptyRoleMap<TeamMemberRow | null>(null);
-    const openRows = this.prep(
+    const openRows = (await this.many(
       `SELECT ${TEAM_MEMBER_COLUMNS} FROM scrum_team_members WHERE team_slug = ? AND to_ts IS NULL`,
-    ).all(slug) as TeamMemberRow[];
+      slug,
+    )) as TeamMemberRow[];
     for (const row of openRows) current[row.role] = row;
 
     if (opts.includeHistory !== true) {
@@ -2939,9 +3562,10 @@ export class ScrumStore {
     }
 
     const history = this.emptyRoleMap<TeamMemberRow[]>([]);
-    const allRows = this.prep(
+    const allRows = (await this.many(
       `SELECT ${TEAM_MEMBER_COLUMNS} FROM scrum_team_members WHERE team_slug = ? ORDER BY from_ts ASC, id ASC`,
-    ).all(slug) as TeamMemberRow[];
+      slug,
+    )) as TeamMemberRow[];
     for (const row of allRows) history[row.role].push(row);
     return { slug, current, history };
   }
@@ -2968,8 +3592,12 @@ export class ScrumStore {
    * Append-only: the row is added, never replacing or removing a prior entry.
    * Retiring an ask type is an explicit `supersedeTeamAccept`, not a delete.
    */
-  addTeamAccept(teamSlug: string, askType: string, createdAt?: string): TeamAcceptRow {
-    if (this.getTeam(teamSlug) === null) {
+  async addTeamAccept(
+    teamSlug: string,
+    askType: string,
+    createdAt?: string,
+  ): Promise<TeamAcceptRow> {
+    if ((await this.getTeam(teamSlug)) === null) {
       throw new Error(`addTeamAccept: unknown team '${teamSlug}'`);
     }
     if (!ASK_TYPE_PATTERN.test(askType)) {
@@ -2977,12 +3605,19 @@ export class ScrumStore {
         `addTeamAccept: invalid ask_type '${askType}'; expected kebab-case (e.g. 'schema-change')`,
       );
     }
-    const result = this.prep(
-      'INSERT INTO scrum_team_accepts (team_slug, ask_type, status, superseded_by, reason, created_at) VALUES (?, ?, ?, NULL, NULL, ?)',
-    ).run(teamSlug, askType, 'active' satisfies TeamInterfaceStatus, createdAt ?? isoNow());
-    return this.prep(`SELECT ${TEAM_ACCEPT_COLUMNS} FROM scrum_team_accepts WHERE id = ?`).get(
-      Number(result.lastInsertRowid),
-    ) as TeamAcceptRow;
+    const id = ulid();
+    await this.exec(
+      'INSERT INTO scrum_team_accepts (id, team_slug, ask_type, status, superseded_by, reason, created_at) VALUES (?, ?, ?, ?, NULL, NULL, ?)',
+      id,
+      teamSlug,
+      askType,
+      'active' satisfies TeamInterfaceStatus,
+      createdAt ?? isoNow(),
+    );
+    return (await this.one(
+      `SELECT ${TEAM_ACCEPT_COLUMNS} FROM scrum_team_accepts WHERE id = ?`,
+      id,
+    )) as TeamAcceptRow;
   }
 
   /**
@@ -2994,22 +3629,24 @@ export class ScrumStore {
    * never a delete — removing a published interface is a backward-compatibility
    * hazard that must stay auditable.
    */
-  addTeamExpose(teamSlug: string, input: AddTeamExposeInput): TeamExposeRow {
-    if (this.getTeam(teamSlug) === null) {
+  async addTeamExpose(teamSlug: string, input: AddTeamExposeInput): Promise<TeamExposeRow> {
+    if ((await this.getTeam(teamSlug)) === null) {
       throw new Error(`addTeamExpose: unknown team '${teamSlug}'`);
     }
-    const result = this.prep(
-      'INSERT INTO scrum_team_exposes (team_slug, name, schema_ref, status, superseded_by, reason, created_at) VALUES (?, ?, ?, ?, NULL, NULL, ?)',
-    ).run(
+    const id = ulid();
+    await this.exec(
+      'INSERT INTO scrum_team_exposes (id, team_slug, name, schema_ref, status, superseded_by, reason, created_at) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?)',
+      id,
       teamSlug,
       input.name,
       input.schemaRef,
       'active' satisfies TeamInterfaceStatus,
       input.createdAt ?? isoNow(),
     );
-    return this.prep(`SELECT ${TEAM_EXPOSE_COLUMNS} FROM scrum_team_exposes WHERE id = ?`).get(
-      Number(result.lastInsertRowid),
-    ) as TeamExposeRow;
+    return (await this.one(
+      `SELECT ${TEAM_EXPOSE_COLUMNS} FROM scrum_team_exposes WHERE id = ?`,
+      id,
+    )) as TeamExposeRow;
   }
 
   /**
@@ -3019,22 +3656,32 @@ export class ScrumStore {
    * audit, mirroring `supersedeCriterion` and `supersedeDecision`. Rejects an
    * unknown id and an already-superseded target.
    */
-  supersedeTeamAccept(id: number, reason: string, supersededBy?: number | null): TeamAcceptRow {
-    const target = this.prep(
+  async supersedeTeamAccept(
+    id: string,
+    reason: string,
+    supersededBy?: string | null,
+  ): Promise<TeamAcceptRow> {
+    const target = (await this.one(
       `SELECT ${TEAM_ACCEPT_COLUMNS} FROM scrum_team_accepts WHERE id = ?`,
-    ).get(id) as TeamAcceptRow | null;
+      id,
+    )) as TeamAcceptRow | null;
     if (target === null) {
       throw new Error(`supersedeTeamAccept: unknown accept id '${id}'`);
     }
     if (target.status === 'superseded') {
       throw new Error(`supersedeTeamAccept: accept id '${id}' is already superseded`);
     }
-    this.prep(
+    await this.exec(
       'UPDATE scrum_team_accepts SET status = ?, reason = ?, superseded_by = ? WHERE id = ?',
-    ).run('superseded' satisfies TeamInterfaceStatus, reason, supersededBy ?? null, id);
-    return this.prep(`SELECT ${TEAM_ACCEPT_COLUMNS} FROM scrum_team_accepts WHERE id = ?`).get(
+      'superseded' satisfies TeamInterfaceStatus,
+      reason,
+      supersededBy ?? null,
       id,
-    ) as TeamAcceptRow;
+    );
+    return (await this.one(
+      `SELECT ${TEAM_ACCEPT_COLUMNS} FROM scrum_team_accepts WHERE id = ?`,
+      id,
+    )) as TeamAcceptRow;
   }
 
   /**
@@ -3043,22 +3690,32 @@ export class ScrumStore {
    * replacement expose id. Never removes the row. Rejects an unknown id and an
    * already-superseded target.
    */
-  supersedeTeamExpose(id: number, reason: string, supersededBy?: number | null): TeamExposeRow {
-    const target = this.prep(
+  async supersedeTeamExpose(
+    id: string,
+    reason: string,
+    supersededBy?: string | null,
+  ): Promise<TeamExposeRow> {
+    const target = (await this.one(
       `SELECT ${TEAM_EXPOSE_COLUMNS} FROM scrum_team_exposes WHERE id = ?`,
-    ).get(id) as TeamExposeRow | null;
+      id,
+    )) as TeamExposeRow | null;
     if (target === null) {
       throw new Error(`supersedeTeamExpose: unknown expose id '${id}'`);
     }
     if (target.status === 'superseded') {
       throw new Error(`supersedeTeamExpose: expose id '${id}' is already superseded`);
     }
-    this.prep(
+    await this.exec(
       'UPDATE scrum_team_exposes SET status = ?, reason = ?, superseded_by = ? WHERE id = ?',
-    ).run('superseded' satisfies TeamInterfaceStatus, reason, supersededBy ?? null, id);
-    return this.prep(`SELECT ${TEAM_EXPOSE_COLUMNS} FROM scrum_team_exposes WHERE id = ?`).get(
+      'superseded' satisfies TeamInterfaceStatus,
+      reason,
+      supersededBy ?? null,
       id,
-    ) as TeamExposeRow;
+    );
+    return (await this.one(
+      `SELECT ${TEAM_EXPOSE_COLUMNS} FROM scrum_team_exposes WHERE id = ?`,
+      id,
+    )) as TeamExposeRow;
   }
 
   /**
@@ -3068,9 +3725,12 @@ export class ScrumStore {
    * Tolerates an unknown slug: both arrays are empty (the absence reads as "no
    * interface" rather than an error, matching `getTeamScopes`).
    */
-  getTeamInterface(slug: string, opts: { includeSuperseded?: boolean } = {}): TeamInterface {
-    const accepts = this.listTeamAccepts(slug, opts);
-    const exposes = this.listTeamExposes(slug, opts);
+  async getTeamInterface(
+    slug: string,
+    opts: { includeSuperseded?: boolean } = {},
+  ): Promise<TeamInterface> {
+    const accepts = await this.listTeamAccepts(slug, opts);
+    const exposes = await this.listTeamExposes(slug, opts);
     return { slug, accepts, exposes };
   }
 
@@ -3079,12 +3739,16 @@ export class ScrumStore {
    * `includeSuperseded: true` includes retired entries. Tolerates an unknown
    * slug (returns an empty array).
    */
-  listTeamAccepts(slug: string, opts: { includeSuperseded?: boolean } = {}): TeamAcceptRow[] {
+  async listTeamAccepts(
+    slug: string,
+    opts: { includeSuperseded?: boolean } = {},
+  ): Promise<TeamAcceptRow[]> {
     const where =
       opts.includeSuperseded === true ? 'team_slug = ?' : "team_slug = ? AND status = 'active'";
-    return this.prep(
+    return (await this.many(
       `SELECT ${TEAM_ACCEPT_COLUMNS} FROM scrum_team_accepts WHERE ${where} ORDER BY id ASC`,
-    ).all(slug) as TeamAcceptRow[];
+      slug,
+    )) as TeamAcceptRow[];
   }
 
   /**
@@ -3092,12 +3756,16 @@ export class ScrumStore {
    * `includeSuperseded: true` includes retired entries. Tolerates an unknown
    * slug (returns an empty array).
    */
-  listTeamExposes(slug: string, opts: { includeSuperseded?: boolean } = {}): TeamExposeRow[] {
+  async listTeamExposes(
+    slug: string,
+    opts: { includeSuperseded?: boolean } = {},
+  ): Promise<TeamExposeRow[]> {
     const where =
       opts.includeSuperseded === true ? 'team_slug = ?' : "team_slug = ? AND status = 'active'";
-    return this.prep(
+    return (await this.many(
       `SELECT ${TEAM_EXPOSE_COLUMNS} FROM scrum_team_exposes WHERE ${where} ORDER BY id ASC`,
-    ).all(slug) as TeamExposeRow[];
+      slug,
+    )) as TeamExposeRow[];
   }
 
   // ==========================================================================
@@ -3120,28 +3788,29 @@ export class ScrumStore {
    * are the three above. The insert and the `ask_filed` audit event ride one
    * transaction, so a failure leaves the store untouched. Returns the new row.
    */
-  fileAsk(input: FileAskInput): AskRow {
-    if (this.getTeam(input.fromTeam) === null) {
+  async fileAsk(input: FileAskInput): Promise<AskRow> {
+    if ((await this.getTeam(input.fromTeam)) === null) {
       throw new Error(`fileAsk: unknown from_team '${input.fromTeam}'`);
     }
-    if (this.getTeam(input.toTeam) === null) {
+    if ((await this.getTeam(input.toTeam)) === null) {
       throw new Error(`fileAsk: unknown to_team '${input.toTeam}'`);
     }
-    const accepted = this.listTeamAccepts(input.toTeam).map((a) => a.ask_type);
+    const accepted = (await this.listTeamAccepts(input.toTeam)).map((a) => a.ask_type);
     if (!accepted.includes(input.askType)) {
       throw new Error(
         `fileAsk: ask_type '${input.askType}' is not accepted by to_team '${input.toTeam}'; accepted: ${accepted.length > 0 ? accepted.join(', ') : '(none)'}`,
       );
     }
-    if (this.getTask(input.blockingArtifact) === null) {
+    if ((await this.getTask(input.blockingArtifact)) === null) {
       throw new Error(`fileAsk: unknown blocking_artifact '${input.blockingArtifact}'`);
     }
 
     const createdAt = input.createdAt ?? isoNow();
-    const tx = this.db.transaction(() => {
-      const result = this.prep(
-        'INSERT INTO scrum_asks (from_team, to_team, ask_type, blocking_artifact, state, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-      ).run(
+    const id = ulid();
+    const tx = async () => {
+      await this.exec(
+        'INSERT INTO scrum_asks (id, from_team, to_team, ask_type, blocking_artifact, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        id,
         input.fromTeam,
         input.toTeam,
         input.askType,
@@ -3149,10 +3818,9 @@ export class ScrumStore {
         'filed' satisfies AskState,
         createdAt,
       );
-      const id = Number(result.lastInsertRowid);
       // Audit the filing against the blocking artifact's event timeline so the
       // task that triggered the ask carries the cross-team request in its history.
-      this.appendEvent({
+      await this.appendEvent({
         taskId: input.blockingArtifact,
         kind: 'ask_filed',
         ts: createdAt,
@@ -3163,17 +3831,17 @@ export class ScrumStore {
           ask_type: input.askType,
         },
       });
-      return id;
-    });
-    const askId = tx();
-    return this.prep(`SELECT ${ASK_COLUMNS} FROM scrum_asks WHERE id = ?`).get(askId) as AskRow;
+    };
+    await withTx(this.store, tx);
+    return (await this.one(`SELECT ${ASK_COLUMNS} FROM scrum_asks WHERE id = ?`, id)) as AskRow;
   }
 
   /** Fetch one ask by id, or null if missing. */
-  getAsk(id: number): AskRow | null {
-    const row = this.prep(`SELECT ${ASK_COLUMNS} FROM scrum_asks WHERE id = ?`).get(
+  async getAsk(id: string): Promise<AskRow | null> {
+    const row = (await this.one(
+      `SELECT ${ASK_COLUMNS} FROM scrum_asks WHERE id = ?`,
       id,
-    ) as AskRow | null;
+    )) as AskRow | null;
     return row ?? null;
   }
 
@@ -3204,13 +3872,13 @@ export class ScrumStore {
    * off-vocabulary verdict, and a non-`filed` ask (an ask is responded to
    * exactly once). Returns the updated row.
    */
-  respondAsk(input: RespondAskInput): AskRow {
+  async respondAsk(input: RespondAskInput): Promise<AskRow> {
     if (!(ASK_VERDICTS as string[]).includes(input.verdict)) {
       throw new Error(
         `respondAsk: invalid verdict '${input.verdict}'; expected one of: ${ASK_VERDICTS.join(', ')}`,
       );
     }
-    const existing = this.getAsk(input.id);
+    const existing = await this.getAsk(input.id);
     if (existing === null) {
       throw new Error(`respondAsk: unknown ask id '${input.id}'`);
     }
@@ -3226,7 +3894,7 @@ export class ScrumStore {
     const comment = input.comment ?? null;
     const childLayer = input.childLayer ?? 'story';
 
-    const apply = this.db.transaction((): AskRow => {
+    const apply = async (): Promise<AskRow> => {
       let mappedArtifact: string | null = null;
       let rejectedReason: string | null = null;
       let counterProposal: string | null = null;
@@ -3238,12 +3906,12 @@ export class ScrumStore {
         const childId =
           input.childId !== undefined && input.childId.length > 0
             ? input.childId
-            : `ask-${existing.id}-${childLayer}-${randomUUID().slice(0, 8)}`;
+            : `ask-${existing.id}-${childLayer}-${ulid()}`;
         const childTitle =
           input.childTitle !== undefined && input.childTitle.length > 0
             ? input.childTitle
             : `${existing.to_team}: ${existing.ask_type} (ask ${existing.id})`;
-        this.createTask({
+        await this.createTask({
           id: childId,
           title: childTitle,
           layer: childLayer,
@@ -3253,7 +3921,7 @@ export class ScrumStore {
         });
         // The from-team's blocking artifact is blocked_by the new child: it
         // stays blocked until the child completes.
-        this.addDep(existing.blocking_artifact, childId, 'blocked_by');
+        await this.addDep(existing.blocking_artifact, childId, 'blocked_by');
         mappedArtifact = childId;
       } else if (verdict === 'reject') {
         rejectedReason = comment;
@@ -3261,13 +3929,18 @@ export class ScrumStore {
         counterProposal = comment;
       }
 
-      this.prep(
+      await this.exec(
         'UPDATE scrum_asks SET state = ?, mapped_artifact = ?, rejected_reason = ?, counter_proposal = ? WHERE id = ?',
-      ).run(nextState, mappedArtifact, rejectedReason, counterProposal, existing.id);
+        nextState,
+        mappedArtifact,
+        rejectedReason,
+        counterProposal,
+        existing.id,
+      );
 
       // Audit the response against the blocking artifact's event timeline, the
       // same timeline `fileAsk` recorded `ask_filed` on.
-      this.appendEvent({
+      await this.appendEvent({
         taskId: existing.blocking_artifact,
         kind: 'ask_responded',
         ts: respondedAt,
@@ -3282,11 +3955,12 @@ export class ScrumStore {
         },
       });
 
-      return this.prep(`SELECT ${ASK_COLUMNS} FROM scrum_asks WHERE id = ?`).get(
+      return (await this.one(
+        `SELECT ${ASK_COLUMNS} FROM scrum_asks WHERE id = ?`,
         existing.id,
-      ) as AskRow;
-    });
-    return apply();
+      )) as AskRow;
+    };
+    return await withTx(this.store, apply);
   }
 
   /**
@@ -3313,8 +3987,8 @@ export class ScrumStore {
    * Rejects an unknown ask id (the one error path); every existing ask yields a
    * report.
    */
-  awaitAsk(id: number): AskAwaitReport {
-    const ask = this.getAsk(id);
+  async awaitAsk(id: string): Promise<AskAwaitReport> {
+    const ask = await this.getAsk(id);
     if (ask === null) {
       throw new Error(`awaitAsk: unknown ask id '${id}'`);
     }
@@ -3338,7 +4012,7 @@ export class ScrumStore {
 
     // state === 'accepted': the phase hinges on the mapped child's status. A
     // missing child (soft-deleted out from under the ask) reads as not-done.
-    const child = ask.mapped_artifact !== null ? this.getTask(ask.mapped_artifact) : null;
+    const child = ask.mapped_artifact !== null ? await this.getTask(ask.mapped_artifact) : null;
     const artifactStatus: TaskStatus | null = child?.status ?? null;
     if (artifactStatus !== 'done') {
       return this.buildAwaitReport(base, 'waiting', { artifactStatus });
@@ -3346,7 +4020,7 @@ export class ScrumStore {
     // The child is done — expose the to-team's ACTIVE published outputs.
     return this.buildAwaitReport(base, 'ready', {
       artifactStatus,
-      outputs: this.listTeamExposes(ask.to_team),
+      outputs: await this.listTeamExposes(ask.to_team),
     });
   }
 
@@ -3391,11 +4065,16 @@ export class ScrumStore {
    * accepts (the ask types it handles) and exposes (the outputs it publishes),
    * without each team walking the registry itself.
    */
-  getManifest(): Manifest {
-    const teams: ManifestTeamEntry[] = this.listTeams().map((team) => {
-      const iface = this.getTeamInterface(team.slug);
-      return { slug: iface.slug, accepts: iface.accepts, exposes: iface.exposes };
-    });
+  async getManifest(): Promise<Manifest> {
+    // Sequential, not Promise.all: the prepared-statement cache hands every
+    // getTeamInterface call the SAME cached Statement per SQL, and the driver's
+    // Statement is stateful across bind/execute — running the per-team reads
+    // concurrently would interleave their binds and cross-wire the results.
+    const teams: ManifestTeamEntry[] = [];
+    for (const team of await this.listTeams()) {
+      const iface = await this.getTeamInterface(team.slug);
+      teams.push({ slug: iface.slug, accepts: iface.accepts, exposes: iface.exposes });
+    }
     // SEAM: incorporate cross-team asks here once an inter-agent ask protocol
     // (a capability that lets one team file a request against another team's
     // accepted ask types) exists to source them. Until then there is no ask
@@ -3432,8 +4111,8 @@ export class ScrumStore {
    * re-running the effects, so a double-disband is a caught error, not a silent
    * no-op that re-stamps timestamps. Throws on an unknown slug.
    */
-  teamTerminate(slug: string, reason: string): TeamTerminateResult {
-    const existing = this.getTeam(slug);
+  async teamTerminate(slug: string, reason: string): Promise<TeamTerminateResult> {
+    const existing = await this.getTeam(slug);
     if (existing === null) {
       throw new Error(`teamTerminate: unknown team '${slug}'`);
     }
@@ -3441,26 +4120,29 @@ export class ScrumStore {
       throw new Error(`teamTerminate: team '${slug}' is already inactive`);
     }
     const at = isoNow();
-    const priorScopes = this.getTeamScopes(slug);
+    const priorScopes = await this.getTeamScopes(slug);
     const scopesCleared = priorScopes.read.length + priorScopes.write.length;
-    const activeExposes = this.listTeamExposes(slug);
+    const activeExposes = await this.listTeamExposes(slug);
 
-    const disband = this.db.transaction(() => {
+    const disband = async () => {
       // 1. Release scope — the seam setTeamScopes left for the disband path.
-      this.setTeamScopes(slug, { read: [], write: [] });
+      await this.setTeamScopes(slug, { read: [], write: [] });
 
       // 2. Supersede every active expose with the disband reason, no replacement.
       for (const expose of activeExposes) {
-        this.supersedeTeamExpose(expose.id, reason, null);
+        await this.supersedeTeamExpose(expose.id, reason, null);
       }
 
       // 3. Vacate every open roster slot — close to_ts without a successor.
-      const vacated = this.prep(
+      const vacated = await this.run(
         'UPDATE scrum_team_members SET to_ts = ? WHERE team_slug = ? AND to_ts IS NULL',
-      ).run(at, slug);
+        at,
+        slug,
+      );
 
       // 4. Flip status to the terminal inactive state.
-      this.prep('UPDATE scrum_teams SET status = ? WHERE slug = ?').run(
+      await this.exec(
+        'UPDATE scrum_teams SET status = ? WHERE slug = ?',
         'inactive' satisfies TeamStatus,
         slug,
       );
@@ -3477,8 +4159,8 @@ export class ScrumStore {
       // disband itself never re-runs (an already-inactive team throws above), so
       // double-promotion cannot happen on this path. The promotion's inner
       // transaction nests as a SAVEPOINT inside this disband transaction.
-      for (const lore of this.listLiveLores(slug)) {
-        this.promoteLoreToCodex({ loreId: lore.id });
+      for (const lore of await this.listLiveLores(slug)) {
+        await this.promoteLoreToCodex({ loreId: lore.id });
       }
 
       // SEAM: cascade-cancel this team's in-flight epics once a task<->team
@@ -3488,8 +4170,8 @@ export class ScrumStore {
       // omitted until that link is added.
 
       return Number(vacated.changes);
-    });
-    const rosterVacated = disband();
+    };
+    const rosterVacated = await withTx(this.store, disband);
 
     return {
       slug,
@@ -3507,11 +4189,21 @@ export class ScrumStore {
    * per-team results, ordered by slug. A team already `inactive` is skipped (it
    * was disbanded by an earlier path), so re-closing a milestone is safe.
    */
-  terminateTeamsForMilestone(milestoneId: string, reason: string): TeamTerminateResult[] {
-    const matches = this.listTeams().filter(
+  async terminateTeamsForMilestone(
+    milestoneId: string,
+    reason: string,
+  ): Promise<TeamTerminateResult[]> {
+    const matches = (await this.listTeams()).filter(
       (team) => team.status === 'active' && team.terminates_on_milestone === milestoneId,
     );
-    return matches.map((team) => this.teamTerminate(team.slug, reason));
+    // Sequential, not Promise.all: teamTerminate issues a transaction and the
+    // cached prepared statements are stateful, so concurrent runs would
+    // interleave. Terminations are few, so the serial cost is negligible.
+    const results: TeamTerminateResult[] = [];
+    for (const team of matches) {
+      results.push(await this.teamTerminate(team.slug, reason));
+    }
+    return results;
   }
 
   // ==========================================================================
@@ -3536,14 +4228,14 @@ export class ScrumStore {
    * Append-only: an entry is never updated or deleted — a correction is a fresh
    * `recordLore`, not an edit, so the full history survives.
    */
-  recordLore(input: RecordLoreInput): RecordLoreResult {
-    if (this.getTeam(input.teamSlug) === null) {
+  async recordLore(input: RecordLoreInput): Promise<RecordLoreResult> {
+    if ((await this.getTeam(input.teamSlug)) === null) {
       throw new Error(`recordLore: unknown team '${input.teamSlug}'`);
     }
 
     // The current tech_lead is the open (to_ts IS NULL) holder of that role
     // slot — null when the slot has never been filled or is currently vacant.
-    const techLead = this.getTeamRoster(input.teamSlug).current.tech_lead;
+    const techLead = (await this.getTeamRoster(input.teamSlug)).current.tech_lead;
     let warning: string | null = null;
     if (techLead === null) {
       warning = `team '${input.teamSlug}' has no current tech_lead; recording Lore by ${input.authorContributorId} without an authorship check`;
@@ -3553,12 +4245,19 @@ export class ScrumStore {
       );
     }
 
-    const result = this.prep(
-      'INSERT INTO scrum_lores (team_slug, body, author_contributor_id, created_at) VALUES (?, ?, ?, ?)',
-    ).run(input.teamSlug, input.body, input.authorContributorId, input.createdAt ?? isoNow());
-    const row = this.prep(`SELECT ${LORE_COLUMNS} FROM scrum_lores WHERE id = ?`).get(
-      Number(result.lastInsertRowid),
-    ) as LoreRow;
+    const id = ulid();
+    await this.exec(
+      'INSERT INTO scrum_lores (id, team_slug, body, author_contributor_id, created_at) VALUES (?, ?, ?, ?, ?)',
+      id,
+      input.teamSlug,
+      input.body,
+      input.authorContributorId,
+      input.createdAt ?? isoNow(),
+    );
+    const row = (await this.one(
+      `SELECT ${LORE_COLUMNS} FROM scrum_lores WHERE id = ?`,
+      id,
+    )) as LoreRow;
     return { row, warning };
   }
 
@@ -3569,17 +4268,19 @@ export class ScrumStore {
    * returns an empty array (the absence reads as "no Lore" rather than an error,
    * matching `getTeamScopes`).
    */
-  listLores(teamSlug: string): LoreRow[] {
-    return this.prep(
+  async listLores(teamSlug: string): Promise<LoreRow[]> {
+    return (await this.many(
       `SELECT ${LORE_COLUMNS} FROM scrum_lores WHERE team_slug = ? ORDER BY id ASC`,
-    ).all(teamSlug) as LoreRow[];
+      teamSlug,
+    )) as LoreRow[];
   }
 
   /** Fetch a single Lore entry by id, or null when no such entry exists. */
-  getLore(id: number): LoreRow | null {
-    const row = this.prep(`SELECT ${LORE_COLUMNS} FROM scrum_lores WHERE id = ?`).get(
+  async getLore(id: string): Promise<LoreRow | null> {
+    const row = (await this.one(
+      `SELECT ${LORE_COLUMNS} FROM scrum_lores WHERE id = ?`,
       id,
-    ) as LoreRow | null;
+    )) as LoreRow | null;
     return row ?? null;
   }
 
@@ -3590,10 +4291,11 @@ export class ScrumStore {
    * Lore→Codex sweep read this, while `listLores` keeps serving the full
    * append-only history (superseded rows included) for audit and provenance.
    */
-  listLiveLores(teamSlug: string): LoreRow[] {
-    return this.prep(
+  async listLiveLores(teamSlug: string): Promise<LoreRow[]> {
+    return (await this.many(
       `SELECT ${LORE_COLUMNS} FROM scrum_lores WHERE team_slug = ? AND superseded_by IS NULL ORDER BY id ASC`,
-    ).all(teamSlug) as LoreRow[];
+      teamSlug,
+    )) as LoreRow[];
   }
 
   /**
@@ -3620,8 +4322,8 @@ export class ScrumStore {
    * a SEATED tech_lead must author the write (mismatch throws), a vacant seat
    * warns and allows (the bootstrapping tolerance).
    */
-  supersedeLore(input: SupersedeLoreInput): SupersedeLoreResult {
-    const lore = this.getLore(input.loreId);
+  async supersedeLore(input: SupersedeLoreInput): Promise<SupersedeLoreResult> {
+    const lore = await this.getLore(input.loreId);
     if (lore === null) {
       throw new Error(`supersedeLore: unknown lore id '${input.loreId}'`);
     }
@@ -3647,7 +4349,7 @@ export class ScrumStore {
       if (input.byLoreId === input.loreId) {
         throw new Error(`supersedeLore: lore ${input.loreId} cannot supersede itself`);
       }
-      const replacement = this.getLore(input.byLoreId);
+      const replacement = await this.getLore(input.byLoreId);
       if (replacement === null) {
         throw new Error(`supersedeLore: unknown replacement lore id '${input.byLoreId}'`);
       }
@@ -3663,7 +4365,7 @@ export class ScrumStore {
       }
       pointer = `lore:${replacement.id}`;
     } else {
-      const decision = this.getDecision(input.byDecisionId as string);
+      const decision = await this.getDecision(input.byDecisionId as string);
       if (decision === null) {
         throw new Error(`supersedeLore: unknown replacement decision '${input.byDecisionId}'`);
       }
@@ -3679,7 +4381,7 @@ export class ScrumStore {
     // and retiring an entry changes what every reader sees just as writing one
     // does — so the same seated-tech_lead gate (with the same vacant-seat
     // warn-and-allow tolerance) guards both writes.
-    const techLead = this.getTeamRoster(lore.team_slug).current.tech_lead;
+    const techLead = (await this.getTeamRoster(lore.team_slug)).current.tech_lead;
     let warning: string | null = null;
     if (techLead === null) {
       warning = `team '${lore.team_slug}' has no current tech_lead; superseding Lore by ${input.authorContributorId} without an authorship check`;
@@ -3689,14 +4391,16 @@ export class ScrumStore {
       );
     }
 
-    this.prep('UPDATE scrum_lores SET superseded_by = ?, reason = ? WHERE id = ?').run(
+    await this.exec(
+      'UPDATE scrum_lores SET superseded_by = ?, reason = ? WHERE id = ?',
       pointer,
       input.reason,
       lore.id,
     );
-    const row = this.prep(`SELECT ${LORE_COLUMNS} FROM scrum_lores WHERE id = ?`).get(
+    const row = (await this.one(
+      `SELECT ${LORE_COLUMNS} FROM scrum_lores WHERE id = ?`,
       lore.id,
-    ) as LoreRow;
+    )) as LoreRow;
     return { row, warning };
   }
 
@@ -3720,8 +4424,8 @@ export class ScrumStore {
    * (e.g. the disband path inside `teamTerminate`) — `recordDecision` itself
    * opens no transaction, and this wrapper's transaction becomes a SAVEPOINT.
    */
-  promoteLoreToCodex(input: PromoteLoreToCodexInput): DecisionRow {
-    const lore = this.getLore(input.loreId);
+  async promoteLoreToCodex(input: PromoteLoreToCodexInput): Promise<DecisionRow> {
+    const lore = await this.getLore(input.loreId);
     if (lore === null) {
       throw new Error(`promoteLoreToCodex: unknown lore id '${input.loreId}'`);
     }
@@ -3733,9 +4437,9 @@ export class ScrumStore {
     // the body later; the engine just surfaces a faithful starting point.
     const content = `Promoted from team '${lore.team_slug}' Lore entry ${lore.id} (authored by ${lore.author_contributor_id}).\n\n${lore.body}`;
 
-    const promote = this.db.transaction(() => {
+    const promote = async () => {
       // Record THROUGH the gate: a gated kind lands as a DRAFT, not accepted.
-      this.recordDecision({
+      await this.recordDecision({
         id: decisionId,
         title,
         content,
@@ -3745,13 +4449,14 @@ export class ScrumStore {
       // Stamp provenance back at the source Lore. A separate UPDATE (rather than
       // a recordDecision arg) keeps the draft/gate semantics of recordDecision
       // untouched — provenance is orthogonal to the write-gate state.
-      this.prep('UPDATE scrum_decisions SET source_lore_id = ? WHERE id = ?').run(
+      await this.exec(
+        'UPDATE scrum_decisions SET source_lore_id = ? WHERE id = ?',
         lore.id,
         decisionId,
       );
-      return this.requireDecision(decisionId, 'promoteLoreToCodex');
-    });
-    return promote();
+      return await this.requireDecision(decisionId, 'promoteLoreToCodex');
+    };
+    return await withTx(this.store, promote);
   }
 
   // ==========================================================================
@@ -3773,18 +4478,26 @@ export class ScrumStore {
    * Append-only: an entry is never updated or deleted — a correction is a fresh
    * `addAnnotation`, not an edit, so the full history survives.
    */
-  addAnnotation(input: AddAnnotationInput): AnnotationRow {
+  async addAnnotation(input: AddAnnotationInput): Promise<AnnotationRow> {
     if (!(ANNOTATION_TARGET_KINDS as string[]).includes(input.targetKind)) {
       throw new Error(
         `addAnnotation: invalid target_kind '${input.targetKind}'; expected one of: ${ANNOTATION_TARGET_KINDS.join(', ')}`,
       );
     }
-    const result = this.prep(
-      'INSERT INTO scrum_annotations (target_kind, target_ref, body, author, created_at) VALUES (?, ?, ?, ?, ?)',
-    ).run(input.targetKind, input.targetRef, input.body, input.author, input.createdAt ?? isoNow());
-    return this.prep(`SELECT ${ANNOTATION_COLUMNS} FROM scrum_annotations WHERE id = ?`).get(
-      Number(result.lastInsertRowid),
-    ) as AnnotationRow;
+    const id = ulid();
+    await this.exec(
+      'INSERT INTO scrum_annotations (id, target_kind, target_ref, body, author, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      id,
+      input.targetKind,
+      input.targetRef,
+      input.body,
+      input.author,
+      input.createdAt ?? isoNow(),
+    );
+    return (await this.one(
+      `SELECT ${ANNOTATION_COLUMNS} FROM scrum_annotations WHERE id = ?`,
+      id,
+    )) as AnnotationRow;
   }
 
   /**
@@ -3794,10 +4507,15 @@ export class ScrumStore {
    * absence reads as "no annotations" rather than an error, matching
    * `listLores`).
    */
-  listAnnotations(targetKind: AnnotationTargetKind, targetRef: string): AnnotationRow[] {
-    return this.prep(
+  async listAnnotations(
+    targetKind: AnnotationTargetKind,
+    targetRef: string,
+  ): Promise<AnnotationRow[]> {
+    return (await this.many(
       `SELECT ${ANNOTATION_COLUMNS} FROM scrum_annotations WHERE target_kind = ? AND target_ref = ? ORDER BY id ASC`,
-    ).all(targetKind, targetRef) as AnnotationRow[];
+      targetKind,
+      targetRef,
+    )) as AnnotationRow[];
   }
 
   // ==========================================================================
@@ -3819,7 +4537,7 @@ export class ScrumStore {
    * append-on-walk-up path (`resolveEscalation` / `autoBubbleEscalation`) is the
    * only writer that sets it.
    */
-  raiseEscalation(input: RaiseEscalationInput): EscalationRow {
+  async raiseEscalation(input: RaiseEscalationInput): Promise<EscalationRow> {
     if (!(ESCALATION_TYPES as string[]).includes(input.escalationType)) {
       throw new Error(
         `raiseEscalation: invalid escalation_type '${input.escalationType}'; expected one of: ${ESCALATION_TYPES.join(', ')}`,
@@ -3831,7 +4549,7 @@ export class ScrumStore {
         `raiseEscalation: invalid layer '${layer}'; expected one of: ${ESCALATION_CHAIN.join(', ')}`,
       );
     }
-    return this.insertEscalation({
+    return await this.insertEscalation({
       taskId: input.taskId,
       escalationType: input.escalationType,
       layer,
@@ -3843,10 +4561,11 @@ export class ScrumStore {
   }
 
   /** Fetch one escalation by id, or null when no such row exists. */
-  getEscalation(id: number): EscalationRow | null {
-    const row = this.prep(`SELECT ${ESCALATION_COLUMNS} FROM scrum_escalations WHERE id = ?`).get(
+  async getEscalation(id: string): Promise<EscalationRow | null> {
+    const row = (await this.one(
+      `SELECT ${ESCALATION_COLUMNS} FROM scrum_escalations WHERE id = ?`,
       id,
-    ) as EscalationRowRaw | null;
+    )) as EscalationRowRaw | null;
     return row ? decodeEscalation(row) : null;
   }
 
@@ -3855,11 +4574,12 @@ export class ScrumStore {
    * consults to see the full escalation history — every rung, open and closed —
    * for a task. Tolerates a task with no escalations: returns an empty array.
    */
-  listEscalationsForTask(taskId: string): EscalationRow[] {
+  async listEscalationsForTask(taskId: string): Promise<EscalationRow[]> {
     return (
-      this.prep(
+      (await this.many(
         `SELECT ${ESCALATION_COLUMNS} FROM scrum_escalations WHERE task_id = ? ORDER BY id ASC`,
-      ).all(taskId) as EscalationRowRaw[]
+        taskId,
+      )) as EscalationRowRaw[]
     ).map(decodeEscalation);
   }
 
@@ -3867,11 +4587,11 @@ export class ScrumStore {
    * Every currently-`open` escalation across all tasks, oldest-first — the
    * driver's worklist of escalations awaiting a receiver's resolution.
    */
-  listOpenEscalationRows(): EscalationRow[] {
+  async listOpenEscalationRows(): Promise<EscalationRow[]> {
     return (
-      this.prep(
+      (await this.many(
         `SELECT ${ESCALATION_COLUMNS} FROM scrum_escalations WHERE state = 'open' ORDER BY id ASC`,
-      ).all() as EscalationRowRaw[]
+      )) as EscalationRowRaw[]
     ).map(decodeEscalation);
   }
 
@@ -3882,14 +4602,14 @@ export class ScrumStore {
    * journey up the ladder: each entry is one rung, with its closing state and
    * resolution. A visited-set guards against an accidental self-link cycle.
    */
-  getEscalationChain(id: number): EscalationRow[] {
+  async getEscalationChain(id: string): Promise<EscalationRow[]> {
     // Walk DOWN to the root via walked_up_from, collecting the rung at each hop.
     const chainDown: EscalationRow[] = [];
-    const visited = new Set<number>();
-    let cursor: number | null = id;
+    const visited = new Set<string>();
+    let cursor: string | null = id;
     while (cursor !== null && !visited.has(cursor)) {
       visited.add(cursor);
-      const row = this.getEscalation(cursor);
+      const row = await this.getEscalation(cursor);
       if (row === null) break;
       chainDown.push(row);
       cursor = row.walked_up_from;
@@ -3921,13 +4641,13 @@ export class ScrumStore {
    * terminal — every transition is one-shot), an off-vocabulary `mode`, or a
    * `re_escalate` at the top of the chain.
    */
-  resolveEscalation(input: ResolveEscalationInput): ResolveEscalationResult {
+  async resolveEscalation(input: ResolveEscalationInput): Promise<ResolveEscalationResult> {
     if (!(ESCALATION_RESOLUTION_MODES as string[]).includes(input.mode)) {
       throw new Error(
         `resolveEscalation: invalid mode '${input.mode}'; expected one of: ${ESCALATION_RESOLUTION_MODES.join(', ')}`,
       );
     }
-    const existing = this.getEscalation(input.id);
+    const existing = await this.getEscalation(input.id);
     if (existing === null) {
       throw new Error(`resolveEscalation: unknown escalation id '${input.id}'`);
     }
@@ -3951,15 +4671,15 @@ export class ScrumStore {
       );
     }
 
-    const apply = this.db.transaction((): ResolveEscalationResult => {
+    const apply = async (): Promise<ResolveEscalationResult> => {
       // `resolve` and `re_decompose` both DISCHARGE the row → `resolved`; only the
       // result flag differs. `re_escalate` closes it → `re_escalated`.
       const closedState: EscalationState = mode === 're_escalate' ? 're_escalated' : 'resolved';
-      this.closeEscalationRow(existing.id, closedState, mode, note, resolvedBy, resolvedAt);
+      await this.closeEscalationRow(existing.id, closedState, mode, note, resolvedBy, resolvedAt);
 
       let walkedUpTo: EscalationRow | null = null;
       if (mode === 're_escalate' && nextLayer !== null) {
-        walkedUpTo = this.insertEscalation({
+        walkedUpTo = await this.insertEscalation({
           taskId: existing.task_id,
           escalationType: existing.escalation_type,
           layer: nextLayer,
@@ -3970,10 +4690,10 @@ export class ScrumStore {
         });
       }
 
-      const row = this.requireEscalation(existing.id, 'resolveEscalation');
+      const row = await this.requireEscalation(existing.id, 'resolveEscalation');
       return { row, walkedUpTo, reDecomposeTriggered: mode === 're_decompose' };
-    });
-    return apply();
+    };
+    return await withTx(this.store, apply);
   }
 
   /**
@@ -3995,8 +4715,8 @@ export class ScrumStore {
    * the store, preserving the escalation's soft-reference semantics (an
    * escalation may name a task the store does not track).
    */
-  autoBubbleEscalation(id: number, bubbledAt?: string): EscalationRow {
-    const existing = this.getEscalation(id);
+  async autoBubbleEscalation(id: string, bubbledAt?: string): Promise<EscalationRow> {
+    const existing = await this.getEscalation(id);
     if (existing === null) {
       throw new Error(`autoBubbleEscalation: unknown escalation id '${id}'`);
     }
@@ -4012,9 +4732,9 @@ export class ScrumStore {
       );
     }
     const ts = bubbledAt ?? isoNow();
-    const bubble = this.db.transaction((): EscalationRow => {
-      this.closeEscalationRow(existing.id, 'auto_bubbled', null, null, null, ts);
-      const bubbled = this.insertEscalation({
+    const bubble = async (): Promise<EscalationRow> => {
+      await this.closeEscalationRow(existing.id, 'auto_bubbled', null, null, null, ts);
+      const bubbled = await this.insertEscalation({
         taskId: existing.task_id,
         escalationType: existing.escalation_type,
         layer: nextLayer,
@@ -4024,14 +4744,14 @@ export class ScrumStore {
         createdAt: ts,
       });
       // Stamp the closed row with the marker + forward pointer to the new rung.
-      this.setEscalationAttributes(existing.id, {
+      await this.setEscalationAttributes(existing.id, {
         auto_bubbled: true,
         linked_escalation: bubbled.id,
       });
-      this.surfaceEscalationEvent(bubbled, ts);
+      await this.surfaceEscalationEvent(bubbled, ts);
       return bubbled;
-    });
-    return bubble();
+    };
+    return await withTx(this.store, bubble);
   }
 
   /**
@@ -4039,8 +4759,12 @@ export class ScrumStore {
    * The single low-level attributes writer — used by the staleness auto-bubble
    * to stamp `{ auto_bubbled, linked_escalation }` on the closed row.
    */
-  private setEscalationAttributes(id: number, attributes: EscalationAttributes | null): void {
-    this.prep('UPDATE scrum_escalations SET attributes = ? WHERE id = ?').run(
+  private async setEscalationAttributes(
+    id: string,
+    attributes: EscalationAttributes | null,
+  ): Promise<void> {
+    await this.exec(
+      'UPDATE scrum_escalations SET attributes = ? WHERE id = ?',
       attributes === null ? null : JSON.stringify(attributes),
       id,
     );
@@ -4054,13 +4778,13 @@ export class ScrumStore {
    * bubble naming an untracked task still advances the chain, it just carries no
    * event surface.
    */
-  private surfaceEscalationEvent(row: EscalationRow, ts: string): void {
-    if (!this.getTask(row.task_id)) return;
+  private async surfaceEscalationEvent(row: EscalationRow, ts: string): Promise<void> {
+    if (!(await this.getTask(row.task_id))) return;
     const payload: EscalationPayload = {
       escalation_type: row.escalation_type,
       summary: row.summary,
     };
-    this.appendEvent({ taskId: row.task_id, kind: 'blocker_raised', payload, ts });
+    await this.appendEvent({ taskId: row.task_id, kind: 'blocker_raised', payload, ts });
   }
 
   /**
@@ -4069,20 +4793,21 @@ export class ScrumStore {
    * (`resolveEscalation` / `autoBubbleEscalation`, which pass `walkedUpFrom`).
    * Closed-enum guarding is the caller's job — this writes what it is given.
    */
-  private insertEscalation(args: {
+  private async insertEscalation(args: {
     taskId: string;
     escalationType: EscalationType;
     layer: EscalationLayer;
     summary: string;
     raisedBy: string | null;
-    walkedUpFrom: number | null;
+    walkedUpFrom: string | null;
     createdAt: string;
-  }): EscalationRow {
-    const result = this.prep(
+  }): Promise<EscalationRow> {
+    const id = ulid();
+    await this.exec(
       `INSERT INTO scrum_escalations
-         (task_id, escalation_type, layer, state, summary, raised_by, walked_up_from, created_at)
-       VALUES (?, ?, ?, 'open', ?, ?, ?, ?)`,
-    ).run(
+         (id, task_id, escalation_type, layer, state, summary, raised_by, walked_up_from, created_at)
+       VALUES (?, ?, ?, ?, 'open', ?, ?, ?, ?)`,
+      id,
       args.taskId,
       args.escalationType,
       args.layer,
@@ -4091,7 +4816,7 @@ export class ScrumStore {
       args.walkedUpFrom,
       args.createdAt,
     );
-    return this.requireEscalation(Number(result.lastInsertRowid), 'insertEscalation');
+    return await this.requireEscalation(id, 'insertEscalation');
   }
 
   /**
@@ -4099,24 +4824,30 @@ export class ScrumStore {
    * resolution provenance. The single low-level closer shared by every walk-up
    * and resolution path.
    */
-  private closeEscalationRow(
-    id: number,
+  private async closeEscalationRow(
+    id: string,
     state: EscalationState,
     mode: EscalationResolutionMode | null,
     note: string | null,
     resolvedBy: string | null,
     resolvedAt: string,
-  ): void {
-    this.prep(
+  ): Promise<void> {
+    await this.exec(
       `UPDATE scrum_escalations
          SET state = ?, resolution_mode = ?, resolution_note = ?, resolved_by = ?, resolved_at = ?
        WHERE id = ?`,
-    ).run(state, mode, note, resolvedBy, resolvedAt, id);
+      state,
+      mode,
+      note,
+      resolvedBy,
+      resolvedAt,
+      id,
+    );
   }
 
   /** Fetch an escalation by id or throw — the post-write read-back guard. */
-  private requireEscalation(id: number, ctx: string): EscalationRow {
-    const row = this.getEscalation(id);
+  private async requireEscalation(id: string, ctx: string): Promise<EscalationRow> {
+    const row = await this.getEscalation(id);
     if (row === null) {
       throw new Error(`${ctx}: escalation ${id} vanished after write`);
     }
@@ -4136,20 +4867,20 @@ export class ScrumStore {
    * expected to be invocation-scoped (see `nextReady`) — dependency edges
    * can change between calls, so we never cache across invocations.
    */
-  private computeUnblockDepth(taskId: string, cache?: Map<string, number>): number {
+  private async computeUnblockDepth(taskId: string, cache?: Map<string, number>): Promise<number> {
     const cached = cache?.get(taskId);
     if (cached !== undefined) return cached;
 
     const visited = new Set<string>([taskId]);
     const stack = [taskId];
     let count = 0;
-    const stmt = this.prep(
+    const stmt = await this.prep(
       "SELECT to_task_id FROM scrum_deps WHERE from_task_id = ? AND kind = 'blocks'",
     );
     while (stack.length > 0) {
       const current = stack.pop();
       if (current === undefined) break;
-      const children = stmt.all(current) as Array<{ to_task_id: string }>;
+      const children = (await stmt.all(current)) as Array<{ to_task_id: string }>;
       for (const child of children) {
         if (!visited.has(child.to_task_id)) {
           visited.add(child.to_task_id);
@@ -4171,7 +4902,7 @@ export class ScrumStore {
    * suppression instead of treating them as neutral. Tasks with no scored
    * tags at all are absent (callers treat missing as 0).
    */
-  private fetchTagBoosts(taskIds: string[]): Map<string, number> {
+  private async fetchTagBoosts(taskIds: string[]): Promise<Map<string, number>> {
     const boosts = new Map<string, number>();
     if (taskIds.length === 0) return boosts;
 
@@ -4194,7 +4925,7 @@ export class ScrumStore {
       GROUP BY task_id
       HAVING boost <> 0
     `;
-    const rows = this.prep(sql).all(...taskIds) as Array<{ task_id: string; boost: number }>;
+    const rows = (await this.many(sql, ...taskIds)) as Array<{ task_id: string; boost: number }>;
 
     for (const { task_id, boost } of rows) {
       boosts.set(task_id, boost);
@@ -4210,15 +4941,16 @@ export class ScrumStore {
    * so the last write per task wins). Per-invocation only — escalations mutate
    * between calls (mirrors `fetchTagBoosts`).
    */
-  private fetchLatestEscalations(
+  private async fetchLatestEscalations(
     taskIds: string[],
-  ): Map<string, { type: EscalationType; ts: string }> {
+  ): Promise<Map<string, { type: EscalationType; ts: string }>> {
     const out = new Map<string, { type: EscalationType; ts: string }>();
     if (taskIds.length === 0) return out;
     const placeholders = taskIds.map(() => '?').join(', ');
-    const rows = this.prep(
+    const rows = (await this.many(
       `SELECT task_id, ts, payload_json FROM scrum_events WHERE kind = 'blocker_raised' AND task_id IN (${placeholders}) ORDER BY ts ASC, id ASC`,
-    ).all(...taskIds) as Array<{ task_id: string; ts: string; payload_json: string }>;
+      ...taskIds,
+    )) as Array<{ task_id: string; ts: string; payload_json: string }>;
     for (const row of rows) {
       const type = parseEscalationType(row.payload_json);
       if (type !== null) out.set(row.task_id, { type, ts: row.ts });
@@ -4232,20 +4964,26 @@ export class ScrumStore {
    * surface: a `done`/`cancelled` task's escalation is resolved and
    * excluded. `age_days` is computed by the caller against its clock.
    */
-  listOpenEscalations(): Array<{
-    task_id: string;
-    title: string;
-    escalation_type: EscalationType;
-    ts: string;
-  }> {
-    const rows = this.prep(
-      `SELECT e.task_id AS task_id, e.ts AS ts, e.payload_json AS payload_json, t.title AS title
+  async listOpenEscalations(): Promise<
+    Array<{
+      task_id: string;
+      title: string;
+      escalation_type: EscalationType;
+      ts: string;
+    }>
+  > {
+    const rows =
+      (await this.many(`SELECT e.task_id AS task_id, e.ts AS ts, e.payload_json AS payload_json, t.title AS title
        FROM scrum_events e
        INNER JOIN scrum_tasks t ON t.id = e.task_id
        WHERE e.kind = 'blocker_raised' AND t.deleted_at IS NULL
          AND t.status NOT IN ('done', 'cancelled')
-       ORDER BY e.ts ASC, e.id ASC`,
-    ).all() as Array<{ task_id: string; ts: string; payload_json: string; title: string }>;
+       ORDER BY e.ts ASC, e.id ASC`)) as Array<{
+        task_id: string;
+        ts: string;
+        payload_json: string;
+        title: string;
+      }>;
     // Reduce to the latest escalation per task (later rows overwrite earlier).
     const latest = new Map<
       string,
@@ -4274,13 +5012,17 @@ export class ScrumStore {
    * `listOpenEscalations`. Ordered by task id then criterion id for a stable
    * report.
    */
-  listPendingGates(): Array<{
-    task_id: string;
-    title: string;
-    criterion_id: string;
-    criterion_text: string;
-  }> {
-    const tasks = this.listTasks().filter((t) => t.status !== 'done' && t.status !== 'cancelled');
+  async listPendingGates(): Promise<
+    Array<{
+      task_id: string;
+      title: string;
+      criterion_id: string;
+      criterion_text: string;
+    }>
+  > {
+    const tasks = (await this.listTasks()).filter(
+      (t) => t.status !== 'done' && t.status !== 'cancelled',
+    );
     const pending: Array<{
       task_id: string;
       title: string;
@@ -4308,16 +5050,68 @@ export class ScrumStore {
   }
 
   /**
-   * Lazily-cached prepared statement. Caching by SQL text matches bun's own
-   * internal prepared-statement cache semantics and avoids re-parsing on
-   * every hot-path call (nextReady walks the graph N times).
+   * Resolve a lazily-cached prepared statement. The cache holds the async
+   * `prepare()` promise keyed by SQL text, so a given SQL string is prepared
+   * exactly once per process even when hot paths (nextReady walks the graph N
+   * times) hit it repeatedly: the first call seeds the promise, later callers
+   * await the same one. Always `await` the result before binding/executing —
+   * the driver's `prepare()` is async (the await-prepare rule).
    */
-  private prep(sql: string): Statement {
+  private prep(sql: string): Promise<Statement> {
     const cached = this.statements.get(sql);
     if (cached) return cached;
-    const stmt = this.db.prepare(sql);
+    const stmt = this.store.getDb().prepare(sql);
     this.statements.set(sql, stmt);
     return stmt;
+  }
+
+  /** Prepare (cached) + execute a write. */
+  private async exec(sql: string, ...params: SqlParam[]): Promise<void> {
+    const stmt = await this.prep(sql);
+    await stmt.run(...params);
+  }
+
+  /**
+   * Prepare (cached) + execute a write bound by NAMED parameters (`$name`).
+   * The driver binds a single object argument by key, so a long INSERT whose
+   * column list may be reordered stays aligned with its values — no positional
+   * `?N` to silently misplace. Distinct from `exec`'s positional rest-args.
+   */
+  private async execNamed(sql: string, params: Record<string, SqlParam>): Promise<void> {
+    const stmt = await this.prep(sql);
+    await stmt.run(params);
+  }
+
+  /**
+   * Prepare (cached) + execute a write, returning the driver run info
+   * (`changes`, `lastInsertRowid`) for callers that read the new row id or the
+   * affected-row count.
+   */
+  private async run(
+    sql: string,
+    ...params: SqlParam[]
+  ): Promise<{ changes: number; lastInsertRowid: number }> {
+    const stmt = await this.prep(sql);
+    return stmt.run(...params);
+  }
+
+  /**
+   * Prepare (cached) + fetch the first row, or `null` when there is no match.
+   * Returns `null` (not `undefined`) so the many `const row = ... as X | null`
+   * decode sites and their `row === null` / `!row` guards read coherently — the
+   * driver yields `undefined` for an empty result, which would otherwise slip
+   * past a strict `=== null` check.
+   */
+  private async one<T>(sql: string, ...params: SqlParam[]): Promise<T | null> {
+    const stmt = await this.prep(sql);
+    const row = await stmt.get(...params);
+    return (row ?? null) as T | null;
+  }
+
+  /** Prepare (cached) + fetch all rows. */
+  private async many<T>(sql: string, ...params: SqlParam[]): Promise<T[]> {
+    const stmt = await this.prep(sql);
+    return (await stmt.all(...params)) as T[];
   }
 }
 
@@ -4388,26 +5182,104 @@ function taskProvenance(row: ScrumTaskRow): Provenance {
 }
 
 /**
- * Decode a raw `scrum_tasks` SELECT row into the public `ScrumTask`. The two
- * transforms are `acceptance_json` (TEXT|NULL) → `acceptance` and `bounds_json`
- * (TEXT|NULL) → `bounds`; every other column passes through unchanged. NULL
- * JSON → `null`.
+ * Decode a raw `scrum_tasks` SELECT row into the public `ScrumTask`. The
+ * `acceptance` object is reconstructed UPSTREAM (in `hydrateRows`, from the
+ * normalized criteria + head-verdict tables joined onto the row's
+ * `acceptance_policy_json`) and passed in; this function only transforms
+ * `bounds_json` (TEXT|NULL) → `bounds` and assembles the provenance block, with
+ * every other column passing through unchanged.
  *
- * The JSON columns have no SQL-level guarantee of valid JSON (`validateBounds`/
- * `validateAcceptance` only run on writes through the store API). `decodeTask`
- * is on the hot read path of getTask/listTasks/getChildren/listTasksForTag/
+ * The `bounds_json` column has no SQL-level guarantee of valid JSON
+ * (`validateBounds` only runs on writes through the store API). `decodeTask` is
+ * on the hot read path of getTask/listTasks/getChildren/listTasksForTag/
  * nextReady, so a single corrupt row must NOT throw and brick every task read.
  * `safeParseJson` degrades a poisoned column to `null` (with a stderr warning)
- * instead — the task still reads, just without its acceptance/bounds.
+ * instead — the task still reads, just without its bounds.
  */
-function decodeTask(row: ScrumTaskRow): ScrumTask {
-  const { acceptance_json, bounds_json, ...rest } = row;
+function decodeTask(row: ScrumTaskRow, acceptance: Acceptance | null): ScrumTask {
+  const { acceptance_policy_json: _policy, bounds_json, ...rest } = row;
   return {
     ...rest,
-    acceptance: safeParseJson<Acceptance>(acceptance_json, row.id, 'acceptance_json'),
+    acceptance,
     bounds: safeParseJson<TaskBounds>(bounds_json, row.id, 'bounds_json'),
     provenance: taskProvenance(row),
   };
+}
+
+/**
+ * Reassemble a task's `Acceptance` object from its normalized parts: the
+ * criterion DEFINITION rows (ordered by the minted `ord`), the latest verdict
+ * per criterion (the criterion-head view), and the task-level `policy` (the
+ * `acceptance_policy_json` column). Returns `null` when the task carries no
+ * criteria AND no policy — the "no acceptance" shape every read expects.
+ *
+ * The head verdict folds back into the in-memory criterion the same way the
+ * blob used to carry it: a `gate`-channel head becomes `gate: {verdict,
+ * responder, comment, responded_at}`; a `verification`-channel head becomes
+ * `verification: {verdict, reason, verified_by, verified_at}`. A gate-kind
+ * criterion with no verdict row reads `gate: {verdict: 'gate_pending'}` (a
+ * fresh gate always starts pending and resolvable), exactly as
+ * `withGateStatesSeeded` seeded the blob.
+ */
+function reconstructAcceptance(
+  criterionRows: AcceptanceCriterionRow[],
+  heads: Map<string, CriterionHeadRow>,
+  policyJson: string | null,
+  taskId: string,
+): Acceptance | null {
+  const policy = safeParseJson<AcceptancePolicy>(policyJson, taskId, 'acceptance_policy_json');
+  if (criterionRows.length === 0) return policy ? { criteria: [], policy } : null;
+
+  const criteria = criterionRows
+    .slice()
+    .sort((a, b) => a.ord.localeCompare(b.ord))
+    .map((row) => decodeCriterion(row, heads.get(row.id)));
+  return policy ? { criteria, policy } : { criteria };
+}
+
+/**
+ * Decode one criterion DEFINITION row plus its head verdict (if any) into the
+ * public `AcceptanceCriterion`. Optional fields stay absent (not null/undefined
+ * on the shape) so the reconstructed object round-trips byte-for-byte against
+ * what the authoring path wrote — `scope`/`timeout` are only set when present.
+ */
+function decodeCriterion(
+  row: AcceptanceCriterionRow,
+  head: CriterionHeadRow | undefined,
+): AcceptanceCriterion {
+  const criterion: AcceptanceCriterion = {
+    id: row.criterion_id,
+    text: row.text,
+    verifies_by: row.verifies_by,
+    check: row.check_payload,
+    status: row.status,
+    idempotent: row.idempotent !== 0,
+    superseded_by: row.superseded_by,
+    reason: row.reason,
+    inherited_from: row.inherited_from,
+  };
+  if (row.scope !== null) criterion.scope = row.scope as AcceptanceScope;
+  if (row.timeout !== null) criterion.timeout = row.timeout;
+
+  if (row.verifies_by === 'gate') {
+    criterion.gate =
+      head && head.channel === 'gate'
+        ? {
+            verdict: head.verdict as GateVerdict,
+            responder: head.by_whom,
+            comment: head.comment,
+            responded_at: head.at,
+          }
+        : { verdict: 'gate_pending' };
+  } else if (head && head.channel === 'verification') {
+    criterion.verification = {
+      verdict: head.verdict as VerificationVerdict,
+      reason: head.reason,
+      verified_by: head.by_whom,
+      verified_at: head.at,
+    };
+  }
+  return criterion;
 }
 
 /**
@@ -4446,7 +5318,7 @@ function decodeEscalation(row: EscalationRowRaw): EscalationRow {
 
 function parseEscalationAttributes(
   raw: string | null,
-  escalationId: number,
+  escalationId: string,
 ): EscalationAttributes | null {
   if (raw === null) return null;
   try {
@@ -4742,7 +5614,7 @@ function normalizeDepEdge(
 }
 
 function decodeEvent(row: {
-  id: number;
+  id: string;
   task_id: string;
   ts: string;
   kind: string;

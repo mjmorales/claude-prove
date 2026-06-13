@@ -94,11 +94,11 @@ export type LoreAction = 'record' | 'list' | 'show' | 'supersede' | 'promote';
 
 const LORE_ACTIONS: LoreAction[] = ['record', 'list', 'show', 'supersede', 'promote'];
 
-export function runLoreCmd(
+export async function runLoreCmd(
   action: string,
   args: (string | undefined)[],
   flags: LoreCmdFlags,
-): number {
+): Promise<number> {
   if (!isLoreAction(action)) {
     process.stderr.write(
       `error: unknown lore action '${action}'. expected one of: ${LORE_ACTIONS.join(', ')}\n`,
@@ -110,19 +110,19 @@ export function runLoreCmd(
     flags.workspaceRoot && flags.workspaceRoot.length > 0
       ? flags.workspaceRoot
       : (mainWorktreeRoot() ?? process.cwd());
-  const store = openCliStore(workspaceRoot);
+  const store = await openCliStore(workspaceRoot);
   try {
     switch (action) {
       case 'record':
-        return doRecord(store, workspaceRoot, args[0], flags);
+        return await doRecord(store, workspaceRoot, args[0], flags);
       case 'list':
-        return doList(store, args[0], flags);
+        return await doList(store, args[0], flags);
       case 'show':
-        return doShow(store, args[0]);
+        return await doShow(store, args[0]);
       case 'supersede':
-        return doSupersede(store, workspaceRoot, args[0], flags);
+        return await doSupersede(store, workspaceRoot, args[0], flags);
       case 'promote':
-        return doPromote(store, args[0], flags);
+        return await doPromote(store, args[0], flags);
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -141,12 +141,12 @@ function isLoreAction(value: string): value is LoreAction {
 // record
 // ---------------------------------------------------------------------------
 
-function doRecord(
+async function doRecord(
   store: ScrumStore,
   workspaceRoot: string,
   slug: string | undefined,
   flags: LoreCmdFlags,
-): number {
+): Promise<number> {
   if (slug === undefined || slug.length === 0) {
     process.stderr.write('scrum lore record: <slug> is required\n');
     return 1;
@@ -162,7 +162,7 @@ function doRecord(
 
   // recordLore throws on an unknown team AND on an authorship mismatch (author is
   // not the seated tech_lead); both surface as exit 1 via the runLoreCmd catch.
-  const { row, warning } = store.recordLore({
+  const { row, warning } = await store.recordLore({
     teamSlug: slug,
     body: flags.body,
     authorContributorId: flags.author,
@@ -178,7 +178,7 @@ function doRecord(
 
   // The artifact mirror is a best-effort secondary write: the row is already
   // durably stored, so a filesystem failure should warn but not exit 1.
-  const where = mirrorTeamArtifact(store, workspaceRoot, slug, 'record', row.id);
+  const where = await mirrorTeamArtifact(store, workspaceRoot, slug, 'record', row.id);
 
   process.stderr.write(
     `scrum lore record: ${slug} entry ${row.id} by ${row.author_contributor_id}${where}\n`,
@@ -190,12 +190,16 @@ function doRecord(
 // list
 // ---------------------------------------------------------------------------
 
-function doList(store: ScrumStore, slug: string | undefined, flags: LoreCmdFlags): number {
+async function doList(
+  store: ScrumStore,
+  slug: string | undefined,
+  flags: LoreCmdFlags,
+): Promise<number> {
   if (slug === undefined || slug.length === 0) {
     process.stderr.write('scrum lore list: <slug> is required\n');
     return 1;
   }
-  const rows = flags.live === true ? store.listLiveLores(slug) : store.listLores(slug);
+  const rows = flags.live === true ? await store.listLiveLores(slug) : await store.listLores(slug);
   if (flags.human === true) {
     process.stdout.write(renderHumanTable(rows));
   } else {
@@ -228,10 +232,10 @@ function renderHumanTable(rows: LoreRow[]): string {
 // show
 // ---------------------------------------------------------------------------
 
-function doShow(store: ScrumStore, rawId: string | undefined): number {
-  const id = parsePositiveInt(rawId, 'scrum lore show');
+async function doShow(store: ScrumStore, rawId: string | undefined): Promise<number> {
+  const id = requireId(rawId, 'scrum lore show');
   if (id === null) return 1;
-  const row = store.getLore(id);
+  const row = await store.getLore(id);
   if (row === null) {
     process.stdout.write('null\n');
     process.stderr.write(`scrum lore show: no entry '${id}'\n`);
@@ -246,13 +250,13 @@ function doShow(store: ScrumStore, rawId: string | undefined): number {
 // supersede
 // ---------------------------------------------------------------------------
 
-function doSupersede(
+async function doSupersede(
   store: ScrumStore,
   workspaceRoot: string,
   rawId: string | undefined,
   flags: LoreCmdFlags,
-): number {
-  const id = parsePositiveInt(rawId, 'scrum lore supersede');
+): Promise<number> {
+  const id = requireId(rawId, 'scrum lore supersede');
   if (id === null) return 1;
   if (flags.reason === undefined || flags.reason.length === 0) {
     process.stderr.write('scrum lore supersede: --reason <text> is required\n');
@@ -270,9 +274,9 @@ function doSupersede(
     );
     return 1;
   }
-  let byLoreId: number | undefined;
+  let byLoreId: string | undefined;
   if (hasLore) {
-    const parsed = parsePositiveInt(flags.by, 'scrum lore supersede: --by');
+    const parsed = requireId(flags.by, 'scrum lore supersede: --by');
     if (parsed === null) return 1;
     byLoreId = parsed;
   }
@@ -280,7 +284,7 @@ function doSupersede(
   // supersedeLore throws on every guard rejection (unknown ids, already
   // superseded, cross-team, self, non-accepted decision, authorship mismatch);
   // all surface as exit 1 via the runLoreCmd catch.
-  const { row, warning } = store.supersedeLore({
+  const { row, warning } = await store.supersedeLore({
     loreId: id,
     byLoreId,
     byDecisionId: hasDecision ? flags.byDecision : undefined,
@@ -292,7 +296,7 @@ function doSupersede(
   if (warning !== null) {
     process.stderr.write(`scrum lore supersede: WARNING: ${warning}\n`);
   }
-  const where = mirrorTeamArtifact(store, workspaceRoot, row.team_slug, 'supersede', row.id);
+  const where = await mirrorTeamArtifact(store, workspaceRoot, row.team_slug, 'supersede', row.id);
   process.stderr.write(
     `scrum lore supersede: ${row.team_slug} entry ${row.id} -> ${row.superseded_by}${where}\n`,
   );
@@ -303,8 +307,12 @@ function doSupersede(
 // promote
 // ---------------------------------------------------------------------------
 
-function doPromote(store: ScrumStore, rawId: string | undefined, flags: LoreCmdFlags): number {
-  const id = parsePositiveInt(rawId, 'scrum lore promote');
+async function doPromote(
+  store: ScrumStore,
+  rawId: string | undefined,
+  flags: LoreCmdFlags,
+): Promise<number> {
+  const id = requireId(rawId, 'scrum lore promote');
   if (id === null) return 1;
 
   // Only a gated kind may carry a promotion: a non-gated kind would record as
@@ -323,7 +331,7 @@ function doPromote(store: ScrumStore, rawId: string | undefined, flags: LoreCmdF
   // promoteLoreToCodex throws on an unknown lore id; surfaces as exit 1 via the
   // runLoreCmd catch. The decision lands as a gated DRAFT — approval (which
   // auto-retires the source Lore) is a separate `scrum decision approve`.
-  const decision = store.promoteLoreToCodex({
+  const decision = await store.promoteLoreToCodex({
     loreId: id,
     decisionId: flags.id,
     kind: flags.kind,
@@ -342,18 +350,13 @@ function doPromote(store: ScrumStore, rawId: string | undefined, flags: LoreCmdF
 // shared helpers
 // ---------------------------------------------------------------------------
 
-/** Parse a required positive-integer id argument; null (after stderr) on failure. */
-function parsePositiveInt(raw: string | undefined, context: string): number | null {
+/** Require a non-empty string id (a ULID) argument; null (after stderr) on a miss. */
+function requireId(raw: string | undefined, context: string): string | null {
   if (raw === undefined || raw.length === 0) {
     process.stderr.write(`${context}: <id> is required\n`);
     return null;
   }
-  const id = Number(raw);
-  if (!Number.isInteger(id) || id <= 0) {
-    process.stderr.write(`${context}: <id> must be a positive integer, got '${raw}'\n`);
-    return null;
-  }
-  return id;
+  return raw;
 }
 
 /**
@@ -362,16 +365,17 @@ function parsePositiveInt(raw: string | undefined, context: string): number | nu
  * the `record` path's contract. Returns the ` -> <path>` suffix for the stderr
  * summary, or an empty string when the mirror was skipped or failed.
  */
-function mirrorTeamArtifact(
+async function mirrorTeamArtifact(
   store: ScrumStore,
   workspaceRoot: string,
   slug: string,
   action: string,
-  rowId: number,
-): string {
+  rowId: string,
+): Promise<string> {
   try {
-    const team = store.getTeam(slug);
-    const artifactPath = team !== null ? reconcileTeamArtifact(store, workspaceRoot, team) : null;
+    const team = await store.getTeam(slug);
+    const artifactPath =
+      team !== null ? await reconcileTeamArtifact(store, workspaceRoot, team) : null;
     return artifactPath !== null ? ` -> ${artifactPath}` : '';
   } catch (artifactErr) {
     const msg = artifactErr instanceof Error ? artifactErr.message : String(artifactErr);

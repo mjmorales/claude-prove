@@ -1,10 +1,12 @@
 import { create } from "zustand";
+import type { DocView } from "./run-doc-render";
+
+// Re-exported so callers can keep importing the doc-view union from the store
+// while its single declaration lives in run-doc-render.
+export type { DocView };
 
 export type StructureTab = "branches" | "steps" | "commits" | "intents" | "docs" | "decisions";
 export type RightTab = "diff" | "intent" | "context";
-
-/** Run doc kinds the UI can render — maps to prove JSON artifacts. */
-export type DocView = "PRD" | "PLAN" | "STATE";
 
 export type Selection = {
   /** Composite run key: `<branch>/<slug>`. */

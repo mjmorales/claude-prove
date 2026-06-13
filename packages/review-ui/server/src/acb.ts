@@ -2,15 +2,17 @@
  * Review-UI ACB storage adapter.
  *
  * Thin wrapper around `@claude-prove/cli`'s `AcbStore` (which is itself
- * backed by `@claude-prove/store` over `bun:sqlite`). The exports here
- * preserve the exact function names, signatures, and return shapes the
- * server routes consumed before phase 11, so swapping sqlite backends
- * costs zero changes under `server/src/routes/`.
+ * backed by `@claude-prove/store` over the `@tursodatabase/database` async
+ * driver). The exports here preserve the exact function names, argument
+ * shapes, and return values the server routes consume — only the result is
+ * now a Promise — so the routes await them but otherwise stay unchanged.
  *
  * Open/close policy: every exported function opens a short-lived AcbStore,
- * does its one operation, and closes it — mirrors the legacy open-on-each-
- * call lifecycle. Migrations run on every open, but the `_migrations_log`
- * table makes subsequent opens cheap no-ops.
+ * does its one operation, and closes it. The driver is async, so every store
+ * read MUST be awaited BEFORE `close()`: the close finalizes prepared
+ * statements, and an un-awaited query that resolves after the close throws
+ * "statement has been finalized". Migrations run on every open, but the
+ * `_migrations_log` table makes subsequent opens cheap no-ops.
  */
 
 import path from 'node:path';
@@ -48,7 +50,7 @@ function dbPath(repoRoot: string): string {
  * pending acb migration on first open. Ensures the parent directory exists
  * (matches pre-swap behavior of `openWritableDb`).
  */
-function openStore(repoRoot: string): AcbStore {
+async function openStore(repoRoot: string): Promise<AcbStore> {
   const p = dbPath(repoRoot);
   const dir = path.dirname(p);
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -63,7 +65,7 @@ function openStore(repoRoot: string): AcbStore {
  * Note: we still run migrations on open so the schema matches the reader's
  * expectations. `runMigrations` is a no-op when the log is already current.
  */
-function openStoreIfExists(repoRoot: string): AcbStore | null {
+async function openStoreIfExists(repoRoot: string): Promise<AcbStore | null> {
   const p = dbPath(repoRoot);
   if (!fs.existsSync(p)) return null;
   return openAcbStore({ override: p });
@@ -87,11 +89,14 @@ function rowToManifest(row: ManifestRow): IntentManifest {
   };
 }
 
-export function getManifestForCommit(repoRoot: string, sha: string): IntentManifest | null {
-  const acb = openStoreIfExists(repoRoot);
+export async function getManifestForCommit(
+  repoRoot: string,
+  sha: string,
+): Promise<IntentManifest | null> {
+  const acb = await openStoreIfExists(repoRoot);
   if (!acb) return null;
   try {
-    const rows = acb.getStore().all<ManifestRow>(
+    const rows = await acb.getStore().all<ManifestRow>(
       `SELECT branch, commit_sha, timestamp, data, created_at
        FROM acb_manifests
        WHERE commit_sha LIKE ? || '%'
@@ -106,13 +111,16 @@ export function getManifestForCommit(repoRoot: string, sha: string): IntentManif
   }
 }
 
-export function listManifestsForBranches(repoRoot: string, branches: string[]): IntentManifest[] {
+export async function listManifestsForBranches(
+  repoRoot: string,
+  branches: string[],
+): Promise<IntentManifest[]> {
   if (branches.length === 0) return [];
-  const acb = openStoreIfExists(repoRoot);
+  const acb = await openStoreIfExists(repoRoot);
   if (!acb) return [];
   try {
     const placeholders = branches.map(() => '?').join(',');
-    const rows = acb.getStore().all<ManifestRow>(
+    const rows = await acb.getStore().all<ManifestRow>(
       `SELECT branch, commit_sha, timestamp, data, created_at
        FROM acb_manifests
        WHERE branch IN (${placeholders})
@@ -131,13 +139,16 @@ export function listManifestsForBranches(repoRoot: string, branches: string[]): 
  * branches are gone but their manifests are still keyed by SHA and the
  * commits themselves remain reachable via the orchestrator branch.
  */
-export function listManifestsForCommits(repoRoot: string, shas: string[]): IntentManifest[] {
+export async function listManifestsForCommits(
+  repoRoot: string,
+  shas: string[],
+): Promise<IntentManifest[]> {
   if (shas.length === 0) return [];
-  const acb = openStoreIfExists(repoRoot);
+  const acb = await openStoreIfExists(repoRoot);
   if (!acb) return [];
   try {
     const placeholders = shas.map(() => '?').join(',');
-    const rows = acb.getStore().all<ManifestRow>(
+    const rows = await acb.getStore().all<ManifestRow>(
       `SELECT branch, commit_sha, timestamp, data, created_at
        FROM acb_manifests
        WHERE commit_sha IN (${placeholders})
@@ -156,11 +167,14 @@ export function listManifestsForCommits(repoRoot: string, shas: string[]): Inten
  * prove uses: `orchestrator/<slug>` and `task/<slug>/<task-id>`. Useful for
  * merged runs whose task branches have been deleted.
  */
-export function listManifestsForSlug(repoRoot: string, slug: string): IntentManifest[] {
-  const acb = openStoreIfExists(repoRoot);
+export async function listManifestsForSlug(
+  repoRoot: string,
+  slug: string,
+): Promise<IntentManifest[]> {
+  const acb = await openStoreIfExists(repoRoot);
   if (!acb) return [];
   try {
-    const rows = acb.getStore().all<ManifestRow>(
+    const rows = await acb.getStore().all<ManifestRow>(
       `SELECT branch, commit_sha, timestamp, data, created_at
        FROM acb_manifests
        WHERE branch = ? OR branch LIKE ?
@@ -173,11 +187,14 @@ export function listManifestsForSlug(repoRoot: string, slug: string): IntentMani
   }
 }
 
-export function listManifestsForBranch(repoRoot: string, branch: string): IntentManifest[] {
-  const acb = openStoreIfExists(repoRoot);
+export async function listManifestsForBranch(
+  repoRoot: string,
+  branch: string,
+): Promise<IntentManifest[]> {
+  const acb = await openStoreIfExists(repoRoot);
   if (!acb) return [];
   try {
-    const rows = acb.getStore().all<ManifestRow>(
+    const rows = await acb.getStore().all<ManifestRow>(
       `SELECT branch, commit_sha, timestamp, data, created_at
        FROM acb_manifests
        WHERE branch = ?
@@ -190,17 +207,24 @@ export function listManifestsForBranch(repoRoot: string, branch: string): Intent
   }
 }
 
-export function getAcbDocument(repoRoot: string, branch: string): AcbDocument | null {
-  const acb = openStoreIfExists(repoRoot);
+export async function getAcbDocument(
+  repoRoot: string,
+  branch: string,
+): Promise<AcbDocument | null> {
+  const acb = await openStoreIfExists(repoRoot);
   if (!acb) return null;
   try {
-    const rows = acb.getStore().all<{
+    // Read the head view, not the base table: `acb_acb_documents` is an
+    // append-only revision log, so the view returns the single latest revision
+    // per branch (with `created_at` = the branch's first revision and
+    // `updated_at` = the latest), preserving this function's return shape.
+    const rows = await acb.getStore().all<{
       branch: string;
       data: string;
       created_at: string;
       updated_at: string;
     }>(
-      'SELECT branch, data, created_at, updated_at FROM acb_acb_documents WHERE branch = ?',
+      'SELECT branch, data, created_at, updated_at FROM acb_acb_documents_head WHERE branch = ?',
       [branch],
     );
     const row = rows[0];
@@ -224,35 +248,42 @@ function safeParse(s: string): unknown {
   }
 }
 
-export function listVerdicts(repoRoot: string, slug: string): GroupVerdictRecord[] {
-  const acb = openStore(repoRoot);
+export async function listVerdicts(repoRoot: string, slug: string): Promise<GroupVerdictRecord[]> {
+  const acb = await openStore(repoRoot);
   try {
-    return acb.listGroupVerdicts(slug);
+    // Await BEFORE close: returning the un-awaited promise would let the query
+    // resolve after `close()` finalizes the statement, throwing "statement has
+    // been finalized".
+    return await acb.listGroupVerdicts(slug);
   } finally {
     acb.close();
   }
 }
 
-export function upsertVerdict(
+export async function upsertVerdict(
   repoRoot: string,
   slug: string,
   groupId: string,
   verdict: GroupVerdict,
   note: string | null,
   fixPrompt: string | null,
-): GroupVerdictRecord {
-  const acb = openStore(repoRoot);
+): Promise<GroupVerdictRecord> {
+  const acb = await openStore(repoRoot);
   try {
-    return acb.upsertGroupVerdict(slug, groupId, verdict, note, fixPrompt);
+    return await acb.upsertGroupVerdict(slug, groupId, verdict, note, fixPrompt);
   } finally {
     acb.close();
   }
 }
 
-export function clearVerdict(repoRoot: string, slug: string, groupId: string): void {
-  const acb = openStore(repoRoot);
+export async function clearVerdict(
+  repoRoot: string,
+  slug: string,
+  groupId: string,
+): Promise<void> {
+  const acb = await openStore(repoRoot);
   try {
-    acb.clearGroupVerdict(slug, groupId);
+    await acb.clearGroupVerdict(slug, groupId);
   } finally {
     acb.close();
   }

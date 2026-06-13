@@ -5,10 +5,13 @@
  * `updateTaskStatus(store, id, next, agent?)` validates the transition against
  * the closed `ALLOWED_TRANSITIONS` table, enforces the two story-layer
  * mechanical floors (acceptance-criteria presence/satisfaction and
- * synthesis-entry presence), then performs the single in-transaction
- * `UPDATE scrum_tasks` + `INSERT INTO scrum_events` (kind `status_changed`,
- * payload `{from,to}`) — bumping `last_event_at` and stamping the row's
- * last-touch + executing-worker/run provenance.
+ * synthesis-entry presence), then in one transaction appends the
+ * `INSERT INTO scrum_events` (kind `status_changed`, payload `{from,to}`) and
+ * runs the `UPDATE scrum_tasks` — bumping `last_event_at`, stamping the row's
+ * last-touch + executing-worker/run provenance, and pointing `status_event_id`
+ * at the very `status_changed` event that set the new status (the event id is
+ * minted once and shared by both writes; the event is inserted first so the
+ * pointer's FK target exists when the row is stamped).
  *
  * Event-log emission for a status transition lives EXACTLY ONCE — here. The
  * service operates on a raw `Store` handle and assumes the scrum domain tables
@@ -21,10 +24,11 @@
  * inverse.
  */
 
-import type { Database } from 'bun:sqlite';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
-import type { Store } from '../connection';
+import { type Store, withTx } from '../connection';
+import { ulid } from '../ulid';
+import { isoNow } from './util';
 
 // ---------------------------------------------------------------------------
 // Closed scrum status enum + task / acceptance domain types (canonical copy)
@@ -99,7 +103,10 @@ export interface AcceptancePolicy {
   rerun_policy: 'all' | 'failed_only';
 }
 
-/** Decoded `scrum_tasks.acceptance_json`. */
+/**
+ * A task's acceptance, reconstructed from the normalized criteria +
+ * head-verdict tables (the task row carries only the `policy`).
+ */
 export interface Acceptance {
   criteria: AcceptanceCriterion[];
   policy?: AcceptancePolicy;
@@ -151,16 +158,16 @@ const ALLOWED_TRANSITIONS: Record<TaskStatus, TaskStatus[]> = {
  * Update a task's status. Rejects invalid transitions (see
  * `ALLOWED_TRANSITIONS`) and unknown task ids. Enforces the two story-layer
  * floors, then appends a `status_changed` event inside the same transaction as
- * the row update and bumps `last_event_at`. Returns the post-write task view.
+ * the row update, bumps `last_event_at`, and stamps `status_event_id` with that
+ * event's id. Returns the post-write task view.
  */
-export function updateTaskStatus(
+export async function updateTaskStatus(
   store: Store,
   id: string,
   next: TaskStatus,
   agent?: string | null,
-): TransitionTask {
-  const db = store.getDb();
-  const task = getTransitionTask(db, id);
+): Promise<TransitionTask> {
+  const task = await getTransitionTask(store, id);
   if (!task) throw new Error(`updateTaskStatus: unknown task '${id}'`);
   const allowed = ALLOWED_TRANSITIONS[task.status];
   if (!allowed.includes(next)) {
@@ -174,22 +181,42 @@ export function updateTaskStatus(
   // Non-story layers pass straight through.
   if (task.layer === 'story') {
     assertStoryAcceptanceFloor(task, next);
-    if (next === 'done') assertStorySynthesisFloor(store, db, id);
+    if (next === 'done') await assertStorySynthesisFloor(store, id);
   }
 
   const ts = isoNow();
   const { workerId, runId } = resolveRunContext();
-  const tx = db.transaction(() => {
-    db.prepare(
-      'UPDATE scrum_tasks SET status = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
-    ).run(next, ts, agent ?? null, ts, workerId, runId, id);
-    db.prepare(
-      'INSERT INTO scrum_events (task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?)',
-    ).run(id, ts, 'status_changed', agent ?? null, JSON.stringify({ from: task.status, to: next }));
+  // Treat the event as the primary fact: mint the status_changed event id up
+  // front so the row UPDATE can stamp `status_event_id` with the SAME id the
+  // event INSERT carries. After the transaction, scrum_tasks.status_event_id
+  // points at the exact event that set the current status — provenance, not a
+  // separate fact. Both writes share one transaction, so the pointer can never
+  // dangle.
+  //
+  // The event INSERT runs BEFORE the row UPDATE: status_event_id is an immediate
+  // FK onto scrum_events(id), so the referenced event row must already exist
+  // when the UPDATE stamps the pointer (a transaction with foreign-key checks
+  // ON enforces the constraint per-statement, not at commit).
+  const statusEventId = ulid();
+  await withTx(store, async () => {
+    await store.run(
+      'INSERT INTO scrum_events (id, task_id, ts, kind, agent, payload_json) VALUES (?, ?, ?, ?, ?, ?)',
+      [
+        statusEventId,
+        id,
+        ts,
+        'status_changed',
+        agent ?? null,
+        JSON.stringify({ from: task.status, to: next }),
+      ],
+    );
+    await store.run(
+      'UPDATE scrum_tasks SET status = ?, status_event_id = ?, last_event_at = ?, last_modified_by = ?, last_modified_at = ?, worker_id = ?, run_id = ? WHERE id = ?',
+      [next, statusEventId, ts, agent ?? null, ts, workerId, runId, id],
+    );
   });
-  tx();
 
-  const updated = getTransitionTask(db, id);
+  const updated = await getTransitionTask(store, id);
   if (!updated) throw new Error(`updateTaskStatus: task '${id}' vanished mid-update`);
   return updated;
 }
@@ -252,8 +279,8 @@ function assertStoryAcceptanceFloor(task: TransitionTask, next: TaskStatus): voi
  * manually-driven story, which the floor intentionally does not gate.
  * Invariant: only called for `task.layer === 'story'`.
  */
-function assertStorySynthesisFloor(store: Store, db: Database, taskId: string): void {
-  const runs = listRunsForTask(db, taskId);
+async function assertStorySynthesisFloor(store: Store, taskId: string): Promise<void> {
+  const runs = await listRunsForTask(store, taskId);
   if (runs.length === 0) return;
 
   // listRunsForTask is ordered by linked_at ASC — the last entry is the
@@ -287,45 +314,140 @@ interface TransitionTaskRow {
   id: string;
   status: TaskStatus;
   layer: TaskLayer | null;
-  acceptance_json: string | null;
 }
 
 /**
- * Fetch the transition-relevant projection of a live task, decoding
- * `acceptance_json`, or null if the row is missing or soft-deleted. A corrupt
- * `acceptance_json` degrades to `null` (with a stderr warning) rather than
- * throwing, so one poisoned row cannot brick the transition read.
+ * Raw `scrum_acceptance_criteria` projection the floor reads (the DEFINITION).
+ * `id` is the surrogate row id (the verdict-log FK target); `criterion_id` is
+ * the author-given external id the floor surfaces in its error detail.
  */
-function getTransitionTask(db: Database, id: string): TransitionTask | null {
-  const row = db
-    .prepare(
-      'SELECT id, status, layer, acceptance_json FROM scrum_tasks WHERE id = ? AND deleted_at IS NULL',
-    )
-    .get(id) as TransitionTaskRow | null;
+interface CriterionRow {
+  id: string;
+  criterion_id: string;
+  ord: string;
+  text: string;
+  verifies_by: AcceptanceVerifiesBy;
+  check_payload: string;
+  status: AcceptanceCriterionStatus;
+  idempotent: number;
+  scope: string | null;
+  timeout: string | null;
+  superseded_by: string | null;
+  reason: string | null;
+  inherited_from: string | null;
+}
+
+/**
+ * Raw `scrum_criterion_head` view projection — the latest verdict per criterion.
+ * `criterion_id` here is the criterion-row SURROGATE id, not the external id.
+ */
+interface HeadRow {
+  criterion_id: string;
+  channel: 'gate' | 'verification';
+  verdict: string;
+  reason: string | null;
+  by_whom: string | null;
+  comment: string | null;
+  at: string;
+}
+
+/**
+ * Fetch the transition-relevant projection of a live task, reconstructing its
+ * `Acceptance` from the normalized criteria + head-verdict tables (the floor
+ * reads the latest verdict per criterion, never a mutable column). Returns null
+ * if the row is missing or soft-deleted; a task with no criteria has a null
+ * acceptance, exactly as the empty-blob read used to.
+ */
+async function getTransitionTask(store: Store, id: string): Promise<TransitionTask | null> {
+  const row = await store.get<TransitionTaskRow>(
+    'SELECT id, status, layer FROM scrum_tasks WHERE id = ? AND deleted_at IS NULL',
+    [id],
+  );
   if (!row) return null;
   return {
     id: row.id,
     status: row.status,
     layer: row.layer,
-    acceptance: safeParseAcceptance(row.acceptance_json, row.id),
+    acceptance: await loadAcceptance(store, id),
   };
 }
 
-function safeParseAcceptance(raw: string | null, taskId: string): Acceptance | null {
-  if (raw === null) return null;
-  try {
-    return JSON.parse(raw) as Acceptance;
-  } catch {
-    process.stderr.write(`scrum: task '${taskId}' has corrupt acceptance_json; treating as null\n`);
-    return null;
+/**
+ * Rebuild a task's `Acceptance` (criteria + their head verdict) from the tables.
+ * The DEFINITION rows are ordered by the minted `ord` (authored array order);
+ * each criterion's latest verdict folds back into its `gate`/`verification`
+ * field via the criterion-head view, so the floor reads the same satisfaction
+ * state the blob used to carry. A gate-kind criterion with no verdict row reads
+ * `gate: {verdict: 'gate_pending'}`. The transition floor ignores `policy`, so
+ * this returns just `{criteria}` (null when the task carries no criteria).
+ */
+async function loadAcceptance(store: Store, taskId: string): Promise<Acceptance | null> {
+  const criterionRows = await store.all<CriterionRow>(
+    'SELECT id, criterion_id, ord, text, verifies_by, check_payload, status, idempotent, scope, timeout, superseded_by, reason, inherited_from FROM scrum_acceptance_criteria WHERE task_id = ?',
+    [taskId],
+  );
+  if (criterionRows.length === 0) return null;
+
+  const headRows = await store.all<HeadRow>(
+    `SELECT h.criterion_id, h.channel, h.verdict, h.reason, h.by_whom, h.comment, h.at
+     FROM scrum_criterion_head h
+     INNER JOIN scrum_acceptance_criteria c ON c.id = h.criterion_id
+     WHERE c.task_id = ?`,
+    [taskId],
+  );
+  const heads = new Map<string, HeadRow>();
+  for (const head of headRows) heads.set(head.criterion_id, head);
+
+  const criteria = criterionRows
+    .slice()
+    .sort((a, b) => a.ord.localeCompare(b.ord))
+    .map((c) => decodeCriterion(c, heads.get(c.id)));
+  return { criteria };
+}
+
+/** Fold one criterion DEFINITION row + its head verdict into an `AcceptanceCriterion`. */
+function decodeCriterion(row: CriterionRow, head: HeadRow | undefined): AcceptanceCriterion {
+  const criterion: AcceptanceCriterion = {
+    id: row.criterion_id,
+    text: row.text,
+    verifies_by: row.verifies_by,
+    check: row.check_payload,
+    status: row.status,
+    idempotent: row.idempotent !== 0,
+    superseded_by: row.superseded_by,
+    reason: row.reason,
+    inherited_from: row.inherited_from,
+  };
+  if (row.scope !== null) criterion.scope = row.scope as AcceptanceScope;
+  if (row.timeout !== null) criterion.timeout = row.timeout;
+
+  if (row.verifies_by === 'gate') {
+    criterion.gate =
+      head && head.channel === 'gate'
+        ? {
+            verdict: head.verdict as GateVerdict,
+            responder: head.by_whom,
+            comment: head.comment,
+            responded_at: head.at,
+          }
+        : { verdict: 'gate_pending' };
+  } else if (head && head.channel === 'verification') {
+    criterion.verification = {
+      verdict: head.verdict as VerificationVerdict,
+      reason: head.reason,
+      verified_by: head.by_whom,
+      verified_at: head.at,
+    };
   }
+  return criterion;
 }
 
 /** Run links for `taskId`, ordered by `linked_at` ASC (oldest first). */
-function listRunsForTask(db: Database, taskId: string): { run_path: string }[] {
-  return db
-    .prepare('SELECT run_path FROM scrum_run_links WHERE task_id = ? ORDER BY linked_at ASC')
-    .all(taskId) as { run_path: string }[];
+async function listRunsForTask(store: Store, taskId: string): Promise<{ run_path: string }[]> {
+  return await store.all<{ run_path: string }>(
+    'SELECT run_path FROM scrum_run_links WHERE task_id = ? ORDER BY linked_at ASC',
+    [taskId],
+  );
 }
 
 /**
@@ -418,8 +540,12 @@ interface ScanEntry {
   type: string;
 }
 
-/** The closed reasoning-log entry type taxonomy. */
-const SCAN_ENTRY_TYPES = [
+/**
+ * The closed reasoning-log entry type taxonomy. Exported only so the
+ * conformance test can assert it stays identical to the CLI's canonical
+ * `ENTRY_TYPES`; not part of the public store API.
+ */
+export const SCAN_ENTRY_TYPES = [
   'decision',
   'discovery',
   'context',
@@ -446,13 +572,17 @@ const isScanStrOrNull = (v: unknown): boolean => v === null || isScanStr(v);
 const isScanRiskSeverity = (v: unknown): boolean =>
   isScanStr(v) && (SCAN_RISK_SEVERITIES as readonly string[]).includes(v);
 
-interface ScanFieldSpec {
+export interface ScanFieldSpec {
   fields: Record<string, (value: unknown) => boolean>;
   optional?: Record<string, (value: unknown) => boolean>;
 }
 
-/** Per-type required (and optional) fields beyond the envelope. */
-const SCAN_TYPE_SPECS: Record<string, ScanFieldSpec> = {
+/**
+ * Per-type required (and optional) fields beyond the envelope. Exported only
+ * so the conformance test can assert key-parity with the CLI's canonical
+ * `TYPE_SPECS`; not part of the public store API.
+ */
+export const SCAN_TYPE_SPECS: Record<string, ScanFieldSpec> = {
   decision: { fields: { alternatives: isScanStrArray, selected_rationale: isScanStr } },
   discovery: { fields: {} },
   context: { fields: {} },
@@ -568,10 +698,6 @@ function criterionSatisfiedAtFloor(criterion: AcceptanceCriterion): boolean {
 // ---------------------------------------------------------------------------
 // Provenance stamping helpers
 // ---------------------------------------------------------------------------
-
-function isoNow(): string {
-  return new Date().toISOString();
-}
 
 /**
  * The executing-worker/run context for a row write. The orchestrator exports

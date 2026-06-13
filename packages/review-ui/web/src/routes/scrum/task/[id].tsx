@@ -345,20 +345,25 @@ function DecisionsList({
       {decisions.map((d) => {
         const p = d.payload as { path?: string; title?: string } | null;
         const path = p?.path ?? null;
+        // Only absolute http(s) links are navigable. A repo-relative path like
+        // `.prove/decisions/foo.md` is not a URL the daemon serves — the daemon
+        // exposes decision CONTENT as JSON at `/api/decisions/:id`, not a
+        // browsable page — so render it as plain text rather than a dead link.
+        const httpLink = path && path.startsWith("http") ? path : null;
         return (
           <li key={d.id} className="px-3 h-10 flex items-center gap-3 text-[12.5px] mono">
             <span className="text-amber">◆</span>
-            {path ? (
+            {httpLink ? (
               <a
-                href={path.startsWith("http") ? path : `/${path}`}
+                href={httpLink}
                 className="text-data hover:underline truncate flex-1 min-w-0"
-                target={path.startsWith("http") ? "_blank" : undefined}
-                rel={path.startsWith("http") ? "noreferrer" : undefined}
+                target="_blank"
+                rel="noreferrer"
               >
-                {p?.title ?? path}
+                {p?.title ?? httpLink}
               </a>
             ) : (
-              <span className="text-fg-dim truncate flex-1 min-w-0">{p?.title ?? "(decision)"}</span>
+              <span className="text-fg-dim truncate flex-1 min-w-0">{p?.title ?? path ?? "(decision)"}</span>
             )}
             <span className="text-fg-faint shrink-0">{relTime(d.ts)}</span>
           </li>

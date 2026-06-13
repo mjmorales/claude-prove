@@ -1,5 +1,11 @@
 .prove/
 .prove-wt-slug.txt
+
+# Secrets — never commit local env / credential files
+.env
+.env.*
+*.pem
+
 tools/cafi/__pycache__/
 .mypy_cache/
 .pytest_cache/

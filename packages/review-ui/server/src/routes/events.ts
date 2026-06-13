@@ -105,7 +105,11 @@ export function registerEventsRoute(
       entry.subscribers.delete(subscriber);
       if (entry.subscribers.size === 0) {
         sharedByRoot.delete(projectRoot);
-        void entry.watcher.close();
+        // Surface a teardown rejection: in a long-lived daemon a silent
+        // close() failure would otherwise leave a leaked watcher invisible.
+        void Promise.resolve(entry.watcher.close()).catch((err) =>
+          app.log.warn({ err, projectRoot }, "review-ui watcher close failed"),
+        );
       }
     };
   };

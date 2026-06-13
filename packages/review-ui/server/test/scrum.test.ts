@@ -15,12 +15,13 @@
  *     missing context, orphaned runs)
  */
 
-import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { openScrumStore } from '@claude-prove/cli/scrum/store';
+import { openStore } from '@claude-prove/store';
+import { ensureAcbSchemaRegistered } from '@claude-prove/cli/acb/store';
+import { ensureScrumSchemaRegistered, openScrumStore } from '@claude-prove/cli/scrum/store';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { makeProjectResolver } from '../src/projects';
 import { registerScrumRoutes } from '../src/scrum';
@@ -33,22 +34,33 @@ const FRESH_WIP_ID = 'task-wip';
 const DONE_TASK_ID = 'task-done';
 const ORPHAN_DEP_TARGET = 'task-deleted-target';
 
+// Every store this file creates must carry BOTH shipped domains' migrations:
+// the route guard's expected-version map always sees scrum + acb (it re-lands
+// them at read time), so a fixture db created while a prior file's
+// `clearRegistry()` had wiped acb would read as behind and 409 every write.
+beforeEach(() => {
+  ensureScrumSchemaRegistered();
+  ensureAcbSchemaRegistered();
+});
+
 beforeAll(async () => {
+  ensureScrumSchemaRegistered();
+  ensureAcbSchemaRegistered();
   repoRoot = mkdtempSync(join(tmpdir(), 'prove-scrum-server-'));
   mkdirSync(join(repoRoot, '.prove'), { recursive: true });
 
   // Seed fixtures via ScrumStore directly.
   const dbFile = join(repoRoot, '.prove/prove.db');
-  const store = openScrumStore({ override: dbFile });
+  const store = await openScrumStore({ override: dbFile });
   try {
     // Milestones (2)
-    store.createMilestone({ id: 'm-active', title: 'Active milestone', status: 'active' });
-    store.createMilestone({ id: 'm-planned', title: 'Planned milestone', status: 'planned' });
+    await store.createMilestone({ id: 'm-active', title: 'Active milestone', status: 'active' });
+    await store.createMilestone({ id: 'm-planned', title: 'Planned milestone', status: 'planned' });
 
     const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000).toISOString();
 
     // Stalled WIP — built first so we can stamp last_event_at last.
-    store.createTask({
+    await store.createTask({
       id: STALLED_TASK_ID,
       title: 'Stalled WIP task',
       status: 'backlog',
@@ -56,21 +68,21 @@ beforeAll(async () => {
       createdAt: eightDaysAgo,
       tags: ['p0'],
     });
-    store.updateTaskStatus(STALLED_TASK_ID, 'ready');
-    store.updateTaskStatus(STALLED_TASK_ID, 'in_progress');
+    await store.updateTaskStatus(STALLED_TASK_ID, 'ready');
+    await store.updateTaskStatus(STALLED_TASK_ID, 'in_progress');
     // Provision a context bundle so this task is NOT a missing-context alert.
-    store.saveContextBundle(STALLED_TASK_ID, { hint: 'seeded' });
+    await store.saveContextBundle(STALLED_TASK_ID, { hint: 'seeded' });
 
     // Broken dep: stalled task blocks a (subsequently soft-deleted) task.
     // Add deps BEFORE the date override so any incidental writes don't reset
     // last_event_at after we backdate it.
-    store.createTask({ id: ORPHAN_DEP_TARGET, title: 'Will be deleted' });
-    store.addDep(STALLED_TASK_ID, ORPHAN_DEP_TARGET, 'blocks');
-    store.softDeleteTask(ORPHAN_DEP_TARGET);
+    await store.createTask({ id: ORPHAN_DEP_TARGET, title: 'Will be deleted' });
+    await store.addDep(STALLED_TASK_ID, ORPHAN_DEP_TARGET, 'blocks');
+    await store.softDeleteTask(ORPHAN_DEP_TARGET);
 
     // Orphaned run alert: append the event BEFORE we backdate last_event_at,
     // because appendEvent bumps last_event_at on the underlying task.
-    store.appendEvent({
+    await store.appendEvent({
       taskId: STALLED_TASK_ID,
       kind: 'unlinked_run_detected',
       payload: { runPath: '.prove/runs/main/orphaned' },
@@ -78,23 +90,21 @@ beforeAll(async () => {
 
     // Now stamp last_event_at into the stalled window — must be the final
     // write that touches scrum_tasks for this row.
-    store
+    await store
       .getStore()
-      .getDb()
-      .prepare('UPDATE scrum_tasks SET last_event_at = ? WHERE id = ?')
-      .run(eightDaysAgo, STALLED_TASK_ID);
+      .run('UPDATE scrum_tasks SET last_event_at = ? WHERE id = ?', [eightDaysAgo, STALLED_TASK_ID]);
 
     // Fresh in_progress task — appears in missing_context (no bundle).
-    store.createTask({
+    await store.createTask({
       id: FRESH_WIP_ID,
       title: 'Fresh WIP task',
       status: 'backlog',
       milestoneId: 'm-active',
     });
-    store.updateTaskStatus(FRESH_WIP_ID, 'ready');
-    store.updateTaskStatus(FRESH_WIP_ID, 'in_progress');
+    await store.updateTaskStatus(FRESH_WIP_ID, 'ready');
+    await store.updateTaskStatus(FRESH_WIP_ID, 'in_progress');
     // 1 run link belongs to the fresh WIP task.
-    store.linkRun({
+    await store.linkRun({
       taskId: FRESH_WIP_ID,
       runPath: '.prove/runs/main/sample-run',
       branch: 'orchestrator/sample-run',
@@ -102,14 +112,14 @@ beforeAll(async () => {
     });
 
     // Done task.
-    store.createTask({ id: DONE_TASK_ID, title: 'Done task' });
-    store.updateTaskStatus(DONE_TASK_ID, 'ready');
-    store.updateTaskStatus(DONE_TASK_ID, 'in_progress');
-    store.updateTaskStatus(DONE_TASK_ID, 'done');
+    await store.createTask({ id: DONE_TASK_ID, title: 'Done task' });
+    await store.updateTaskStatus(DONE_TASK_ID, 'ready');
+    await store.updateTaskStatus(DONE_TASK_ID, 'in_progress');
+    await store.updateTaskStatus(DONE_TASK_ID, 'done');
 
     // One additional plain note event — gets us to >=5 events when combined
     // with auto-created `task_created` + `status_changed` rows.
-    store.appendEvent({ taskId: FRESH_WIP_ID, kind: 'note', payload: { body: 'hello' } });
+    await store.appendEvent({ taskId: FRESH_WIP_ID, kind: 'note', payload: { body: 'hello' } });
   } finally {
     store.close();
   }
@@ -267,6 +277,55 @@ describe('GET /api/scrum/alerts', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Alerts — missing_context across many in-progress tasks (concurrency guard)
+//
+// Regression for a shared-prepared-statement race: `buildAlerts` reads each
+// in-progress task's context bundle through ONE ScrumStore instance, so the
+// reads MUST be sequential — a `Promise.all` fan-out collides on the single
+// cached prepared statement and can misclassify which tasks lack a bundle.
+// With 6 in-progress tasks (3 bundled, 3 not) a racing read would drop or add
+// entries to `missing_context`; the sequential read yields the exact set.
+// ---------------------------------------------------------------------------
+
+describe('GET /api/scrum/alerts — missing_context with many in-progress tasks', () => {
+  test('returns exactly the bundle-less in-progress tasks', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'prove-scrum-missctx-'));
+    mkdirSync(join(root, '.prove'), { recursive: true });
+
+    const bundled = ['ip-1', 'ip-3', 'ip-5'];
+    const bundleless = ['ip-2', 'ip-4', 'ip-6'];
+
+    const store = await openScrumStore({ override: join(root, '.prove/prove.db') });
+    try {
+      for (const id of [...bundled, ...bundleless]) {
+        await store.createTask({ id, title: `WIP ${id}`, status: 'backlog' });
+        await store.updateTaskStatus(id, 'ready');
+        await store.updateTaskStatus(id, 'in_progress');
+      }
+      for (const id of bundled) {
+        await store.saveContextBundle(id, { hint: id });
+      }
+    } finally {
+      store.close();
+    }
+
+    const app = Fastify({ logger: false });
+    registerScrumRoutes(app, makeProjectResolver(root));
+    await app.ready();
+    try {
+      const res = await app.inject({ method: 'GET', url: '/api/scrum/alerts' });
+      expect(res.statusCode).toBe(200);
+      const body = res.json() as { missing_context: Array<{ id: string }> };
+      const ids = body.missing_context.map((t) => t.id).sort();
+      expect(ids).toEqual([...bundleless].sort());
+    } finally {
+      await app.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Context bundles
 // ---------------------------------------------------------------------------
 
@@ -362,13 +421,16 @@ describe('POST /api/scrum/tasks/:id/status', () => {
     txRoot = null;
   });
 
+  // Resolved ScrumStore type — `openScrumStore` now returns a Promise.
+  type Store = Awaited<ReturnType<typeof openScrumStore>>;
+
   /** Boot a migrated scrum store at a fresh tmp root and an app bound to it. */
-  async function bootMigrated(seed: (store: ReturnType<typeof openScrumStore>) => void) {
+  async function bootMigrated(seed: (store: Store) => Promise<void>) {
     const root = mkdtempSync(join(tmpdir(), 'prove-scrum-tx-'));
     mkdirSync(join(root, '.prove'), { recursive: true });
-    const store = openScrumStore({ override: join(root, '.prove/prove.db') });
+    const store = await openScrumStore({ override: join(root, '.prove/prove.db') });
     try {
-      seed(store);
+      await seed(store);
     } finally {
       store.close();
     }
@@ -381,14 +443,13 @@ describe('POST /api/scrum/tasks/:id/status', () => {
   }
 
   /** Count `status_changed` events for one task by reading the db read-only. */
-  function statusChangedCount(root: string, taskId: string): number {
-    const db = new Database(join(root, '.prove/prove.db'), { readonly: true });
+  async function statusChangedCount(root: string, taskId: string): Promise<number> {
+    const db = await openStore({ path: join(root, '.prove/prove.db'), readonly: true });
     try {
-      const rows = db
-        .prepare<{ n: number }, [string]>(
-          "SELECT COUNT(*) AS n FROM scrum_events WHERE task_id = ? AND kind = 'status_changed'",
-        )
-        .all(taskId);
+      const rows = await db.all<{ n: number }>(
+        "SELECT COUNT(*) AS n FROM scrum_events WHERE task_id = ? AND kind = 'status_changed'",
+        [taskId],
+      );
       return rows[0]?.n ?? 0;
     } finally {
       db.close();
@@ -396,8 +457,8 @@ describe('POST /api/scrum/tasks/:id/status', () => {
   }
 
   test('valid transition → 200 with the post-write task + exactly one status_changed event', async () => {
-    const { app, root } = await bootMigrated((store) => {
-      store.createTask({ id: 'tx-task', title: 'Flat task', status: 'backlog' });
+    const { app, root } = await bootMigrated(async (store) => {
+      await store.createTask({ id: 'tx-task', title: 'Flat task', status: 'backlog' });
     });
     const res = await app.inject({
       method: 'POST',
@@ -409,16 +470,16 @@ describe('POST /api/scrum/tasks/:id/status', () => {
     expect(body.task.id).toBe('tx-task');
     expect(body.task.status).toBe('ready');
     // The service emits the transition event exactly once.
-    expect(statusChangedCount(root, 'tx-task')).toBe(1);
+    expect(await statusChangedCount(root, 'tx-task')).toBe(1);
   });
 
   test('invalid transition → 422 with the service message', async () => {
-    const { app } = await bootMigrated((store) => {
+    const { app } = await bootMigrated(async (store) => {
       // `done` is terminal: every outgoing edge is rejected by the service.
-      store.createTask({ id: 'tx-done', title: 'Done task', status: 'backlog' });
-      store.updateTaskStatus('tx-done', 'ready');
-      store.updateTaskStatus('tx-done', 'in_progress');
-      store.updateTaskStatus('tx-done', 'done');
+      await store.createTask({ id: 'tx-done', title: 'Done task', status: 'backlog' });
+      await store.updateTaskStatus('tx-done', 'ready');
+      await store.updateTaskStatus('tx-done', 'in_progress');
+      await store.updateTaskStatus('tx-done', 'done');
     });
     const res = await app.inject({
       method: 'POST',
@@ -431,10 +492,10 @@ describe('POST /api/scrum/tasks/:id/status', () => {
   });
 
   test('story-layer floor rejection → 422', async () => {
-    const { app } = await bootMigrated((store) => {
+    const { app } = await bootMigrated(async (store) => {
       // A `layer=story` task with zero acceptance criteria cannot enter `ready`:
       // the story acceptance floor rejects it from the service.
-      store.createTask({
+      await store.createTask({
         id: 'tx-story',
         title: 'Story without criteria',
         status: 'backlog',
@@ -454,14 +515,14 @@ describe('POST /api/scrum/tasks/:id/status', () => {
   test('behind-schema project → 409 with the structured body, no mutation', async () => {
     const root = mkdtempSync(join(tmpdir(), 'prove-scrum-behind-'));
     mkdirSync(join(root, '.prove'), { recursive: true });
-    // Re-land the live scrum domain so the guard's expected-version lookup sees
-    // scrum's real head — a prior test file's `clearRegistry()` may have wiped
-    // it. Opening an in-memory scrum store calls `ensureScrumSchemaRegistered`.
-    openScrumStore({ path: ':memory:' }).close();
-    // Seed a `_migrations_log` at scrum@1 (below the live scrum head) so the db
-    // reads as behind. The guard refuses before opening the writable store, so
-    // no scrum tables are needed for the refusal.
-    seedBehindScrumDb(root);
+    // Seed a `_migrations_log` at scrum@0 (below the live v1 head) so the db
+    // reads as behind via the scrum domain itself. The guard re-lands both
+    // shipped domains at read time (`registeredExpectedVersions` calls the
+    // idempotent ensure helpers), so no registry pre-warming is needed here
+    // and a prior test file's `clearRegistry()` cannot skew the verdict. The
+    // guard refuses before opening the writable store, so no scrum tables are
+    // needed for the refusal.
+    await seedBehindScrumDb(root);
 
     const app = Fastify({ logger: false });
     registerScrumRoutes(app, makeProjectResolver(root));
@@ -481,40 +542,44 @@ describe('POST /api/scrum/tasks/:id/status', () => {
     expect(body.store.behind).toBe(true);
     // The refusal never opened the writable (migrating) store, so the db keeps
     // its sole seeded `_migrations_log` row and grows no scrum tables.
-    expect(scrumTablesExist(root)).toBe(false);
+    expect(await scrumTablesExist(root)).toBe(false);
   });
 });
 
 /**
- * Seed `<root>/.prove/prove.db` with only a `_migrations_log` row at scrum@1.
- * That sits below the live scrum head, so the guard reports the project behind
- * without the db carrying any scrum domain tables.
+ * Seed `<root>/.prove/prove.db` with only a `_migrations_log` row at scrum@0.
+ * The Turso-v1 chain's head is 1, so an applied version of 0 sits below the
+ * live scrum head and the guard reports the project behind — via the scrum
+ * domain itself, independent of which OTHER domains happen to be registered
+ * (an absent acb domain must not be what makes this fixture read behind).
+ * The db carries no scrum domain tables; the guard refuses before opening.
  */
-function seedBehindScrumDb(root: string): void {
-  const db = new Database(join(root, '.prove/prove.db'), { create: true });
-  db.exec(`
-    CREATE TABLE _migrations_log (
-      domain TEXT NOT NULL,
-      version INTEGER NOT NULL,
-      description TEXT NOT NULL,
-      applied_at TEXT NOT NULL,
-      PRIMARY KEY (domain, version)
-    );
-    INSERT INTO _migrations_log (domain, version, description, applied_at)
-      VALUES ('scrum', 1, 'create scrum domain tables', '2026-01-01T00:00:00Z');
-  `);
-  db.close();
+async function seedBehindScrumDb(root: string): Promise<void> {
+  const db = await openStore({ path: join(root, '.prove/prove.db') });
+  try {
+    await db.exec(`
+      CREATE TABLE _migrations_log (
+        domain TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        description TEXT NOT NULL,
+        applied_at TEXT NOT NULL,
+        PRIMARY KEY (domain, version)
+      );
+      INSERT INTO _migrations_log (domain, version, description, applied_at)
+        VALUES ('scrum', 0, 'pre-v1 placeholder below the live head', '2026-01-01T00:00:00Z');
+    `);
+  } finally {
+    db.close();
+  }
 }
 
 /** Whether the db grew any `scrum_`-prefixed table (proof a write opened it). */
-function scrumTablesExist(root: string): boolean {
-  const db = new Database(join(root, '.prove/prove.db'), { readonly: true });
+async function scrumTablesExist(root: string): Promise<boolean> {
+  const db = await openStore({ path: join(root, '.prove/prove.db'), readonly: true });
   try {
-    const rows = db
-      .prepare<{ name: string }, []>(
-        "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'scrum_%'",
-      )
-      .all();
+    const rows = await db.all<{ name: string }>(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'scrum_%'",
+    );
     return rows.length > 0;
   } finally {
     db.close();

@@ -3,7 +3,7 @@ import { type Store, openStore } from './connection';
 import { MigrationError, dropAllDomainTables, runMigrations } from './migrate';
 import { clearRegistry, registerSchema } from './registry';
 
-function makeStore(): Store {
+function makeStore(): Promise<Store> {
   return openStore({ path: ':memory:' });
 }
 
@@ -12,33 +12,33 @@ describe('runMigrations', () => {
     clearRegistry();
   });
 
-  test('applies all pending migrations on a fresh store', () => {
+  test('applies all pending migrations on a fresh store', async () => {
     registerSchema({
       domain: 'widgets',
       migrations: [
         {
           version: 1,
           description: 'create widgets table',
-          up: (db) => db.run('CREATE TABLE widgets (id INTEGER PRIMARY KEY)'),
+          up: (store) => store.run('CREATE TABLE widgets (id INTEGER PRIMARY KEY)'),
         },
         {
           version: 2,
           description: 'add widgets.name',
-          up: (db) => db.run('ALTER TABLE widgets ADD COLUMN name TEXT'),
+          up: (store) => store.run('ALTER TABLE widgets ADD COLUMN name TEXT'),
         },
       ],
     });
 
-    const store = makeStore();
+    const store = await makeStore();
     try {
-      const result = runMigrations(store);
+      const result = await runMigrations(store);
       expect(result.applied.map((a) => `${a.domain}:${a.version}`)).toEqual([
         'widgets:1',
         'widgets:2',
       ]);
       expect(result.alreadyUpToDate).toEqual([]);
 
-      const log = store.all<{ domain: string; version: number }>(
+      const log = await store.all<{ domain: string; version: number }>(
         'SELECT domain, version FROM _migrations_log ORDER BY version',
       );
       expect(log).toEqual([
@@ -50,22 +50,22 @@ describe('runMigrations', () => {
     }
   });
 
-  test('is idempotent across reruns', () => {
+  test('is idempotent across reruns', async () => {
     registerSchema({
       domain: 'gadgets',
       migrations: [
         {
           version: 1,
           description: 'create gadgets',
-          up: (db) => db.run('CREATE TABLE gadgets (id INTEGER)'),
+          up: (store) => store.run('CREATE TABLE gadgets (id INTEGER)'),
         },
       ],
     });
 
-    const store = makeStore();
+    const store = await makeStore();
     try {
-      runMigrations(store);
-      const second = runMigrations(store);
+      await runMigrations(store);
+      const second = await runMigrations(store);
       expect(second.applied).toEqual([]);
       expect(second.alreadyUpToDate).toEqual([{ domain: 'gadgets', version: 1 }]);
     } finally {
@@ -73,21 +73,21 @@ describe('runMigrations', () => {
     }
   });
 
-  test('applies only new migrations when a version lands after an initial run', () => {
+  test('applies only new migrations when a version lands after an initial run', async () => {
     registerSchema({
       domain: 'incremental',
       migrations: [
         {
           version: 1,
           description: 'init',
-          up: (db) => db.run('CREATE TABLE incremental (id INTEGER)'),
+          up: (store) => store.run('CREATE TABLE incremental (id INTEGER)'),
         },
       ],
     });
 
-    const store = makeStore();
+    const store = await makeStore();
     try {
-      runMigrations(store);
+      await runMigrations(store);
       // Simulate a later release that adds a new migration.
       clearRegistry();
       registerSchema({
@@ -96,17 +96,17 @@ describe('runMigrations', () => {
           {
             version: 1,
             description: 'init',
-            up: (db) => db.run('CREATE TABLE incremental (id INTEGER)'),
+            up: (store) => store.run('CREATE TABLE incremental (id INTEGER)'),
           },
           {
             version: 2,
             description: 'add label',
-            up: (db) => db.run('ALTER TABLE incremental ADD COLUMN label TEXT'),
+            up: (store) => store.run('ALTER TABLE incremental ADD COLUMN label TEXT'),
           },
         ],
       });
 
-      const result = runMigrations(store);
+      const result = await runMigrations(store);
       expect(result.applied).toEqual([
         { domain: 'incremental', version: 2, description: 'add label' },
       ]);
@@ -115,14 +115,14 @@ describe('runMigrations', () => {
     }
   });
 
-  test('rolls back the current batch when a migration throws', () => {
+  test('rolls back the current batch when a migration throws', async () => {
     registerSchema({
       domain: 'bad',
       migrations: [
         {
           version: 1,
           description: 'first',
-          up: (db) => db.run('CREATE TABLE bad_a (id INTEGER)'),
+          up: (store) => store.run('CREATE TABLE bad_a (id INTEGER)'),
         },
         {
           version: 2,
@@ -134,21 +134,21 @@ describe('runMigrations', () => {
       ],
     });
 
-    const store = makeStore();
+    const store = await makeStore();
     try {
-      expect(() => runMigrations(store)).toThrow('synthetic failure');
-      const tables = store.all<{ name: string }>(
+      await expect(runMigrations(store)).rejects.toThrow('synthetic failure');
+      const tables = await store.all<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'bad_a'",
       );
       expect(tables).toEqual([]);
-      const log = store.all<{ version: number }>('SELECT version FROM _migrations_log');
+      const log = await store.all<{ version: number }>('SELECT version FROM _migrations_log');
       expect(log).toEqual([]);
     } finally {
       store.close();
     }
   });
 
-  test('reports already-committed domains on a later domain failure', () => {
+  test('reports already-committed domains on a later domain failure', async () => {
     // Domains migrate in alphabetical order (listDomains sorts), so 'a-good'
     // commits before 'z-bad' throws. Cross-domain commits are NOT rolled back,
     // so the throw must surface what 'a-good' durably applied.
@@ -158,7 +158,7 @@ describe('runMigrations', () => {
         {
           version: 1,
           description: 'good init',
-          up: (db) => db.run('CREATE TABLE a_good (id INTEGER)'),
+          up: (store) => store.run('CREATE TABLE a_good (id INTEGER)'),
         },
       ],
     });
@@ -175,11 +175,11 @@ describe('runMigrations', () => {
       ],
     });
 
-    const store = makeStore();
+    const store = await makeStore();
     try {
       let caught: unknown;
       try {
-        runMigrations(store);
+        await runMigrations(store);
       } catch (err) {
         caught = err;
       }
@@ -189,21 +189,21 @@ describe('runMigrations', () => {
       expect(partial.applied.map((a) => `${a.domain}:${a.version}`)).toEqual(['a-good:1']);
 
       // The committed domain is durably present in the DB despite the throw.
-      const log = store.all<{ domain: string }>('SELECT domain FROM _migrations_log');
+      const log = await store.all<{ domain: string }>('SELECT domain FROM _migrations_log');
       expect(log).toEqual([{ domain: 'a-good' }]);
     } finally {
       store.close();
     }
   });
 
-  test('runs migrations per-domain independently', () => {
+  test('runs migrations per-domain independently', async () => {
     registerSchema({
       domain: 'dom-a',
       migrations: [
         {
           version: 1,
           description: 'a init',
-          up: (db) => db.run('CREATE TABLE dom_a (id INTEGER)'),
+          up: (store) => store.run('CREATE TABLE dom_a (id INTEGER)'),
         },
       ],
     });
@@ -213,19 +213,19 @@ describe('runMigrations', () => {
         {
           version: 1,
           description: 'b init',
-          up: (db) => db.run('CREATE TABLE dom_b (id INTEGER)'),
+          up: (store) => store.run('CREATE TABLE dom_b (id INTEGER)'),
         },
         {
           version: 2,
           description: 'b extend',
-          up: (db) => db.run('ALTER TABLE dom_b ADD COLUMN extra TEXT'),
+          up: (store) => store.run('ALTER TABLE dom_b ADD COLUMN extra TEXT'),
         },
       ],
     });
 
-    const store = makeStore();
+    const store = await makeStore();
     try {
-      const result = runMigrations(store);
+      const result = await runMigrations(store);
       expect(result.applied.map((a) => `${a.domain}:${a.version}`)).toEqual([
         'dom-a:1',
         'dom-b:1',
@@ -242,26 +242,103 @@ describe('dropAllDomainTables', () => {
     clearRegistry();
   });
 
-  test('wipes domain tables and _migrations_log', () => {
+  test('wipes domain tables and _migrations_log', async () => {
     registerSchema({
       domain: 'cleanup',
       migrations: [
         {
           version: 1,
           description: 'create cleanup',
-          up: (db) => db.run('CREATE TABLE cleanup_rows (id INTEGER)'),
+          up: (store) => store.run('CREATE TABLE cleanup_rows (id INTEGER)'),
         },
       ],
     });
 
-    const store = makeStore();
+    const store = await makeStore();
     try {
-      runMigrations(store);
-      dropAllDomainTables(store);
-      const remaining = store.all<{ name: string }>(
+      await runMigrations(store);
+      await dropAllDomainTables(store);
+      const remaining = await store.all<{ name: string }>(
         "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
       );
       expect(remaining).toEqual([]);
+    } finally {
+      store.close();
+    }
+  });
+
+  test('drops FK-linked tables with live rows regardless of sqlite_master order', async () => {
+    // The real store's tables form an FK graph (self-references, cross-domain
+    // pointers). sqlite_master yields creation order, so a referenced table
+    // can come up for DROP before its referrer — with enforcement on and
+    // dependent rows present, that throws FOREIGN KEY constraint failed.
+    registerSchema({
+      domain: 'fkgraph',
+      migrations: [
+        {
+          version: 1,
+          description: 'parent created before child so parent drops first',
+          up: async (store) => {
+            await store.run('CREATE TABLE fk_parent (id TEXT PRIMARY KEY)');
+            await store.run(
+              'CREATE TABLE fk_child (id TEXT PRIMARY KEY, parent_id TEXT REFERENCES fk_parent(id), prev_id TEXT REFERENCES fk_child(id))',
+            );
+          },
+        },
+      ],
+    });
+
+    const store = await makeStore();
+    try {
+      await runMigrations(store);
+      await store.exec('PRAGMA foreign_keys = ON');
+      await store.run("INSERT INTO fk_parent (id) VALUES ('p1')");
+      await store.run("INSERT INTO fk_child (id, parent_id, prev_id) VALUES ('c1', 'p1', NULL)");
+      await store.run("INSERT INTO fk_child (id, parent_id, prev_id) VALUES ('c2', 'p1', 'c1')");
+
+      await dropAllDomainTables(store);
+
+      const remaining = await store.all<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+      );
+      expect(remaining).toEqual([]);
+      // Enforcement is restored for whatever the connection does next.
+      const fk = await store.get<{ foreign_keys: number }>('PRAGMA foreign_keys');
+      expect(fk?.foreign_keys).toBe(1);
+    } finally {
+      store.close();
+    }
+  });
+
+  test('drops views so a re-migration can recreate them with bare CREATE VIEW', async () => {
+    registerSchema({
+      domain: 'viewful',
+      migrations: [
+        {
+          version: 1,
+          description: 'table + bare CREATE VIEW (no IF NOT EXISTS)',
+          up: async (store) => {
+            await store.run('CREATE TABLE view_rows (id TEXT PRIMARY KEY, v TEXT)');
+            await store.exec('CREATE VIEW view_rows_head AS SELECT MAX(id) AS id FROM view_rows');
+          },
+        },
+      ],
+    });
+
+    const store = await makeStore();
+    try {
+      await runMigrations(store);
+      await dropAllDomainTables(store);
+
+      const leftoverViews = await store.all<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'view'",
+      );
+      expect(leftoverViews).toEqual([]);
+
+      // The reset-then-reopen path re-runs the chain; a surviving view would
+      // collide on the bare CREATE VIEW.
+      const rerun = await runMigrations(store);
+      expect(rerun.applied.map((a) => `${a.domain}:${a.version}`)).toEqual(['viewful:1']);
     } finally {
       store.close();
     }

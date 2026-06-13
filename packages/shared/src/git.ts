@@ -12,21 +12,66 @@
  * throw. Empty git output is also coerced to `null`.
  */
 
-/** Internal: run `git <args>` and return trimmed stdout, or `null` on failure. */
-function runGit(args: string[], cwd?: string): string | null {
-  let proc: ReturnType<typeof Bun.spawnSync>;
+import { execFileSync } from 'node:child_process';
+
+/**
+ * True under the Bun runtime, false under plain Node. Mirrors `file-walker.ts`:
+ * the git helpers prefer `Bun.spawnSync` when available (no extra fork) and
+ * fall back to `child_process.execFileSync` under Node, so behaviour is
+ * identical either way.
+ */
+const isBun = typeof (globalThis as { Bun?: unknown }).Bun !== 'undefined';
+
+/** Normalized subprocess result shared between the Bun and Node paths. */
+interface GitRunResult {
+  exitCode: number;
+  stdout: string;
+}
+
+/**
+ * Run `git <args>` and return a normalized `{exitCode, stdout}`, or `null` on a
+ * spawn failure (git not installed, ENOENT). The Node path's `execFileSync`
+ * throws on a non-zero exit; we intercept the thrown error object
+ * (`{ status, stdout }`) and normalize so callers see the same shape Bun gives.
+ */
+function spawnGit(args: string[], cwd?: string): GitRunResult | null {
+  if (isBun) {
+    const bunGlobal = (globalThis as { Bun: typeof Bun }).Bun;
+    try {
+      const proc = bunGlobal.spawnSync({
+        cmd: ['git', ...args],
+        cwd,
+        stdout: 'pipe',
+        stderr: 'ignore',
+      });
+      return { exitCode: proc.exitCode, stdout: proc.stdout?.toString() ?? '' };
+    } catch {
+      return null;
+    }
+  }
+
   try {
-    proc = Bun.spawnSync({
-      cmd: ['git', ...args],
+    const stdout = execFileSync('git', args, {
       cwd,
-      stdout: 'pipe',
-      stderr: 'ignore',
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
     });
-  } catch {
+    return { exitCode: 0, stdout };
+  } catch (err) {
+    const e = err as { status?: number; stdout?: Buffer | string };
+    if (typeof e.status === 'number') {
+      const out = typeof e.stdout === 'string' ? e.stdout : (e.stdout?.toString('utf8') ?? '');
+      return { exitCode: e.status, stdout: out };
+    }
     return null;
   }
-  if (proc.exitCode !== 0) return null;
-  const out = proc.stdout?.toString().trim() ?? '';
+}
+
+/** Internal: run `git <args>` and return trimmed stdout, or `null` on failure. */
+function runGit(args: string[], cwd?: string): string | null {
+  const proc = spawnGit(args, cwd);
+  if (proc === null || proc.exitCode !== 0) return null;
+  const out = proc.stdout.trim();
   return out.length > 0 ? out : null;
 }
 

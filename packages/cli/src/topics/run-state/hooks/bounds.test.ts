@@ -27,7 +27,7 @@ const PROJECT_ROOT = '/repo';
 
 /** A deps stub returning a fixed `ActiveBounds` (or null for permissive). */
 function stubDeps(active: ActiveBounds | null): BoundsHookDeps {
-  return { resolveActiveBounds: () => active };
+  return { resolveActiveBounds: () => Promise.resolve(active) };
 }
 
 function writeBounds(write: string[]): ActiveBounds {
@@ -39,8 +39,8 @@ function readBounds(read: string[]): ActiveBounds {
 }
 
 describe('runBoundsHook — write wall', () => {
-  test('denies a Write outside the declared write globs (deny + reason)', () => {
-    const result = runBoundsHook(
+  test('denies a Write outside the declared write globs (deny + reason)', async () => {
+    const result = await runBoundsHook(
       { tool_name: 'Write', tool_input: { file_path: '/repo/docs/readme.md' } },
       stubDeps(writeBounds(['src/**'])),
     );
@@ -50,17 +50,17 @@ describe('runBoundsHook — write wall', () => {
     expect(result.stdout).toContain('src/**');
   });
 
-  test('passes a Write inside the declared write globs (exit 0, silent)', () => {
-    const result = runBoundsHook(
+  test('passes a Write inside the declared write globs (exit 0, silent)', async () => {
+    const result = await runBoundsHook(
       { tool_name: 'Write', tool_input: { file_path: '/repo/src/auth/login.ts' } },
       stubDeps(writeBounds(['src/**'])),
     );
     expect(result).toEqual({ exitCode: 0, stdout: '', stderr: '' });
   });
 
-  test('blocks Edit + MultiEdit outside write scope', () => {
+  test('blocks Edit + MultiEdit outside write scope', async () => {
     for (const tool of ['Edit', 'MultiEdit']) {
-      const result = runBoundsHook(
+      const result = await runBoundsHook(
         { tool_name: tool, tool_input: { file_path: '/repo/other/x.ts' } },
         stubDeps(writeBounds(['src/**'])),
       );
@@ -69,13 +69,13 @@ describe('runBoundsHook — write wall', () => {
     }
   });
 
-  test('resolves a relative file_path against the project root before matching', () => {
-    const blocked = runBoundsHook(
+  test('resolves a relative file_path against the project root before matching', async () => {
+    const blocked = await runBoundsHook(
       { tool_name: 'Write', tool_input: { file_path: 'docs/x.md' }, cwd: PROJECT_ROOT },
       stubDeps(writeBounds(['src/**'])),
     );
     expect(blocked.exitCode).toBe(0);
-    const allowed = runBoundsHook(
+    const allowed = await runBoundsHook(
       { tool_name: 'Write', tool_input: { file_path: 'src/x.ts' }, cwd: PROJECT_ROOT },
       stubDeps(writeBounds(['src/**'])),
     );
@@ -84,8 +84,8 @@ describe('runBoundsHook — write wall', () => {
 });
 
 describe('runBoundsHook — read wall', () => {
-  test('blocks a Read outside the declared read globs', () => {
-    const result = runBoundsHook(
+  test('blocks a Read outside the declared read globs', async () => {
+    const result = await runBoundsHook(
       { tool_name: 'Read', tool_input: { file_path: '/repo/secrets/key.pem' } },
       stubDeps(readBounds(['src/**'])),
     );
@@ -94,16 +94,16 @@ describe('runBoundsHook — read wall', () => {
     expect(result.stdout).toContain('secrets/key.pem');
   });
 
-  test('passes a Read inside the declared read globs', () => {
-    const result = runBoundsHook(
+  test('passes a Read inside the declared read globs', async () => {
+    const result = await runBoundsHook(
       { tool_name: 'Read', tool_input: { file_path: '/repo/src/db/conn.ts' } },
       stubDeps(readBounds(['src/**'])),
     );
     expect(result.stdout).toBe('');
   });
 
-  test('Read with only write bounds declared is permissive (no read glob to check)', () => {
-    const result = runBoundsHook(
+  test('Read with only write bounds declared is permissive (no read glob to check)', async () => {
+    const result = await runBoundsHook(
       { tool_name: 'Read', tool_input: { file_path: '/repo/anything.ts' } },
       stubDeps(writeBounds(['src/**'])),
     );
@@ -112,8 +112,8 @@ describe('runBoundsHook — read wall', () => {
 });
 
 describe('runBoundsHook — Bash wall', () => {
-  test('blocks a Bash redirection writing outside the write globs', () => {
-    const result = runBoundsHook(
+  test('blocks a Bash redirection writing outside the write globs', async () => {
+    const result = await runBoundsHook(
       {
         tool_name: 'Bash',
         tool_input: { command: 'echo hi > /repo/docs/out.txt' },
@@ -126,8 +126,8 @@ describe('runBoundsHook — Bash wall', () => {
     expect(result.stdout).toContain('docs/out.txt');
   });
 
-  test('blocks an rm outside the write globs', () => {
-    const result = runBoundsHook(
+  test('blocks an rm outside the write globs', async () => {
+    const result = await runBoundsHook(
       { tool_name: 'Bash', tool_input: { command: 'rm -rf config/prod.yaml' }, cwd: PROJECT_ROOT },
       stubDeps(writeBounds(['src/**'])),
     );
@@ -135,24 +135,24 @@ describe('runBoundsHook — Bash wall', () => {
     expect(result.stdout).toContain('config/prod.yaml');
   });
 
-  test('passes a Bash write inside the write globs', () => {
-    const result = runBoundsHook(
+  test('passes a Bash write inside the write globs', async () => {
+    const result = await runBoundsHook(
       { tool_name: 'Bash', tool_input: { command: 'echo x >> src/gen.ts' }, cwd: PROJECT_ROOT },
       stubDeps(writeBounds(['src/**'])),
     );
     expect(result.stdout).toBe('');
   });
 
-  test('passes a read-only Bash command (no write target)', () => {
-    const result = runBoundsHook(
+  test('passes a read-only Bash command (no write target)', async () => {
+    const result = await runBoundsHook(
       { tool_name: 'Bash', tool_input: { command: 'cat src/x.ts | grep foo' }, cwd: PROJECT_ROOT },
       stubDeps(writeBounds(['src/**'])),
     );
     expect(result.stdout).toBe('');
   });
 
-  test('ignores writes outside the repo (not the wall’s concern)', () => {
-    const result = runBoundsHook(
+  test('ignores writes outside the repo (not the wall’s concern)', async () => {
+    const result = await runBoundsHook(
       {
         tool_name: 'Bash',
         tool_input: { command: 'echo x > /tmp/scratch.txt' },
@@ -165,58 +165,58 @@ describe('runBoundsHook — Bash wall', () => {
 });
 
 describe('runBoundsHook — permissive by construction', () => {
-  test('null payload passes silently', () => {
-    expect(runBoundsHook(null, stubDeps(writeBounds(['src/**'])))).toEqual({
+  test('null payload passes silently', async () => {
+    expect(await runBoundsHook(null, stubDeps(writeBounds(['src/**'])))).toEqual({
       exitCode: 0,
       stdout: '',
       stderr: '',
     });
   });
 
-  test('irrelevant tool passes (active bounds never consulted)', () => {
+  test('irrelevant tool passes (active bounds never consulted)', async () => {
     let consulted = false;
     const deps: BoundsHookDeps = {
       resolveActiveBounds: () => {
         consulted = true;
-        return writeBounds(['src/**']);
+        return Promise.resolve(writeBounds(['src/**']));
       },
     };
-    const result = runBoundsHook({ tool_name: 'Glob', tool_input: { pattern: '**' } }, deps);
+    const result = await runBoundsHook({ tool_name: 'Glob', tool_input: { pattern: '**' } }, deps);
     expect(result.stdout).toBe('');
     expect(consulted).toBe(false);
   });
 
-  test('absent active bounds passes (most tasks have none)', () => {
-    const result = runBoundsHook(
+  test('absent active bounds passes (most tasks have none)', async () => {
+    const result = await runBoundsHook(
       { tool_name: 'Write', tool_input: { file_path: '/repo/anywhere.ts' } },
       stubDeps(null),
     );
     expect(result.stdout).toBe('');
   });
 
-  test('empty write glob list passes', () => {
-    const result = runBoundsHook(
+  test('empty write glob list passes', async () => {
+    const result = await runBoundsHook(
       { tool_name: 'Write', tool_input: { file_path: '/repo/anywhere.ts' } },
       stubDeps(writeBounds([])),
     );
     expect(result.stdout).toBe('');
   });
 
-  test('a thrown resolver never false-blocks', () => {
+  test('a thrown resolver never false-blocks', async () => {
     const deps: BoundsHookDeps = {
       resolveActiveBounds: () => {
         throw new Error('db locked');
       },
     };
-    const result = runBoundsHook(
+    const result = await runBoundsHook(
       { tool_name: 'Write', tool_input: { file_path: '/repo/anywhere.ts' } },
       deps,
     );
     expect(result).toEqual({ exitCode: 0, stdout: '', stderr: '' });
   });
 
-  test('missing file_path passes', () => {
-    const result = runBoundsHook(
+  test('missing file_path passes', async () => {
+    const result = await runBoundsHook(
       { tool_name: 'Write', tool_input: {} },
       stubDeps(writeBounds(['src/**'])),
     );
@@ -316,59 +316,67 @@ describe('resolveActiveBoundsFromStore', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  function seedStore(seed: (store: ReturnType<typeof openScrumStore>) => void): void {
-    const store = openScrumStore({ override: join(dir, '.prove', 'prove.db') });
+  async function seedStore(
+    seed: (store: Awaited<ReturnType<typeof openScrumStore>>) => Promise<void>,
+  ): Promise<void> {
+    const store = await openScrumStore({ override: join(dir, '.prove', 'prove.db') });
     try {
-      seed(store);
+      await seed(store);
     } finally {
+      // Await every seed write before the sync close so no pending prepared
+      // statement runs after the connection finalizes.
       store.close();
     }
   }
 
-  test('returns the single in_progress task carrying path globs', () => {
-    seedStore((store) => {
-      store.createTask({ id: 't1', title: 'bounded', bounds: { write: ['src/**'] } });
-      store.updateTaskStatus('t1', 'ready');
-      store.updateTaskStatus('t1', 'in_progress');
+  test('returns the single in_progress task carrying path globs', async () => {
+    await seedStore(async (store) => {
+      await store.createTask({ id: 't1', title: 'bounded', bounds: { write: ['src/**'] } });
+      await store.updateTaskStatus('t1', 'ready');
+      await store.updateTaskStatus('t1', 'in_progress');
     });
-    const active = resolveActiveBoundsFromStore(dir);
+    const active = await resolveActiveBoundsFromStore(dir);
     expect(active?.taskId).toBe('t1');
     expect(active?.bounds.write).toEqual(['src/**']);
     expect(active?.projectRoot).toBe(resolve(dir));
   });
 
-  test('returns the single in_progress task carrying only a tool_calls budget', () => {
-    seedStore((store) => {
-      store.createTask({ id: 't1', title: 'budgeted', bounds: { budgets: { tool_calls: 5 } } });
-      store.updateTaskStatus('t1', 'ready');
-      store.updateTaskStatus('t1', 'in_progress');
+  test('returns the single in_progress task carrying only a tool_calls budget', async () => {
+    await seedStore(async (store) => {
+      await store.createTask({
+        id: 't1',
+        title: 'budgeted',
+        bounds: { budgets: { tool_calls: 5 } },
+      });
+      await store.updateTaskStatus('t1', 'ready');
+      await store.updateTaskStatus('t1', 'in_progress');
     });
-    const active = resolveActiveBoundsFromStore(dir);
+    const active = await resolveActiveBoundsFromStore(dir);
     expect(active?.taskId).toBe('t1');
     expect(active?.bounds.budgets?.tool_calls).toBe(5);
   });
 
-  test('returns null when no in_progress task has an enforceable bound (permissive)', () => {
-    seedStore((store) => {
-      store.createTask({ id: 't1', title: 'unbounded' });
-      store.updateTaskStatus('t1', 'ready');
-      store.updateTaskStatus('t1', 'in_progress');
+  test('returns null when no in_progress task has an enforceable bound (permissive)', async () => {
+    await seedStore(async (store) => {
+      await store.createTask({ id: 't1', title: 'unbounded' });
+      await store.updateTaskStatus('t1', 'ready');
+      await store.updateTaskStatus('t1', 'in_progress');
     });
-    expect(resolveActiveBoundsFromStore(dir)).toBeNull();
+    expect(await resolveActiveBoundsFromStore(dir)).toBeNull();
   });
 
-  test('returns null when more than one in_progress task is bounded (ambiguous)', () => {
-    seedStore((store) => {
+  test('returns null when more than one in_progress task is bounded (ambiguous)', async () => {
+    await seedStore(async (store) => {
       for (const id of ['t1', 't2']) {
-        store.createTask({ id, title: id, bounds: { write: ['src/**'] } });
-        store.updateTaskStatus(id, 'ready');
-        store.updateTaskStatus(id, 'in_progress');
+        await store.createTask({ id, title: id, bounds: { write: ['src/**'] } });
+        await store.updateTaskStatus(id, 'ready');
+        await store.updateTaskStatus(id, 'in_progress');
       }
     });
-    expect(resolveActiveBoundsFromStore(dir)).toBeNull();
+    expect(await resolveActiveBoundsFromStore(dir)).toBeNull();
   });
 
-  test('returns null when the store does not exist', () => {
-    expect(resolveActiveBoundsFromStore(dir)).toBeNull();
+  test('returns null when the store does not exist', async () => {
+    expect(await resolveActiveBoundsFromStore(dir)).toBeNull();
   });
 });

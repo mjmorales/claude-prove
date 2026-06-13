@@ -19,9 +19,9 @@
  *   1  missing/invalid plan.json, or plan with no tasks
  */
 
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { teamAgentNames } from '../scrum/team-agent-names';
+import { readJson } from './read-json';
 
 export interface WavePlanOpts {
   runDir: string;
@@ -246,12 +246,4 @@ function renderBatchAgents(batch: string[], teamAgents: Record<string, string[]>
     if (names) parts.push(`${id}: ${names.join(', ')}`);
   }
   return parts.length > 0 ? parts.join('; ') : '—';
-}
-
-function readJson<T>(path: string): T | null {
-  try {
-    return JSON.parse(readFileSync(path, 'utf8')) as T;
-  } catch {
-    return null;
-  }
 }

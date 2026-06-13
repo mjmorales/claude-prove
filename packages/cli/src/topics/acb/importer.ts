@@ -12,18 +12,26 @@
  *     has no `run_slug` column) and post-migrate (has it). We detect via
  *     `PRAGMA table_info(manifests)` and insert NULL for run_slug when the
  *     column is absent.
- *   - The entire copy runs under `BEGIN EXCLUSIVE` on prove.db so a second
- *     concurrent importer sees `SQLITE_BUSY` and backs off once; on retry
- *     the loser observes non-empty acb_* tables and returns `already-migrated`.
+ *   - The entire copy runs under `BEGIN EXCLUSIVE` on prove.db. The
+ *     idempotency guard (`proveDbHasAcbRows`) is re-checked INSIDE that
+ *     exclusive transaction, immediately before the inserts, so the
+ *     empty-then-insert sequence is atomic: whichever importer acquires the
+ *     lock second observes the winner's rows, commits its empty transaction,
+ *     and returns `already-migrated` — never double-importing. The check
+ *     before the transaction is only a cheap fast-path. A concurrent peer
+ *     that meets `SQLITE_BUSY` (the lock is held when it tries `BEGIN
+ *     EXCLUSIVE`, or on the WAL pragma at open) backs off once via the retry
+ *     loop in `importLegacyDb`, then re-runs through the same in-transaction
+ *     guard.
  *   - Bare table names in legacy (`manifests`, `acb_documents`, `review_state`)
  *     land in the prefixed unified names (`acb_manifests`, `acb_acb_documents`,
  *     `acb_review_state`).
  */
 
-import { Database } from 'bun:sqlite';
 import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { openStore, runMigrations } from '@claude-prove/store';
+import { assertStoreSchemaCompatible, openStore, runMigrations, ulid } from '@claude-prove/store';
+import { type Database, connect } from '@tursodatabase/database';
 import { ensureAcbSchemaRegistered } from './store';
 
 // ---------------------------------------------------------------------------
@@ -56,21 +64,23 @@ export interface ImportResult {
  *
  * Never throws — errors land in `result.error` with `reason: 'error'`.
  */
-export function importLegacyDb(workspaceRoot: string): ImportResult {
+export async function importLegacyDb(workspaceRoot: string): Promise<ImportResult> {
   const legacyPath = join(workspaceRoot, '.prove', 'acb.db');
   if (!existsSync(legacyPath)) {
     return { imported: false, reason: 'legacy-absent' };
   }
 
-  // One retry on SQLITE_BUSY covers the two-process race: first process
-  // holds BEGIN EXCLUSIVE, second process waits 75ms, re-checks — at that
-  // point the winner's rows are visible and we short-circuit to
-  // already-migrated.
-  const first = runImport(workspaceRoot, legacyPath);
+  // One retry on SQLITE_BUSY covers the case where a peer holds the lock at
+  // open/BEGIN time: the first process holds BEGIN EXCLUSIVE, this one waits
+  // 75ms and re-runs. The double-import itself is prevented by the
+  // in-transaction `proveDbHasAcbRows` guard in `runImport`, not by this
+  // retry — on the second pass the winner's rows are visible inside the
+  // exclusive transaction and `runImport` short-circuits to already-migrated.
+  const first = await runImport(workspaceRoot, legacyPath);
   if (first.reason !== 'error' || !isBusy(first.error)) return first;
 
   sleepSync(75);
-  const second = runImport(workspaceRoot, legacyPath);
+  const second = await runImport(workspaceRoot, legacyPath);
   if (second.reason !== 'error' || !isBusy(second.error)) return second;
 
   return { imported: false, reason: 'error', error: 'busy' };
@@ -96,11 +106,11 @@ const MEMO = new Map<string, ImportResult>();
  *   - error:    one-line warning (caller decides whether to proceed)
  *   - already-migrated / legacy-absent: silent
  */
-export function ensureLegacyImported(workspaceRoot: string): ImportResult {
+export async function ensureLegacyImported(workspaceRoot: string): Promise<ImportResult> {
   const cached = MEMO.get(workspaceRoot);
   if (cached !== undefined) return cached;
 
-  const result = importLegacyDb(workspaceRoot);
+  const result = await importLegacyDb(workspaceRoot);
   MEMO.set(workspaceRoot, result);
 
   if (result.imported && result.counts) {
@@ -148,61 +158,85 @@ interface LegacyReviewRow {
   updated_at: string;
 }
 
-function runImport(workspaceRoot: string, legacyPath: string): ImportResult {
+async function runImport(workspaceRoot: string, legacyPath: string): Promise<ImportResult> {
   // Mirror openAcbStore internals: register the acb schema, open the
-  // unified store at `<workspaceRoot>/.prove/prove.db`, run pending
-  // migrations so the acb_* tables exist before we read/write them.
+  // unified store at `<workspaceRoot>/.prove/prove.db`, guard its schema
+  // identity, then run pending migrations so the acb_* tables exist before
+  // we read/write them.
   //
   // `openStore` itself can throw SQLITE_BUSY from the `PRAGMA
   // journal_mode = WAL` call when a peer process already holds the lock;
   // catch it here so the retry loop in `importLegacyDb` can back off.
   ensureAcbSchemaRegistered();
   const proveDbPath = join(workspaceRoot, '.prove', 'prove.db');
-  let store: ReturnType<typeof openStore>;
+  let store: Awaited<ReturnType<typeof openStore>>;
   try {
-    store = openStore({ path: proveDbPath });
+    store = await openStore({ path: proveDbPath });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { imported: false, reason: 'error', error: message };
   }
   try {
-    runMigrations(store);
+    // Refuse a store carrying legacy or ahead-of-binary lineage before
+    // migrating it — the same guard every other write-open applies. Without
+    // this, `migrate-legacy-db` would silently migrate and write rows into a
+    // store the rest of the binary refuses to touch.
+    await assertStoreSchemaCompatible(store);
+
+    await runMigrations(store);
     const proveDb = store.getDb();
 
-    if (proveDbHasAcbRows(proveDb)) {
+    // Fast-path: skip the legacy read entirely if the store is already
+    // populated. This is NOT the atomicity guard — that re-check lives
+    // inside the exclusive transaction below.
+    if (await proveDbHasAcbRows(proveDb)) {
       return { imported: false, reason: 'already-migrated' };
     }
 
-    const legacyDb = new Database(legacyPath, { readonly: true });
+    const legacyDb = await connect(legacyPath, { readonly: true });
     let manifests: LegacyManifestRow[];
     let documents: LegacyDocumentRow[];
     let reviews: LegacyReviewRow[];
     try {
-      const hasRunSlug = legacyHasRunSlugColumn(legacyDb);
-      manifests = readLegacyManifests(legacyDb, hasRunSlug);
-      documents = readLegacyDocuments(legacyDb);
-      reviews = readLegacyReviews(legacyDb);
+      const hasRunSlug = await legacyHasRunSlugColumn(legacyDb);
+      manifests = await readLegacyManifests(legacyDb, hasRunSlug);
+      documents = await readLegacyDocuments(legacyDb);
+      reviews = await readLegacyReviews(legacyDb);
     } finally {
-      legacyDb.close();
+      // Await every legacy read above before closing the readonly handle so
+      // no still-pending prepared statement runs after the connection drops.
+      await legacyDb.close();
     }
 
     try {
-      proveDb.run('BEGIN EXCLUSIVE TRANSACTION');
+      await proveDb.exec('BEGIN EXCLUSIVE TRANSACTION');
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       return { imported: false, reason: 'error', error: message };
     }
 
     try {
-      insertManifests(proveDb, manifests);
-      insertDocuments(proveDb, documents);
-      insertReviews(proveDb, reviews);
-      proveDb.run('COMMIT');
+      // Atomicity guard: re-check inside the exclusive transaction. The
+      // pre-transaction `proveDbHasAcbRows` fast-path runs OUTSIDE the lock,
+      // so two processes can both observe empty tables there; the second to
+      // acquire the lock (after the first commits, with no SQLITE_BUSY) would
+      // double-import every row. Re-checking here, with the inserts, under one
+      // lock makes the empty-then-insert sequence atomic — the loser commits
+      // its empty transaction and returns already-migrated.
+      if (await proveDbHasAcbRows(proveDb)) {
+        await proveDb.exec('COMMIT');
+        return { imported: false, reason: 'already-migrated' };
+      }
+
+      await insertManifests(proveDb, manifests);
+      await insertDocuments(proveDb, documents);
+      await insertReviews(proveDb, reviews);
+      await proveDb.exec('COMMIT');
     } catch (err) {
       const insertMsg = err instanceof Error ? err.message : String(err);
       let errorMsg = insertMsg;
       try {
-        proveDb.run('ROLLBACK');
+        await proveDb.exec('ROLLBACK');
       } catch (rbErr) {
         // Capture the rollback failure so both errors are observable. The
         // finally block below closes the connection (implicitly rolling back
@@ -235,18 +269,21 @@ function runImport(workspaceRoot: string, legacyPath: string): ImportResult {
 // Legacy-db readers (foreign schema — NOT routed through packages/store)
 // ---------------------------------------------------------------------------
 
-function legacyHasRunSlugColumn(legacyDb: Database): boolean {
-  const rows = legacyDb
-    .prepare<{ name: string }, []>("SELECT name FROM pragma_table_info('manifests')")
-    .all();
+async function legacyHasRunSlugColumn(legacyDb: Database): Promise<boolean> {
+  const stmt = await legacyDb.prepare("SELECT name FROM pragma_table_info('manifests')");
+  const rows = (await stmt.all()) as { name: string }[];
   return rows.some((r) => r.name === 'run_slug');
 }
 
-function readLegacyManifests(legacyDb: Database, hasRunSlug: boolean): LegacyManifestRow[] {
+async function readLegacyManifests(
+  legacyDb: Database,
+  hasRunSlug: boolean,
+): Promise<LegacyManifestRow[]> {
   const sql = hasRunSlug
     ? 'SELECT branch, commit_sha, timestamp, data, created_at, run_slug FROM manifests'
     : 'SELECT branch, commit_sha, timestamp, data, created_at, NULL AS run_slug FROM manifests';
-  const rows = legacyDb.prepare<Record<string, unknown>, []>(sql).all();
+  const stmt = await legacyDb.prepare(sql);
+  const rows = (await stmt.all()) as Record<string, unknown>[];
   return rows.map((row) => ({
     branch: asString(row.branch, 'manifests.branch'),
     commit_sha: asString(row.commit_sha, 'manifests.commit_sha'),
@@ -257,12 +294,11 @@ function readLegacyManifests(legacyDb: Database, hasRunSlug: boolean): LegacyMan
   }));
 }
 
-function readLegacyDocuments(legacyDb: Database): LegacyDocumentRow[] {
-  const rows = legacyDb
-    .prepare<Record<string, unknown>, []>(
-      'SELECT branch, data, created_at, updated_at FROM acb_documents',
-    )
-    .all();
+async function readLegacyDocuments(legacyDb: Database): Promise<LegacyDocumentRow[]> {
+  const stmt = await legacyDb.prepare(
+    'SELECT branch, data, created_at, updated_at FROM acb_documents',
+  );
+  const rows = (await stmt.all()) as Record<string, unknown>[];
   return rows.map((row) => ({
     branch: asString(row.branch, 'acb_documents.branch'),
     data: asString(row.data, 'acb_documents.data'),
@@ -271,12 +307,11 @@ function readLegacyDocuments(legacyDb: Database): LegacyDocumentRow[] {
   }));
 }
 
-function readLegacyReviews(legacyDb: Database): LegacyReviewRow[] {
-  const rows = legacyDb
-    .prepare<Record<string, unknown>, []>(
-      'SELECT branch, acb_hash, data, created_at, updated_at FROM review_state',
-    )
-    .all();
+async function readLegacyReviews(legacyDb: Database): Promise<LegacyReviewRow[]> {
+  const stmt = await legacyDb.prepare(
+    'SELECT branch, acb_hash, data, created_at, updated_at FROM review_state',
+  );
+  const rows = (await stmt.all()) as Record<string, unknown>[];
   return rows.map((row) => ({
     branch: asString(row.branch, 'review_state.branch'),
     acb_hash: asString(row.acb_hash, 'review_state.acb_hash'),
@@ -290,33 +325,43 @@ function readLegacyReviews(legacyDb: Database): LegacyReviewRow[] {
 // Prove-db writers (run inside BEGIN EXCLUSIVE)
 // ---------------------------------------------------------------------------
 
-function insertManifests(db: Database, rows: LegacyManifestRow[]): void {
-  const stmt = db.prepare<unknown, [string, string, string, string, string, string | null]>(
-    'INSERT INTO acb_manifests (branch, commit_sha, timestamp, data, created_at, run_slug) VALUES (?, ?, ?, ?, ?, ?)',
+async function insertManifests(db: Database, rows: LegacyManifestRow[]): Promise<void> {
+  // The new schema assigns a fresh ULID id per row — the legacy AUTOINCREMENT
+  // rowid is not carried over (nothing references it; the manifest log orders
+  // by timestamp).
+  const stmt = await db.prepare(
+    'INSERT INTO acb_manifests (id, branch, commit_sha, timestamp, data, created_at, run_slug) VALUES (?, ?, ?, ?, ?, ?, ?)',
   );
   for (const r of rows) {
-    stmt.run(r.branch, r.commit_sha, r.timestamp, r.data, r.created_at, r.run_slug);
+    await stmt.run(ulid(), r.branch, r.commit_sha, r.timestamp, r.data, r.created_at, r.run_slug);
   }
 }
 
-function insertDocuments(db: Database, rows: LegacyDocumentRow[]): void {
-  // UNIQUE(branch): legacy should have at most one row per branch, but
-  // `INSERT OR IGNORE` gives us a stable fallback if the invariant ever
-  // slips (e.g., a manually-edited db).
-  const stmt = db.prepare<unknown, [string, string, string, string]>(
-    'INSERT OR IGNORE INTO acb_acb_documents (branch, data, created_at, updated_at) VALUES (?, ?, ?, ?)',
+async function insertDocuments(db: Database, rows: LegacyDocumentRow[]): Promise<void> {
+  // The redesigned `acb_acb_documents` is an append-only revision log with no
+  // UNIQUE(branch); the latest revision per branch is read through the head
+  // view. Legacy carried at most one row per branch, so a plain INSERT lands
+  // exactly one revision per branch — that lone revision IS the head. The
+  // legacy `updated_at` is dropped: the head view re-derives the document's
+  // updated time from its newest revision's `created_at`. A fresh ULID id is
+  // minted per row.
+  const stmt = await db.prepare(
+    'INSERT INTO acb_acb_documents (id, branch, data, created_at) VALUES (?, ?, ?, ?)',
   );
   for (const r of rows) {
-    stmt.run(r.branch, r.data, r.created_at, r.updated_at);
+    await stmt.run(ulid(), r.branch, r.data, r.created_at);
   }
 }
 
-function insertReviews(db: Database, rows: LegacyReviewRow[]): void {
-  const stmt = db.prepare<unknown, [string, string, string, string, string]>(
-    'INSERT OR IGNORE INTO acb_review_state (branch, acb_hash, data, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+async function insertReviews(db: Database, rows: LegacyReviewRow[]): Promise<void> {
+  // Same append-only revision shape as `insertDocuments`: one legacy row per
+  // branch becomes one head revision; `updated_at` is dropped in favor of the
+  // head view's `created_at`-derived recency.
+  const stmt = await db.prepare(
+    'INSERT INTO acb_review_state (id, branch, acb_hash, data, created_at) VALUES (?, ?, ?, ?, ?)',
   );
   for (const r of rows) {
-    stmt.run(r.branch, r.acb_hash, r.data, r.created_at, r.updated_at);
+    await stmt.run(ulid(), r.branch, r.acb_hash, r.data, r.created_at);
   }
 }
 
@@ -324,12 +369,11 @@ function insertReviews(db: Database, rows: LegacyReviewRow[]): void {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function proveDbHasAcbRows(proveDb: Database): boolean {
-  const row = proveDb
-    .prepare<{ total: number }, []>(
-      'SELECT (SELECT COUNT(*) FROM acb_manifests) + (SELECT COUNT(*) FROM acb_acb_documents) + (SELECT COUNT(*) FROM acb_review_state) AS total',
-    )
-    .get();
+async function proveDbHasAcbRows(proveDb: Database): Promise<boolean> {
+  const stmt = await proveDb.prepare(
+    'SELECT (SELECT COUNT(*) FROM acb_manifests) + (SELECT COUNT(*) FROM acb_acb_documents) + (SELECT COUNT(*) FROM acb_review_state) AS total',
+  );
+  const row = (await stmt.get()) as { total: number } | undefined;
   return (row?.total ?? 0) > 0;
 }
 
