@@ -17,6 +17,7 @@
 
 import type { Store } from '../connection';
 import { ulid } from '../ulid';
+import { isoNow } from './util';
 
 /**
  * Canonical verdict vocabulary for `acb_group_verdicts.verdict`.
@@ -29,9 +30,7 @@ import { ulid } from '../ulid';
  * The dependency graph runs `@claude-prove/cli` → `@claude-prove/store`, so
  * this module cannot import the matching `VerdictValue` from the CLI's
  * `acb/schemas.ts` without a cycle. The vocabulary therefore lives here as
- * the canonical copy. Follow-up: the CLI should re-import `VERDICT_VALUES` /
- * `VerdictValue` / `GroupVerdict` / `GroupVerdictRecord` from this module
- * rather than keep a parallel definition, so the two never drift.
+ * the canonical copy, and the CLI re-imports it rather than redeclaring it.
  */
 export const VERDICT_VALUES = [
   'accepted',
@@ -79,8 +78,4 @@ export async function appendGroupVerdict(
     [ulid(), slug, groupId, verdict, note, fixPrompt, updatedAt],
   );
   return { slug, groupId, verdict, note, fixPrompt, updatedAt };
-}
-
-function isoNow(): string {
-  return new Date().toISOString();
 }

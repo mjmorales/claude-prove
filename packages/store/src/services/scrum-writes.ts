@@ -28,6 +28,7 @@ import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { type Store, withTx } from '../connection';
 import { ulid } from '../ulid';
+import { isoNow } from './util';
 
 // ---------------------------------------------------------------------------
 // Closed scrum status enum + task / acceptance domain types (canonical copy)
@@ -539,8 +540,12 @@ interface ScanEntry {
   type: string;
 }
 
-/** The closed reasoning-log entry type taxonomy. */
-const SCAN_ENTRY_TYPES = [
+/**
+ * The closed reasoning-log entry type taxonomy. Exported only so the
+ * conformance test can assert it stays identical to the CLI's canonical
+ * `ENTRY_TYPES`; not part of the public store API.
+ */
+export const SCAN_ENTRY_TYPES = [
   'decision',
   'discovery',
   'context',
@@ -567,13 +572,17 @@ const isScanStrOrNull = (v: unknown): boolean => v === null || isScanStr(v);
 const isScanRiskSeverity = (v: unknown): boolean =>
   isScanStr(v) && (SCAN_RISK_SEVERITIES as readonly string[]).includes(v);
 
-interface ScanFieldSpec {
+export interface ScanFieldSpec {
   fields: Record<string, (value: unknown) => boolean>;
   optional?: Record<string, (value: unknown) => boolean>;
 }
 
-/** Per-type required (and optional) fields beyond the envelope. */
-const SCAN_TYPE_SPECS: Record<string, ScanFieldSpec> = {
+/**
+ * Per-type required (and optional) fields beyond the envelope. Exported only
+ * so the conformance test can assert key-parity with the CLI's canonical
+ * `TYPE_SPECS`; not part of the public store API.
+ */
+export const SCAN_TYPE_SPECS: Record<string, ScanFieldSpec> = {
   decision: { fields: { alternatives: isScanStrArray, selected_rationale: isScanStr } },
   discovery: { fields: {} },
   context: { fields: {} },
@@ -689,10 +698,6 @@ function criterionSatisfiedAtFloor(criterion: AcceptanceCriterion): boolean {
 // ---------------------------------------------------------------------------
 // Provenance stamping helpers
 // ---------------------------------------------------------------------------
-
-function isoNow(): string {
-  return new Date().toISOString();
-}
 
 /**
  * The executing-worker/run context for a row write. The orchestrator exports
