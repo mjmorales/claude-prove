@@ -8,7 +8,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Unreleased — Turso store: async driver port + sync-safe v1 schema (BREAKING store reset)
+## v4.0.0 — Turso store: async driver port + sync-safe v1 schema (BREAKING store reset)
 
 *(Store migration: **breaking — the schema chain resets to a clean v1 per domain**. A store written by any earlier plugin version is refused on write-open with a reset-or-migrate message; see Migration below. No `.claude/.prove.json` migration.)*
 

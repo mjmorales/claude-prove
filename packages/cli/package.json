@@ -1,6 +1,6 @@
 {
   "name": "@claude-prove/cli",
-  "version": "3.13.3",
+  "version": "4.0.0",
   "private": true,
   "type": "module",
   "bin": {
