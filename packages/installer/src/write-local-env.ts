@@ -74,7 +74,7 @@ export function writeLocalEnv(settingsPath: string, pluginDir: string): boolean 
   settings.env = { ...settings.env, [PLUGIN_DIR_ENV_VAR]: pluginDir };
 
   const serialized = `${JSON.stringify(settings, null, 2)}\n`;
-  const tmp = `${settingsPath}.tmp`;
+  const tmp = `${settingsPath}.tmp.${process.pid}`;
   writeFileSync(tmp, serialized, 'utf8');
   renameSync(tmp, settingsPath);
   return true;
