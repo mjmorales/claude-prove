@@ -184,7 +184,7 @@ const isRiskSeverity = (v: unknown): boolean =>
  * (discovery, context, review_feedback, verification) maps to an empty spec —
  * the envelope alone is its full shape.
  */
-const TYPE_SPECS: Record<EntryType, FieldSpec> = {
+export const TYPE_SPECS: Record<EntryType, FieldSpec> = {
   decision: { fields: { alternatives: isStrArray, selected_rationale: isStr } },
   discovery: { fields: {} },
   context: { fields: {} },

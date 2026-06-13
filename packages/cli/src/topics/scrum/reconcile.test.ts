@@ -201,6 +201,78 @@ describe('reconcileRunCompleted — tracked run', () => {
 });
 
 // ===========================================================================
+// reconcileRunCompleted — projectRoot anchoring (cwd != projectRoot)
+// ===========================================================================
+
+describe('reconcileRunCompleted — run_path is anchored on projectRoot, not cwd', () => {
+  test('stores a projectRoot-relative run_path that round-trips when cwd differs', async () => {
+    // A linked worktree / subdirectory invocation: cwd is the harness `project`,
+    // but the run lives under a DIFFERENT projectRoot. The stored run_path must
+    // be relative to projectRoot (so the read path resolves it correctly), never
+    // to cwd.
+    const altRoot = mkdtempSync(join(tmpdir(), 'scrum-altroot-'));
+    try {
+      const branch = 'feature-anchor';
+      const slug = 'demo';
+      const runDir = join(altRoot, '.prove', 'runs', branch, slug);
+      mkdirSync(runDir, { recursive: true });
+
+      const plan = {
+        schema_version: '5',
+        kind: 'plan',
+        mode: 'full',
+        task_id: 'anchor-1',
+        tasks: [{ id: '1', title: 'step', steps: [] }],
+      };
+      writeFileSync(join(runDir, 'plan.json'), `${JSON.stringify(plan, null, 2)}\n`);
+
+      const state = {
+        schema_version: '5',
+        kind: 'state',
+        run_status: 'completed',
+        slug,
+        branch,
+        current_task: '1',
+        current_step: '',
+        started_at: '2026-04-23T09:00:00Z',
+        updated_at: '2026-04-23T12:00:00Z',
+        ended_at: '2026-04-23T12:00:00Z',
+        tasks: [],
+        dispatch: { dispatched: [] },
+      };
+      const statePath = join(runDir, 'state.json');
+      writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`);
+
+      await store.createTask({ id: 'anchor-1', title: 'Anchor task' });
+
+      // cwd is the harness `project` (set in beforeEach), distinct from altRoot.
+      expect(process.cwd()).not.toBe(altRoot);
+      const result = await reconcileRunCompleted(statePath, store, altRoot);
+      expect(result.kind).toBe('reconciled');
+
+      // Stored path is projectRoot-relative — NOT an absolute path and NOT a
+      // `../`-laden traversal that a cwd anchor would have produced.
+      const expectedRel = join('.prove', 'runs', branch, slug);
+      const runs = await store.listRunsForTask('anchor-1');
+      expect(runs).toHaveLength(1);
+      expect(runs[0]?.run_path).toBe(expectedRel);
+
+      // The run_completed event payload carries the same anchored path.
+      const events = await store.listEventsForTask('anchor-1');
+      const completed = events.find((e) => e.kind === 'run_completed');
+      expect((completed?.payload as Record<string, unknown>)?.run_path).toBe(expectedRel);
+
+      // Round-trip: the reverse lookup keyed on the stored path resolves back to
+      // the task, and join(projectRoot, run_path) reaches the run dir on disk.
+      expect((await store.getTaskForRun(expectedRel))?.id).toBe('anchor-1');
+      expect(join(altRoot, expectedRel)).toBe(runDir);
+    } finally {
+      rmSync(altRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+// ===========================================================================
 // reconcileRunCompleted — orphan path
 // ===========================================================================
 

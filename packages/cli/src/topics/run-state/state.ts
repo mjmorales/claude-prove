@@ -9,21 +9,40 @@
  * `JSON.stringify(..., null, 2)` (two-space indent), and files end with a
  * trailing newline.
  *
- * Atomic write: temp-file (`<path>.tmp`) + rename to target. `state.json` is
- * single-writer-by-convention: there is no locking. The `state.json.lock`
- * sidecar is a presence-flag only — it is never acquired, tested, or held, so
- * it provides no write-serialization. Concurrent mutators would interleave
- * load -> mutate -> write with last-write-wins; callers must funnel every
- * mutation through this module to keep the single-writer invariant.
+ * Atomic write: temp-file (`<path>.tmp`) + rename to target.
+ *
+ * Write serialization: every whole-file load -> mutate -> write window
+ * (`mutateState`, `reconcile`) runs under an `O_EXCL` advisory lock held on a
+ * `state.json.lock.held` sidecar (see `withStateLock`). In parallel-wave mode
+ * multiple worktree subagent hook processes finish near-simultaneously; without
+ * the lock a late writer's whole-file write would erase an earlier sibling's
+ * just-recorded step completion (last-write-wins). The lock makes concurrent
+ * mutators briefly block instead of clobbering. A stale lock (older than
+ * `STALE_LOCK_MS`, from a crashed holder) is taken over.
+ *
+ * The separate `state.json.lock` sidecar is an unrelated presence-flag only —
+ * it is never acquired, tested, or held; it exists because the on-disk run
+ * layout and shipped `.gitignore` expect the file to be present.
  */
 
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs';
 import { dirname } from 'node:path';
 import { RunPaths } from './paths';
 import {
   CURRENT_SCHEMA_VERSION,
   PLAN_SCHEMA,
   PRD_SCHEMA,
+  REVIEW_VERDICTS,
   STEP_STATUSES,
   TASK_STATUSES,
   VALIDATOR_PHASES,
@@ -251,6 +270,93 @@ export function writeJsonAtomic(path: string, data: unknown): void {
 }
 
 // ---------------------------------------------------------------------------
+// Advisory write lock — O_EXCL serialization for whole-file mutations.
+// ---------------------------------------------------------------------------
+
+/** Spin-retry backoff between lock-acquire attempts. */
+const LOCK_RETRY_MS = 50;
+/** Upper bound on total time spent blocking for the lock before giving up. */
+const LOCK_TIMEOUT_MS = 5_000;
+/** A held-lock file older than this is treated as abandoned by a crashed holder
+ *  and taken over. Comfortably exceeds any single load -> mutate -> write. */
+const STALE_LOCK_MS = 30_000;
+
+/** Held-lock sidecar path. Distinct from the `state.json.lock` presence flag.
+ *  Exported for tests that assert acquire/release/takeover behavior directly. */
+export function heldLockPath(statePath: string): string {
+  return `${statePath}.lock.held`;
+}
+
+/** Blocking sleep via a sync poll loop — the lock window is short and the CLI
+ *  runs one mutation per process, so spinning here is acceptable. */
+function spinSleep(ms: number): void {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    // busy-wait
+  }
+}
+
+/**
+ * Run `fn` while holding an exclusive advisory lock on `<statePath>.lock.held`.
+ *
+ * Acquire by `openSync(..., 'wx')` (O_EXCL create); on `EEXIST` spin-retry with
+ * `LOCK_RETRY_MS` backoff up to `LOCK_TIMEOUT_MS`. A held-lock file whose mtime
+ * is older than `STALE_LOCK_MS` is assumed to belong to a crashed holder and is
+ * unlinked so the next attempt can take it over. The lock is always released
+ * (close + unlink) in `finally`, so a clean mutate leaves no held-lock file
+ * behind. The lock records `{ pid, ts }` for post-mortem inspection of a stale
+ * takeover.
+ *
+ * Exported so tests can drive the acquire/block/takeover paths directly.
+ */
+export function withStateLock<T>(statePath: string, fn: () => T): T {
+  const lockPath = heldLockPath(statePath);
+  mkdirSync(dirname(lockPath), { recursive: true });
+
+  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  let fd: number | undefined;
+  while (fd === undefined) {
+    try {
+      fd = openSync(lockPath, 'wx');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      takeOverIfStale(lockPath);
+      if (Date.now() >= deadline) {
+        throw new StateError(
+          `timed out acquiring state lock after ${LOCK_TIMEOUT_MS}ms: ${lockPath}`,
+        );
+      }
+      spinSleep(LOCK_RETRY_MS);
+    }
+  }
+
+  try {
+    writeSync(fd, JSON.stringify({ pid: process.pid, ts: utcnowIso() }));
+    return fn();
+  } finally {
+    closeSync(fd);
+    try {
+      unlinkSync(lockPath);
+    } catch {
+      // Already removed (e.g. a concurrent stale-takeover unlinked it); the
+      // lock is released regardless, so the failure is benign.
+    }
+  }
+}
+
+/** Unlink a held-lock file if its mtime is older than `STALE_LOCK_MS`, so a
+ *  crashed holder cannot deadlock live mutators. */
+function takeOverIfStale(lockPath: string): void {
+  try {
+    const age = Date.now() - statSync(lockPath).mtimeMs;
+    if (age > STALE_LOCK_MS) unlinkSync(lockPath);
+  } catch {
+    // The lock vanished between EEXIST and stat — the holder released it; the
+    // next acquire attempt will succeed.
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Defaults / factory helpers
 // ---------------------------------------------------------------------------
 
@@ -416,24 +522,33 @@ export function loadState(paths: RunPaths): StateData {
   return readJson(paths.state) as unknown as StateData;
 }
 
-/** Write state back. Bumps `updated_at` and goes through atomic write. */
+/**
+ * Write state back. Bumps `updated_at` and goes through atomic write, under the
+ * advisory lock so it cannot clobber a concurrent `mutateState`.
+ */
 export function saveState(paths: RunPaths, state: StateData): void {
-  state.updated_at = utcnowIso();
   touchLock(paths.state_lock);
-  writeJsonAtomic(paths.state, state);
+  withStateLock(paths.state, () => {
+    state.updated_at = utcnowIso();
+    writeJsonAtomic(paths.state, state);
+  });
 }
 
 /**
  * Read-modify-write helper: load, apply mutator, bump `updated_at`, persist
- * atomically.
+ * atomically. The whole load -> mutate -> write window runs under the advisory
+ * lock (`withStateLock`) so concurrent parallel-wave mutators serialize instead
+ * of overwriting each other's whole-file writes.
  */
 function mutateState<T>(paths: RunPaths, mutator: (state: StateData) => T): T {
   touchLock(paths.state_lock);
-  const state = readJson(paths.state) as unknown as StateData;
-  const result = mutator(state);
-  state.updated_at = utcnowIso();
-  writeJsonAtomic(paths.state, state);
-  return result;
+  return withStateLock(paths.state, () => {
+    const state = readJson(paths.state) as unknown as StateData;
+    const result = mutator(state);
+    state.updated_at = utcnowIso();
+    writeJsonAtomic(paths.state, state);
+    return result;
+  });
 }
 
 /**
@@ -683,11 +798,9 @@ export interface TaskReviewOptions {
   reviewer?: string;
 }
 
-const REVIEW_VERDICT_VALUES: readonly string[] = ['approved', 'rejected', 'pending', 'n/a'];
-
 export function taskReview(paths: RunPaths, taskId: string, options: TaskReviewOptions): StateData {
   const { verdict, notes = '', reviewer = '' } = options;
-  if (!REVIEW_VERDICT_VALUES.includes(verdict)) {
+  if (!(REVIEW_VERDICTS as readonly string[]).includes(verdict)) {
     throw new StateError(`invalid review verdict: '${verdict}'`);
   }
 
@@ -746,8 +859,19 @@ const TERMINAL_STEP_STATUSES: ReadonlySet<StepStatus> = new Set(
 );
 
 const TERMINAL_TASK_STATUSES: ReadonlySet<TaskStatus> = new Set(
-  TASK_STATUSES.filter((s): s is TaskStatus => s === 'completed'),
+  TASK_STATUSES.filter(
+    (s): s is TaskStatus => s === 'completed' || s === 'failed' || s === 'halted',
+  ),
 );
+
+// Run verdict precedence when every task is terminal: the worst outcome wins.
+// A run with any failed task is 'failed'; failing that, any halted task makes
+// it 'halted'; only an all-completed run is 'completed'.
+const RUN_VERDICT_PRECEDENCE: ReadonlyArray<[TaskStatus, RunStatus]> = [
+  ['failed', 'failed'],
+  ['halted', 'halted'],
+  ['completed', 'completed'],
+];
 
 function maybeFinalizeTask(task: TaskData): void {
   const statuses = new Set(task.steps.map((s) => s.status));
@@ -788,16 +912,28 @@ function maybeAdvanceCurrent(state: StateData, task: TaskData, step: StepData): 
   state.current_step = '';
 }
 
+/**
+ * Finalize the run once every task is terminal. The run verdict is the worst
+ * status present (failed > halted > completed), so a mixed-terminal run — e.g.
+ * a `stepComplete` that ends the last task while a sibling already 'failed' —
+ * finalizes as 'failed' instead of lingering at 'running'.
+ *
+ * Only fires when `run_status` is still 'running': `terminateStep` and
+ * `reconcile` set the run verdict directly on the failing/halting path, and
+ * this must not override a verdict they already stamped.
+ */
 function maybeFinalizeRun(state: StateData): void {
+  if (state.run_status !== 'running') return;
   const statuses = new Set(state.tasks.map((t) => t.status));
   if (statuses.size === 0) return;
   const allTerminal = [...statuses].every((s) => TERMINAL_TASK_STATUSES.has(s));
-  if (allTerminal) {
-    state.run_status = 'completed';
-    if (!state.ended_at) state.ended_at = utcnowIso();
-    state.current_task = '';
-    state.current_step = '';
-  }
+  if (!allTerminal) return;
+
+  const verdict = RUN_VERDICT_PRECEDENCE.find(([status]) => statuses.has(status));
+  state.run_status = verdict ? verdict[1] : 'completed';
+  if (!state.ended_at) state.ended_at = utcnowIso();
+  state.current_task = '';
+  state.current_step = '';
 }
 
 // ---------------------------------------------------------------------------

@@ -246,6 +246,36 @@ describe('onSubagentStop', () => {
     expect(result).toEqual({ exitCode: 0, stdout: '', stderr: '' });
   });
 
+  test('no-op for an unrelated agent name like Explore', async () => {
+    const result = await onSubagentStop({
+      cwd: project,
+      subagent_type: 'Explore',
+    });
+    expect(result).toEqual({ exitCode: 0, stdout: '', stderr: '' });
+  });
+
+  test('team-role subagent (team-<slug>-<role>) reaches the reconcile path', async () => {
+    await seedStore(async (store) => {
+      await store.createTask({ id: 'team-t1', title: 'Team task' });
+    });
+    const runDir = writeRun('feature-team', 'demo', 'team-t1');
+
+    const result = await onSubagentStop({
+      cwd: runDir,
+      subagent_type: 'team-engine-implementer',
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('scrum: reconciled');
+
+    const store = await openScrumStore({ cwd: project });
+    try {
+      const events = await store.listEventsForTask('team-t1');
+      expect(events.some((e) => e.kind === 'run_completed')).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
   test('reconciles when subagent_type matches and run dir resolvable', async () => {
     await seedStore(async (store) => {
       await store.createTask({ id: 'hook-t1', title: 'Hook task' });

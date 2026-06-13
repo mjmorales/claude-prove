@@ -176,6 +176,41 @@ async function readProveDb<T>(root: string, sql: string): Promise<T[]> {
   }
 }
 
+/**
+ * Seed `<root>/.prove/prove.db` with a `_migrations_log` carrying a legacy
+ * acb lineage — the acb domain recorded at a version above the Turso v1 head.
+ * This mirrors the schema-guard fixtures: a store migrated under the old
+ * incremental chain, which `assertStoreSchemaCompatible` must refuse.
+ */
+async function seedLegacyLineageProveDb(root: string, version: number): Promise<void> {
+  const db = await connect(join(root, '.prove', 'prove.db'));
+  try {
+    await db.exec(
+      `CREATE TABLE IF NOT EXISTS _migrations_log (
+        domain TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        description TEXT NOT NULL,
+        applied_at TEXT NOT NULL,
+        PRIMARY KEY (domain, version)
+      )`,
+    );
+    const stmt = await db.prepare(
+      'INSERT INTO _migrations_log (domain, version, description, applied_at) VALUES (?, ?, ?, ?)',
+    );
+    await stmt.run('acb', version, 'legacy incremental hop', '2026-01-01T00:00:00Z');
+  } finally {
+    await db.close();
+  }
+}
+
+async function proveDbHasTable(root: string, table: string): Promise<boolean> {
+  const rows = await readProveDb<{ name: string }>(
+    root,
+    `SELECT name FROM sqlite_master WHERE type = 'table' AND name = '${table}'`,
+  );
+  return rows.length > 0;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -452,6 +487,48 @@ describe('importLegacyDb: transactional rollback', () => {
   });
 });
 
+describe('importLegacyDb: schema-incompatible store is refused', () => {
+  let root: string;
+  beforeEach(() => {
+    root = makeWorkspace();
+    resetLegacyImportMemo();
+  });
+  afterEach(() => cleanup(root));
+
+  test('legacy-lineage prove.db (acb logged above the v1 head) is refused with reason=error; no migration applied', async () => {
+    // F2 regression: `runImport` must call `assertStoreSchemaCompatible`
+    // between opening the store and running migrations, so a store carrying a
+    // pre-Turso-v1 lineage is refused rather than silently migrated. Seed a
+    // prove.db whose `_migrations_log` records the acb domain at v28, then
+    // place a legacy acb.db to import.
+    await seedLegacyLineageProveDb(root, 28);
+    const legacyPath = await createPostMigrateLegacy(root, {
+      manifests: [
+        {
+          branch: 'feat/x',
+          commit_sha: 'abc',
+          timestamp: '2026-01-01T00:00:00Z',
+          data: '{}',
+          created_at: '2026-01-01T00:00:01Z',
+          run_slug: null,
+        },
+      ],
+    });
+
+    const result = await importLegacyDb(root);
+    expect(result.imported).toBe(false);
+    expect(result.reason).toBe('error');
+    expect(result.error).toMatch(/predates the Turso v1 schema/);
+
+    // The guard runs BEFORE `runMigrations`, so the acb_* tables were never
+    // created — the store is left untouched.
+    expect(await proveDbHasTable(root, 'acb_manifests')).toBe(false);
+
+    // Legacy file must remain intact — a refused import never deletes it.
+    expect(existsSync(legacyPath)).toBe(true);
+  });
+});
+
 describe('importLegacyDb: concurrency', () => {
   let root: string;
   beforeEach(() => {
@@ -568,6 +645,96 @@ describe('importLegacyDb: concurrency', () => {
     // Legacy file from the second attempt is still intact on disk —
     // already-migrated path must not delete it.
     expect(existsSync(join(root, '.prove', 'acb.db'))).toBe(true);
+  });
+
+  test('concurrent subprocesses against the same fresh store: at most one imports, no duplicate rows', async () => {
+    // F1 regression: the `proveDbHasAcbRows` fast-path runs OUTSIDE the
+    // exclusive transaction, so two processes can both observe empty tables
+    // there. Without an in-transaction re-check, the second to acquire the
+    // lock (after the first commits, with no SQLITE_BUSY) double-imports
+    // every row. Launch two importers simultaneously against the SAME fresh
+    // store and assert the in-transaction guard holds: exactly the original
+    // 3 rows land, regardless of which process wins.
+    await createPostMigrateLegacy(root, {
+      manifests: [
+        {
+          branch: 'feat/a',
+          commit_sha: 'aaa',
+          timestamp: '2026-01-01T00:00:00Z',
+          data: '{}',
+          created_at: '2026-01-01T00:00:01Z',
+          run_slug: null,
+        },
+        {
+          branch: 'feat/b',
+          commit_sha: 'bbb',
+          timestamp: '2026-01-02T00:00:00Z',
+          data: '{}',
+          created_at: '2026-01-02T00:00:01Z',
+          run_slug: null,
+        },
+        {
+          branch: 'feat/c',
+          commit_sha: 'ccc',
+          timestamp: '2026-01-03T00:00:00Z',
+          data: '{}',
+          created_at: '2026-01-03T00:00:01Z',
+          run_slug: null,
+        },
+      ],
+    });
+
+    const importerPath = join(import.meta.dir, 'importer.ts');
+    const script = `
+      import { importLegacyDb } from ${JSON.stringify(importerPath)};
+      const res = await importLegacyDb(${JSON.stringify(root)});
+      process.stdout.write(JSON.stringify(res));
+    `;
+
+    const spawnOne = () =>
+      Bun.spawn({
+        cmd: ['bun', '-e', script],
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+
+    // Launch both at once so they genuinely race for the exclusive lock.
+    const procs = [spawnOne(), spawnOne()];
+    const outs = await Promise.all(procs.map((p) => new Response(p.stdout).text()));
+    await Promise.all(procs.map((p) => p.exited));
+
+    const results = outs.map(
+      (out) => JSON.parse(out || '{}') as { imported?: boolean; reason?: string; error?: string },
+    );
+
+    // No process may double-import: row counts are the invariant.
+    const rows = await readProveDb<{ n: number; branches: string }>(
+      root,
+      "SELECT COUNT(*) AS n, GROUP_CONCAT(branch, ',') AS branches FROM (SELECT branch FROM acb_manifests ORDER BY branch)",
+    );
+    expect(rows[0]?.n).toBe(3);
+    expect(rows[0]?.branches).toBe('feat/a,feat/b,feat/c');
+
+    // At most one process reports a successful import. Any non-success
+    // outcome is a contention artifact — `already-migrated` (the lock loser
+    // hitting the in-transaction guard) or a transient lock `error` after the
+    // bounded SQLITE_BUSY retry. The load-bearing invariant is the row count
+    // above: whatever the scheduler decides, no rows are duplicated. (The
+    // original test notes that pinning the winner deterministically in-test
+    // is impractical because the OS scheduler decides the race.) A surfaced
+    // error must therefore be a lock/busy error, never a duplicate-key or
+    // corruption failure.
+    const imported = results.filter((r) => r.imported === true);
+    expect(imported.length).toBeLessThanOrEqual(1);
+    for (const r of results) {
+      if (r.reason === 'error') {
+        // A surfaced error must be lock contention, never duplicate-key or
+        // corruption. Turso reports the open-time exclusive file lock as a
+        // "Locking error: ... File is locked by another process" string,
+        // distinct from the in-statement SQLITE_BUSY message.
+        expect(r.error ?? '').toMatch(/SQLITE_BUSY|database is locked|is locked by another|busy/i);
+      }
+    }
   });
 });
 

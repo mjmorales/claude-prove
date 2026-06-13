@@ -5,8 +5,8 @@
  * `(payload: Record<string, unknown> | null) => HookResult`:
  *   - `onSessionStart` — emit a compact digest of active tasks,
  *     stalled WIP, and recent events as `hookSpecificOutput`.
- *   - `onSubagentStop` — filter to `general-purpose` / `task-planner`
- *     subagents, locate the run directory, delegate to
+ *   - `onSubagentStop` — filter to `general-purpose` / `task-planner` and
+ *     `team-<slug>-<role>` subagents, locate the run directory, delegate to
  *     `reconcileRunCompleted`.
  *   - `onStop` — read `.prove/scrum/last-sweep.json`, invoke
  *     `sweepUnreconciled`, write updated timestamp back.
@@ -33,6 +33,7 @@ import {
   bubbleStaleEscalations,
   computeBoundActions,
   detectContributionMiss,
+  parseTeamAgentName,
   reconcileRunCompleted,
   sweepUnreconciled,
 } from './reconcile';
@@ -43,7 +44,12 @@ import type { EscalationPayload, ScrumEvent, ScrumTask } from './types';
 // Configuration
 // ---------------------------------------------------------------------------
 
-/** Subagents we reconcile on SubagentStop. Anything else is a no-op. */
+/**
+ * Generic (non-team) subagents we reconcile on SubagentStop. Team-role seats
+ * (`team-<slug>-<role>`) also reconcile, but are admitted by name shape via
+ * `parseTeamAgentName` rather than this set — see `isReconcileTarget`. Any
+ * subagent matching neither is a no-op.
+ */
 const RECONCILED_SUBAGENTS = new Set(['general-purpose', 'task-planner']);
 
 /** Sidecar file tracking the last sweep's mtime cursor. */
@@ -125,7 +131,13 @@ export async function onSubagentStop(payload: Record<string, unknown> | null): P
   if (!payload) return EMPTY_HOOK_RESULT;
 
   const subagentType = readString(payload, 'subagent_type');
-  if (!RECONCILED_SUBAGENTS.has(subagentType)) return EMPTY_HOOK_RESULT;
+  // Reconcile generic seats (general-purpose / task-planner) AND team-role
+  // seats (`team-<slug>-<role>`). The latter are the primary dispatch model and
+  // are also the only seats the contribution-miss floor targets, so they MUST
+  // reach the reconcile path. Anything else early-returns as a clean no-op.
+  const isReconcileTarget =
+    RECONCILED_SUBAGENTS.has(subagentType) || parseTeamAgentName(subagentType) !== null;
+  if (!isReconcileTarget) return EMPTY_HOOK_RESULT;
 
   try {
     const cwd = readCwd(payload) || process.cwd();

@@ -28,7 +28,7 @@ import type { StoryBriefInput } from '../acb/milestone-brief';
 import type { LogEntry } from '../acb/reasoning-log';
 import { listEntries } from '../acb/reasoning-log-store';
 import type { ScrumStore } from './store';
-import { STALENESS_THRESHOLD_HOURS, TEAM_ROLES } from './types';
+import { STALENESS_THRESHOLD_HOURS, TEAM_ROLES, nextEscalationLayer } from './types';
 import type { EscalationRow, ScrumEvent, ScrumTask, TaskStatus, TeamRole } from './types';
 
 // ---------------------------------------------------------------------------
@@ -389,17 +389,23 @@ export async function reconcileRunCompleted(
   }
 
   const plan = readJsonOrNull<PlanJsonLite>(planPath);
-  const taskId = await resolveLinkedTaskId(plan, store, runDir);
+  const taskId = await resolveLinkedTaskId(plan, store, runDir, projectRoot);
 
   if (taskId === null) {
-    await emitOrphanEvent(store, runDir, state);
+    await emitOrphanEvent(store, runDir, state, projectRoot);
     return { kind: 'orphan', taskId: null, runPath: runDir };
   }
 
   // Tracked run — guard missing task via a null check before mutating.
   const task = await store.getTask(taskId);
   if (!task) {
-    await emitOrphanEvent(store, runDir, state, `task '${taskId}' not found in scrum store`);
+    await emitOrphanEvent(
+      store,
+      runDir,
+      state,
+      projectRoot,
+      `task '${taskId}' not found in scrum store`,
+    );
     return {
       kind: 'orphan',
       taskId,
@@ -408,8 +414,8 @@ export async function reconcileRunCompleted(
     };
   }
 
-  await linkRunForTask(store, taskId, runDir, state);
-  await appendRunCompletedEvent(store, taskId, runDir, state);
+  await linkRunForTask(store, taskId, runDir, state, projectRoot);
+  await appendRunCompletedEvent(store, taskId, runDir, state, projectRoot);
   await appendStewardVerdictIfPresent(store, taskId, state);
   const blockedReason = await transitionTaskIfTerminal(store, task, state);
   await rebuildContextBundle(store, taskId, projectRoot);
@@ -550,7 +556,7 @@ export async function bubbleStaleEscalations(
     const ageMs = ageMillis(escalation.created_at, nowMs);
     if (ageMs === null || ageMs <= thresholdMs) continue;
 
-    const nextLayer = nextLayerOf(escalation);
+    const nextLayer = nextEscalationLayer(escalation.layer);
     if (nextLayer === null) {
       result.atTopOfChain++;
       continue;
@@ -576,27 +582,6 @@ function ageMillis(createdAt: string, nowMs: number): number | null {
   if (Number.isNaN(ms)) return null;
   return Math.max(0, nowMs - ms);
 }
-
-/** The rung one above an escalation's, or null when it already sits at the top. */
-function nextLayerOf(escalation: EscalationRow): EscalationRow['layer'] | null {
-  const idx = ESCALATION_CHAIN_ORDER.indexOf(escalation.layer);
-  if (idx < 0 || idx + 1 >= ESCALATION_CHAIN_ORDER.length) return null;
-  return ESCALATION_CHAIN_ORDER[idx + 1] ?? null;
-}
-
-/**
- * Bottom-to-top rung order, mirroring the store's `ESCALATION_CHAIN`. Inlined as
- * a local const so this module's top-of-chain check needs no store round-trip;
- * the store boundary remains the authority that rejects a bubble past `human`.
- */
-const ESCALATION_CHAIN_ORDER: EscalationRow['layer'][] = [
-  'implementer',
-  'engineer',
-  'tech_lead',
-  'pm',
-  'strategy',
-  'human',
-];
 
 // ---------------------------------------------------------------------------
 // reconcileMilestoneClosed — Forced Bubble-Up of curation candidates
@@ -932,6 +917,7 @@ async function resolveLinkedTaskId(
   plan: PlanJsonLite | null,
   store: ScrumStore,
   runDir: string,
+  projectRoot: string,
 ): Promise<string | null> {
   if (plan && typeof plan.task_id === 'string' && plan.task_id.length > 0) {
     return plan.task_id;
@@ -943,7 +929,7 @@ async function resolveLinkedTaskId(
       }
     }
   }
-  const linked = await store.getTaskForRun(toRunPath(runDir));
+  const linked = await store.getTaskForRun(toRunPath(runDir, projectRoot));
   return linked?.id ?? null;
 }
 
@@ -952,8 +938,9 @@ async function linkRunForTask(
   taskId: string,
   runDir: string,
   state: StateJsonLite,
+  projectRoot: string,
 ): Promise<void> {
-  const runPath = toRunPath(runDir);
+  const runPath = toRunPath(runDir, projectRoot);
   await store.linkRun({
     taskId,
     runPath,
@@ -967,12 +954,13 @@ async function appendRunCompletedEvent(
   taskId: string,
   runDir: string,
   state: StateJsonLite,
+  projectRoot: string,
 ): Promise<void> {
   await store.appendEvent({
     taskId,
     kind: 'run_completed',
     payload: {
-      run_path: toRunPath(runDir),
+      run_path: toRunPath(runDir, projectRoot),
       run_status: state.run_status ?? 'unknown',
       branch: state.branch ?? null,
       slug: state.slug ?? null,
@@ -1056,7 +1044,10 @@ async function rebuildContextBundle(
 export async function isRunOrphan(runDir: string, store: ScrumStore): Promise<boolean> {
   const planPath = join(runDir, 'plan.json');
   const plan = readJsonOrNull<PlanJsonLite>(planPath);
-  return (await resolveLinkedTaskId(plan, store, runDir)) === null;
+  // `alerts-cmd` builds `runDir` under the workspace root it runs from, so the
+  // store reverse-lookup anchor is that same cwd. The predicate's result does
+  // not depend on the anchor when a plan-side link exists (the common case).
+  return (await resolveLinkedTaskId(plan, store, runDir, process.cwd())) === null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1089,10 +1080,11 @@ async function emitOrphanEvent(
   store: ScrumStore,
   runDir: string,
   state: StateJsonLite,
+  projectRoot: string,
   extraReason?: string,
 ): Promise<void> {
   await ensureOrphanTask(store);
-  const runPath = toRunPath(runDir);
+  const runPath = toRunPath(runDir, projectRoot);
   const reason = extraReason ?? 'plan.json missing task_id';
   if (await hasOrphanEventForRun(store, runPath, reason)) return;
   await store.appendEvent({
@@ -1270,16 +1262,19 @@ function isDir(path: string): boolean {
 }
 
 /**
- * Normalize `runDir` into a repo-relative path (matches Task 1's
- * `linkRun(runPath: '.prove/runs/...')` convention). Falls back to the
- * absolute path when `runDir` lives outside `process.cwd()`. Uses
- * realpath on both sides so macOS tmpdir symlinks (/var vs /private/var)
- * don't produce spurious `../../..` traversals.
+ * Normalize `runDir` into a `projectRoot`-relative path (matches the
+ * `linkRun(runPath: '.prove/runs/...')` convention). Anchoring on `projectRoot`
+ * — NOT `process.cwd()` — keeps the stored path correct when reconcile fires
+ * from a linked worktree or a subdirectory where `cwd != projectRoot`; it also
+ * stays the exact inverse of `resolveRunStatePath`, which joins the stored value
+ * against the same `projectRoot`. Falls back to the absolute path when `runDir`
+ * lives outside `projectRoot`. Uses realpath on both sides so macOS tmpdir
+ * symlinks (/var vs /private/var) don't produce spurious `../../..` traversals.
  */
-function toRunPath(runDir: string): string {
-  const cwdReal = safeRealpath(process.cwd());
+function toRunPath(runDir: string, projectRoot: string): string {
+  const rootReal = safeRealpath(projectRoot);
   const dirReal = safeRealpath(runDir);
-  const rel = relative(cwdReal, dirReal);
+  const rel = relative(rootReal, dirReal);
   if (rel && !rel.startsWith('..')) return rel;
   return runDir;
 }

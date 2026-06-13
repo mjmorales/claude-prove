@@ -12,9 +12,17 @@
  *     has no `run_slug` column) and post-migrate (has it). We detect via
  *     `PRAGMA table_info(manifests)` and insert NULL for run_slug when the
  *     column is absent.
- *   - The entire copy runs under `BEGIN EXCLUSIVE` on prove.db so a second
- *     concurrent importer sees `SQLITE_BUSY` and backs off once; on retry
- *     the loser observes non-empty acb_* tables and returns `already-migrated`.
+ *   - The entire copy runs under `BEGIN EXCLUSIVE` on prove.db. The
+ *     idempotency guard (`proveDbHasAcbRows`) is re-checked INSIDE that
+ *     exclusive transaction, immediately before the inserts, so the
+ *     empty-then-insert sequence is atomic: whichever importer acquires the
+ *     lock second observes the winner's rows, commits its empty transaction,
+ *     and returns `already-migrated` — never double-importing. The check
+ *     before the transaction is only a cheap fast-path. A concurrent peer
+ *     that meets `SQLITE_BUSY` (the lock is held when it tries `BEGIN
+ *     EXCLUSIVE`, or on the WAL pragma at open) backs off once via the retry
+ *     loop in `importLegacyDb`, then re-runs through the same in-transaction
+ *     guard.
  *   - Bare table names in legacy (`manifests`, `acb_documents`, `review_state`)
  *     land in the prefixed unified names (`acb_manifests`, `acb_acb_documents`,
  *     `acb_review_state`).
@@ -22,7 +30,7 @@
 
 import { existsSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { openStore, runMigrations, ulid } from '@claude-prove/store';
+import { assertStoreSchemaCompatible, openStore, runMigrations, ulid } from '@claude-prove/store';
 import { type Database, connect } from '@tursodatabase/database';
 import { ensureAcbSchemaRegistered } from './store';
 
@@ -62,10 +70,12 @@ export async function importLegacyDb(workspaceRoot: string): Promise<ImportResul
     return { imported: false, reason: 'legacy-absent' };
   }
 
-  // One retry on SQLITE_BUSY covers the two-process race: first process
-  // holds BEGIN EXCLUSIVE, second process waits 75ms, re-checks — at that
-  // point the winner's rows are visible and we short-circuit to
-  // already-migrated.
+  // One retry on SQLITE_BUSY covers the case where a peer holds the lock at
+  // open/BEGIN time: the first process holds BEGIN EXCLUSIVE, this one waits
+  // 75ms and re-runs. The double-import itself is prevented by the
+  // in-transaction `proveDbHasAcbRows` guard in `runImport`, not by this
+  // retry — on the second pass the winner's rows are visible inside the
+  // exclusive transaction and `runImport` short-circuits to already-migrated.
   const first = await runImport(workspaceRoot, legacyPath);
   if (first.reason !== 'error' || !isBusy(first.error)) return first;
 
@@ -150,8 +160,9 @@ interface LegacyReviewRow {
 
 async function runImport(workspaceRoot: string, legacyPath: string): Promise<ImportResult> {
   // Mirror openAcbStore internals: register the acb schema, open the
-  // unified store at `<workspaceRoot>/.prove/prove.db`, run pending
-  // migrations so the acb_* tables exist before we read/write them.
+  // unified store at `<workspaceRoot>/.prove/prove.db`, guard its schema
+  // identity, then run pending migrations so the acb_* tables exist before
+  // we read/write them.
   //
   // `openStore` itself can throw SQLITE_BUSY from the `PRAGMA
   // journal_mode = WAL` call when a peer process already holds the lock;
@@ -166,9 +177,18 @@ async function runImport(workspaceRoot: string, legacyPath: string): Promise<Imp
     return { imported: false, reason: 'error', error: message };
   }
   try {
+    // Refuse a store carrying legacy or ahead-of-binary lineage before
+    // migrating it — the same guard every other write-open applies. Without
+    // this, `migrate-legacy-db` would silently migrate and write rows into a
+    // store the rest of the binary refuses to touch.
+    await assertStoreSchemaCompatible(store);
+
     await runMigrations(store);
     const proveDb = store.getDb();
 
+    // Fast-path: skip the legacy read entirely if the store is already
+    // populated. This is NOT the atomicity guard — that re-check lives
+    // inside the exclusive transaction below.
     if (await proveDbHasAcbRows(proveDb)) {
       return { imported: false, reason: 'already-migrated' };
     }
@@ -196,6 +216,18 @@ async function runImport(workspaceRoot: string, legacyPath: string): Promise<Imp
     }
 
     try {
+      // Atomicity guard: re-check inside the exclusive transaction. The
+      // pre-transaction `proveDbHasAcbRows` fast-path runs OUTSIDE the lock,
+      // so two processes can both observe empty tables there; the second to
+      // acquire the lock (after the first commits, with no SQLITE_BUSY) would
+      // double-import every row. Re-checking here, with the inserts, under one
+      // lock makes the empty-then-insert sequence atomic — the loser commits
+      // its empty transaction and returns already-migrated.
+      if (await proveDbHasAcbRows(proveDb)) {
+        await proveDb.exec('COMMIT');
+        return { imported: false, reason: 'already-migrated' };
+      }
+
       await insertManifests(proveDb, manifests);
       await insertDocuments(proveDb, documents);
       await insertReviews(proveDb, reviews);

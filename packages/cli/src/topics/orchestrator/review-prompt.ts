@@ -14,8 +14,8 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { readJson } from './read-json';
 
 export interface ReviewPromptOpts {
   worktreePath: string;
@@ -230,12 +230,4 @@ function formatCriterion(c: PlanCriterion): string {
   if (!c.verifies_by) return text;
   const check = c.check ? `: ${c.check}` : '';
   return `${text} (${c.verifies_by}${check})`;
-}
-
-function readJson<T>(path: string): T | null {
-  try {
-    return JSON.parse(readFileSync(path, 'utf8')) as T;
-  } catch {
-    return null;
-  }
 }

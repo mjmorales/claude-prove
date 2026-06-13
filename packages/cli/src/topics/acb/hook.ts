@@ -24,6 +24,7 @@ import { isAbsolute, join, normalize } from 'node:path';
 import { DEV_INVOCATION_PREFIX } from '@claude-prove/installer';
 import { currentBranch, headSha, resolveRunSlug } from '@claude-prove/shared';
 import { openAcbStore } from './store';
+import { isoSeconds } from './time';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -124,11 +125,15 @@ export async function runHookPostCommit(opts: {
 
   if (!commitSucceeded(payload.tool_response)) return silent();
 
+  // Parse `.claude/.prove.json` once; the enabled-toggle check and the later
+  // dev-mode read both consult this single parse.
+  const proveConfig = readProveConfig(workspaceRoot);
+
   // Respect the `tools.acb.enabled` toggle in `.claude/.prove.json`. Defense in
   // depth alongside the installer, which omits the acb hook block when the tool
   // is disabled — a settings.json staged while acb was enabled would otherwise
   // keep firing this hook.
-  if (!acbEnabled(workspaceRoot)) return silent();
+  if (!acbEnabledFrom(proveConfig)) return silent();
 
   // Subagents run `cd <worktree> && git commit` because shell state doesn't
   // persist across Bash calls. Read HEAD from the cd target so the right
@@ -156,7 +161,7 @@ export async function runHookPostCommit(opts: {
 
   const diffStat = headDiffStat(sha, cwd);
   const nowIso = isoSeconds();
-  const devMode = readDevMode(workspaceRoot);
+  const devMode = devModeFrom(proveConfig);
 
   const reason = generateManifestPrompt({
     branch,
@@ -366,6 +371,45 @@ function isDir(path: string): boolean {
 }
 
 /**
+ * Parse `.claude/.prove.json` under `workspaceRoot` into a plain object, or
+ * `null` when the file is absent, unparseable, or not a JSON object. The single
+ * parse `runHookPostCommit` reads both the `dev_mode` and `tools.acb.enabled`
+ * flags from, so one fire does not stat/parse the config twice.
+ */
+function readProveConfig(workspaceRoot: string): Record<string, unknown> | null {
+  const configPath = join(workspaceRoot, '.claude', '.prove.json');
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(configPath, 'utf8'));
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+    return parsed as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether `dev_mode` is enabled in a parsed config. Defaults to `false`
+ * (installed-binary mode) for a `null` config or a missing/non-boolean field.
+ */
+function devModeFrom(config: Record<string, unknown> | null): boolean {
+  return config?.dev_mode === true;
+}
+
+/**
+ * Whether the acb tool is enabled in a parsed config. Defaults to `true`
+ * (fire-by-default) for a `null` config or an absent block; only an explicit
+ * `tools.acb.enabled: false` disables it.
+ */
+function acbEnabledFrom(config: Record<string, unknown> | null): boolean {
+  if (config === null) return true;
+  const tools = config.tools;
+  if (typeof tools !== 'object' || tools === null) return true;
+  const acb = (tools as Record<string, unknown>).acb;
+  if (typeof acb !== 'object' || acb === null) return true;
+  return (acb as Record<string, unknown>).enabled !== false;
+}
+
+/**
  * Read `.claude/.prove.json::dev_mode` under `workspaceRoot`. Returns `false`
  * when the file is absent, unparseable, or when `dev_mode` is missing/not a
  * boolean — installed-binary mode is the default.
@@ -375,14 +419,7 @@ function isDir(path: string): boolean {
  * when switching between a dev checkout and an installed binary.
  */
 export function readDevMode(workspaceRoot: string): boolean {
-  const configPath = join(workspaceRoot, '.claude', '.prove.json');
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(configPath, 'utf8'));
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
-    return (parsed as Record<string, unknown>).dev_mode === true;
-  } catch {
-    return false;
-  }
+  return devModeFrom(readProveConfig(workspaceRoot));
 }
 
 /**
@@ -392,30 +429,5 @@ export function readDevMode(workspaceRoot: string): boolean {
  * `enabled: false` disables it.
  */
 export function acbEnabled(workspaceRoot: string): boolean {
-  const configPath = join(workspaceRoot, '.claude', '.prove.json');
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(configPath, 'utf8'));
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return true;
-    const tools = (parsed as Record<string, unknown>).tools;
-    if (typeof tools !== 'object' || tools === null) return true;
-    const acb = (tools as Record<string, unknown>).acb;
-    if (typeof acb !== 'object' || acb === null) return true;
-    return (acb as Record<string, unknown>).enabled !== false;
-  } catch {
-    return true;
-  }
-}
-
-/**
- * UTC ISO 8601 string truncated to seconds precision — matches Python's
- * `datetime.now(timezone.utc).isoformat(timespec="seconds")`, which yields
- * `2026-04-22T12:00:00+00:00` (not a `Z` suffix, not milliseconds).
- */
-export function isoSeconds(): string {
-  const d = new Date();
-  const pad = (n: number): string => n.toString().padStart(2, '0');
-  return (
-    `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}` +
-    `T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}+00:00`
-  );
+  return acbEnabledFrom(readProveConfig(workspaceRoot));
 }

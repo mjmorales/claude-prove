@@ -361,6 +361,11 @@ export interface ResolveContributorKey {
 const TASK_COLUMNS =
   'id, title, description, status, milestone_id, team_slug, parent_id, layer, acceptance_policy_json, bounds_json, terminal_reason, terminal_detail, created_by_agent, created_at, last_event_at, last_modified_by, last_modified_at, worker_id, run_id, status_event_id, deleted_at';
 
+/** `TASK_COLUMNS` qualified with the `t.` alias, for joins that disambiguate `scrum_tasks t`. */
+const T_COLS = TASK_COLUMNS.split(', ')
+  .map((c) => `t.${c}`)
+  .join(', ');
+
 /** Canonical `scrum_milestones` SELECT column list; includes the v10 `initiative` grouping. */
 const MILESTONE_COLUMNS =
   'id, title, description, target_state, status, initiative, created_at, closed_at';
@@ -2200,7 +2205,7 @@ export class ScrumStore {
   async listTasksForTag(tag: string): Promise<ScrumTask[]> {
     return await this.hydrateRows(
       (await this.many(
-        `SELECT t.id, t.title, t.description, t.status, t.milestone_id, t.team_slug, t.parent_id, t.layer, t.acceptance_policy_json, t.bounds_json, t.terminal_reason, t.terminal_detail, t.created_by_agent, t.created_at, t.last_event_at, t.last_modified_by, t.last_modified_at, t.worker_id, t.run_id, t.status_event_id, t.deleted_at
+        `SELECT ${T_COLS}
        FROM scrum_tasks t
        INNER JOIN scrum_tags g ON g.task_id = t.id
        WHERE g.tag = ? AND t.deleted_at IS NULL
@@ -3164,19 +3169,6 @@ export class ScrumStore {
   }
 
   /**
-   * Resolve the contributor who held operator-of-record AT `at` (an ISO-8601
-   * instant) — POINT-IN-TIME attribution, not the current holder. Returns the
-   * `scrum_contributors` row whose half-open interval `[from_ts, to_ts)` contains
-   * `at`, or null when no holder was in effect at that instant (e.g. `at`
-   * predates the first interval, or the role was never set).
-   *
-   * The historical holder can differ from the current holder — an action stamped
-   * before a handoff attributes to whoever held the role then, not now. Intervals
-   * never overlap (the set-then-append invariant), so at most one row matches.
-   * Ties on a shared boundary instant resolve to the LATER interval: the upper
-   * bound is exclusive (`at < to_ts`), the lower inclusive (`from_ts <= at`).
-   */
-  /**
    * Resolve the contributor who CURRENTLY holds operator-of-record — the single
    * open interval (`to_ts IS NULL`), of which the set-then-append invariant
    * guarantees at most one. Returns the `scrum_contributors` row, or null when
@@ -3193,6 +3185,19 @@ export class ScrumStore {
     return await this.getContributor(open.contributor_id);
   }
 
+  /**
+   * Resolve the contributor who held operator-of-record AT `at` (an ISO-8601
+   * instant) — POINT-IN-TIME attribution, not the current holder. Returns the
+   * `scrum_contributors` row whose half-open interval `[from_ts, to_ts)` contains
+   * `at`, or null when no holder was in effect at that instant (e.g. `at`
+   * predates the first interval, or the role was never set).
+   *
+   * The historical holder can differ from the current holder — an action stamped
+   * before a handoff attributes to whoever held the role then, not now. Intervals
+   * never overlap (the set-then-append invariant), so at most one row matches.
+   * Ties on a shared boundary instant resolve to the LATER interval: the upper
+   * bound is exclusive (`at < to_ts`), the lower inclusive (`from_ts <= at`).
+   */
   async operatorOfRecordAt(at: string): Promise<Contributor | null> {
     const interval = (await this.one(
       'SELECT contributor_id FROM scrum_operator_history WHERE from_ts <= ? AND (to_ts IS NULL OR ? < to_ts) ORDER BY from_ts DESC LIMIT 1',
@@ -3901,7 +3906,7 @@ export class ScrumStore {
         const childId =
           input.childId !== undefined && input.childId.length > 0
             ? input.childId
-            : `ask-${existing.id}-${childLayer}-${randomUUID().slice(0, 8)}`;
+            : `ask-${existing.id}-${childLayer}-${ulid()}`;
         const childTitle =
           input.childTitle !== undefined && input.childTitle.length > 0
             ? input.childTitle
