@@ -49,9 +49,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Intel mac (bun-darwin-x64) is omitted to match the release matrix:
+        # @tursodatabase publishes no Intel-mac binding, so the binary has no
+        # addon to embed and cannot run the store. Building it here would only
+        # upload a known-broken artifact.
         target:
           - bun-darwin-arm64
-          - bun-darwin-x64
           - bun-linux-x64
           - bun-linux-arm64
     steps:
@@ -65,18 +68,51 @@ jobs:
       # bundle into the binary. Must run BEFORE the compile step.
       - name: Build + embed review-ui web bundle
         run: ./scripts/build-review-ui-embed.sh
-      - name: Compile prove binary
+      # Cross-compile from run.ts for every target: validates the source
+      # compiles for each triple. This does NOT embed the @tursodatabase native
+      # addon (only the host platform's addon is installed on this runner), so
+      # the artifact is a compile-check, not a runnable release binary — the
+      # release workflow builds the embedded, runnable binary on native runners.
+      - name: Cross-compile check (${{ matrix.target }})
         run: |
           mkdir -p dist-bin
           bun build --compile \
             --target=${{ matrix.target }} \
             --outfile dist-bin/claude-prove-${{ matrix.target }} \
             packages/cli/bin/run.ts
-      - name: Smoke test binary (linux-x64 only)
+      # For the host target (linux-x64, runnable on this runner) build the REAL
+      # release-shaped binary — native addon embedded via the generated wrapper,
+      # exactly as the release workflow does — and smoke it from a directory with
+      # NO node_modules. Running in the repo root would let a missing/broken
+      # embed pass by resolving the addon from the build tree's node_modules,
+      # which is the masking gap that once shipped a binary that died on every
+      # command in the wild. A concurrent burst additionally guards the
+      # native-addon extraction race (sibling launches must all load the addon).
+      - name: Embed + clean-room smoke (linux-x64)
         if: matrix.target == 'bun-linux-x64'
         run: |
-          chmod +x dist-bin/claude-prove-${{ matrix.target }}
-          ./dist-bin/claude-prove-${{ matrix.target }} --help
+          set -euo pipefail
+          bun run scripts/gen-native-embed.ts ${{ matrix.target }}
+          bun build --compile \
+            --target=${{ matrix.target }} \
+            --outfile dist-bin/claude-prove-embedded \
+            packages/cli/bin/run.compiled.generated.ts
+          SMOKE_DIR="$(mktemp -d)"
+          cp dist-bin/claude-prove-embedded "$SMOKE_DIR/claude-prove"
+          export CLAUDE_PROVE_HOME="$SMOKE_DIR/home"
+          ( cd "$SMOKE_DIR"
+            ./claude-prove --version
+            git init -q smoke && cd smoke
+            "$SMOKE_DIR/claude-prove" scrum init
+            "$SMOKE_DIR/claude-prove" scrum status
+            # Concurrent launches with a cold addon cache must all load the
+            # binding (regression guard for the extract-to-shared-temp race).
+            rm -rf "$CLAUDE_PROVE_HOME/native"
+            for i in 1 2 3 4 5 6; do ( "$SMOKE_DIR/claude-prove" scrum status >"c_$i.out" 2>&1 ) & done
+            wait
+            if grep -l -i 'native binding' c_*.out >/dev/null 2>&1; then
+              echo "REGRESSION: concurrent launch hit the native-binding race"; exit 1
+            fi )
       - name: Upload binary artifact
         uses: actions/upload-artifact@v7
         with:
