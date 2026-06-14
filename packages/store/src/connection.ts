@@ -29,9 +29,46 @@ export interface StoreOptions extends ResolveOptions {
   path?: string;
   /** Open the database read-only. Defaults to false. */
   readonly?: boolean;
+  /**
+   * Busy-timeout in milliseconds the driver waits for the file lock at open and
+   * on every locked operation before failing. Defaults to `DEFAULT_BUSY_TIMEOUT_MS`.
+   */
+  busyTimeoutMs?: number;
 }
 
 const MEMORY_PATH = ':memory:';
+
+/**
+ * Default wall-clock budget (ms) for acquiring the database file lock at open.
+ * The local engine takes an exclusive file lock when it opens a writable
+ * connection; with no envelope, two opens racing on the same `.prove/prove.db`
+ * collide and one hard-fails at `connect()` with "File is locked by another
+ * process" instead of waiting. Claude Code fires reconciliation hooks
+ * (scrum/acb) in concurrent batches, so this race is the normal case, not an
+ * edge — a lost open silently drops the hook's reconciliation write.
+ *
+ * The driver's native `timeout` option governs in-flight SQLITE_BUSY on a live
+ * connection, NOT the file-lock acquisition during `connect()` itself, so the
+ * open path needs its own retry envelope: `openStore` retries `connect()` on a
+ * lock error with jittered backoff until this budget elapses, turning a lost
+ * write into a brief wait. Five seconds absorbs realistic hook bursts while
+ * still surfacing a genuine deadlock.
+ */
+export const DEFAULT_BUSY_TIMEOUT_MS = 5000;
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * True when an error is the driver's file-lock-contention failure at open. The
+ * local engine reports this as a "Locking error: Failed locking file ... File
+ * is locked by another process"; matching the stable substrings keeps the
+ * retry envelope from swallowing unrelated open failures (corruption, bad path,
+ * schema mismatch), which must surface immediately.
+ */
+function isLockContentionError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /Locking error|File is locked/i.test(message);
+}
 
 /**
  * Wraps a @tursodatabase/database Database with a narrower async API aimed at
@@ -135,14 +172,22 @@ export async function withTx<T>(store: Store, fn: () => Promise<T>): Promise<T> 
  * Open a prove store connection. With no options, resolves `path` via
  * `resolveDbPath()` against the enclosing git repository. File-backed
  * stores enable WAL journaling and foreign keys; `:memory:` stores skip
- * those pragmas. Async because the driver's `connect()` is async.
+ * those pragmas. A concurrent open racing on the file lock is retried with
+ * jittered backoff until `busyTimeoutMs` elapses instead of hard-failing (see
+ * `DEFAULT_BUSY_TIMEOUT_MS`). Async because the driver's `connect()` is async.
  */
 export async function openStore(opts: StoreOptions = {}): Promise<Store> {
   const path = opts.path ?? resolveDbPath({ cwd: opts.cwd, override: opts.override });
   if (path !== MEMORY_PATH && !opts.readonly) {
     mkdirSync(dirname(path), { recursive: true });
   }
-  const db = opts.readonly ? await connect(path, { readonly: true }) : await connect(path);
+  // `:memory:` stores are private to one connection and never contend, so the
+  // busy-timeout (native `timeout` for in-flight SQLITE_BUSY + open retry
+  // envelope) applies only to file-backed opens.
+  const budgetMs = opts.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS;
+  const connectOpts =
+    path === MEMORY_PATH ? {} : { timeout: budgetMs, ...(opts.readonly ? { readonly: true } : {}) };
+  const db = await connectWithBusyRetry(path, connectOpts, budgetMs);
   if (path !== MEMORY_PATH) {
     // WAL is a journal-mode write — illegal on a readonly handle (errors or
     // no-ops depending on the SQLite build). foreign_keys is a harmless
@@ -151,4 +196,35 @@ export async function openStore(opts: StoreOptions = {}): Promise<Store> {
     await db.exec('PRAGMA foreign_keys = ON');
   }
   return new Store(path, db);
+}
+
+/**
+ * `connect()` with a bounded busy-retry envelope on file-lock contention. The
+ * native `timeout` option does not cover the exclusive file lock the engine
+ * takes during `connect()`, so a racing open fails immediately; this retries
+ * the open on a lock-contention error with exponential backoff plus jitter
+ * (jitter de-synchronizes a thundering herd of hooks) until `budgetMs` of
+ * wall-clock elapses, then re-raises the last error. Non-lock errors propagate
+ * on the first attempt. In-memory stores never reach this path.
+ */
+async function connectWithBusyRetry(
+  path: string,
+  connectOpts: Record<string, unknown>,
+  budgetMs: number,
+): Promise<Database> {
+  const deadline = Date.now() + budgetMs;
+  let backoffMs = 5;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await connect(path, connectOpts);
+    } catch (err) {
+      if (!isLockContentionError(err) || Date.now() >= deadline) throw err;
+      // Sleep the smaller of the backoff and the time left, with jitter in
+      // [0, backoff) so concurrent retriers spread out instead of re-colliding.
+      const jittered = backoffMs + Math.random() * backoffMs;
+      const remaining = deadline - Date.now();
+      await sleep(Math.max(0, Math.min(jittered, remaining)));
+      backoffMs = Math.min(backoffMs * 2, 100);
+    }
+  }
 }

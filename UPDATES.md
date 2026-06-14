@@ -8,6 +8,16 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — store no longer drops writes under concurrent open
+
+*(Bug fix. No action required — `/prove:update` ships it with the next binary; no config or schema change.)*
+
+The Turso local engine takes an exclusive file lock when it opens a writable connection, and the store had no busy-wait envelope around it. Two opens racing on the same `.prove/prove.db` collided and one hard-failed at connect time with `Locking error: Failed locking file ... File is locked by another process` — roughly 50% of opens at 2-way concurrency, 75% at 4-way. Because Claude Code fires reconciliation hooks (`scrum hook ...`, `acb hook post-commit`) in concurrent batches during parallel tool use and subagent fan-out, a failed open meant that hook's reconciliation **write was silently lost**, and driver-session reads (`scrum status`, `next-ready`) intermittently errored mid-session.
+
+`openStore` now wraps the open in a bounded busy-retry: a lock-contention failure retries with jittered exponential backoff until a 5-second budget elapses, so a racing open briefly waits instead of failing. Non-lock open errors (corruption, missing file, schema mismatch) still surface immediately. The driver's native `timeout` is also set, covering in-flight `SQLITE_BUSY` on live connections. Readonly opens already took a shared lock and never contended.
+
+Migration: none. Auto-adoption: automatic with the binary upgrade.
+
 ## v4.2.0 — `store migrate-to-turso` lifts a legacy `prove.db` onto the v1 schema
 
 *(New command. No automatic migration — you run it once per existing project. New projects bootstrap clean v1 and never need it.)*

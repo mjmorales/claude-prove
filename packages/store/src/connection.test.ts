@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Store, openStore, withTx } from './connection';
@@ -60,6 +60,72 @@ describe('openStore', () => {
     const store = await openStore({ path: ':memory:' });
     store.close();
     expect(() => store.close()).not.toThrow();
+  });
+
+  test('concurrent cross-process opens all succeed and no write is lost', async () => {
+    // Regression: the local engine takes an exclusive file lock during
+    // `connect()`. With no busy-retry envelope, concurrent opens of the same
+    // `.prove/prove.db` collide and one hard-fails with "File is locked by
+    // another process", silently dropping that process's write. The OS file
+    // lock is held per-PID, so reproducing the race requires real subprocesses,
+    // not in-process concurrency.
+    const dir = mkdtempSync(join(tmpdir(), 'store-conc-'));
+    const dbPath = join(dir, 'prove.db');
+    const workerPath = join(dir, 'worker.ts');
+    const connectionModule = join(import.meta.dir, 'connection.ts');
+    // Each worker opens the shared store, inserts one row keyed by its id, and
+    // closes — the shape of a reconciliation-hook write.
+    writeFileSync(
+      workerPath,
+      `import { openStore } from ${JSON.stringify(connectionModule)};
+const store = await openStore({ path: ${JSON.stringify(dbPath)} });
+await store.run('CREATE TABLE IF NOT EXISTS hits (id INTEGER PRIMARY KEY)');
+await store.run('INSERT INTO hits (id) VALUES (?)', [Number(process.argv[2])]);
+store.close();
+`,
+    );
+    try {
+      // Seed the file (table + WAL) so workers contend purely on the open lock.
+      const seed = await openStore({ path: dbPath });
+      await seed.run('CREATE TABLE IF NOT EXISTS hits (id INTEGER PRIMARY KEY)');
+      seed.close();
+
+      const workers = 8;
+      const procs = Array.from({ length: workers }, (_unused, i) =>
+        Bun.spawn(['bun', workerPath, String(i + 1)], { stdout: 'pipe', stderr: 'pipe' }),
+      );
+      const codes = await Promise.all(procs.map((p) => p.exited));
+
+      // Every worker must exit cleanly: no lock-contention failure.
+      expect(codes).toEqual(Array.from({ length: workers }, () => 0));
+
+      // Every worker's write must have landed: no silently-dropped reconciliation.
+      const verifier = await openStore({ path: dbPath, readonly: true });
+      const rows = await verifier.all<{ id: number }>('SELECT id FROM hits ORDER BY id');
+      verifier.close();
+      expect(rows.map((r) => r.id)).toEqual(Array.from({ length: workers }, (_u, i) => i + 1));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  test('a non-lock open error propagates without retrying', async () => {
+    // The retry envelope must only swallow file-lock contention. A readonly
+    // open of a path with no database file is a genuine failure (readonly
+    // cannot create it) and must surface immediately, not spin until the
+    // busy-timeout budget elapses.
+    const dir = mkdtempSync(join(tmpdir(), 'store-noexist-'));
+    const missing = join(dir, 'absent.db');
+    try {
+      const start = Date.now();
+      await expect(
+        openStore({ path: missing, readonly: true, busyTimeoutMs: 5000 }),
+      ).rejects.toThrow();
+      // Fails fast — nowhere near the 5s budget a lock retry would consume.
+      expect(Date.now() - start).toBeLessThan(2000);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   test('opening a file-backed store readonly skips the WAL journal-mode write', async () => {
