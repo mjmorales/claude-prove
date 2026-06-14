@@ -84,7 +84,8 @@ Ex: `prompting token-count "agents/*.md" --sort tokens`. Heuristic tokenizer (~1
 
 ### store — `.prove/prove.db` unified store
 
-Actions: `migrate` `info` `reset` (requires `--confirm`). Ex: `store info`.
+Actions: `migrate` `info` `reset` (requires `--confirm`) `migrate-to-turso`. Ex: `store info`.
+`migrate-to-turso [--dry-run] [--confirm] [--db-path <p>]` moves a legacy pre-Turso `prove.db` (scrum chain up to v28 / acb up to v4) onto the Turso v1 schema in place: it backfills ULID PKs over the integer-`AUTOINCREMENT` tables (preserving chronological order and every FK), explodes `scrum_tasks.acceptance_json` into `scrum_acceptance_criteria` rows, re-keys the ACB document/review/verdict blobs as revision rows, verifies row counts + dangling-FK integrity, preserves the untouched legacy file as `<db>.pre-turso`, and swaps the new v1 db in. Idempotent (a non-legacy store is a no-op); `--dry-run` reports without writing; `--confirm` performs the file swap. Local-only — cloud provision/push is a separate step. Run once per existing project.
 
 ### install — `.claude/` scaffolding + binary upgrade
 

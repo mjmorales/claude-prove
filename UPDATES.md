@@ -8,6 +8,28 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — `store migrate-to-turso` lifts a legacy `prove.db` onto the v1 schema
+
+*(New command. No automatic migration — you run it once per existing project. New projects bootstrap clean v1 and never need it.)*
+
+A store written by a plugin version before the Turso v1 reset (the pre-Turso `bun:sqlite` schema, scrum chain up to v28 / acb up to v4) is refused on write-open with a reset-or-migrate message — until now the only options were a destructive `store reset --confirm` or staying on the old binary. `claude-prove store migrate-to-turso` is the data-preserving path:
+
+- Reads the legacy file directly with the Turso engine (same SQLite format — no `bun:sqlite`), and transforms it into the v1 shape: ULID primary keys backfilled over the integer-`AUTOINCREMENT` tables (chronological order and every foreign key preserved), `scrum_tasks.acceptance_json` exploded into normalized `scrum_acceptance_criteria` rows, and the ACB document/review/verdict blobs re-keyed as append-only revision rows.
+- Verifies mechanically before swapping anything in: per-table row counts and a dangling-foreign-key integrity sweep, both printed in a report.
+- Preserves the original file untouched as `<db>.pre-turso` and swaps the verified v1 database in at the canonical path. A failed verify aborts before any rename, leaving the project exactly as it was.
+- Idempotent: a store that is already v1 (or never migrated) is a no-op; a partial prior run is safely overwritten.
+
+Usage:
+
+```
+claude-prove store migrate-to-turso --dry-run   # verify + report, change nothing
+claude-prove store migrate-to-turso --confirm   # perform the swap
+```
+
+This is **local-only**; provisioning a cloud database and pushing is a separate step that lands with the cloud-sync work. Migration: run the command once per legacy project (`--dry-run` first to preview the report). Auto-adoption: none — it is operator-invoked by design, and the legacy file is always preserved.
+
+---
+
 ## v4.1.1 — Standalone binary survives concurrent launches (fixes native-addon extraction race)
 
 *(No config or schema migration. The fix lands entirely in the compiled release binary — upgrade to get it.)*

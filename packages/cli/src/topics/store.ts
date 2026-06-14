@@ -6,14 +6,17 @@ import {
   runMigrations,
 } from '@claude-prove/store';
 import type { CAC } from 'cac';
+import { runMigrateToTurso } from './store-migrate-to-turso';
 
 interface StoreFlags {
   confirm?: boolean;
+  dryRun?: boolean;
+  dbPath?: string;
 }
 
-type StoreAction = 'migrate' | 'info' | 'reset';
+type StoreAction = 'migrate' | 'info' | 'reset' | 'migrate-to-turso';
 
-const STORE_ACTIONS: StoreAction[] = ['migrate', 'info', 'reset'];
+const STORE_ACTIONS: StoreAction[] = ['migrate', 'info', 'reset', 'migrate-to-turso'];
 
 /**
  * Register the `store` topic on the cac instance.
@@ -32,14 +35,30 @@ const STORE_ACTIONS: StoreAction[] = ['migrate', 'info', 'reset'];
  */
 export function register(cli: CAC): void {
   cli
-    .command('store <action>', 'Unified store operations (action: migrate | info | reset)')
-    .option('--confirm', 'Required by `reset` to actually drop tables')
+    .command(
+      'store <action>',
+      'Unified store operations (action: migrate | info | reset | migrate-to-turso)',
+    )
+    .option('--confirm', 'Required by `reset` (drop tables) and `migrate-to-turso` (swap files)')
+    .option('--dry-run', 'migrate-to-turso: verify + report only, change no files')
+    .option('--db-path <path>', 'migrate-to-turso: explicit legacy db path (default: resolved)')
     .action(async (action: string, flags: StoreFlags) => {
       if (!isStoreAction(action)) {
         console.error(
           `claude-prove store: unknown action '${action}'. expected one of: ${STORE_ACTIONS.join(', ')}`,
         );
         process.exit(1);
+      }
+      // migrate-to-turso owns its own store lifecycle (it opens a legacy file
+      // read-only and builds a separate v1 db), so it bypasses the canonical
+      // single-store open that `runStoreCommand` provides.
+      if (action === 'migrate-to-turso') {
+        const code = await runMigrateToTurso({
+          dbPath: flags.dbPath,
+          dryRun: flags.dryRun ?? false,
+          confirm: flags.confirm ?? false,
+        });
+        process.exit(code);
       }
       // Single exit point — sub-handlers return exit codes; lifecycle
       // wrapper maps unexpected errors to 1; the action callback is the
@@ -53,7 +72,13 @@ function isStoreAction(value: string): value is StoreAction {
   return (STORE_ACTIONS as string[]).includes(value);
 }
 
-function dispatch(store: Store, action: StoreAction, flags: StoreFlags): Promise<number> {
+// migrate-to-turso is dispatched separately (it owns its store lifecycle), so
+// this handles only the actions that run against the single canonical store.
+function dispatch(
+  store: Store,
+  action: Exclude<StoreAction, 'migrate-to-turso'>,
+  flags: StoreFlags,
+): Promise<number> {
   switch (action) {
     case 'migrate':
       return handleMigrate(store);
