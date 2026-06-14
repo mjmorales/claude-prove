@@ -92,13 +92,26 @@ import { listDomains, registerSchema } from '@claude-prove/store';
  *                           Defining the eligible predicate once here keeps every
  *                           reader (the CLI ranking and the review-ui boundary)
  *                           on a single shared definition.
- *   scrum_current_operator— VIEW: the operator-of-record's CURRENT open interval
- *                           (the single `to_ts IS NULL` row, of which the
- *                           set-then-append invariant guarantees at most one).
- *                           Resolution AT an arbitrary past instant stays a
- *                           parameterized interval scan (`operatorOfRecordAt`);
- *                           only the shared "who holds it now" derivation lives in
- *                           this view.
+ *   scrum_current_operator— VIEW: the operator-of-record's CURRENT holder, derived
+ *                           as the LATEST OPEN interval — the single max-fold row
+ *                           `WHERE to_ts IS NULL ORDER BY from_ts DESC, id DESC
+ *                           LIMIT 1` over the APPEND-ONLY position-history rows. The
+ *                           previous read took every `to_ts IS NULL` row and assumed
+ *                           the set-then-append kept exactly one; that assumption
+ *                           breaks under concurrent offline transfers — each appends
+ *                           an open interval and BOTH land on rebase (Class A
+ *                           inserts), leaving TWO open rows the old read could not
+ *                           collapse. Folding those opens to the one with the
+ *                           greatest `(from_ts, id)` makes the single-holder
+ *                           invariant survive by construction: every replica sees the
+ *                           same merged rows and the fold is deterministic, so all
+ *                           converge to the same later holder regardless of push
+ *                           order. A vacate (close with no successor) leaves zero
+ *                           open rows → the fold yields no holder, the correct
+ *                           "slot empty" reading. Resolution AT an arbitrary past
+ *                           instant stays a parameterized interval scan
+ *                           (`operatorOfRecordAt`); only the shared "who holds it
+ *                           now" derivation lives in this view.
  *   scrum_tags            — composite PK (task_id, tag).
  *   scrum_deps            — composite PK (from_task_id, to_task_id, kind).
  *   scrum_events          — append-only audit log; ULID TEXT PK.
@@ -393,7 +406,9 @@ SELECT id FROM scrum_tasks WHERE deleted_at IS NULL AND status IN ('ready', 'bac
 CREATE VIEW scrum_current_operator AS
 SELECT contributor_id, from_ts, to_ts, created_at, created_by
 FROM scrum_operator_history
-WHERE to_ts IS NULL;
+WHERE to_ts IS NULL
+ORDER BY from_ts DESC, id DESC
+LIMIT 1;
 
 CREATE INDEX idx_scrum_acceptance_criteria_task ON scrum_acceptance_criteria(task_id);
 CREATE INDEX idx_scrum_criterion_verdicts_criterion ON scrum_criterion_verdicts(criterion_id);

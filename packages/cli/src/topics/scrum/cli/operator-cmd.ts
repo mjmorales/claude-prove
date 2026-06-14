@@ -17,8 +17,9 @@
  *                              role AT the given instant (the interval
  *                              `[from_ts, to_ts)` containing it) — point-in-time
  *                              attribution. Without `--at`: resolve the CURRENT
- *                              holder (the open `to_ts IS NULL` interval) via the
- *                              shared `scrum_current_operator` view. Prints the
+ *                              holder (the latest open interval — the max-fold
+ *                              over `to_ts IS NULL` rows) via the shared
+ *                              `scrum_current_operator` view. Prints the
  *                              matched contributor JSON row, or exits 1 on a miss
  *                              (no holder in effect, or the role is unset).
  *   history                    [--human]

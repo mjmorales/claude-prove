@@ -970,14 +970,19 @@ export interface Contributor {
  *   contributor_id — the holder, a `scrum_contributors.id` (CT-UUID).
  *   from_ts        — when the holder took the role (ISO-8601). May be backdated
  *                    to the real handoff instant, distinct from `created_at`.
- *   to_ts          — when they handed it off, or NULL for the CURRENT (open)
- *                    holder. The interval is half-open `[from_ts, to_ts)`: a
- *                    point-in-time resolve at `t` returns the row where
+ *   to_ts          — when they handed it off, or NULL for an OPEN interval. The
+ *                    interval is half-open `[from_ts, to_ts)`: a point-in-time
+ *                    resolve at `t` returns the row where
  *                    `from_ts <= t AND (to_ts IS NULL OR t < to_ts)`.
  *
- * At most one open row (`to_ts IS NULL`) exists at a time — setting a new holder
- * closes the prior open row before appending. History is append-only: an
- * interval is never mutated except to stamp its `to_ts` once on handoff.
+ * A handoff closes the prior open row before appending the new one, but this does
+ * NOT guarantee a single open row: two operators transferring the role offline
+ * each append an open interval, and both land on rebase (Class A ULID inserts).
+ * The CURRENT holder is therefore the LATEST open interval — the `to_ts IS NULL`
+ * row with the greatest `(from_ts, id)` — NOT "the one open row". That max-fold
+ * over the open rows is deterministic on the merged set, so every replica
+ * converges. History is append-only: an interval is never mutated except to stamp
+ * its `to_ts` once on handoff.
  *
  * This is the single role slot that exists — a degenerate one-row roster that a
  * later multi-role roster generalizes.
@@ -1226,15 +1231,18 @@ export const TEAM_ROLES: TeamRole[] = ['tech_lead', 'engineer', 'implementer'];
  *                    reference: it is NOT enforced by a foreign key, matching how
  *                    the operator position history stores its holder.
  *   from_ts        — when the holder took the slot (ISO-8601).
- *   to_ts          — when they vacated it, or NULL for the CURRENT (open) holder
- *                    of that (team, role). The interval is half-open
- *                    `[from_ts, to_ts)`.
+ *   to_ts          — when they vacated it, or NULL for an OPEN interval of that
+ *                    (team, role). The interval is half-open `[from_ts, to_ts)`.
  *   reason         — free-text rationale recorded on the rotation, or NULL.
  *
- * Exactly one open row (`to_ts IS NULL`) exists per (team_slug, role) once the
- * slot has ever been filled — rotating a slot closes its prior open row before
- * appending the new one. History is append-only: an interval is never mutated
- * except to stamp its `to_ts` once on rotation.
+ * Rotating a slot closes its prior open row before appending the new one, but this
+ * does NOT guarantee a single open row per (team_slug, role): two operators
+ * rotating the same slot offline each append an open interval and both land on
+ * rebase. The CURRENT holder of a slot is therefore the LATEST open interval — the
+ * `to_ts IS NULL` row with the greatest `(from_ts, id)` for that (team, role) —
+ * NOT "the one open row". That max-fold converges across replicas. History is
+ * append-only: an interval is never mutated except to stamp its `to_ts` once on
+ * rotation.
  */
 export interface TeamMemberRow {
   id: string;
@@ -1280,14 +1288,15 @@ export interface RotateTeamMemberResult {
 }
 
 /**
- * A team's current roster (v16) — the open holder of each of the three role
+ * A team's current roster (v16) — the current holder of each of the three role
  * slots, plus optionally the full position history per slot. The current view of
- * the `scrum_team_members` open rows for one team.
+ * the `scrum_team_members` rows for one team, derived by the latest-open max-fold
+ * (the `to_ts IS NULL` row with the greatest `(from_ts, id)` per role).
  *
  *   slug    — the team the roster belongs to.
- *   current — the open holder per role: each of `tech_lead`/`engineer`/
- *             `implementer` maps to its open `TeamMemberRow`, or NULL when that
- *             slot has never been filled (or has no current holder).
+ *   current — the current holder per role: each of `tech_lead`/`engineer`/
+ *             `implementer` maps to its latest-open `TeamMemberRow`, or NULL when
+ *             that slot has never been filled (or has no current holder).
  *   history — every interval for the team, oldest-first, grouped by role. Present
  *             only when the caller requests it; omitted for the current-only view.
  */

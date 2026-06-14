@@ -542,12 +542,16 @@ describe('Class B — LWW head columns converge with intent surfaced', () => {
 });
 
 // ===========================================================================
-// Class C① — single-open-interval invariant breaks under concurrent transfers
-// (operator-of-record / team role slot). CURRENT code does NOT self-heal.
+// Class C① — single-open-interval roles converge STRUCTURALLY under concurrent
+// transfers (operator-of-record / team role slot). The current-holder read is a
+// max(from_ts) fold over the append-only OPEN intervals (tie-break max(id)), so
+// two concurrent offline transfers leave two open rows on the merged state BUT
+// every replica deterministically folds them to ONE holder — the dual-open
+// hazard is eliminated by construction, with no repair pass.
 // ===========================================================================
 
-describe('Class C① — concurrent open-interval transfers break the single-holder invariant', () => {
-  test('two concurrent operator-of-record transfers yield TWO open intervals (hazard, not self-healed)', async () => {
+describe('Class C① — concurrent open-interval transfers converge to one holder via the max-fold', () => {
+  test('two concurrent operator-of-record transfers converge: currentOperator folds both opens to the latest holder', async () => {
     await seedCommonBase(async (s) => {
       await s.registerContributor({ slug: 'alice', id: 'ct-alice' });
       await s.registerContributor({ slug: 'bob', id: 'ct-bob' });
@@ -561,7 +565,7 @@ describe('Class C① — concurrent open-interval transfers break the single-hol
 
     // Each operator, offline, transfers the role to a different holder. Each
     // close-old-then-append-new transaction is valid against ITS OWN local
-    // state (it sees exactly one open interval — Alice's — and closes it).
+    // state (it sees one open interval — Alice's — and closes it).
     await opA.scrum.setOperatorOfRecord({
       contributorId: 'ct-bob',
       fromTs: '2026-02-01T00:00:00.000Z',
@@ -573,41 +577,36 @@ describe('Class C① — concurrent open-interval transfers break the single-hol
 
     await sim.settle();
 
-    // The merged state on the server now holds TWO open intervals — A closed
-    // Alice and opened Bob; B closed Alice and opened Carol; both opens land via
-    // distinct ULID PKs (Class A inserts), and B's close of Alice is the same
-    // row A already closed (idempotent), so neither new open is closed.
+    // The merged state still holds TWO open interval ROWS — A closed Alice and
+    // opened Bob; B closed Alice and opened Carol; both opens land via distinct
+    // ULID PKs (Class A inserts). The raw row state is unchanged by the fix.
     const openIntervals = await count(
       server,
       'SELECT COUNT(*) n FROM scrum_operator_history WHERE to_ts IS NULL',
     );
-    expect(openIntervals).toBe(2); // INVARIANT BROKEN — does not self-heal.
+    expect(openIntervals).toBe(2);
 
-    // The breakage is DETECTABLE (the C② / C③ surfacing target reads exactly
-    // this): more than one open interval means the single-holder invariant no
-    // longer holds.
-    expect(openIntervals).toBeGreaterThan(1);
+    // But `currentOperator()` no longer trusts "the one open row": it folds the
+    // open rows to the greatest (from_ts, id). The later transfer is Carol
+    // (2026-03 > 2026-02), so EVERY replica converges to Carol — deterministically,
+    // independent of push order. The single-holder read is restored by construction.
+    for (const r of [server, opA, opB]) {
+      const current = await r.scrum.currentOperator();
+      expect(current?.id).toBe('ct-carol');
+    }
 
-    // The CURRENT `currentOperator()` read (SELECT ... FROM scrum_current_operator
-    // LIMIT 1) silently returns whichever open row the engine orders first — it
-    // does NOT detect the dual-open hazard. This is the break the fix
-    // (max(from_ts) fold over the append-only interval rows, demoting to_ts to
-    // advisory) converts to convergence-by-construction.
-    const current = await server.scrum.currentOperator();
-    expect(current).not.toBeNull();
-
-    // Assert the TARGET (post-fix) behaviour as a pending guard: the commutative
-    // derivation is the latest open interval by from_ts (tie-break id), which is
-    // Carol (2026-03 > 2026-02). When `cloud-sync-s1-interval-converge` lands the
-    // max-fold, `currentOperator()` should converge to this regardless of push
-    // order. Documented here so that task has a concrete target.
-    const maxFold = await server.store.get<{ contributor_id: string }>(
-      'SELECT contributor_id FROM scrum_operator_history WHERE to_ts IS NULL ORDER BY from_ts DESC, id DESC LIMIT 1',
+    // The shared `scrum_current_operator` view that the read derives through
+    // returns exactly one row (the max-fold's LIMIT 1), never two — so no
+    // "current holder" query surfaces a dual-open.
+    const viewRows = await count(server, 'SELECT COUNT(*) n FROM scrum_current_operator');
+    expect(viewRows).toBe(1);
+    const viewHolder = await server.store.get<{ contributor_id: string }>(
+      'SELECT contributor_id FROM scrum_current_operator',
     );
-    expect(maxFold?.contributor_id).toBe('ct-carol');
+    expect(viewHolder?.contributor_id).toBe('ct-carol');
   });
 
-  test('two concurrent team role-slot rotations yield TWO open rows for one (team, role)', async () => {
+  test('two concurrent team role-slot rotations converge: getTeamRoster folds both opens to the latest holder', async () => {
     await seedCommonBase(async (s) => {
       await s.createTeam({ slug: 'engine', teamType: 'stream_aligned' });
       await s.rotateTeamMember({
@@ -633,12 +632,22 @@ describe('Class C① — concurrent open-interval transfers break the single-hol
 
     await sim.settle();
 
+    // Both open rows land on the merged state (Class A ULID inserts) — the raw
+    // row state is unchanged by the fix.
     const openSlots = await count(
       server,
       "SELECT COUNT(*) n FROM scrum_team_members WHERE team_slug = 'engine' AND role = 'engineer' AND to_ts IS NULL",
     );
-    expect(openSlots).toBe(2); // INVARIANT BROKEN — dual open role-slot.
-    expect(openSlots).toBeGreaterThan(1);
+    expect(openSlots).toBe(2);
+
+    // But the role-slot read folds the open rows per (team, role) to the greatest
+    // (from_ts, id): Carol (2026-03) is the latest, so EVERY replica's roster
+    // resolves the engineer slot to Carol regardless of push order — the dual-open
+    // hazard is eliminated by construction.
+    for (const r of [server, opA, opB]) {
+      const roster = await r.scrum.getTeamRoster('engine');
+      expect(roster.current.engineer?.contributor_id).toBe('ct-carol');
+    }
   });
 });
 

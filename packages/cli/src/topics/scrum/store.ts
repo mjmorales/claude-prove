@@ -2947,14 +2947,23 @@ export class ScrumStore {
   }
 
   /**
-   * Whether `contributorId` currently holds an open `tech_lead` slot on ANY
-   * team — the tech_lead-review check for a `glossary` write-gate. Reads the
-   * open (`to_ts IS NULL`) tech_lead rows across every team, matching how
-   * `getTeamRoster` reads the open slot for a single team.
+   * Whether `contributorId` is the CURRENT `tech_lead` holder of ANY team — the
+   * tech_lead-review check for a `glossary` write-gate. "Current" is the
+   * per-(team, tech_lead) latest OPEN interval (the `to_ts IS NULL` row with the
+   * greatest `(from_ts, id)`), the same commutative max-fold `getTeamRoster`
+   * uses, NOT a bare `to_ts IS NULL` open-row read: a contributor counts only
+   * when they are the latest open tech_lead interval on some team, so a
+   * concurrent rotation that superseded them (a later open interval) correctly
+   * drops them even if their old row's `to_ts` never got stamped on rebase.
    */
   private async holdsTechLeadAnywhere(contributorId: string): Promise<boolean> {
     const row = await this.one(
-      "SELECT 1 FROM scrum_team_members WHERE role = 'tech_lead' AND contributor_id = ? AND to_ts IS NULL LIMIT 1",
+      `SELECT 1 FROM scrum_team_members m
+       WHERE m.role = 'tech_lead' AND m.contributor_id = ? AND m.to_ts IS NULL AND m.id = (
+         SELECT m2.id FROM scrum_team_members m2
+         WHERE m2.team_slug = m.team_slug AND m2.role = m.role AND m2.to_ts IS NULL
+         ORDER BY m2.from_ts DESC, m2.id DESC LIMIT 1
+       ) LIMIT 1`,
       contributorId,
     );
     return row !== null && row !== undefined;
@@ -3126,15 +3135,19 @@ export class ScrumStore {
 
   /**
    * Set (or transfer) the operator-of-record to `contributorId`, appending a new
-   * open interval to the position history. This is the single role slot — a
-   * degenerate one-row roster.
+   * interval to the position history. This is the single role slot — a degenerate
+   * one-row roster.
    *
-   * Transfer is two writes in ONE transaction: the prior open row (`to_ts IS
-   * NULL`) is closed by stamping its `to_ts` to the new holder's `from_ts`, then
-   * the new open row is appended. The invariant "at most one open row" holds
-   * across the transaction; a reader never sees zero or two open rows. Setting
-   * the SAME contributor still appends a fresh interval (a re-affirmation is a
-   * new held interval, not a no-op).
+   * Transfer is two writes in ONE transaction: the prior open row is closed by
+   * stamping its `to_ts` to the new holder's `from_ts`, then the new open interval
+   * is appended. The current holder is NOT "the single open row" (concurrent
+   * offline transfers leave two opens that both land on rebase); it is the LATEST
+   * OPEN interval — the `to_ts IS NULL` row with the greatest `(from_ts, id)`,
+   * derived in `currentOperator` / the `scrum_current_operator` view. That fold
+   * over the open rows is why two concurrent transfers converge: both appends
+   * survive and every replica deterministically folds them to the same later
+   * holder. Setting the SAME contributor still appends a fresh interval (a
+   * re-affirmation is a new held interval, not a no-op).
    *
    * `contributorId` must be a registered contributor — an unknown id throws
    * rather than recording an unresolvable holder.
@@ -3148,7 +3161,11 @@ export class ScrumStore {
 
     const id = ulid();
     const append = async () => {
-      // Close the current open interval (if any) at the new holder's from_ts.
+      // Close the prior open interval (if any) at the new holder's from_ts. This
+      // no longer maintains a single-open invariant on its own — concurrent
+      // offline transfers can leave two opens — but it keeps the history
+      // well-formed; the current holder is the LATEST open row (max from_ts), so
+      // the read converges even when this close races another writer's append.
       await this.exec('UPDATE scrum_operator_history SET to_ts = ? WHERE to_ts IS NULL', fromTs);
       await this.exec(
         'INSERT INTO scrum_operator_history (id, contributor_id, from_ts, to_ts, created_at, created_by) VALUES (?, ?, ?, NULL, ?, ?)',
@@ -3169,20 +3186,32 @@ export class ScrumStore {
   }
 
   /**
-   * Resolve the contributor who CURRENTLY holds operator-of-record — the single
-   * open interval (`to_ts IS NULL`), of which the set-then-append invariant
-   * guarantees at most one. Returns the `scrum_contributors` row, or null when
-   * the role is unset (no open interval). Reads the shared `scrum_current_operator`
-   * view so the CLI and the review-ui boundary share ONE current-holder
+   * Resolve the contributor who CURRENTLY holds operator-of-record — the LATEST
+   * OPEN interval, i.e. the single max-fold row `WHERE to_ts IS NULL ORDER BY
+   * from_ts DESC, id DESC LIMIT 1` over the append-only position history. Returns
+   * the `scrum_contributors` row, or null when the role is unset or vacated (no
+   * open intervals).
+   *
+   * Folding the open rows to the greatest `(from_ts, id)` is the commutative
+   * derivation that survives concurrent offline transfers: two operators that
+   * each append a new open interval both land their rows on rebase, and this fold
+   * deterministically picks the later one — so every replica converges to the
+   * SAME current operator regardless of push order. The pre-fix read took EVERY
+   * `to_ts IS NULL` row and trusted the set-then-append to keep exactly one;
+   * concurrent transfers break that, leaving two opens. The fold collapses them
+   * by construction. Reads the shared `scrum_current_operator` view (now defined
+   * as that fold) so the CLI and the review-ui boundary share ONE current-holder
    * definition; point-in-time-at-an-instant stays the parameterized
    * `operatorOfRecordAt` scan.
    */
   async currentOperator(): Promise<Contributor | null> {
-    const open = (await this.one('SELECT contributor_id FROM scrum_current_operator LIMIT 1')) as {
+    const holder = (await this.one(
+      'SELECT contributor_id FROM scrum_current_operator LIMIT 1',
+    )) as {
       contributor_id: string;
     } | null;
-    if (open === null) return null;
-    return await this.getContributor(open.contributor_id);
+    if (holder === null) return null;
+    return await this.getContributor(holder.contributor_id);
   }
 
   /**
@@ -3442,17 +3471,20 @@ export class ScrumStore {
   // ==========================================================================
 
   /**
-   * Rotate a team's role slot to `contributorId`, appending a new open interval
-   * to that (team, role) position history. The per-(team, role) generalization
-   * of `setOperatorOfRecord`.
+   * Rotate a team's role slot to `contributorId`, appending a new interval to
+   * that (team, role) position history. The per-(team, role) generalization of
+   * `setOperatorOfRecord`.
    *
    * Rotation is two writes in ONE transaction: the prior open row for THAT
-   * (team_slug, role) (`to_ts IS NULL`) is closed by stamping its `to_ts` to the
-   * new holder's `from_ts`, then the new open row is appended. The invariant
-   * "at most one open row per (team, role)" holds across the transaction; a
-   * reader never sees zero or two open rows for a slot. Rotating in the SAME
-   * contributor still appends a fresh interval (a re-affirmation is a new held
-   * interval, not a no-op).
+   * (team_slug, role) is closed by stamping its `to_ts` to the new holder's
+   * `from_ts`, then the new open interval is appended. The current holder of a
+   * slot is NOT "the single open row" but the LATEST OPEN interval — the per-(team,
+   * role) `to_ts IS NULL` row with the greatest `(from_ts, id)`, derived in
+   * `getTeamRoster` — so two concurrent offline rotations of the same slot
+   * converge (both appends land on rebase and every replica folds them to the
+   * same later holder) instead of leaving a dual-open hazard. Rotating in the
+   * SAME contributor still appends a fresh interval (a re-affirmation is a new
+   * held interval, not a no-op).
    *
    * `teamSlug` must be a registered team and `role` must be one of the closed
    * `TeamRole` set — both guarded at this boundary (the columns carry no SQL
@@ -3486,8 +3518,11 @@ export class ScrumStore {
 
     const id = ulid();
     const append = async () => {
-      // Close the current open interval for THIS (team, role) at the new
-      // holder's from_ts.
+      // Close the prior open interval for THIS (team, role) at the new holder's
+      // from_ts. This keeps the history well-formed but no longer enforces a
+      // single-open invariant alone (concurrent offline rotations can leave two
+      // opens); the current slot holder is the LATEST open row (max from_ts), so
+      // the read converges even when this close races another writer's append.
       await this.exec(
         'UPDATE scrum_team_members SET to_ts = ? WHERE team_slug = ? AND role = ? AND to_ts IS NULL',
         fromTs,
@@ -3525,13 +3560,21 @@ export class ScrumStore {
   }
 
   /**
-   * The role slots `contributorId` currently holds open on `teamSlug` — every
-   * (team, role) whose open row (`to_ts IS NULL`) names this contributor.
-   * Backs the multi-slot warning in `rotateTeamMember`.
+   * The role slots `contributorId` currently holds on `teamSlug` — every
+   * (team, role) whose CURRENT holder (the latest OPEN interval: the `to_ts IS
+   * NULL` row with the greatest `(from_ts, id)`, NOT a bare `to_ts IS NULL`)
+   * names this contributor. The same commutative max-fold the roster read uses,
+   * so the multi-slot warning in `rotateTeamMember` reflects the converged
+   * current holders rather than a possibly-dual-open `to_ts` set.
    */
   private async openRolesHeldBy(teamSlug: string, contributorId: string): Promise<TeamRole[]> {
     const rows = (await this.many(
-      'SELECT role FROM scrum_team_members WHERE team_slug = ? AND contributor_id = ? AND to_ts IS NULL',
+      `SELECT m.role FROM scrum_team_members m
+       WHERE m.team_slug = ? AND m.contributor_id = ? AND m.to_ts IS NULL AND m.id = (
+         SELECT m2.id FROM scrum_team_members m2
+         WHERE m2.team_slug = m.team_slug AND m2.role = m.role AND m2.to_ts IS NULL
+         ORDER BY m2.from_ts DESC, m2.id DESC LIMIT 1
+       )`,
       teamSlug,
       contributorId,
     )) as Array<{ role: string }>;
@@ -3539,23 +3582,35 @@ export class ScrumStore {
   }
 
   /**
-   * A team's roster — the open (current) holder of each of the three role slots,
-   * and optionally the full per-role position history. Tolerates an unknown slug:
+   * A team's roster — the current holder of each of the three role slots, and
+   * optionally the full per-role position history. Tolerates an unknown slug:
    * the returned `current` simply maps every role to null (the absence reads as
    * "no holders" rather than an error, matching `getTeamScopes`).
    *
-   * Each role in `current` maps to its single open `TeamMemberRow` (`to_ts IS
-   * NULL`) or null when that slot has never been filled. With
+   * Each role in `current` maps to its CURRENT `TeamMemberRow` — the latest OPEN
+   * interval for that (team, role): the per-partition max-fold row `to_ts IS NULL`
+   * with the greatest `(from_ts, id)` — or null when the slot was never filled or
+   * has been vacated (no open intervals). The fold over the open rows (not a bare
+   * `to_ts IS NULL` that trusts a single open) is the commutative derivation that
+   * survives concurrent offline rotations: two writers that each append a new open
+   * interval for the same slot both land their rows on rebase, and the fold picks
+   * the later one — so every replica converges to the SAME holder regardless of
+   * push order, eliminating the dual-open role-slot hazard by construction. With
    * `includeHistory: true`, `history` carries every interval for the team,
    * oldest-first, grouped by role.
    */
   async getTeamRoster(slug: string, opts: { includeHistory?: boolean } = {}): Promise<TeamRoster> {
     const current = this.emptyRoleMap<TeamMemberRow | null>(null);
-    const openRows = (await this.many(
-      `SELECT ${TEAM_MEMBER_COLUMNS} FROM scrum_team_members WHERE team_slug = ? AND to_ts IS NULL`,
+    const currentRows = (await this.many(
+      `SELECT ${TEAM_MEMBER_COLUMNS} FROM scrum_team_members m
+       WHERE m.team_slug = ? AND m.to_ts IS NULL AND m.id = (
+         SELECT m2.id FROM scrum_team_members m2
+         WHERE m2.team_slug = m.team_slug AND m2.role = m.role AND m2.to_ts IS NULL
+         ORDER BY m2.from_ts DESC, m2.id DESC LIMIT 1
+       )`,
       slug,
     )) as TeamMemberRow[];
-    for (const row of openRows) current[row.role] = row;
+    for (const row of currentRows) current[row.role] = row;
 
     if (opts.includeHistory !== true) {
       return { slug, current };
@@ -4233,8 +4288,9 @@ export class ScrumStore {
       throw new Error(`recordLore: unknown team '${input.teamSlug}'`);
     }
 
-    // The current tech_lead is the open (to_ts IS NULL) holder of that role
-    // slot — null when the slot has never been filled or is currently vacant.
+    // The current tech_lead is the latest-open holder of that role slot (the
+    // max-fold over open intervals, via getTeamRoster) — null when the slot has
+    // never been filled or has been vacated.
     const techLead = (await this.getTeamRoster(input.teamSlug)).current.tech_lead;
     let warning: string | null = null;
     if (techLead === null) {
