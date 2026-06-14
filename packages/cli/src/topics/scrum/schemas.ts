@@ -127,7 +127,20 @@ import { listDomains, registerSchema } from '@claude-prove/store';
  *                           (every row NULL); a later phase backfills it and adds
  *                           semantic search. Nullable so a write that has no
  *                           embedding to attach simply leaves it NULL.
- *   scrum_contributors    — CT-UUID registry; TEXT PK.
+ *   scrum_contributors    — CT-UUID registry; TEXT PK. The `slug` carries NO
+ *                           DB-level UNIQUE: a secondary UNIQUE is not absorbed
+ *                           by the sync engine's PK-keyed UPSERT replay, so a
+ *                           cross-writer duplicate-slug collision would raise and
+ *                           BLOCK sync. Slug-uniqueness is enforced at the
+ *                           registry/app boundary instead (the register path
+ *                           pre-checks by slug and `registerContributor` rejects
+ *                           a same-store duplicate), so a same-store duplicate is
+ *                           still impossible while a cross-writer offline
+ *                           duplicate degrades to a surfaced anomaly the post-pull
+ *                           pass deconflicts — never a sync-blocking throw, never
+ *                           a silent loss. `idx_scrum_contributors_slug` (non-
+ *                           unique) preserves the by-slug lookup the dropped
+ *                           UNIQUE index used to back.
  *   scrum_operator_history— operator-of-record position history; ULID TEXT PK.
  *   scrum_teams           — team registry; TEXT slug PK.
  *   scrum_team_scopes     — per-team read/write globs; composite PK
@@ -274,7 +287,7 @@ CREATE TABLE scrum_decisions (
 
 CREATE TABLE scrum_contributors (
     id TEXT PRIMARY KEY,
-    slug TEXT NOT NULL UNIQUE,
+    slug TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'active',
     display_name TEXT,
     github TEXT,
@@ -420,6 +433,7 @@ CREATE INDEX idx_scrum_tags_tag ON scrum_tags(tag);
 CREATE INDEX idx_scrum_tasks_parent ON scrum_tasks(parent_id);
 CREATE INDEX idx_scrum_decisions_topic ON scrum_decisions(topic);
 CREATE INDEX idx_scrum_decisions_status ON scrum_decisions(status);
+CREATE INDEX idx_scrum_contributors_slug ON scrum_contributors(slug);
 CREATE INDEX idx_scrum_contributors_github ON scrum_contributors(github);
 CREATE INDEX idx_scrum_contributors_email ON scrum_contributors(email);
 CREATE INDEX idx_scrum_operator_history_interval ON scrum_operator_history(from_ts, to_ts);
@@ -437,12 +451,77 @@ CREATE INDEX idx_scrum_escalations_walked_up_from ON scrum_escalations(walked_up
 `;
 
 /**
- * Current scrum-domain store version. The redesigned base schema is a fresh
- * v1; there is no incremental chain. Stamped as the per-artifact
- * `schema_version` on the reusable provenance block (see `taskProvenance` in
- * `store.ts`), so every scrum row reports the schema it was read under.
+ * Migration v2 — drop the `scrum_contributors.slug` DB-level UNIQUE.
+ *
+ * Why a rebuild: SQLite cannot drop a column-level constraint in place, so the
+ * canonical table-rebuild applies — create a UNIQUE-free clone, copy every row,
+ * drop the old table, rename the clone back. `scrum_contributors` is the FK
+ * target of `scrum_operator_history.contributor_id`; with FK enforcement ON a
+ * `DROP TABLE` of a table that has live referencing rows trips `FOREIGN KEY
+ * constraint failed`, so the rebuild brackets itself with `PRAGMA foreign_keys =
+ * OFF/ON`. The migration runner wraps each domain's batch in a transaction, and
+ * this local engine HONORS the foreign_keys toggle inside that transaction
+ * (verified empirically — the toggle is not the no-op the classic SQLite
+ * convention warns about here), so the drop/rename run unenforced and FK is
+ * restored before commit. Every row is preserved and the clone is renamed back
+ * to the same name, so the references resolve unchanged. The clone
+ * (`scrum_contributors_v2`) is itself unreferenced, so its rename rewrites no
+ * other table's FK clause.
+ *
+ * The v1 base DDL above ALSO ships the UNIQUE-free table (and the non-unique
+ * slug index), so a FRESH store reaches the identical final shape by running v1
+ * then this no-op-equivalent v2 (the rebuild reproduces the same UNIQUE-free
+ * table the v1 DDL already created). An EXISTING v1 store — which still carries
+ * the old UNIQUE — only runs v2, where the rebuild actually drops it.
+ *
+ * `DROP TABLE` also drops the table's indexes, so the rebuild MUST recreate all
+ * three contributor indexes after the rename (plain `CREATE INDEX`, never `IF
+ * NOT EXISTS` — after the drop they are guaranteed absent, and the `IF NOT
+ * EXISTS` text would otherwise leak into the stored `sqlite_master.sql` and
+ * drift the golden). Both paths converge on byte-identical DDL, the parity the
+ * golden conformance gate pins.
  */
-export const SCRUM_SCHEMA_VERSION = 1;
+export const SCRUM_MIGRATION_V2_SQL = `
+PRAGMA foreign_keys = OFF;
+
+CREATE TABLE scrum_contributors_v2 (
+    id TEXT PRIMARY KEY,
+    slug TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    display_name TEXT,
+    github TEXT,
+    email TEXT,
+    created_by TEXT,
+    created_at TEXT NOT NULL,
+    last_modified_by TEXT,
+    last_modified_at TEXT
+);
+
+INSERT INTO scrum_contributors_v2 (id, slug, status, display_name, github, email, created_by, created_at, last_modified_by, last_modified_at)
+SELECT id, slug, status, display_name, github, email, created_by, created_at, last_modified_by, last_modified_at
+FROM scrum_contributors;
+
+DROP TABLE scrum_contributors;
+
+ALTER TABLE scrum_contributors_v2 RENAME TO scrum_contributors;
+
+CREATE INDEX idx_scrum_contributors_slug ON scrum_contributors(slug);
+CREATE INDEX idx_scrum_contributors_github ON scrum_contributors(github);
+CREATE INDEX idx_scrum_contributors_email ON scrum_contributors(email);
+
+PRAGMA foreign_keys = ON;
+`;
+
+/**
+ * Current scrum-domain store version. The redesigned base schema landed as a
+ * fresh v1; v2 is the first real incremental hop — it drops the
+ * `scrum_contributors.slug` UNIQUE so a cross-writer duplicate-slug collision
+ * degrades to a surfaced anomaly instead of blocking sync. Stamped as the
+ * per-artifact `schema_version` on the reusable provenance block (see
+ * `taskProvenance` in `store.ts`), so every scrum row reports the schema it was
+ * read under.
+ */
+export const SCRUM_SCHEMA_VERSION = 2;
 
 /**
  * Idempotent scrum-domain registration. Safe to call from the module
@@ -461,6 +540,14 @@ export function ensureScrumSchemaRegistered(): void {
         description: 'create the redesigned sync-safe scrum schema (ULID/composite PKs, no rowid)',
         up: async (store) => {
           await store.exec(SCRUM_MIGRATION_V1_SQL);
+        },
+      },
+      {
+        version: 2,
+        description:
+          'drop scrum_contributors.slug UNIQUE (sync-safe; slug uniqueness moves to the app layer)',
+        up: async (store) => {
+          await store.exec(SCRUM_MIGRATION_V2_SQL);
         },
       },
     ],

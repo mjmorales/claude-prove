@@ -1802,18 +1802,32 @@ export class ScrumStore {
   /**
    * Persist an acceptance object's DEFINITION (criteria rows + the task-level
    * `policy`), or clear it (NULL). The criteria are the authoring source — the
-   * whole-object setters (`setAcceptance`/`addCriterion`/`supersedeCriterion`/
-   * `createTask`) pass the full intended criteria list, so this replaces the
-   * task's criteria rows wholesale (delete-then-reinsert) inside one
-   * transaction. It does NOT touch `scrum_criterion_verdicts` — a verdict is an
-   * append, owned by `appendCriterionVerdict`; re-writing the definition does
-   * not erase recorded verdicts (their rows survive and the head view still
-   * resolves them onto the re-inserted criterion of the same id).
+   * whole-object setters (`setAcceptance`/`createTask`) pass the full intended
+   * criteria list, so this reconciles the task's criterion rows to that list
+   * inside one transaction.
    *
-   * The gate/verification fields carried on the in-memory criteria are decode
-   * artifacts (folded in from the head verdict on read), so they are
-   * intentionally ignored here — the verdict log, not the definition write, is
-   * their system of record.
+   * SURROGATE-IDENTITY PRESERVATION (sync hazard fix): an earlier shape DELETEd
+   * every criterion row and re-INSERTed fresh ULID surrogates. That re-keyed an
+   * UNCHANGED criterion's surrogate id, orphaning its append-only verdict history
+   * — the criterion-head view INNER-JOINs verdicts onto the surrogate, so the old
+   * surrogate's verdicts no longer resolved. This reconciles per external
+   * `criterion_id` instead:
+   *   - existing external id, still present → UPDATE the existing surrogate row
+   *     IN PLACE (the surrogate `id` and `ord` are preserved, so verdict history
+   *     keeps resolving);
+   *   - new external id → INSERT a fresh surrogate (seeding any resolved input
+   *     verdict, as before);
+   *   - external id present in the DB but absent from the new set → the criterion
+   *     was genuinely removed, so DELETE its row.
+   * Two concurrent writers re-asserting the same unchanged criterion now both
+   * leave its surrogate identity intact, so neither orphans the other's verdicts
+   * on rebase.
+   *
+   * It does NOT touch `scrum_criterion_verdicts` on the update path — a verdict is
+   * an append owned by `appendCriterionVerdict`; the gate/verification fields on
+   * the in-memory criteria are decode artifacts (folded in from the head verdict
+   * on read), so they are intentionally ignored for an existing criterion. Only
+   * the INSERT path seeds a first verdict (for a criterion arriving pre-decided).
    *
    * Bumps last-touch provenance: `last_modified_at = now()`, `last_modified_by`
    * = the ambient actor (`PROVE_AGENT` env / `defaultActor`, NULL when neither
@@ -1832,17 +1846,76 @@ export class ScrumStore {
         runId,
         taskId,
       );
-      // Replace-the-whole-object semantics: drop this task's criterion rows and
-      // re-insert fresh surrogates. The verdict rows of the dropped surrogates are
-      // intentionally left in scrum_criterion_verdicts (the append-only log is never
-      // pruned); the criterion-head view's INNER JOIN hides them once their
-      // definition row is gone, so they are inert history, not live state.
-      await this.exec('DELETE FROM scrum_acceptance_criteria WHERE task_id = ?', taskId);
-      const criteria = acceptance?.criteria ?? [];
-      for (const criterion of criteria) {
+      await this.reconcileCriterionRows(taskId, acceptance?.criteria ?? [], at);
+    });
+  }
+
+  /**
+   * Reconcile a task's criterion rows to the intended set, keyed by external
+   * `criterion_id`, preserving each unchanged criterion's surrogate identity (see
+   * `writeAcceptance`). Reads the current rows, then per intended criterion
+   * UPDATEs in place when its external id already has a row (surrogate `id`/`ord`
+   * untouched) or INSERTs a fresh surrogate otherwise; finally DELETEs the rows
+   * whose external id dropped out of the intended set. Runs inside the caller's
+   * transaction.
+   */
+  private async reconcileCriterionRows(
+    taskId: string,
+    criteria: AcceptanceCriterion[],
+    at: string,
+  ): Promise<void> {
+    const existing = (await this.many(
+      `SELECT ${ACCEPTANCE_CRITERION_COLUMNS} FROM scrum_acceptance_criteria WHERE task_id = ?`,
+      taskId,
+    )) as AcceptanceCriterionRow[];
+    const existingByExternalId = new Map(existing.map((r) => [r.criterion_id, r]));
+    const intendedExternalIds = new Set(criteria.map((c) => c.id));
+
+    for (const criterion of criteria) {
+      const prior = existingByExternalId.get(criterion.id);
+      if (prior) {
+        await this.updateCriterionRow(prior.id, criterion);
+      } else {
         await this.insertCriterionRow(taskId, criterion, at);
       }
-    });
+    }
+
+    for (const row of existing) {
+      if (!intendedExternalIds.has(row.criterion_id)) {
+        await this.exec('DELETE FROM scrum_acceptance_criteria WHERE id = ?', row.id);
+      }
+    }
+  }
+
+  /**
+   * Update one EXISTING criterion's DEFINITION row in place, keyed by its
+   * SURROGATE id so the surrogate (and the verdict history that references it)
+   * survives. `ord` is intentionally NOT rewritten — the criterion keeps its
+   * authored position. Never touches `scrum_criterion_verdicts`: the in-memory
+   * gate/verification fields are decode artifacts and the verdict log is their
+   * system of record.
+   */
+  private async updateCriterionRow(
+    surrogateId: string,
+    criterion: AcceptanceCriterion,
+  ): Promise<void> {
+    await this.exec(
+      `UPDATE scrum_acceptance_criteria
+         SET text = ?, verifies_by = ?, check_payload = ?, status = ?, idempotent = ?,
+             scope = ?, timeout = ?, superseded_by = ?, reason = ?, inherited_from = ?
+       WHERE id = ?`,
+      criterion.text,
+      criterion.verifies_by,
+      criterion.check,
+      criterion.status,
+      criterion.idempotent ? 1 : 0,
+      criterion.scope ?? null,
+      criterion.timeout ?? null,
+      criterion.superseded_by ?? null,
+      criterion.reason ?? null,
+      criterion.inherited_from ?? null,
+      surrogateId,
+    );
   }
 
   /**
@@ -2987,6 +3060,21 @@ export class ScrumStore {
    * on-disk `contributor.md` identity artifact seeds its provenance block.
    */
   async registerContributor(input: RegisterContributorInput): Promise<Contributor> {
+    // The DB-level UNIQUE on `slug` was dropped (scrum v2): under whole-
+    // transaction sync replay a secondary-UNIQUE collision raises and BLOCKS
+    // sync, so the slug invariant now lives at this registry boundary instead.
+    // A same-store duplicate is still a programming error and rejected here, so
+    // single-writer uniqueness is preserved exactly as before. The ONLY behaviour
+    // change is cross-writer: two offline registrations of the same slug both
+    // land distinct CT-UUID rows on rebase (no throw), to be SURFACED by the
+    // post-pull anomaly pass and deconflicted there — never a sync-blocking
+    // failure and never a silent loss.
+    const collision = await this.getContributorBySlug(input.slug);
+    if (collision !== null) {
+      throw new Error(
+        `registerContributor: slug '${input.slug}' is already registered as ${collision.id}`,
+      );
+    }
     const createdAt = input.createdAt ?? isoNow();
     const createdBy = this.actor(input.createdBy);
     const row: Contributor = {
@@ -3381,15 +3469,50 @@ export class ScrumStore {
       throw new Error(formatWriteScopeConflict(conflict));
     }
 
-    const replace = async () => {
-      await this.exec('DELETE FROM scrum_team_scopes WHERE team_slug = ?', slug);
+    // Per-row reconcile, NOT delete-all-then-reinsert: compute the (kind, glob)
+    // delta against the team's current rows and DELETE only the rows that dropped
+    // out / INSERT only the rows that are new, leaving an unchanged glob's row
+    // untouched. A blanket delete-all re-asserting an identical glob would emit a
+    // spurious delete+reinsert on the sync CDC tape; reconciling keeps the tape
+    // to genuine deltas so a re-assert does not churn a row a peer may also hold.
+    // The composite PK `(team_slug, kind, glob)` is the natural key — there is no
+    // surrogate to orphan, so this is purely a churn/commutativity improvement.
+    const intended = new Set<string>([
+      ...read.map((glob) => `read\x00${glob}`),
+      ...write.map((glob) => `write\x00${glob}`),
+    ]);
+    const reconcile = async () => {
+      const current = (await this.many(
+        'SELECT kind, glob FROM scrum_team_scopes WHERE team_slug = ?',
+        slug,
+      )) as Array<{ kind: string; glob: string }>;
+      const currentKeys = new Set(current.map((r) => `${r.kind}\x00${r.glob}`));
+
+      for (const row of current) {
+        if (!intended.has(`${row.kind}\x00${row.glob}`)) {
+          await this.exec(
+            'DELETE FROM scrum_team_scopes WHERE team_slug = ? AND kind = ? AND glob = ?',
+            slug,
+            row.kind,
+            row.glob,
+          );
+        }
+      }
       const insert = await this.prep(
         'INSERT INTO scrum_team_scopes (team_slug, kind, glob) VALUES (?, ?, ?)',
       );
-      for (const glob of read) await insert.run(slug, 'read' satisfies TeamScopeKind, glob);
-      for (const glob of write) await insert.run(slug, 'write' satisfies TeamScopeKind, glob);
+      for (const glob of read) {
+        if (!currentKeys.has(`read\x00${glob}`)) {
+          await insert.run(slug, 'read' satisfies TeamScopeKind, glob);
+        }
+      }
+      for (const glob of write) {
+        if (!currentKeys.has(`write\x00${glob}`)) {
+          await insert.run(slug, 'write' satisfies TeamScopeKind, glob);
+        }
+      }
     };
-    await withTx(this.store, replace);
+    await withTx(this.store, reconcile);
 
     return await this.getTeamScopes(slug);
   }

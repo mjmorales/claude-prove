@@ -14,6 +14,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendEntry } from '../acb/reasoning-log-store';
 import type { AssertContext } from './assert-grammar';
+import { SCRUM_SCHEMA_VERSION } from './schemas';
 import { type ScrumStore, criterionSatisfied, openScrumStore } from './store';
 import type {
   Acceptance,
@@ -2792,7 +2793,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
       last_modified_at: PAST,
       worker_id: 'worker-1',
       run_id: 'run-1',
-      schema_version: 1,
+      schema_version: SCRUM_SCHEMA_VERSION,
     });
   });
 
@@ -2805,7 +2806,7 @@ describe('ScrumStore — executing-worker/run attribution (v11)', () => {
     expect(updated.provenance.last_modified_by).toBe('bob');
     expect(updated.provenance.worker_id).toBe('worker-2');
     expect(updated.provenance.run_id).toBe('run-2');
-    expect(updated.provenance.schema_version).toBe(1);
+    expect(updated.provenance.schema_version).toBe(SCRUM_SCHEMA_VERSION);
   });
 });
 

@@ -50,7 +50,7 @@ import type {
 import { ACCEPTANCE_SCOPES } from '../types';
 import { openCliStore } from './cli-store';
 import { parseDecisionFile } from './decision-cmd';
-import { generateId } from './scrum-utils';
+import { generateCriterionId, generateId } from './scrum-utils';
 
 export interface TaskCmdFlags {
   title?: string;
@@ -684,7 +684,7 @@ async function doAcceptanceAdd(
     id:
       flags.criterion && flags.criterion.length > 0
         ? flags.criterion
-        : generateId(flags.text, 'ac'),
+        : generateCriterionId(flags.text),
     text: flags.text,
     verifies_by: flags.verifiesBy as AcceptanceVerifiesBy,
     check: flags.check,

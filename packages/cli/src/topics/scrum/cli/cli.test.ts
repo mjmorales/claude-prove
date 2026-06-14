@@ -29,6 +29,7 @@ import { join } from 'node:path';
 import { MACHINE_CONFIG_DIR_ENV_VAR } from '@claude-prove/store';
 
 import { appendEntry } from '../../acb/reasoning-log-store';
+import { SCRUM_SCHEMA_VERSION } from '../schemas';
 import { runAlertsCmd } from './alerts-cmd';
 import { runAnnotationCmd } from './annotation-cmd';
 import { runAskCmd } from './ask-cmd';
@@ -549,7 +550,7 @@ describe('runTaskCmd', () => {
       expect(shown.task.run_id).toBe('feat-prov');
       expect(shown.task.provenance.worker_id).toBe('worker-42');
       expect(shown.task.provenance.run_id).toBe('feat-prov');
-      expect(shown.task.provenance.schema_version).toBe(1);
+      expect(shown.task.provenance.schema_version).toBe(SCRUM_SCHEMA_VERSION);
     } finally {
       restoreEnv('PROVE_WORKER_ID', savedWorker);
       restoreEnv('PROVE_RUN_SLUG', savedSlug);
@@ -3449,7 +3450,7 @@ describe('runTeamCmd', () => {
     const artifact = join(workspace, 'teams', 'payments.md');
     expect(existsSync(artifact)).toBe(true);
     const content = readFileSync(artifact, 'utf8');
-    expect(content).toContain('schema_version: 1');
+    expect(content).toContain(`schema_version: ${SCRUM_SCHEMA_VERSION}`);
     expect(content).toContain('team:');
     expect(content).toContain('slug: payments');
     expect(content).toContain('team_type: stream_aligned');

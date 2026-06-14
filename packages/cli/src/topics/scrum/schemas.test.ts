@@ -64,8 +64,8 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('SCRUM_SCHEMA_VERSION is the fresh v1 reset', async () => {
-    expect(SCRUM_SCHEMA_VERSION).toBe(1);
+  test('SCRUM_SCHEMA_VERSION is v2 (the slug-UNIQUE-drop hop landed on the v1 base)', async () => {
+    expect(SCRUM_SCHEMA_VERSION).toBe(2);
   });
 
   test('the v1 DDL carries zero AUTOINCREMENT', async () => {
@@ -109,7 +109,7 @@ describe('scrum domain registration', () => {
     }
   });
 
-  test('migration creates all 24 scrum indexes', async () => {
+  test('migration creates all 25 scrum indexes', async () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
@@ -125,6 +125,7 @@ describe('scrum domain registration', () => {
         'idx_scrum_asks_to_team',
         'idx_scrum_contributors_email',
         'idx_scrum_contributors_github',
+        'idx_scrum_contributors_slug',
         'idx_scrum_criterion_verdicts_criterion',
         'idx_scrum_decisions_status',
         'idx_scrum_decisions_topic',
@@ -396,11 +397,13 @@ describe('scrum domain registration', () => {
 
   // -- migration runner behavior -------------------------------------------
 
-  test('migration applies the single scrum v1 hop', async () => {
+  test('migration applies the scrum v1 + v2 hops', async () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       const result = await runMigrations(raw);
-      expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([1]);
+      expect(result.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
+        1, 2,
+      ]);
     } finally {
       raw.close();
     }
@@ -410,7 +413,9 @@ describe('scrum domain registration', () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       const first = await runMigrations(raw);
-      expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([1]);
+      expect(first.applied.filter((a) => a.domain === 'scrum').map((a) => a.version)).toEqual([
+        1, 2,
+      ]);
 
       const second = await runMigrations(raw);
       expect(second.applied.filter((a) => a.domain === 'scrum')).toEqual([]);
@@ -419,7 +424,7 @@ describe('scrum domain registration', () => {
         'SELECT version FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(versions).toEqual([{ version: 1 }]);
+      expect(versions).toEqual([{ version: 1 }, { version: 2 }]);
     } finally {
       raw.close();
     }
@@ -439,7 +444,7 @@ describe('scrum domain registration', () => {
     ensureScrumSchemaRegistered();
   });
 
-  test('_migrations_log entry description matches the registered v1 description', async () => {
+  test('_migrations_log entry descriptions match the registered v1 + v2 hops', async () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
@@ -447,12 +452,14 @@ describe('scrum domain registration', () => {
         'SELECT domain, version, description FROM _migrations_log WHERE domain = ? ORDER BY version',
         ['scrum'],
       );
-      expect(log).toHaveLength(1);
-      const [v1] = log;
-      if (!v1) throw new Error('expected one log entry');
+      expect(log).toHaveLength(2);
+      const [v1, v2] = log;
+      if (!v1 || !v2) throw new Error('expected two log entries');
       expect(v1.domain).toBe('scrum');
       expect(v1.version).toBe(1);
       expect(v1.description).toContain('scrum schema');
+      expect(v2.version).toBe(2);
+      expect(v2.description).toContain('slug UNIQUE');
     } finally {
       raw.close();
     }
@@ -460,18 +467,29 @@ describe('scrum domain registration', () => {
 
   // -- registry / contributors / operator history --------------------------
 
-  test('scrum_contributors enforces slug uniqueness', async () => {
+  test('scrum_contributors carries NO DB-level slug UNIQUE (v2): a duplicate slug is allowed at the DB layer', async () => {
     const raw = await openStore({ path: ':memory:' });
     try {
       await runMigrations(raw);
       await raw.exec(
         "INSERT INTO scrum_contributors (id, slug, status, created_at) VALUES ('ct-a', 'jane', 'active', '2026-01-01T00:00:00Z')",
       );
-      await expect(
-        raw.exec(
-          "INSERT INTO scrum_contributors (id, slug, status, created_at) VALUES ('ct-b', 'jane', 'active', '2026-01-02T00:00:00Z')",
-        ),
-      ).rejects.toThrow();
+      // The slug UNIQUE was dropped in v2 — a secondary UNIQUE would block sync,
+      // so slug uniqueness moved to the app/registry layer. Two distinct-PK rows
+      // sharing a slug land at the DB level (the registry guard, not the DB,
+      // prevents a same-store duplicate; a cross-writer one is a surfaced anomaly).
+      await raw.exec(
+        "INSERT INTO scrum_contributors (id, slug, status, created_at) VALUES ('ct-b', 'jane', 'active', '2026-01-02T00:00:00Z')",
+      );
+      const rows = await raw.all<{ id: string }>(
+        "SELECT id FROM scrum_contributors WHERE slug = 'jane' ORDER BY id",
+      );
+      expect(rows.map((r) => r.id)).toEqual(['ct-a', 'ct-b']);
+      // The non-unique slug index backs the by-slug lookup the dropped UNIQUE used to.
+      const idx = await raw.all<{ name: string }>(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_scrum_contributors_slug'",
+      );
+      expect(idx).toHaveLength(1);
     } finally {
       raw.close();
     }

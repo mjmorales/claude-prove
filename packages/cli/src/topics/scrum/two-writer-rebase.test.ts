@@ -56,8 +56,15 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { SqlParam, Store } from '@claude-prove/store';
+import type {
+  DatabaseRowMutation,
+  DatabaseRowTransformResult,
+  SqlParam,
+  Store,
+} from '@claude-prove/store';
+import { generateCriterionId } from './cli/scrum-utils';
 import { type ScrumStore, foldChildStatuses, openScrumStore } from './store';
+import { type SurfacedCollision, makeScrumSyncTransform } from './sync-transform';
 import type { TaskStatus } from './types';
 
 // ===========================================================================
@@ -87,6 +94,34 @@ interface Mutation {
 
 /** A one-sided transform hook, exactly the shipped `transform` shape. */
 type Transform = (m: Mutation) => { operation: 'skip' } | { operation: 'rewrite'; row: Row } | null;
+
+/**
+ * Adapt the PRODUCTION scrum transform (`makeScrumSyncTransform`, typed over the
+ * shipped `DatabaseRowMutation`) into the harness's `Transform` (typed over the
+ * harness `Mutation`). The harness `Mutation` carries the same facts under
+ * different field names (`table`→`tableName`, no rowid), so this maps the shape,
+ * runs the real hook, and maps its `skip`/`rewrite`/null result back. This drives
+ * the EXACT function lifecycle wires at connect() through the simulator.
+ */
+function wrapScrumTransform(
+  hook: (m: DatabaseRowMutation) => DatabaseRowTransformResult,
+): Transform {
+  return (m: Mutation): { operation: 'skip' } | { operation: 'rewrite'; row: Row } | null => {
+    const result = hook({
+      changeTime: 0,
+      tableName: m.table,
+      id: 0,
+      changeType: m.changeType as DatabaseRowMutation['changeType'],
+      after: m.after ?? undefined,
+    });
+    if (result === null) return null;
+    if (result.operation === 'skip') return { operation: 'skip' };
+    // The production hook only ever returns skip for these collisions; a rewrite
+    // would carry a DatabaseRowStatement the harness does not model, so it never
+    // reaches here. Pass through unchanged if one ever does.
+    return null;
+  };
+}
 
 /**
  * Every scrum table the sync engine carries, with its PRIMARY-KEY columns. The
@@ -741,61 +776,67 @@ function hasCycle(adj: Map<string, string[]>): boolean {
 // ===========================================================================
 
 describe('Class D — collision outcomes on replay (no silent drop)', () => {
-  test('secondary UNIQUE (scrum_contributors.slug) collision THROWS and rolls back atomically', async () => {
+  test('scrum_contributors.slug duplicate now LANDS both rows (DB UNIQUE dropped in scrum v2) — surfaced, not blocked', async () => {
     await seedCommonBase(async () => {});
 
     // Both operators register a contributor with the SAME slug but distinct
-    // CT-UUID PKs while offline. The PK does not collide; the secondary UNIQUE
-    // on `slug` does.
+    // CT-UUID PKs while offline. The slug DB-level UNIQUE was DROPPED in the scrum
+    // v1→v2 migration: a secondary-UNIQUE collision would block sync, so slug
+    // uniqueness moved to the app/registry layer. With no DB UNIQUE the replay
+    // INSERTs no longer raise — both distinct-PK rows survive the rebase.
     await opA.scrum.registerContributor({ slug: 'dup', id: 'ct-A-dup' });
     await opB.scrum.registerContributor({ slug: 'dup', id: 'ct-B-dup' });
 
-    // A pushes first → server holds (ct-A-dup, 'dup'). B's push replays its local
-    // ct-B-dup INSERT as a PK-keyed UPSERT against the server. The slug UNIQUE is
-    // a SECONDARY index (no PK conflict clause covers it) → raw `UNIQUE
-    // constraint failed` → the whole push transaction rolls back atomically.
-    // Surfaced as a throw, never a silent drop. (The shipped engine applies this
-    // same UPSERT replay on both push and pull; whichever direction first
-    // replays the losing INSERT over the conflicting row raises.)
-    await sim.push(opA);
-    const serverBefore = await count(server, 'SELECT COUNT(*) n FROM scrum_contributors');
-    let threw = false;
-    try {
-      await sim.push(opB);
-    } catch (err) {
-      threw = true;
-      expect(String(err)).toMatch(/UNIQUE/i);
+    // Neither push throws; the rebase converges with BOTH rows present.
+    await sim.settle();
+
+    // Both writers' rows survived — no sync-blocking throw and no silent drop.
+    for (const r of [server, opA, opB]) {
+      expect(await count(r, "SELECT COUNT(*) n FROM scrum_contributors WHERE slug = 'dup'")).toBe(
+        2,
+      );
     }
-    expect(threw).toBe(true);
-    // Atomic rollback: the server is unchanged (nothing half-applied), so the
-    // collision is recoverable rather than corrupting.
-    expect(await count(server, 'SELECT COUNT(*) n FROM scrum_contributors')).toBe(serverBefore);
+    // The duplicate is detectable on the merged state — the post-pull anomaly
+    // pass surfaces it (two distinct CT-UUIDs sharing one slug) for deconfliction.
+    const dupSlugs = await server.store.all<{ slug: string; n: number }>(
+      'SELECT slug, COUNT(*) n FROM scrum_contributors GROUP BY slug HAVING n > 1',
+    );
+    expect(dupSlugs).toEqual([{ slug: 'dup', n: 2 }]);
   });
 
-  test('transform hook degrades the slug-UNIQUE collision to a surfaced skip (sync not blocked)', async () => {
+  test('the scrum transform hook degrades a slug collision to a surfaced skip (the item-6 hook lifecycle wires)', async () => {
     await seedCommonBase(async () => {});
     await opA.scrum.registerContributor({ slug: 'dup', id: 'ct-A-dup' });
     await opB.scrum.registerContributor({ slug: 'dup', id: 'ct-B-dup' });
     await sim.push(opA);
 
-    // The shipped recovery: a `transform` (fired per CDC mutation before push)
-    // that maps the known slug collision to `skip`, so B's push completes
-    // instead of blocking. This is the policy's item-6 hook modelled on the
-    // simulator. The hook is one-sided — it queries CURRENT server state inside
-    // its decision, since it never receives the conflicting remote row.
-    const surfaced: Mutation[] = [];
-    const transform: Transform = (m) => {
-      if (m.table === 'scrum_contributors' && m.after && m.after.slug === 'dup') {
-        surfaced.push(m); // record for the post-pull anomaly surface.
-        return { operation: 'skip' };
-      }
-      return null;
-    };
+    // The policy's item-6 hook: the one-sided `transform` from the production
+    // factory `makeScrumSyncTransform`, fired per CDC mutation, that maps a known
+    // slug collision to `skip` and surfaces it for the anomaly pass. This is the
+    // exact function lifecycle wires at connect(); here we drive it through the
+    // harness via `wrapScrumTransform`, binding its synchronous `keyExists` to a
+    // pre-fetched snapshot of the server's current slugs (the engine's transform
+    // callback is synchronous, so the existence probe cannot be async — lifecycle
+    // binds it to a sync probe of the live connection).
+    const serverSlugs = new Set(
+      (await server.store.all<{ slug: string }>('SELECT slug FROM scrum_contributors')).map(
+        (r) => r.slug,
+      ),
+    );
+    const surfaced: SurfacedCollision[] = [];
+    const transform = wrapScrumTransform(
+      makeScrumSyncTransform({
+        keyExists: (table, key) =>
+          table === 'scrum_contributors' && serverSlugs.has(String(key.slug)),
+        onCollision: (c) => surfaced.push(c),
+      }),
+    );
 
     await sim.push(opB, transform); // no throw — degraded to skip.
 
     // The collision was surfaced (recorded), not silently dropped.
     expect(surfaced.length).toBe(1);
+    expect(surfaced[0]?.key).toEqual({ slug: 'dup' });
     // The server kept the winning writer's row (ct-A-dup); B's losing insert was
     // skipped, so exactly one 'dup' contributor exists.
     expect(
@@ -805,7 +846,47 @@ describe('Class D — collision outcomes on replay (no silent drop)', () => {
     expect(dup?.id).toBe('ct-A-dup');
   });
 
-  test('secondary UNIQUE on scrum_acceptance_criteria (task_id, criterion_id) collision throws', async () => {
+  test('auto-generated criterion ids do NOT collide across two offline adds to the same task (random suffix)', async () => {
+    await seedCommonBase(async (s) => {
+      await s.createTask({ id: 't1', title: 't1' });
+    });
+
+    // Both operators add a criterion to the SAME task via the CLI auto-gen path
+    // (no explicit --criterion). `generateCriterionId` pairs the timestamp with
+    // random entropy, so the two external criterion_ids differ even when minted in
+    // the same instant — the secondary UNIQUE(task_id, criterion_id) never fires.
+    const idA = generateCriterionId('build passes');
+    const idB = generateCriterionId('build passes');
+    expect(idA).not.toBe(idB);
+
+    await opA.scrum.addCriterion('t1', {
+      id: idA,
+      text: 'A',
+      verifies_by: 'assert',
+      check: 'true',
+      status: 'active',
+      idempotent: true,
+    });
+    await opB.scrum.addCriterion('t1', {
+      id: idB,
+      text: 'B',
+      verifies_by: 'assert',
+      check: 'true',
+      status: 'active',
+      idempotent: true,
+    });
+
+    // No throw — both distinct-id criteria survive the rebase and converge.
+    await sim.settle();
+
+    for (const r of [server, opA, opB]) {
+      expect(
+        await count(r, "SELECT COUNT(*) n FROM scrum_acceptance_criteria WHERE task_id = 't1'"),
+      ).toBe(2);
+    }
+  });
+
+  test('an EXPLICIT same criterion_id from two operators STILL collides on the secondary UNIQUE (true duplicate)', async () => {
     await seedCommonBase(async (s) => {
       await s.createTask({ id: 't1', title: 't1' });
     });
@@ -890,7 +971,7 @@ describe('Class D — collision outcomes on replay (no silent drop)', () => {
     }
   });
 
-  test('delete-all-then-reinsert (writeAcceptance) re-keys the surrogate, orphaning verdict history (the real hazard)', async () => {
+  test('setAcceptance PRESERVES an unchanged criterion surrogate (item-7 fix) so verdict history is not orphaned', async () => {
     await seedCommonBase(async (s) => {
       await s.createTask({
         id: 't1',
@@ -908,6 +989,8 @@ describe('Class D — collision outcomes on replay (no silent drop)', () => {
           ],
         },
       });
+      // Record a verdict on c1 — the append-only history keyed to c1's surrogate.
+      await s.recordCriterionVerdict('t1', 'c1', true, 'green', 'ci');
     });
 
     // The original c1's surrogate PK (the verdict-log FK target).
@@ -916,6 +999,7 @@ describe('Class D — collision outcomes on replay (no silent drop)', () => {
         "SELECT id FROM scrum_acceptance_criteria WHERE task_id = 't1' AND criterion_id = 'c1'",
       )
     )?.id;
+    expect(c1SurrogateBefore).toBeDefined();
 
     // A adds a new criterion via the per-row append path (addCriterion).
     await opA.scrum.addCriterion('t1', {
@@ -926,8 +1010,10 @@ describe('Class D — collision outcomes on replay (no silent drop)', () => {
       status: 'active',
       idempotent: true,
     });
-    // B replaces the WHOLE criteria set via setAcceptance (delete-all-reinsert):
-    // it DELETEs every criterion row for t1 and re-inserts fresh surrogates.
+    // B re-asserts the WHOLE criteria set via setAcceptance. The reshaped write
+    // RECONCILES per external criterion_id instead of delete-all-reinsert: c1 is
+    // unchanged, so its existing surrogate row is UPDATED IN PLACE (id/ord kept),
+    // and only c3-from-B is inserted fresh.
     await opB.scrum.setAcceptance('t1', {
       criteria: [
         {
@@ -958,22 +1044,22 @@ describe('Class D — collision outcomes on replay (no silent drop)', () => {
     ).sort((a, b) => a.criterion_id.localeCompare(b.criterion_id));
     const externalIds = rows.map((r) => r.criterion_id);
 
-    // FINDING — nuances the collision policy: under the SHIPPED per-row CDC
-    // tape, B's delete-all is captured as per-row deletes of only the rows B saw
-    // at its baseline (the original c1 surrogate) — NOT A's concurrently-added
-    // c2-from-A, which B never observed. So the SET-replace does NOT clobber a
-    // peer's concurrent sibling add at the tape-replay level (the clobber the
-    // policy describes is a logical-SQL/predicate-replay concern, not a per-row
-    // one). All three external ids survive:
+    // All three external ids survive: B's reconcile deletes only the rows that
+    // dropped out of its intended set (none here — B re-asserts c1 and adds c3),
+    // and the per-row CDC tape never observed A's concurrent c2-from-A to clobber.
     expect(externalIds).toEqual(['c1', 'c2-from-A', 'c3-from-B']);
 
-    // The REAL residual hazard: B re-inserts c1 under a FRESH ULID surrogate, so
-    // c1's PK changes. Any verdict rows that referenced the OLD c1 surrogate are
-    // now orphaned (the criterion-head INNER JOIN no longer resolves them). The
-    // policy's remedy — prefer per-row append/supersede over bulk replace — is
-    // about preserving this surrogate identity, not about clobbering siblings.
+    // THE FIX: c1's surrogate id is UNCHANGED — the reconcile updated it in place
+    // rather than re-keying it. So the verdict row keyed to the old surrogate
+    // still resolves through the criterion-head INNER JOIN; nothing is orphaned.
     const c1SurrogateAfter = rows.find((r) => r.criterion_id === 'c1')?.id;
-    expect(c1SurrogateAfter).toBeDefined();
-    expect(c1SurrogateAfter).not.toBe(c1SurrogateBefore); // surrogate re-keyed.
+    expect(c1SurrogateAfter).toBe(c1SurrogateBefore);
+
+    // Concretely: c1's recorded verdict still resolves on the merged state.
+    const head = await server.store.get<{ verdict: string }>(
+      'SELECT verdict FROM scrum_criterion_head WHERE criterion_id = ?',
+      [c1SurrogateAfter as string],
+    );
+    expect(head?.verdict).toBe('verified');
   });
 });
