@@ -10,12 +10,15 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ## Unreleased — Opt-in cloud sync, slice 1: `store provision` + `cloud` config block (schema v12)
 
-*(New optional config block + new command. No automatic behavior change — cloud stays OFF by default, so existing local-only projects are unaffected and perform zero network I/O. Schema migrates automatically via `/prove:update`.)*
+*(New optional config block + new command + the session-boundary sync lifecycle. Cloud stays OFF by default, so existing local-only projects perform zero network I/O. **One non-optional change for every project:** the scrum **store** schema advances v1 → v2 on first write after upgrade — see Migration. Config schema migrates automatically via `/prove:update`.)*
 
-This is the first slice of the optional multi-operator cloud-sync layer. It lands the opt-in surface and the provisioning command; the session-boundary push/pull lifecycle is a follow-on slice. Nothing here runs unless you explicitly enable cloud.
+This is the complete first slice of the optional multi-operator cloud-sync layer: the opt-in `cloud` config block, the `store provision` command, the session-boundary push/pull lifecycle, the multi-operator convergence reshape (operator/role-slot derivation + per-key collision policy), and the post-pull anomaly surfacing. Every cloud code path is dead unless you enable cloud — with one exception called out under Migration: the scrum store reshape to v2 applies to all projects, independent of the cloud toggle.
 
-- **`.prove.json` gains a non-secret `cloud` block** (schema v11 → v12): `cloud: { enabled, org, group, db_name }`. Absent or `{ "enabled": false }` (the default) keeps prove **local-only with zero network** — every sync code path is dead. The block is committed and carries no secrets: the org Platform API token and the per-machine db-scoped sync token live OUTSIDE this file.
+- **`.prove.json` gains a non-secret `cloud` block** (config schema v11 → v12): `cloud: { enabled, org, group, db_name }`. Absent or `{ "enabled": false }` (the default) keeps prove **local-only with zero network** — every sync code path is dead. The block is committed and carries no secrets: the org Platform API token and the per-machine db-scoped sync token live OUTSIDE this file.
 - **`claude-prove store provision`** provisions this project's cloud database and mints its machine-local token. It is idempotent (skips creating a database that already exists; always re-mints the db-scoped token so a machine that lost its token recovers) and least-privilege: the org Platform API token (the admin bootstrap secret) is read from the environment (`TURSO_PLATFORM_TOKEN`) and never persisted, while the token this command writes is scoped to exactly one database and lands only in the gitignored `~/.claude-prove/config.json` — never in `.prove.json`. Each contributor runs it once per machine to mint their own token.
+- **Session-boundary sync lifecycle** (cloud-enabled only): `pull()` + a recovery `flush-push()` on session-start, `push()` on stop/subagent-stop. Per-tool-event hooks and ordinary commands stay local (no per-hook network). pull/push race a short timeout inside try/catch — on any failure the command warns and proceeds local with exit 0, so the primary output never blocks on the network.
+- **Multi-operator convergence + collision policy** (a sync-safety reshape of the scrum store, hence the v2 bump for all projects): the current operator-of-record and team role-slot holders are derived by a `max(from_ts)` fold over append-only interval rows (commutes under concurrent transfers); the `scrum_contributors.slug` DB-level UNIQUE is dropped (enforced + surfaced at the app layer instead, so a cross-writer duplicate degrades to a surfaced anomaly rather than blocking sync); auto-generated acceptance `criterion_id`s are deconflicted; and a sync `transform` hook maps known UNIQUE collisions to a surfaced skip.
+- **Post-pull anomaly surfacing**: after a cloud pull, the session-start digest surfaces (detection only — never auto-resolves) cross-writer head intent-loss, skipped UNIQUE collisions, cross-team write-scope overlaps, and dependency/parent cycles.
 
 Usage (only after opting in):
 
@@ -26,10 +29,10 @@ TURSO_PLATFORM_TOKEN=<org-platform-token> claude-prove store provision
 ```
 
 Migration:
-- Manual: run `claude-prove schema migrate --file .claude/.prove.json` (bumps `schema_version` `"11"` → `"12"`; the `cloud` block is optional and is not seeded, so the file changes only its version stamp). Then delete the generated `.bak`.
-- `/prove:update`: applies the schema migration automatically and ships the new binary.
+- **Config schema (`.prove.json`) v11 → v12** — Manual: run `claude-prove schema migrate --file .claude/.prove.json` (the `cloud` block is optional and is not seeded, so the file changes only its version stamp); then delete the generated `.bak`. `/prove:update` applies this automatically.
+- **Scrum store (`.prove/prove.db`) v1 → v2** — applies to **every project**, not just cloud users: the new binary auto-migrates the scrum store to v2 (dropping the `scrum_contributors.slug` DB-level UNIQUE) on the first write after upgrade. This is automatic and data-preserving; no command to run. **Ordering matters:** once a store is at v2, an older (pre-v2) `claude-prove` binary refuses to open it (`SchemaIncompatibleError`), so upgrade the binary everywhere you run prove against the same store — do not mix a v2 store with a stale binary. The generalized schema guard accepts both v1 and v2 stores, so the new binary stays compatible with not-yet-migrated projects.
 
-Auto-adoption: the schema bump is automatic and behavior-neutral (cloud off by default). Provisioning is operator-invoked by design — you only run `store provision` if you opt a project into cloud sync.
+Auto-adoption: the config-schema bump and the store v1→v2 migration are both automatic with the binary upgrade. Cloud behavior is off by default; provisioning is operator-invoked by design — you only run `store provision` if you opt a project into cloud sync.
 
 ## v4.2.2 — `store migrate-to-turso` no longer fails on legacy `acb_group_verdicts` rows
 
