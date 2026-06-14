@@ -8,7 +8,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Unreleased — `store migrate-to-turso` lifts a legacy `prove.db` onto the v1 schema
+## v4.2.0 — `store migrate-to-turso` lifts a legacy `prove.db` onto the v1 schema
 
 *(New command. No automatic migration — you run it once per existing project. New projects bootstrap clean v1 and never need it.)*
 
