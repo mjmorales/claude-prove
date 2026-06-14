@@ -8,7 +8,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Unreleased — `store migrate-to-turso` no longer fails on legacy `acb_group_verdicts` rows
+## v4.2.2 — `store migrate-to-turso` no longer fails on legacy `acb_group_verdicts` rows
 
 *(Bug fix. No action required — `/prove:update` ships it with the next binary; no config or schema change. If a prior run aborted, just re-run the command — the legacy file was left untouched.)*
 
