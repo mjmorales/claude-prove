@@ -8,7 +8,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Unreleased — `install upgrade --tag <vX.Y.Z>` pins a specific release
+## v4.1.0 — `install upgrade --tag <vX.Y.Z>` pins a specific release
 
 *(No config or schema migration. New optional flag; default behavior unchanged.)*
 
