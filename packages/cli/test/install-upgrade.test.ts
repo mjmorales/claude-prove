@@ -127,7 +127,13 @@ describe('claude-prove install upgrade — compiled mode with stubbed CDN', () =
       hostname: '127.0.0.1',
       fetch(req) {
         const url = new URL(req.url);
-        if (url.pathname === `/claude-prove-${target}`) {
+        // Mirror GitHub's release asset paths off the releases root:
+        //   latest  -> /latest/download/<asset>
+        //   pinned  -> /download/<tag>/<asset>
+        if (url.pathname === `/latest/download/claude-prove-${target}`) {
+          return new Response(payload, { status: 200 });
+        }
+        if (url.pathname === `/download/v1.2.3/claude-prove-${target}`) {
           return new Response(payload, { status: 200 });
         }
         return new Response('not found', { status: 404 });
@@ -163,6 +169,39 @@ describe('claude-prove install upgrade — compiled mode with stubbed CDN', () =
       const stat = statSync(destPath);
       const mode = stat.mode & 0o777;
       expect(mode).toBe(0o755);
+    } finally {
+      rmSync(prefix, { recursive: true, force: true });
+    }
+  });
+
+  test('--tag pins the download to a specific release', async () => {
+    const prefix = mkdtempSync(join(tmpdir(), 'prove-install-upgrade-tag-'));
+    try {
+      // Bare semver (no leading v) must normalize to the v-prefixed tag path
+      // the stub serves at /download/v1.2.3/.
+      const { stdout, stderr, status } = await runBin(
+        ['install', 'upgrade', '--prefix', prefix, '--tag', '1.2.3'],
+        { ...FORCE, PROVE_RELEASE_URL_BASE: baseUrl },
+      );
+      expect(stderr).toBe('');
+      expect(status).toBe(0);
+      const destPath = join(prefix, 'claude-prove');
+      expect(stdout).toContain(`upgraded to ${destPath} from v1.2.3`);
+      expect(readFileSync(destPath).length).toBe(payload.byteLength);
+    } finally {
+      rmSync(prefix, { recursive: true, force: true });
+    }
+  });
+
+  test('--tag with a non-semver value exits 1 before any fetch', async () => {
+    const prefix = mkdtempSync(join(tmpdir(), 'prove-install-upgrade-badtag-'));
+    try {
+      const { stderr, status } = await runBin(
+        ['install', 'upgrade', '--prefix', prefix, '--tag', 'latest'],
+        { ...FORCE, PROVE_RELEASE_URL_BASE: baseUrl },
+      );
+      expect(status).toBe(1);
+      expect(stderr).toContain("invalid --tag 'latest'");
     } finally {
       rmSync(prefix, { recursive: true, force: true });
     }

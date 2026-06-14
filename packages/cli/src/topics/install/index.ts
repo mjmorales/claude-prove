@@ -11,7 +11,7 @@
  *   claude-prove install bootstrap-identity  [--cwd <path>] [--with-charter] [--with-team]
  *                                            [--full] [--contributor <id>] [--dry-run]
  *   claude-prove install doctor
- *   claude-prove install upgrade             [--prefix <dir>]
+ *   claude-prove install upgrade             [--prefix <dir>] [--tag <vX.Y.Z>]
  *   claude-prove install latest              [--offline]
  *
  * Semantics:
@@ -25,7 +25,9 @@
  *                          contributor artifacts (skip-if-exists); the mechanical half
  *                          of the project-identity bootstrap the `/prove:init` command drives.
  *   - doctor             : report health of the claude-prove installation (exit 1 on any failure).
- *   - upgrade            : fetch latest binary from GH Releases for the host target (compiled mode only).
+ *   - upgrade            : fetch a release binary from GH Releases for the host target
+ *                          (compiled mode only); `--tag <vX.Y.Z>` pins a specific release,
+ *                          default is latest.
  *   - latest             : emit JSON { local, remote, upToDate } locating the newest installed
  *                          plugin cache and the latest GH release — definitive source for
  *                          `/prove:update` when picking which plugin dir to operate on.
@@ -107,6 +109,7 @@ export function register(cli: CAC): void {
     .option('--dry-run', 'bootstrap-identity: run pre-flight checks only, write nothing')
     .option('--json', 'bootstrap-identity: emit the machine-readable JSON result')
     .option('--prefix <dir>', 'Target directory for upgrade (default: ~/.local/bin)')
+    .option('--tag <vX.Y.Z>', 'upgrade: pin to a specific release tag (default: latest)')
     .option('--offline', 'Skip network calls (latest: omit remote release lookup)')
     .action(async (action: string, flags: InstallFlags) => {
       if (!isInstallAction(action)) {
@@ -161,7 +164,7 @@ async function dispatch(action: InstallAction, flags: InstallFlags): Promise<num
       case 'doctor':
         return await handleDoctorAction();
       case 'upgrade':
-        return await runUpgrade({ prefix: flags.prefix });
+        return await runUpgrade({ prefix: flags.prefix, tag: flags.tag });
       case 'latest':
         return await runLatest({ offline: flags.offline ?? false });
     }

@@ -1,27 +1,35 @@
 /**
- * `claude-prove install upgrade` — download the latest claude-prove binary
- * from GitHub Releases for the current platform and atomically swap it in
- * place.
+ * `claude-prove install upgrade` — download a claude-prove release binary for
+ * the current platform and atomically swap it in place.
  *
- *   claude-prove install upgrade [--prefix <dir>]
+ *   claude-prove install upgrade [--prefix <dir>] [--tag <vX.Y.Z>]
+ *
+ * With no `--tag`, fetches the newest release (`/releases/latest/download`).
+ * With `--tag v4.0.1` (a leading `v` is optional), pins the download to that
+ * release (`/releases/download/<tag>`) — the in-tool path to install a
+ * specific known-good version instead of only `latest`, e.g. to step back off
+ * a release that regressed. (A binary that is already broken cannot run this
+ * command at all — it fails before argument parsing — so a full recovery from
+ * a non-running binary still goes through `install.sh` or a manual download;
+ * `--tag` covers pinning from a working binary.)
  *
  * The dev/compiled gate is PROVENANCE-based — how this process was launched
  * (`runningFromCompiledBinary`), not what `resolvePluginRoot()` points at.
  * Dev machines export `CLAUDE_PROVE_PLUGIN_DIR` toward their checkout, which
  * would make a plugin-root-based check classify even the installed binary at
  * ~/.local/bin as 'dev' and refuse. A `bun run` source invocation exits 1
- * with a pointer to `git pull`; the compiled binary fetches
- * `${PROVE_RELEASE_URL_BASE}/claude-prove-<target>` (env override; default
- * is the canonical GitHub Releases CDN URL), writes to a sibling tmp file,
- * chmods +x, and `rename(2)`s onto the destination so a concurrent
+ * with a pointer to `git pull`; the compiled binary fetches the asset from
+ * the GitHub Releases root (`PROVE_RELEASE_URL_BASE` overrides the root for
+ * tests; default is the canonical GitHub Releases URL), writes to a sibling
+ * tmp file, chmods +x, and `rename(2)`s onto the destination so a concurrent
  * `claude-prove` caller never observes a partial file.
  *
  * `PROVE_FORCE_MODE=dev|compiled` overrides provenance detection — the
  * test-suite escape hatch (tests always run via `bun run`).
  *
- * Platform targets (`<platform>-<arch>`) mirror the eventual bash
- * bootstrap (phase 10 task 8): darwin-arm64, darwin-x64, linux-arm64,
- * linux-x64. Anything else errors out rather than silently guessing.
+ * Platform targets (`<platform>-<arch>`): darwin-arm64, linux-arm64,
+ * linux-x64. Intel mac (darwin-x64) is rejected (no published asset);
+ * anything else errors out rather than silently guessing.
  *
  * NOTE: this file does not register its own cac command -- it exports
  * `runUpgrade` and is dispatched from `topics/install/index.ts` alongside
@@ -35,8 +43,10 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { runningFromCompiledBinary } from '@claude-prove/installer';
 
-const DEFAULT_RELEASE_URL_BASE =
-  'https://github.com/mjmorales/claude-prove/releases/latest/download';
+// The GitHub Releases ROOT (no trailing path). The asset URL is built off it:
+// `/latest/download/<asset>` for the newest release, `/download/<tag>/<asset>`
+// for a pinned `--tag`. PROVE_RELEASE_URL_BASE overrides this root in tests.
+const DEFAULT_RELEASES_ROOT = 'https://github.com/mjmorales/claude-prove/releases';
 const DEFAULT_PREFIX_REL = join('.local', 'bin');
 // Binary was renamed from `prove` → `claude-prove` in v2.0.0 (commit ace69a6)
 // to avoid collision with /usr/bin/prove (Perl TAP test runner). Release
@@ -47,6 +57,8 @@ const DEV_MODE_MESSAGE = 'upgrade is a compiled-mode command; use git pull in de
 
 export interface UpgradeFlags {
   prefix?: string;
+  /** Pin the download to a specific release tag (e.g. `v4.0.1`). Default: latest. */
+  tag?: string;
 }
 
 export async function runUpgrade(flags: UpgradeFlags): Promise<number> {
@@ -60,15 +72,17 @@ export async function runUpgrade(flags: UpgradeFlags): Promise<number> {
   }
 
   let target: string;
+  let tag: string | undefined;
   try {
     target = resolveTarget();
+    tag = flags.tag !== undefined ? normalizeTag(flags.tag) : undefined;
   } catch (err) {
     process.stderr.write(`${errMessage(err)}\n`);
     return 1;
   }
 
-  const base = process.env.PROVE_RELEASE_URL_BASE ?? DEFAULT_RELEASE_URL_BASE;
-  const url = `${base}/${BINARY_NAME}-${target}`;
+  const root = process.env.PROVE_RELEASE_URL_BASE ?? DEFAULT_RELEASES_ROOT;
+  const url = buildReleaseUrl(root, target, tag);
   const prefix = flags.prefix ?? join(homedir(), DEFAULT_PREFIX_REL);
   const destPath = join(prefix, BINARY_NAME);
   const tmpPath = `${destPath}.tmp.${process.pid}`;
@@ -92,8 +106,35 @@ export async function runUpgrade(flags: UpgradeFlags): Promise<number> {
     return 1;
   }
 
-  process.stdout.write(`upgraded to ${destPath} (${bytes.byteLength} bytes)\n`);
+  process.stdout.write(
+    `upgraded to ${destPath} from ${tag ?? 'latest'} (${bytes.byteLength} bytes)\n`,
+  );
   return 0;
+}
+
+/**
+ * Build the GitHub Releases asset URL off the releases `root`. GitHub serves
+ * the newest release at `/latest/download/<asset>` and a pinned release at
+ * `/download/<tag>/<asset>`.
+ */
+export function buildReleaseUrl(root: string, target: string, tag: string | undefined): string {
+  const asset = `${BINARY_NAME}-${target}`;
+  return tag ? `${root}/download/${tag}/${asset}` : `${root}/latest/download/${asset}`;
+}
+
+// Release tags are `vMAJOR.MINOR.PATCH`, optionally with a prerelease suffix
+// (e.g. `v4.0.0-pre.1`). Accept a bare or v-prefixed semver and normalize to
+// the v-prefixed tag GitHub uses. A strict pattern also keeps a stray value
+// from being spliced into the download path.
+const TAG_PATTERN = /^v?\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/;
+
+/** Validate and v-prefix a `--tag` value, throwing on anything non-semver. */
+export function normalizeTag(raw: string): string {
+  const trimmed = raw.trim();
+  if (!TAG_PATTERN.test(trimmed)) {
+    throw new Error(`invalid --tag '${raw}': expected a release version like v4.0.1 or 4.0.1`);
+  }
+  return trimmed.startsWith('v') ? trimmed : `v${trimmed}`;
 }
 
 /**

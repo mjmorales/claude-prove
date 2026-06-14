@@ -8,6 +8,22 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — `install upgrade --tag <vX.Y.Z>` pins a specific release
+
+*(No config or schema migration. New optional flag; default behavior unchanged.)*
+
+`claude-prove install upgrade` previously only ever fetched `latest`, so stepping off a release that regressed meant manually downloading a prior asset. It now accepts `--tag <vX.Y.Z>` (a leading `v` is optional — `4.0.1` and `v4.0.1` both work) to pin the download to a specific release:
+
+```
+claude-prove install upgrade --tag v3.13.3
+```
+
+With no `--tag` the behavior is identical to before (newest release). The tag is validated as a semver before any network call, so a typo fails fast instead of 404-ing. Note a binary that is already non-running cannot execute this command at all (it fails before argument parsing) — recovering a fully broken binary still goes through `install.sh` or a manual download; `--tag` covers pinning/downgrading from a working binary.
+
+Migration: none. Auto-adoption: full — the flag ships with the binary.
+
+---
+
 ## v4.0.1 — Standalone binary loads the Turso native addon (fixes v4.0.0 startup brick); Intel mac dropped
 
 *(No `.claude/.prove.json` migration. The fix lands entirely in the compiled release binary — upgrade to get it.)*
