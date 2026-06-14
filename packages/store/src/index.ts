@@ -29,6 +29,16 @@ export {
 } from './provision';
 export { type ResolveOptions, resolveDbPath } from './paths';
 export {
+  type CloudCoordinates,
+  type ConnectSync,
+  openSyncDatabase,
+  type SyncConnectOptions,
+  type SyncDatabase,
+  type SyncEngineDatabase,
+  type SyncOpenDeps,
+  syncRemoteUrl,
+} from './sync-connection';
+export {
   add,
   canonicalProjectRoot,
   hide,

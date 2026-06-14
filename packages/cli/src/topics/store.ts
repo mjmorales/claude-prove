@@ -1,13 +1,15 @@
+import { dirname } from 'node:path';
 import {
   type Store,
   dropAllDomainTables,
   listDomains,
   openStore,
+  resolveCloudToken,
   runMigrations,
 } from '@claude-prove/store';
 import type { CAC } from 'cac';
 import { runMigrateToTurso } from './store-migrate-to-turso';
-import { runProvision } from './store-provision';
+import { readCloudConfig, runProvision } from './store-provision';
 
 interface StoreFlags {
   confirm?: boolean;
@@ -115,6 +117,13 @@ async function runStoreCommand(fn: (store: Store) => Promise<number>): Promise<n
 }
 
 async function handleMigrate(store: Store): Promise<number> {
+  // Slice-1 soft-warn: migrating against a cloud REPLICA (a sync-opted-in store
+  // with a machine-local token) risks a schema drift the primary must own. This
+  // slice WARNS rather than hard-refuses — the strict "refuse migrate on a
+  // replica" enforcement is a later slice — so an operator who needs a local
+  // migration can still run it knowingly.
+  warnIfReplica(store);
+
   const result = await runMigrations(store);
   if (result.applied.length === 0) {
     console.log('no pending migrations');
@@ -124,6 +133,38 @@ async function handleMigrate(store: Store): Promise<number> {
     console.log(`applied ${m.domain} v${m.version}: ${m.description}`);
   }
   return 0;
+}
+
+/**
+ * Emit the replica soft-warning to stderr when one applies. Best-effort and
+ * non-blocking: a `null` warning (the non-replica case) is silent, and any
+ * lookup failure inside `replicaMigrateWarning` already degrades to `null`.
+ */
+function warnIfReplica(store: Store): void {
+  const warning = replicaMigrateWarning(store.path);
+  if (warning !== null) console.error(warning);
+}
+
+/**
+ * The soft warning text for `store migrate` against a cloud REPLICA, or `null`
+ * when no warning applies. A replica is a project whose committed `.prove.json`
+ * sets `cloud.enabled` AND whose machine holds a db-scoped token for that db.
+ * The store path is `<root>/.prove/prove.db`, so the workspace root is two
+ * directories up. Best-effort: any lookup failure returns `null` so a replica
+ * check never blocks a local migration. This is a SOFT warning for this slice —
+ * the strict "refuse migrate on a replica" enforcement is a later slice.
+ */
+export function replicaMigrateWarning(dbPath: string): string | null {
+  try {
+    const workspaceRoot = dirname(dirname(dbPath));
+    const cloud = readCloudConfig(workspaceRoot);
+    if (cloud === null || !cloud.enabled) return null;
+    const token = resolveCloudToken(cloud.dbName);
+    if (token === null || token.length === 0) return null;
+    return `claude-prove store: warning — migrating a cloud-synced replica ('${cloud.dbName}'). Schema migrations should run against the cloud primary; a local migration here may drift from peers until they pull. Proceeding (soft warning for this slice).`;
+  } catch {
+    return null;
+  }
 }
 
 async function handleInfo(store: Store): Promise<number> {
