@@ -51,6 +51,16 @@ export {
   type SchemaDef,
 } from './registry';
 export { assertStoreSchemaCompatible, SchemaIncompatibleError } from './schema-guard';
+// Re-export the shipped @tursodatabase/sync transform types so domain packages
+// reference the canonical engine shapes through @claude-prove/store (which owns
+// the @tursodatabase/sync dependency) instead of reaching into the transitive
+// package directly. These are the one-sided conflict-recovery hook shapes the
+// sync engine fires per CDC mutation at connect().
+export type {
+  DatabaseRowMutation,
+  DatabaseRowStatement,
+  DatabaseRowTransformResult,
+} from '@tursodatabase/sync';
 export { isUlid, ulid } from './ulid';
 export {
   type GroupVerdict,
