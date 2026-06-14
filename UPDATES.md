@@ -8,6 +8,18 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — Standalone binary survives concurrent launches (fixes native-addon extraction race)
+
+*(No config or schema migration. The fix lands entirely in the compiled release binary — upgrade to get it.)*
+
+The 4.0.1/4.1.0 binary loaded the `@tursodatabase` native addon reliably when launched one process at a time, but **concurrent launches intermittently failed with `Cannot find native binding`** (up to ~15% of a burst). Claude Code fires prove's hooks in concurrent batches — a single tool event fans out `cafi gate` + `run-state` + `scrum` hooks at once — so on real hook batches roughly 1-in-7 store-opening hook fires could die. The hooks are idempotent (the next fire recovers) and Claude Code treats hook failures as non-blocking, so no tool op was lost, but it was constant error-log noise and occasional missed reconciliation.
+
+Cause: pointing the loader at the embedded `/$bunfs` addon path made bun extract the `.node` to a **shared, executable-derived temp path and then delete it**; simultaneous processes raced that extract/cleanup and a sibling saw no binding. The binary now **materializes the addon once** to a content-keyed cache file (`~/.claude-prove/native/turso-<hash>.node`) via a tmp-write + atomic rename, and points `NAPI_RS_NATIVE_LIBRARY_PATH` at that real path. Plain `require()` of a stable on-disk `.node` is an ordinary `dlopen` many processes can share — no per-process extraction, no cleanup to race on. Verified: a fixed binary takes 0 failures across thousands of concurrent cold- and warm-cache launches where the prior binary failed intermittently.
+
+Migration: `claude-prove install upgrade` (or re-run `install.sh`) on Apple Silicon / Linux to pick up the fix. Auto-adoption: full on supported platforms — the fix ships in the binary; no config or project changes. The cache dir is created on first run and reused across releases (keyed by addon content), never requiring manual cleanup.
+
+---
+
 ## v4.1.0 — `install upgrade --tag <vX.Y.Z>` pins a specific release
 
 *(No config or schema migration. New optional flag; default behavior unchanged.)*
