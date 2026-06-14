@@ -1,0 +1,13 @@
+diff --git a/index.js b/index.js
+index 4695e16004a1dc2ef8e492ebd3a956a822b00bf7..9dba23c3dcd80dde60d2430159615a530752b67e 100644
+--- a/index.js
++++ b/index.js
+@@ -67,7 +67,7 @@ const isMuslFromChildProcess = () => {
+ function requireNative() {
+   if (process.env.NAPI_RS_NATIVE_LIBRARY_PATH) {
+     try {
+-      nativeBinding = require(process.env.NAPI_RS_NATIVE_LIBRARY_PATH);
++      return require(process.env.NAPI_RS_NATIVE_LIBRARY_PATH);
+     } catch (err) {
+       loadErrors.push(err)
+     }

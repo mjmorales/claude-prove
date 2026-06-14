@@ -20,5 +20,8 @@
   "packageManager": "bun@1.2.22",
   "engines": {
     "bun": ">=1.2.0"
+  },
+  "patchedDependencies": {
+    "@tursodatabase/database@0.6.1": "patches/@tursodatabase%2Fdatabase@0.6.1.patch"
   }
 }

@@ -257,14 +257,14 @@ jobs:
             arch: arm64
             target: bun-darwin-arm64
             artifact: claude-prove-darwin-arm64
-          # Build the Intel mac target on Apple Silicon — bun's
-          # `--target=bun-darwin-x64` cross-compiles cleanly from any host,
-          # so there is no reason to depend on GH's constrained macos-13
-          # Intel runner pool (queues there regularly exceed 20 minutes).
-          - os: macos-latest
-            arch: x64
-            target: bun-darwin-x64
-            artifact: claude-prove-darwin-x64
+          # Intel mac (bun-darwin-x64) is intentionally NOT built. The store
+          # runs on the @tursodatabase/database NAPI engine, which publishes no
+          # Intel-mac binding at the pinned version (no -darwin-x64 package, no
+          # -darwin-universal or -wasm32-wasi fallback), so a darwin-x64 binary
+          # has no addon to embed and would die on every store command exactly
+          # like a binary with the addon missing. Re-add this entry once
+          # upstream ships an Intel-mac (or universal/wasm) binding and
+          # scripts/gen-native-embed.ts maps the target.
           - os: ubuntu-latest
             arch: x64
             target: bun-linux-x64
@@ -296,26 +296,53 @@ jobs:
       - name: Build + embed review-ui web bundle
         run: ./scripts/build-review-ui-embed.sh
 
+      # `bun build --compile` bundles JavaScript into the executable's embedded
+      # filesystem but does NOT carry the external @tursodatabase NAPI .node
+      # addon the store depends on — a bare compile therefore ships a binary
+      # that throws "Cannot find native binding" before argument parsing, so
+      # even --version dies. This step generates a per-target compiled entry
+      # that embeds the host's prebuilt addon as a file asset and points the
+      # loader at it; the entry is gitignored (release-build artifact only).
+      - name: Generate native-addon embed for ${{ matrix.target }}
+        run: bun run scripts/gen-native-embed.ts ${{ matrix.target }}
+
       - name: Compile ${{ matrix.artifact }}
         run: |
           bun build --compile \
             --target=${{ matrix.target }} \
-            packages/cli/bin/run.ts \
+            packages/cli/bin/run.compiled.generated.ts \
             --outfile claude-prove
           mv claude-prove ${{ matrix.artifact }}
 
-      # A compiled binary differs from `bun run` sources in module identity —
-      # bunfs maps argv[1] AND every bundled module's import.meta.url to one
-      # virtual entry — so source-tree tests cannot catch compiled-only boot
-      # regressions (a binary that printed its version yet exited 1 on every
-      # command once shipped). Every matrix host can execute its own artifact
-      # (darwin-x64 runs under Rosetta on the arm64 macos runner), so execute
-      # it for real and require a clean exit plus the released version string.
-      - name: Smoke-test ${{ matrix.artifact }}
+      # A compiled binary differs from `bun run` sources in TWO ways the source
+      # tree cannot catch: module identity (bunfs maps argv[1] and every bundled
+      # module's import.meta.url to one virtual entry) AND native-addon
+      # resolution (the @tursodatabase NAPI binding is embedded into the
+      # executable, not resolved from node_modules). Both have shipped broken
+      # binaries — one that printed its version yet exited 1 on every command,
+      # and one that died on every command (including --version) because the
+      # native binding wasn't embedded.
+      #
+      # CRITICAL: run from a directory with NO node_modules. Running the binary
+      # in the repo root lets a missing-embed binary "pass" because the build
+      # tree's node_modules satisfies the native require — masking exactly the
+      # failure users hit in the wild. The clean room makes that impossible.
+      # Then exercise the store end-to-end (open DB, migrate, write, read) so a
+      # binding that imports but cannot run is also caught. Every matrix host
+      # executes its own artifact natively.
+      - name: Smoke-test ${{ matrix.artifact }} (clean room)
         run: |
-          out=$(./${{ matrix.artifact }} --version)
-          echo "$out"
-          echo "$out" | grep -q "claude-prove/${{ needs.release.outputs.new_version }}"
+          set -euo pipefail
+          SMOKE_DIR="$(mktemp -d)"
+          cp "./${{ matrix.artifact }}" "$SMOKE_DIR/claude-prove"
+          ( cd "$SMOKE_DIR"
+            out=$(./claude-prove --version)
+            echo "$out"
+            echo "$out" | grep -q "claude-prove/${{ needs.release.outputs.new_version }}"
+            git init -q smoke-repo
+            cd smoke-repo
+            "$SMOKE_DIR/claude-prove" scrum init
+            "$SMOKE_DIR/claude-prove" scrum status )
 
       - name: Upload to GitHub Release
         # `tag_name` is required when the workflow is NOT triggered by a tag

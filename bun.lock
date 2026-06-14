@@ -1,6 +1,5 @@
 {
   "lockfileVersion": 1,
-  "configVersion": 0,
   "workspaces": {
     "": {
       "name": "claude-prove",
@@ -12,7 +11,7 @@
     },
     "packages/cli": {
       "name": "@claude-prove/cli",
-      "version": "3.13.0",
+      "version": "4.0.0",
       "bin": {
         "claude-prove": "./bin/run.ts",
       },
@@ -101,6 +100,9 @@
         "@tursodatabase/database": "^0.6.1",
       },
     },
+  },
+  "patchedDependencies": {
+    "@tursodatabase/database@0.6.1": "patches/@tursodatabase%2Fdatabase@0.6.1.patch",
   },
   "packages": {
     "@acemir/cssom": ["@acemir/cssom@0.9.31", "", {}, "sha512-ZnR3GSaH+/vJ0YlHau21FjfLYjMpYVIzTD8M8vIEQvIGxeOXyXdzCI140rrCY862p/C/BbzWsjc1dgnM9mkoTA=="],

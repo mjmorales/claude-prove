@@ -8,6 +8,26 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — Standalone binary loads the Turso native addon (fixes v4.0.0 startup brick); Intel mac dropped
+
+*(No `.claude/.prove.json` migration. The fix lands entirely in the compiled release binary — upgrade to get it.)*
+
+The v4.0.0 standalone binary died on **every** invocation — including `claude-prove --version` — with `Cannot find native binding`, because `bun build --compile` bundles JavaScript but does not carry the external `@tursodatabase/database` NAPI `.node` addon the store loads at runtime ([#56](https://github.com/mjmorales/claude-prove/issues/56)). Since `install upgrade` overwrote the working binary with the broken one, the upgrade bricked the CLI. (Pre-4.0 was immune: `bun:sqlite` is built into the Bun runtime, so the SEA had no external native dependency.)
+
+The compiled binary now **embeds the platform native addon** as a file asset (`with { type: 'file' }`, the same mechanism that bakes in the review-ui bundle) and points the loader at the extracted copy via `NAPI_RS_NATIVE_LIBRARY_PATH`. The binary is fully self-contained again — no sidecar files, no `node_modules` at runtime. Three things make it durable:
+
+- **Per-target embed** (`scripts/gen-native-embed.ts`): the release build generates a compiled entry that embeds the host's prebuilt addon, run before the store's loader evaluates. Dev (`bun run`) and tests resolve the addon from `node_modules` as before and are unaffected.
+- **Loader fix** (vendored patch, `patches/@tursodatabase%2Fdatabase@0.6.1.patch`): the upstream NAPI-RS loader's `NAPI_RS_NATIVE_LIBRARY_PATH` branch assigned the binding but omitted its `return`, so the result was immediately clobbered to `undefined` — the env hook never worked. The one-line patch adds the missing `return`; it is recorded in the lockfile and applied automatically by `bun install`.
+- **Clean-room release smoke test**: the release workflow now runs the freshly-built binary from a directory with **no `node_modules`** and exercises the store end-to-end (`scrum init` + `scrum status`, opening/migrating/reading the DB). The prior smoke test ran in the repo root, where `node_modules` masked exactly this failure — so a broken binary passed CI and shipped. A non-running binary can no longer reach a release.
+
+**Intel mac (`darwin-x64`) is no longer built or published.** `@tursodatabase/database` ships no Intel-mac binding at the pinned version (no `-darwin-x64` package, no `-darwin-universal` or `-wasm32-wasi` fallback), so an Intel-mac binary has no addon to embed and would brick the same way. `install upgrade` and `install.sh` now fail fast on Intel mac with a clear message instead of fetching a 404. Apple Silicon mac and Linux (x64/arm64) are unaffected and supported. The target returns when upstream publishes an Intel-mac (or universal/wasm) binding.
+
+Migration: **Apple Silicon / Linux** — `claude-prove install upgrade` (or re-run `install.sh`) to replace the bricked v4.0.0 binary; verify with `claude-prove --version`. If your binary is already bricked and cannot self-upgrade, fetch the new release asset directly: `gh release download <latest> -R mjmorales/claude-prove -p 'claude-prove-<target>' && install -m 0755 claude-prove-<target> ~/.local/bin/claude-prove`. **Intel mac** — no supported binary; stay on the source (`bun run`) path, which is itself constrained by the upstream binding gap.
+
+Auto-adoption: full on supported platforms — the fix ships in the binary; no config or project changes.
+
+---
+
 ## v4.0.0 — Turso store: async driver port + sync-safe v1 schema (BREAKING store reset)
 
 *(Store migration: **breaking — the schema chain resets to a clean v1 per domain**. A store written by any earlier plugin version is refused on write-open with a reset-or-migrate message; see Migration below. No `.claude/.prove.json` migration.)*

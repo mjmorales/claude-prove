@@ -24,6 +24,15 @@ bun-*.log
 # Compiled CLI binaries (produced by `bun build --compile`)
 packages/cli/bin/prove
 packages/cli/bin/prove-*
+claude-prove-darwin-arm64
+claude-prove-darwin-x64
+claude-prove-linux-x64
+claude-prove-linux-arm64
+
+# Per-target native-addon embed entry (produced by scripts/gen-native-embed.ts
+# at release-build time; never committed)
+packages/cli/bin/native-embed.generated.ts
+packages/cli/bin/run.compiled.generated.ts
 
 # Biome
 .biome-cache/

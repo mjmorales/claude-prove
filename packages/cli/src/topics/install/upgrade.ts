@@ -105,9 +105,16 @@ export function resolveTarget(): string {
   const platform = process.platform;
   const arch = process.arch;
   if (platform === 'darwin' && arch === 'arm64') return 'darwin-arm64';
-  if (platform === 'darwin' && arch === 'x64') return 'darwin-x64';
   if (platform === 'linux' && arch === 'arm64') return 'linux-arm64';
   if (platform === 'linux' && arch === 'x64') return 'linux-x64';
+  // Intel mac is unsupported: the store's @tursodatabase NAPI engine ships no
+  // Intel-mac binding, so no darwin-x64 release asset is published. Fail with a
+  // clear message rather than 404 on a fetch for an asset that does not exist.
+  if (platform === 'darwin' && arch === 'x64') {
+    throw new Error(
+      'Intel mac (darwin-x64) is not supported: the store backend publishes no Intel-mac native binding, so no claude-prove-darwin-x64 release exists. Apple Silicon and Linux (x64/arm64) are supported.',
+    );
+  }
   throw new Error(`unsupported platform: ${platform}-${arch}`);
 }
 

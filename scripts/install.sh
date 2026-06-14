@@ -25,6 +25,14 @@ while [[ $# -gt 0 ]]; do case "$1" in
   *) echo "unknown arg: $1" >&2; exit 1 ;;
 esac; done
 TARGET="$(uname -s | tr '[:upper:]' '[:lower:]')-$(uname -m | sed 's/x86_64/x64/;s/aarch64/arm64/')"
+# Intel mac is unsupported: the store's native engine publishes no Intel-mac
+# binding, so no claude-prove-darwin-x64 release exists and the source fallback
+# would fail the same way at runtime. Fail fast with a clear message.
+if [[ "$TARGET" == "darwin-x64" ]]; then
+  echo ":: Intel mac (darwin-x64) is not supported — the store backend ships no Intel-mac native binding." >&2
+  echo ":: Apple Silicon and Linux (x64/arm64) are supported." >&2
+  exit 1
+fi
 URL="https://github.com/mjmorales/claude-prove/releases/latest/download/claude-prove-${TARGET}"
 DEST="${PREFIX}/claude-prove"; TMP="${PREFIX}/.claude-prove.tmp.$$"; CLONE="${HOME}/.claude/plugins/prove"
 mkdir -p "$PREFIX"; trap 'rm -f "$TMP"' EXIT
