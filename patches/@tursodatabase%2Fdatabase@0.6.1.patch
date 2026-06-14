@@ -1,13 +1,19 @@
+diff --git a/node_modules/@tursodatabase/database/.bun-tag-de89acf8c4e5f6e1 b/.bun-tag-de89acf8c4e5f6e1
+new file mode 100644
+index 0000000000000000000000000000000000000000..e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
 diff --git a/index.js b/index.js
-index 4695e16004a1dc2ef8e492ebd3a956a822b00bf7..9dba23c3dcd80dde60d2430159615a530752b67e 100644
+index 4695e16004a1dc2ef8e492ebd3a956a822b00bf7..e4f9f21b8c77661a739a0735927581719d968d2b 100644
 --- a/index.js
 +++ b/index.js
-@@ -67,7 +67,7 @@ const isMuslFromChildProcess = () => {
+@@ -65,9 +65,9 @@ const isMuslFromChildProcess = () => {
+ }
+ 
  function requireNative() {
-   if (process.env.NAPI_RS_NATIVE_LIBRARY_PATH) {
+-  if (process.env.NAPI_RS_NATIVE_LIBRARY_PATH) {
++  if (process.env.TURSO_DATABASE_NATIVE_PATH) {
      try {
 -      nativeBinding = require(process.env.NAPI_RS_NATIVE_LIBRARY_PATH);
-+      return require(process.env.NAPI_RS_NATIVE_LIBRARY_PATH);
++      return require(process.env.TURSO_DATABASE_NATIVE_PATH);
      } catch (err) {
        loadErrors.push(err)
      }

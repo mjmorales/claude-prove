@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@claude-prove/shared": "workspace:*",
-    "@tursodatabase/database": "^0.6.1"
+    "@tursodatabase/database": "^0.6.1",
+    "@tursodatabase/sync": "0.6.1"
   }
 }

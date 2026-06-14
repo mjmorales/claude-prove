@@ -1,7 +1,16 @@
 /**
- * Materialize the @tursodatabase NAPI addon embedded in the compiled
+ * Materialize a @tursodatabase NAPI addon embedded in the compiled
  * `claude-prove` binary to a stable on-disk cache file, returning that path for
- * `NAPI_RS_NATIVE_LIBRARY_PATH`.
+ * the addon's per-loader native-path env var (`TURSO_DATABASE_NATIVE_PATH` /
+ * `TURSO_SYNC_NATIVE_PATH`).
+ *
+ * Two distinct addons are embedded — `@tursodatabase/database` (the local store
+ * engine) and `@tursodatabase/sync` (the cloud sync engine) — each shipping its
+ * own NAPI binding. Their stock loaders both read the single hardcoded
+ * `NAPI_RS_NATIVE_LIBRARY_PATH`, which cannot point at two different addons at
+ * once. The repo's loader patches therefore retarget each loader to its OWN env
+ * var, and each addon is materialized under its own content-keyed filename
+ * (prefixed by `name`) so the two never collide in the shared cache dir.
  *
  * Why not point the loader straight at the embedded `/$bunfs/root/…node` path:
  * `require()`-ing a `.node` out of the binary's virtual filesystem forces bun to
@@ -65,17 +74,23 @@ function resolveBaseDir(baseOverride?: string): string {
 
 /**
  * Copy the embedded addon at `bunfsPath` to a content-keyed cache file and
- * return that path. Idempotent and concurrency-safe: a present file of the
- * expected size is reused as-is, and a fresh copy is published via tmp-write +
- * atomic rename so a concurrent reader never observes a partial file.
+ * return that path. `name` namespaces the cache filename so two distinct addons
+ * (`turso-<hash>.node` for database, `sync-<hash>.node` for sync) never collide.
+ * Idempotent and concurrency-safe: a present file of the expected size is reused
+ * as-is, and a fresh copy is published via tmp-write + atomic rename so a
+ * concurrent reader never observes a partial file.
  */
-export function materializeNativeAddon(bunfsPath: string, baseOverride?: string): string {
+export function materializeNativeAddon(
+  bunfsPath: string,
+  name = 'turso',
+  baseOverride?: string,
+): string {
   // Plain content read from the binary's virtual filesystem — not a dlopen, so
   // it cannot trigger bun's racy extract-to-shared-temp path.
   const bytes = readFileSync(bunfsPath);
   const hash = createHash('sha256').update(bytes).digest('hex').slice(0, 16);
   const cacheDir = join(resolveBaseDir(baseOverride), NATIVE_CACHE_SUBDIR);
-  const finalPath = join(cacheDir, `turso-${hash}.node`);
+  const finalPath = join(cacheDir, `${name}-${hash}.node`);
 
   // Fast path: the filename is content-keyed, so a present file of the right
   // size is authoritative. Nearly every invocation stops here on a single stat.

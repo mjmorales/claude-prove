@@ -1,0 +1,16 @@
+diff --git a/index.js b/index.js
+index 689f37015fd19f46598502af0f68b040303a6ed0..cfe49bdc122da5ba91579ec60070e032aaef2008 100644
+--- a/index.js
++++ b/index.js
+@@ -65,9 +65,9 @@ const isMuslFromChildProcess = () => {
+ }
+ 
+ function requireNative() {
+-  if (process.env.NAPI_RS_NATIVE_LIBRARY_PATH) {
++  if (process.env.TURSO_SYNC_NATIVE_PATH) {
+     try {
+-      nativeBinding = require(process.env.NAPI_RS_NATIVE_LIBRARY_PATH);
++      return require(process.env.TURSO_SYNC_NATIVE_PATH);
+     } catch (err) {
+       loadErrors.push(err)
+     }

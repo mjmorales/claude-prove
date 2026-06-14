@@ -1,21 +1,29 @@
 #!/usr/bin/env bun
 // Generates the compiled-binary entry that embeds the @tursodatabase NAPI
-// addon for one bun --compile target.
+// addons for one bun --compile target.
 //
 // Why this exists: `bun build --compile` bundles JavaScript into the embedded
-// /$bunfs/root filesystem but does NOT carry the external NAPI .node addon that
-// @tursodatabase/database resolves at runtime from node_modules. A compiled
-// binary therefore throws "Cannot find native binding" on first store import —
-// before any argument parsing, so even `--version` dies. Embedding the addon as
-// a `with { type: 'file' }` asset bakes it into the binary; bun extracts it on
-// boot and surfaces a loadable path. We point the (patched) loader at that path
-// via NAPI_RS_NATIVE_LIBRARY_PATH.
+// /$bunfs/root filesystem but does NOT carry the external NAPI .node addons that
+// @tursodatabase/database (local store) and @tursodatabase/sync (cloud sync)
+// resolve at runtime from node_modules. A compiled binary therefore throws
+// "Cannot find native binding" on first store import — before any argument
+// parsing, so even `--version` dies. Embedding each addon as a
+// `with { type: 'file' }` asset bakes it into the binary; bun extracts it on
+// boot and surfaces a loadable path. We point each (patched) loader at its OWN
+// materialized path via a per-loader env var.
+//
+// Two addons, two env vars: both stock NAPI loaders read the single hardcoded
+// NAPI_RS_NATIVE_LIBRARY_PATH, which cannot point at two distinct addons. The
+// repo's loader patches retarget database → TURSO_DATABASE_NATIVE_PATH and
+// sync → TURSO_SYNC_NATIVE_PATH, so each loader deterministically loads its own
+// binding even in the SEA where node_modules (and the loaders' colocated /
+// platform-package fallbacks) do not exist.
 //
 // Per-target, not per-source: only the build host's platform package ships its
 // prebuilt .node, and the asset specifier is platform-specific, so the embed
 // cannot be a single committed source file — it is generated for the one target
 // being compiled and consumed only by the release build. Dev (`bun run`) and
-// tests resolve the addon from node_modules normally and never use these files.
+// tests resolve the addons from node_modules normally and never use these files.
 //
 // Usage: bun run scripts/gen-native-embed.ts <bun-target>
 //   e.g. bun run scripts/gen-native-embed.ts bun-darwin-arm64
@@ -26,34 +34,68 @@ import { writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-interface NativeTarget {
+interface NativeAddon {
   /** The @tursodatabase platform package that ships the prebuilt addon. */
   pkg: string;
   /** The .node filename inside that package. */
   file: string;
+  /** Cache-file name prefix passed to materializeNativeAddon (must be unique). */
+  name: string;
+  /** The per-loader env var the patched loader reads its materialized path from. */
+  envVar: string;
 }
 
-// Maps a bun --compile target triple to the @tursodatabase platform package and
-// addon filename it must embed. Only targets with a published native binding at
-// the pinned @tursodatabase/database version appear here.
+// Maps a bun --compile target triple to the @tursodatabase platform packages
+// and addon filenames it must embed. Only targets with a published native
+// binding at the pinned @tursodatabase/database + /sync versions appear here.
 //
 // bun-darwin-x64 is deliberately absent: @tursodatabase publishes no Intel-mac
 // binding (no -darwin-x64 package, no -darwin-universal or -wasm32-wasi at this
 // version), so an Intel-mac standalone binary has no addon to embed and cannot
 // run the store. The release matrix must not build it until upstream ships one.
-const NATIVE_TARGETS: Record<string, NativeTarget> = {
-  'bun-darwin-arm64': {
-    pkg: '@tursodatabase/database-darwin-arm64',
-    file: 'turso.darwin-arm64.node',
-  },
-  'bun-linux-x64': {
-    pkg: '@tursodatabase/database-linux-x64-gnu',
-    file: 'turso.linux-x64-gnu.node',
-  },
-  'bun-linux-arm64': {
-    pkg: '@tursodatabase/database-linux-arm64-gnu',
-    file: 'turso.linux-arm64-gnu.node',
-  },
+const NATIVE_TARGETS: Record<string, NativeAddon[]> = {
+  'bun-darwin-arm64': [
+    {
+      pkg: '@tursodatabase/database-darwin-arm64',
+      file: 'turso.darwin-arm64.node',
+      name: 'turso',
+      envVar: 'TURSO_DATABASE_NATIVE_PATH',
+    },
+    {
+      pkg: '@tursodatabase/sync-darwin-arm64',
+      file: 'sync.darwin-arm64.node',
+      name: 'sync',
+      envVar: 'TURSO_SYNC_NATIVE_PATH',
+    },
+  ],
+  'bun-linux-x64': [
+    {
+      pkg: '@tursodatabase/database-linux-x64-gnu',
+      file: 'turso.linux-x64-gnu.node',
+      name: 'turso',
+      envVar: 'TURSO_DATABASE_NATIVE_PATH',
+    },
+    {
+      pkg: '@tursodatabase/sync-linux-x64-gnu',
+      file: 'sync.linux-x64-gnu.node',
+      name: 'sync',
+      envVar: 'TURSO_SYNC_NATIVE_PATH',
+    },
+  ],
+  'bun-linux-arm64': [
+    {
+      pkg: '@tursodatabase/database-linux-arm64-gnu',
+      file: 'turso.linux-arm64-gnu.node',
+      name: 'turso',
+      envVar: 'TURSO_DATABASE_NATIVE_PATH',
+    },
+    {
+      pkg: '@tursodatabase/sync-linux-arm64-gnu',
+      file: 'sync.linux-arm64-gnu.node',
+      name: 'sync',
+      envVar: 'TURSO_SYNC_NATIVE_PATH',
+    },
+  ],
 };
 
 const target = process.argv[2];
@@ -63,8 +105,8 @@ if (!target) {
   process.exit(1);
 }
 
-const native = NATIVE_TARGETS[target];
-if (!native) {
+const addons = NATIVE_TARGETS[target];
+if (!addons) {
   console.error(`Unsupported compile target for native embed: ${target}`);
   console.error(`supported targets: ${Object.keys(NATIVE_TARGETS).join(', ')}`);
   process.exit(1);
@@ -73,38 +115,45 @@ if (!native) {
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const binDir = join(repoRoot, 'packages', 'cli', 'bin');
 
-// The platform package's addon must be present on disk so bun can resolve the
+// Each platform package's addon must be present on disk so bun can resolve the
 // embed specifier at compile time. Fail loud here rather than emit a binary
 // that silently falls back to the broken runtime resolution.
-const addonOnDisk = join(repoRoot, 'node_modules', native.pkg, native.file);
-if (!existsSync(addonOnDisk)) {
-  console.error(`Native addon not installed: ${addonOnDisk}`);
-  console.error(`Run \`bun install\` on a ${target} host before generating the embed.`);
-  process.exit(1);
+for (const addon of addons) {
+  const addonOnDisk = join(repoRoot, 'node_modules', addon.pkg, addon.file);
+  if (!existsSync(addonOnDisk)) {
+    console.error(`Native addon not installed: ${addonOnDisk}`);
+    console.error(`Run \`bun install\` on a ${target} host before generating the embed.`);
+    process.exit(1);
+  }
 }
 
-const embedModule = `${native.pkg}/${native.file}`;
-
-// Side-effect module: embeds the addon and points the loader at a stable
-// on-disk copy of it. Its assignment runs during evaluation, before the
-// consumer module loads. The addon is materialized to a content-keyed cache
+// Side-effect module: embeds each addon and points its loader's env var at a
+// stable on-disk copy. Each assignment runs during evaluation, before the
+// consumer module loads. Each addon is materialized to a content-keyed cache
 // file rather than pointing the loader at the raw `/$bunfs` path — requiring
 // the embedded path directly forces bun's extract-to-shared-temp, which races
 // across the concurrent process launches Claude Code fires on every hook batch
 // (see materializeNativeAddon). An explicit caller-set value still wins.
+const embedImports = addons
+  .map((addon, i) => `import addon${i} from '${addon.pkg}/${addon.file}' with { type: 'file' };`)
+  .join('\n');
+const embedAssignments = addons
+  .map(
+    (addon, i) =>
+      `if (!process.env.${addon.envVar}) {\n  process.env.${addon.envVar} = materializeNativeAddon(addon${i}, '${addon.name}');\n}`,
+  )
+  .join('\n');
 const embedSource = `// AUTO-GENERATED by scripts/gen-native-embed.ts for ${target} — do not edit or commit.
-import addonPath from '${embedModule}' with { type: 'file' };
+${embedImports}
 import { materializeNativeAddon } from '../src/core/native-addon';
 
-if (!process.env.NAPI_RS_NATIVE_LIBRARY_PATH) {
-  process.env.NAPI_RS_NATIVE_LIBRARY_PATH = materializeNativeAddon(addonPath);
-}
+${embedAssignments}
 `;
 
-// Compiled entry: evaluate the embed side effect FIRST (sets the env var), then
+// Compiled entry: evaluate the embed side effect FIRST (sets the env vars), then
 // the real CLI. Import order is evaluation order in ESM, and the embed module
-// has no top-level await, so the env var is set before run.ts's transitive
-// store import evaluates the native loader.
+// has no top-level await, so the env vars are set before run.ts's transitive
+// store import evaluates the native loaders.
 const entrySource = `// AUTO-GENERATED by scripts/gen-native-embed.ts for ${target} — do not edit or commit.
 import './native-embed.generated';
 import './run';
@@ -115,6 +164,8 @@ const entryPath = join(binDir, 'run.compiled.generated.ts');
 writeFileSync(embedPath, embedSource);
 writeFileSync(entryPath, entrySource);
 
-console.error(`Generated native embed for ${target} (${embedModule}).`);
+console.error(
+  `Generated native embed for ${target} (${addons.map((a) => `${a.pkg}/${a.file}`).join(', ')}).`,
+);
 // stdout: the entry path the build should compile.
 console.log(entryPath);
