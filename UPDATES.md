@@ -8,7 +8,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Unreleased — Standalone binary loads the Turso native addon (fixes v4.0.0 startup brick); Intel mac dropped
+## v4.0.1 — Standalone binary loads the Turso native addon (fixes v4.0.0 startup brick); Intel mac dropped
 
 *(No `.claude/.prove.json` migration. The fix lands entirely in the compiled release binary — upgrade to get it.)*
 
