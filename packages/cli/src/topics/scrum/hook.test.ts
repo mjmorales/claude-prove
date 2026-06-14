@@ -226,6 +226,37 @@ describe('onSessionStart', () => {
       expect(rows[0]?.state).toBe('open');
     });
   });
+
+  test('cloud-off: the post-pull anomaly pass never runs (no merge-anomalies section)', async () => {
+    // Seed a fixture that WOULD trigger every anomaly source if the pass ran:
+    // an active task plus a concurrent cross-writer status contest. With cloud
+    // disabled (the default — no `.prove.json` cloud block), no pull happens, so
+    // the pass is skipped and the digest carries no merge-anomalies section.
+    await seedStore(async (store) => {
+      await store.createTask({ id: 'wip', title: 'Active', status: 'in_progress' });
+      await store.createTask({ id: 'contend', title: 'Contended' });
+      await store.appendEvent({
+        taskId: 'contend',
+        kind: 'status_changed',
+        agent: 'ct-alice',
+        payload: { from: 'backlog', to: 'done' },
+      });
+      await store.appendEvent({
+        taskId: 'contend',
+        kind: 'status_changed',
+        agent: 'ct-bob',
+        payload: { from: 'backlog', to: 'blocked' },
+      });
+    });
+
+    const result = await onSessionStart({ cwd: project });
+
+    expect(result.exitCode).toBe(0);
+    // The digest still renders (active task present) but NEVER carries anomalies.
+    expect(result.stdout).toContain('wip');
+    expect(result.stdout).not.toContain('merge anomalies');
+    expect(result.stdout).not.toContain('intent_loss');
+  });
 });
 
 // ===========================================================================

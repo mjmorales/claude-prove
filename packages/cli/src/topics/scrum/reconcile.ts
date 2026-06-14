@@ -29,7 +29,14 @@ import type { LogEntry } from '../acb/reasoning-log';
 import { listEntries } from '../acb/reasoning-log-store';
 import type { ScrumStore } from './store';
 import { STALENESS_THRESHOLD_HOURS, TEAM_ROLES, nextEscalationLayer } from './types';
-import type { EscalationRow, ScrumEvent, ScrumTask, TaskStatus, TeamRole } from './types';
+import type {
+  EscalationRow,
+  EventKind,
+  ScrumEvent,
+  ScrumTask,
+  TaskStatus,
+  TeamRole,
+} from './types';
 
 // ---------------------------------------------------------------------------
 // Public constants
@@ -271,6 +278,375 @@ export async function computeBoundActions(
     }
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Post-pull merge-anomaly pass — detection + surfacing only, NEVER mutates
+// ---------------------------------------------------------------------------
+
+/**
+ * The closed taxonomy of merge anomalies the post-pull pass surfaces. Each
+ * names a residual concurrency hazard the server's per-row, last-push-wins merge
+ * cannot prevent — surfaced for an operator to reconcile, never auto-resolved.
+ *
+ *   collision          — a secondary-UNIQUE collision the sync transform skipped
+ *                        on replay (the losing writer's row was dropped from the
+ *                        rebase; the surviving anomaly carries the dropped row).
+ *   intent_loss        — a last-write-wins head column whose current value
+ *                        reflects one winner while the append-only event log
+ *                        holds CONCURRENT cross-writer intents for that same
+ *                        column since the last sync (the losing intent survived
+ *                        in the log; the head silently dropped it).
+ *   scope_overlap      — two teams' write globs overlap after merge, breaking the
+ *                        single-writer-per-path invariant neither writer's local
+ *                        state violated.
+ *   graph_cycle        — a dependency/`parent_id` cycle the merged edge set forms
+ *                        from edges that were each individually acyclic.
+ *   dual_open_interval — a position-history slot left with more than one open
+ *                        (`to_ts IS NULL`) interval after merge (advisory: the
+ *                        current-holder read folds by `max(from_ts)`, so the read
+ *                        still converges — the raw multi-open state is surfaced).
+ */
+export const ANOMALY_KINDS = [
+  'collision',
+  'intent_loss',
+  'scope_overlap',
+  'graph_cycle',
+  'dual_open_interval',
+] as const;
+export type AnomalyKind = (typeof ANOMALY_KINDS)[number];
+
+/**
+ * One surfaced merge anomaly. `kind` selects the taxonomy; `summary` is the
+ * one-line operator-facing description rendered into the session-start digest;
+ * `subject` names the affected entity (a task id, a `<team>/<role>` slot, a table
+ * name) so the operator can navigate to it. Detection-only: nothing on this
+ * shape carries a remediation the engine applies — the operator reconciles.
+ */
+export interface SurfacedAnomaly {
+  kind: AnomalyKind;
+  /** The affected entity: a task id, `<team>/<role>` slot, or table name. */
+  subject: string;
+  /** One-line operator-facing description for the digest. */
+  summary: string;
+}
+
+/**
+ * The post-pull anomaly pass result, partitioned by source so a caller (or test)
+ * can assert on one class without re-deriving it. `all` is the flat list the
+ * digest renders, in a stable source order (collisions, intent-loss, scope,
+ * cycles, dual-open).
+ */
+export interface MergeAnomalyResult {
+  all: SurfacedAnomaly[];
+  collisions: SurfacedAnomaly[];
+  intent_loss: SurfacedAnomaly[];
+  scope_overlap: SurfacedAnomaly[];
+  graph_cycle: SurfacedAnomaly[];
+  dual_open_interval: SurfacedAnomaly[];
+}
+
+/**
+ * The last-write-wins head columns whose mutations append a distinguishable
+ * `{ from, to }` event — the ONLY columns whose losing intent is recoverable
+ * from the append-only log. Each maps a head column to the event kind its
+ * mutation emits. Columns without a per-column event (`parent_id`, `layer`,
+ * `terminal_*`, `acceptance_policy_json`, `bounds_json`) carry no recoverable
+ * losing intent and so are not detectable here — `deleted_at` rides the
+ * `task_deleted` event, `status` rides `status_changed`, `milestone_id` rides
+ * `milestone_changed`, `team_slug` rides `team_changed`. Adding a per-column
+ * event for the remaining columns would widen this map without other change.
+ */
+const LWW_COLUMN_EVENTS: Record<string, EventKind> = {
+  status: 'status_changed',
+  milestone_id: 'milestone_changed',
+  team_slug: 'team_changed',
+  deleted_at: 'task_deleted',
+};
+
+/**
+ * The post-pull anomaly pass: a PURE, store-READING detector that surfaces every
+ * residual merge hazard the cloud sync's per-row last-push-wins merge cannot
+ * prevent. It is the detection-only counterpart to the structural reshapes — it
+ * NEVER mutates a row (no status change, no auto-resolution); a test asserts zero
+ * writes occur during the pass.
+ *
+ * Five sources, each detection-only:
+ *   1. Drain `collisions` — the secondary-UNIQUE collisions the sync transform
+ *      already skipped this phase (contributor slug, acceptance criterion key);
+ *      each becomes a surfaced anomaly so a skipped write is never silently lost.
+ *   2. LWW intent-loss — for every detectable head column, surface a task whose
+ *      head folded to one winner while the event log holds concurrent
+ *      cross-writer (distinct-agent) intents for that column SINCE `sinceIso`.
+ *   3. Cross-team write-scope overlap — reuse the single-writer-per-path check.
+ *   4. Dependency/`parent_id` cycles — DFS over the merged edge set.
+ *   5. Residual dual-open intervals — raw multi-open position-history rows.
+ *
+ * `sinceIso` scopes the intent-loss check to "since the last sync" — the caller
+ * passes the reconciler's last-sweep watermark (the last instant this machine
+ * reconciled), so only events that landed in/after this session's pull are
+ * compared. The structural checks (3–5) read current merged state and do not
+ * depend on the watermark. The pass runs only when a pull happened this session;
+ * the caller gates that.
+ */
+export async function detectMergeAnomalies(
+  store: ScrumStore,
+  collisions: CollisionLike[],
+  sinceIso: string,
+): Promise<MergeAnomalyResult> {
+  const collisionAnomalies = drainCollisions(collisions);
+  const intentLoss = await detectLwwIntentLoss(store, sinceIso);
+  const scopeOverlap = await detectScopeOverlap(store);
+  const graphCycle = await detectGraphCycles(store);
+  const dualOpen = await detectDualOpenIntervals(store);
+
+  return {
+    all: [...collisionAnomalies, ...intentLoss, ...scopeOverlap, ...graphCycle, ...dualOpen],
+    collisions: collisionAnomalies,
+    intent_loss: intentLoss,
+    scope_overlap: scopeOverlap,
+    graph_cycle: graphCycle,
+    dual_open_interval: dualOpen,
+  };
+}
+
+/**
+ * The minimal shape of a surfaced sync collision this pass drains. Mirrors
+ * `SurfacedCollision` from `sync-transform` structurally so the reconciler need
+ * not depend on the sync module — the caller passes `sync.collisions` directly.
+ */
+export interface CollisionLike {
+  table: string;
+  key: Record<string, unknown>;
+  skipped: Record<string, unknown>;
+}
+
+/**
+ * Render each skipped secondary-UNIQUE collision as a surfaced anomaly. The
+ * subject is the colliding table; the summary names the key tuple that collided
+ * so the operator can find and deconflict the dropped row.
+ */
+function drainCollisions(collisions: CollisionLike[]): SurfacedAnomaly[] {
+  return collisions.map((c) => ({
+    kind: 'collision' as const,
+    subject: c.table,
+    summary: `sync dropped a colliding ${c.table} row on replay (key ${formatKey(c.key)}); the losing write needs deconfliction`,
+  }));
+}
+
+/** Stable `col=value, …` rendering of a collision/intent key tuple. */
+function formatKey(key: Record<string, unknown>): string {
+  return Object.entries(key)
+    .map(([column, value]) => `${column}=${String(value)}`)
+    .join(', ');
+}
+
+/**
+ * Surface every LWW head column whose current value reflects one winner while
+ * the event log holds CONCURRENT cross-writer intents for that column since
+ * `sinceIso`. "Concurrent cross-writer" = two or more events of the column's
+ * kind on the same task by DISTINCT authoring agents in the window: under
+ * last-push-wins the head folds to the last push and the earlier author's intent
+ * survives only in the log. A single author re-writing its own column is NOT an
+ * anomaly (no cross-writer conflict). A null author is treated as a distinct
+ * "unattributed" writer so an un-stamped concurrent write still surfaces.
+ *
+ * Reads `listEventsSince` once (oldest-first), buckets per (task, column), and
+ * emits one anomaly per bucket with ≥2 distinct authors. Pure: it reads events
+ * and the current head, never writes.
+ */
+async function detectLwwIntentLoss(
+  store: ScrumStore,
+  sinceIso: string,
+): Promise<SurfacedAnomaly[]> {
+  const events = await store.listEventsSince(sinceIso);
+
+  // Bucket distinct authors per (task_id, column) for the detectable kinds. The
+  // bucket retains the (task_id, column) pair directly, so there is no string key
+  // to split back apart — no separator-collision ambiguity.
+  const kindToColumn = invertColumnEvents();
+  const buckets = new Map<string, { taskId: string; column: string; authors: Set<string> }>();
+  for (const event of events) {
+    const column = kindToColumn.get(event.kind);
+    if (column === undefined) continue;
+    const bucketKey = JSON.stringify([event.task_id, column]);
+    const existing = buckets.get(bucketKey);
+    if (existing !== undefined) {
+      existing.authors.add(event.agent ?? '<unattributed>');
+      continue;
+    }
+    buckets.set(bucketKey, {
+      taskId: event.task_id,
+      column,
+      authors: new Set<string>([event.agent ?? '<unattributed>']),
+    });
+  }
+
+  const out: SurfacedAnomaly[] = [];
+  for (const { taskId, column, authors } of buckets.values()) {
+    if (authors.size < 2) continue;
+    const task = await store.getTask(taskId);
+    // Read the current head value for the surfaced column so the summary names
+    // the surviving winner; a missing task (soft-deleted away) still surfaces.
+    const headValue = task ? headColumnValue(task, column) : '(unknown)';
+    const writers = [...authors].sort().join(', ');
+    out.push({
+      kind: 'intent_loss',
+      subject: taskId,
+      summary: `${taskId} ${column}=${headValue}: concurrent cross-writer intents since last sync (${writers}) — losing intent survives only in the event log`,
+    });
+  }
+  // Deterministic order: by task id then column (already encoded in subject+summary).
+  out.sort((a, b) => cmpAsc(a.summary, b.summary));
+  return out;
+}
+
+/** Invert `LWW_COLUMN_EVENTS` to a kind → column lookup for the event scan. */
+function invertColumnEvents(): Map<EventKind, string> {
+  const map = new Map<EventKind, string>();
+  for (const [column, kind] of Object.entries(LWW_COLUMN_EVENTS)) map.set(kind, column);
+  return map;
+}
+
+/** Read one head column's current value off a task for the surfaced summary. */
+function headColumnValue(task: ScrumTask, column: string): string {
+  switch (column) {
+    case 'status':
+      return task.status;
+    case 'milestone_id':
+      return task.milestone_id ?? '(none)';
+    case 'team_slug':
+      return task.team_slug ?? '(none)';
+    case 'deleted_at':
+      return task.deleted_at === null ? 'live' : 'deleted';
+    default:
+      return '(unknown)';
+  }
+}
+
+/**
+ * Surface a cross-team write-scope overlap the merge introduced. Reuses the
+ * store's single-writer-per-path check — the same `validateTeamWriteScopes` the
+ * write path runs against local state — over the MERGED registry, so an overlap
+ * two concurrent scope-adds formed (each valid locally) is detected post-pull.
+ * Returns at most one anomaly (the check returns the first conflict); a clean
+ * registry yields none.
+ */
+async function detectScopeOverlap(store: ScrumStore): Promise<SurfacedAnomaly[]> {
+  const conflict = await store.validateTeamWriteScopes();
+  if (conflict === null) return [];
+  return [
+    {
+      kind: 'scope_overlap',
+      subject: `${conflict.teamA}/${conflict.teamB}`,
+      summary: `teams '${conflict.teamA}' and '${conflict.teamB}' now share a write path after merge ('${conflict.globA}' overlaps '${conflict.globB}') — single-writer-per-path broken`,
+    },
+  ];
+}
+
+/**
+ * Surface every dependency/`parent_id` cycle the merged edge set forms. Both
+ * edge classes are append-only inserts (every offline edge survives the rebase),
+ * so two operators each adding an acyclic edge can together close a loop. A DFS
+ * over the union of `blocks` edges and `parent → child` containment edges
+ * reports each node that participates in a back-edge. The read-time guards
+ * elsewhere only PREVENT infinite recursion; this pass SURFACES the residual
+ * cycle so an operator can break it. Detection-only — no edge is removed.
+ */
+async function detectGraphCycles(store: ScrumStore): Promise<SurfacedAnomaly[]> {
+  const adjacency = await buildMergedEdgeGraph(store);
+  const cyclic = findCyclicNodes(adjacency);
+  return [...cyclic].sort(cmpAsc).map((node) => ({
+    kind: 'graph_cycle' as const,
+    subject: node,
+    summary: `task ${node} is in a dependency/containment cycle formed by the merge — mutual block, needs an edge removed`,
+  }));
+}
+
+/**
+ * Build the merged directed edge graph the cycle DFS walks: a `blocks` edge
+ * `from → to` (the blocker points at what it blocks) plus a containment edge
+ * `parent → child` for every live task carrying a `parent_id`. Both are read
+ * from current merged state. A cycle in either relation (or across the union) is
+ * the corruption to surface.
+ */
+async function buildMergedEdgeGraph(store: ScrumStore): Promise<Map<string, string[]>> {
+  const adjacency = new Map<string, string[]>();
+  const addEdge = (from: string, to: string) => {
+    const targets = adjacency.get(from) ?? [];
+    targets.push(to);
+    adjacency.set(from, targets);
+  };
+
+  for (const dep of await store.listAllDeps()) addEdge(dep.from_task_id, dep.to_task_id);
+  for (const task of await store.listTasks()) {
+    if (task.parent_id !== null) addEdge(task.parent_id, task.id);
+  }
+  return adjacency;
+}
+
+/**
+ * Iterative DFS reporting every node that lies on a cycle in `adjacency`. Uses a
+ * three-color walk (white/gray/black): a gray node re-entered on the current
+ * path closes a back-edge, and every node on that path is marked cyclic. Bounded
+ * by the edge set; never recurses on the call stack so a deep chain is safe.
+ */
+function findCyclicNodes(adjacency: Map<string, string[]>): Set<string> {
+  const cyclic = new Set<string>();
+  const color = new Map<string, 'gray' | 'black'>();
+
+  const nodes = new Set<string>(adjacency.keys());
+  for (const targets of adjacency.values()) for (const t of targets) nodes.add(t);
+
+  for (const root of nodes) {
+    if (color.has(root)) continue;
+    // path holds the current DFS stack; stack holds (node, next-child-index).
+    const path: string[] = [];
+    const stack: Array<{ node: string; index: number }> = [{ node: root, index: 0 }];
+    color.set(root, 'gray');
+    path.push(root);
+
+    while (stack.length > 0) {
+      const frame = stack[stack.length - 1] as { node: string; index: number };
+      const targets = adjacency.get(frame.node) ?? [];
+      if (frame.index < targets.length) {
+        const next = targets[frame.index] as string;
+        frame.index++;
+        const c = color.get(next);
+        if (c === 'gray') {
+          // Back-edge: mark the whole cycle segment from `next` to the top.
+          const start = path.lastIndexOf(next);
+          if (start >= 0) for (let i = start; i < path.length; i++) cyclic.add(path[i] as string);
+          cyclic.add(next);
+        } else if (c === undefined) {
+          color.set(next, 'gray');
+          path.push(next);
+          stack.push({ node: next, index: 0 });
+        }
+      } else {
+        color.set(frame.node, 'black');
+        path.pop();
+        stack.pop();
+      }
+    }
+  }
+  return cyclic;
+}
+
+/**
+ * Surface every position-history slot left with more than one open interval after
+ * merge. Advisory by construction: the current-holder read folds open rows by
+ * `max(from_ts)`, so the read still converges — but the raw multi-open state is
+ * surfaced so an operator can reconcile the slot. Reads `listMultiOpenIntervals`
+ * (operator-of-record + every team role slot); never closes an interval.
+ */
+async function detectDualOpenIntervals(store: ScrumStore): Promise<SurfacedAnomaly[]> {
+  const intervals = await store.listMultiOpenIntervals();
+  return intervals.map((iv) => ({
+    kind: 'dual_open_interval' as const,
+    subject: iv.scope,
+    summary: `slot '${iv.scope}' (${iv.table}) has ${iv.open_count} open intervals after merge — read converges to the latest, raw state advisory`,
+  }));
 }
 
 /**

@@ -28,13 +28,16 @@ import { openStoreWithSync, runSyncPhase } from './cli/sync-lifecycle';
 import { type GateVerdict, evaluateSessionEndGate } from './handoff-gate';
 import {
   type BoundAction,
+  type MergeAnomalyResult,
   ORPHAN_TASK_ID,
   type ReconcileRunResult,
   type StaleEscalationSweepResult,
+  type SurfacedAnomaly,
   type TriggerBinding,
   bubbleStaleEscalations,
   computeBoundActions,
   detectContributionMiss,
+  detectMergeAnomalies,
   parseTeamAgentName,
   reconcileRunCompleted,
   sweepUnreconciled,
@@ -71,6 +74,7 @@ const DIGEST_MAX_ACTIVE = 10;
 const DIGEST_MAX_STALLED = 5;
 const DIGEST_MAX_RECENT = 15;
 const DIGEST_MAX_BOUND = 10;
+const DIGEST_MAX_ANOMALY = 15;
 
 // ---------------------------------------------------------------------------
 // Public handlers
@@ -83,6 +87,13 @@ export interface SessionStartDigest {
   auto_bubbled: StaleEscalationSweepResult['bubbled'];
   /** Pending bound next-actions from the declared trigger table (1.4). */
   bound_actions: BoundAction[];
+  /**
+   * Merge anomalies the post-pull pass surfaced (detection-only). EMPTY in the
+   * local-only / cloud-off path: the pass runs only after a session-start pull
+   * actually completed, so a clean cloud-off session leaves this empty and the
+   * digest byte-for-byte unchanged.
+   */
+  anomalies: SurfacedAnomaly[];
 }
 
 /**
@@ -107,7 +118,17 @@ export async function onSessionStart(payload: Record<string, unknown> | null): P
     }
     try {
       const sweep = await bubbleStaleEscalations(store, Date.now());
-      const digest = await computeDigest(store, sweep, readTriggers(project));
+      // The post-pull anomaly pass runs ONLY when a session-start pull actually
+      // completed (`attempted && ok`): cloud-off (the default) and a degraded
+      // sync both skip it, so a clean cloud-off session leaves the digest
+      // byte-for-byte unchanged. The "since last sync" watermark is the
+      // reconciler's last-sweep cursor — the last instant this machine
+      // reconciled — so only events in/after this session's pull are compared.
+      const pulled = sync.attempted && sync.ok;
+      const anomalies = pulled
+        ? await detectMergeAnomalies(store, sync.collisions, lastSweepIso(project))
+        : null;
+      const digest = await computeDigest(store, sweep, readTriggers(project), anomalies);
       if (isEmptyDigest(digest)) return EMPTY_HOOK_RESULT;
       const body = pyJsonDump({
         hookSpecificOutput: {
@@ -269,10 +290,19 @@ export async function onStop(payload: Record<string, unknown> | null): Promise<H
 // Session-start digest helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Assemble the session-start digest. `anomalies` is the post-pull merge-anomaly
+ * result when a session-start pull completed, or `null` in the cloud-off /
+ * degraded path (in which case the digest carries an empty `anomalies` list and
+ * stays byte-for-byte identical to the pre-cloud digest). The anomaly list is
+ * capped at `DIGEST_MAX_ANOMALY` so the digest stays small for
+ * `hookSpecificOutput`.
+ */
 async function computeDigest(
   store: ScrumStore,
   sweep: StaleEscalationSweepResult,
   triggers: TriggerBinding[],
+  anomalies: MergeAnomalyResult | null,
 ): Promise<SessionStartDigest> {
   const nowMs = Date.now();
   const stallCutoffMs = nowMs - STALL_THRESHOLD_HOURS * 3600 * 1000;
@@ -294,6 +324,7 @@ async function computeDigest(
     recent_events: recent,
     auto_bubbled: sweep.bubbled,
     bound_actions: await computeBoundActions(store, triggers, DIGEST_MAX_BOUND),
+    anomalies: anomalies === null ? [] : anomalies.all.slice(0, DIGEST_MAX_ANOMALY),
   };
 }
 
@@ -327,7 +358,8 @@ function isEmptyDigest(digest: SessionStartDigest): boolean {
     digest.stalled_wip.length === 0 &&
     digest.recent_events.length === 0 &&
     digest.auto_bubbled.length === 0 &&
-    digest.bound_actions.length === 0
+    digest.bound_actions.length === 0 &&
+    digest.anomalies.length === 0
   );
 }
 
@@ -395,6 +427,14 @@ function formatDigest(digest: SessionStartDigest): string {
       lines.push(
         `  - ${action.task_id} [${action.status}] → ${action.workflow}${note} (${action.title})`,
       );
+    }
+  }
+  // Appended LAST so a clean cloud-off session (zero anomalies) renders exactly
+  // the pre-cloud digest — the section is emitted only when an anomaly surfaced.
+  if (digest.anomalies.length > 0) {
+    lines.push(`- merge anomalies (${digest.anomalies.length}, detection-only):`);
+    for (const anomaly of digest.anomalies) {
+      lines.push(`  - [${anomaly.kind}] ${anomaly.summary}`);
     }
   }
   return lines.join('\n');
@@ -548,6 +588,16 @@ function readLastSweep(project: string): number {
   } catch {
     return 0;
   }
+}
+
+/**
+ * The last-sweep cursor as an ISO string — the "since last sync" watermark the
+ * post-pull anomaly pass scopes its LWW intent-loss check to. An absent cursor
+ * (`0`) reads as the epoch so the first post-pull pass scans all events rather
+ * than missing a concurrent intent.
+ */
+function lastSweepIso(project: string): string {
+  return new Date(readLastSweep(project)).toISOString();
 }
 
 function writeLastSweep(project: string, tsMs: number): void {

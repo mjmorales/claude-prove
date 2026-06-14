@@ -1201,6 +1201,19 @@ export interface TeamWriteScopeConflict {
 }
 
 /**
+ * One position-history slot found carrying more than one open interval (`to_ts
+ * IS NULL`) — the residual dual-open state the post-pull anomaly pass surfaces as
+ * advisory. `table` names the source history; `scope` identifies the single
+ * logical slot (`operator` for the org operator-of-record, `<team>/<role>` for a
+ * roster slot); `open_count` is how many open intervals collided on it.
+ */
+export interface MultiOpenInterval {
+  table: 'scrum_operator_history' | 'scrum_team_members';
+  scope: string;
+  open_count: number;
+}
+
+/**
  * One of a team's three role slots. Every team has exactly these three —
  * `tech_lead`, `engineer`, and `implementer` — and no others. Matches
  * `scrum_team_members.role`; the column has no CHECK constraint, so this union

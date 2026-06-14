@@ -21,13 +21,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendEntry } from '../acb/reasoning-log-store';
 import {
+  type CollisionLike,
   type CurationProposedPayload,
   ORPHAN_TASK_ID,
+  type SurfacedAnomaly,
   type TriggerBinding,
   bubbleStaleEscalations,
   buildContextBundle,
   computeBoundActions,
   detectContributionMiss,
+  detectMergeAnomalies,
   isRunOrphan,
   parseTeamAgentName,
   reconcileMilestoneClosed,
@@ -1445,5 +1448,349 @@ describe('detectContributionMiss', () => {
       role: 'implementer',
       slug: 'vacant',
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// detectMergeAnomalies — post-pull anomaly surfacing (detection-only)
+// ---------------------------------------------------------------------------
+
+/** A watermark before every event timestamp in these tests (scan-all). */
+const SINCE_EPOCH = '1970-01-01T00:00:00.000Z';
+
+/** Group surfaced anomalies by kind for compact per-source assertions. */
+function byKind(anomalies: SurfacedAnomaly[]): Record<string, SurfacedAnomaly[]> {
+  const out: Record<string, SurfacedAnomaly[]> = {};
+  for (const a of anomalies) {
+    const bucket = out[a.kind] ?? [];
+    bucket.push(a);
+    out[a.kind] = bucket;
+  }
+  return out;
+}
+
+describe('detectMergeAnomalies — collisions drain', () => {
+  test('each surfaced sync collision becomes a collision anomaly', async () => {
+    const collisions: CollisionLike[] = [
+      { table: 'scrum_contributors', key: { slug: 'jane' }, skipped: { id: 'ct-x', slug: 'jane' } },
+      {
+        table: 'scrum_acceptance_criteria',
+        key: { task_id: 't1', criterion_id: 'c1' },
+        skipped: { task_id: 't1', criterion_id: 'c1' },
+      },
+    ];
+    const result = await detectMergeAnomalies(store, collisions, SINCE_EPOCH);
+    expect(result.collisions).toHaveLength(2);
+    expect(result.collisions.every((a) => a.kind === 'collision')).toBe(true);
+    expect(result.collisions[0]?.summary).toContain('slug=jane');
+    expect(result.collisions[1]?.summary).toContain('task_id=t1, criterion_id=c1');
+    // No other source fired on a clean store.
+    expect(result.all).toHaveLength(2);
+  });
+
+  test('an empty collision list surfaces no collision anomalies', async () => {
+    const result = await detectMergeAnomalies(store, [], SINCE_EPOCH);
+    expect(result.collisions).toHaveLength(0);
+    expect(result.all).toHaveLength(0);
+  });
+});
+
+describe('detectMergeAnomalies — LWW intent-loss across head columns', () => {
+  test('concurrent cross-writer status writes surface (status column)', async () => {
+    await store.createTask({ id: 'lww-1', title: 'Contended' });
+    // Two DISTINCT authors each move status since the watermark: the head folded
+    // to one winner, the other intent survives only in the log.
+    await store.appendEvent({
+      taskId: 'lww-1',
+      kind: 'status_changed',
+      agent: 'ct-alice',
+      payload: { from: 'backlog', to: 'done' },
+    });
+    await store.appendEvent({
+      taskId: 'lww-1',
+      kind: 'status_changed',
+      agent: 'ct-bob',
+      payload: { from: 'backlog', to: 'blocked' },
+    });
+
+    const result = await detectMergeAnomalies(store, [], SINCE_EPOCH);
+    expect(result.intent_loss).toHaveLength(1);
+    const anomaly = result.intent_loss[0] as SurfacedAnomaly;
+    expect(anomaly.kind).toBe('intent_loss');
+    expect(anomaly.subject).toBe('lww-1');
+    expect(anomaly.summary).toContain('ct-alice');
+    expect(anomaly.summary).toContain('ct-bob');
+    expect(anomaly.summary).toContain('status=');
+  });
+
+  test('covers milestone, team, and deleted head columns — not just status', async () => {
+    await store.createMilestone({ id: 'm-1', title: 'M1' });
+    await store.createMilestone({ id: 'm-2', title: 'M2' });
+    await store.createTeam({ slug: 'alpha', teamType: 'stream_aligned' });
+    await store.createTeam({ slug: 'beta', teamType: 'platform' });
+    await store.createTask({ id: 'lww-ms', title: 'Milestone contend' });
+    await store.createTask({ id: 'lww-tm', title: 'Team contend' });
+    await store.createTask({ id: 'lww-del', title: 'Delete contend' });
+
+    // milestone_id column: two writers.
+    await store.appendEvent({
+      taskId: 'lww-ms',
+      kind: 'milestone_changed',
+      agent: 'ct-alice',
+      payload: { from: null, to: 'm-1' },
+    });
+    await store.appendEvent({
+      taskId: 'lww-ms',
+      kind: 'milestone_changed',
+      agent: 'ct-bob',
+      payload: { from: null, to: 'm-2' },
+    });
+    // team_slug column: two writers.
+    await store.appendEvent({
+      taskId: 'lww-tm',
+      kind: 'team_changed',
+      agent: 'ct-alice',
+      payload: { from: null, to: 'alpha' },
+    });
+    await store.appendEvent({
+      taskId: 'lww-tm',
+      kind: 'team_changed',
+      agent: 'ct-bob',
+      payload: { from: null, to: 'beta' },
+    });
+    // deleted_at column rides task_deleted: two writers.
+    await store.appendEvent({ taskId: 'lww-del', kind: 'task_deleted', agent: 'ct-alice' });
+    await store.appendEvent({ taskId: 'lww-del', kind: 'task_deleted', agent: 'ct-bob' });
+
+    const result = await detectMergeAnomalies(store, [], SINCE_EPOCH);
+    const subjects = result.intent_loss.map((a) => a.subject).sort();
+    expect(subjects).toEqual(['lww-del', 'lww-ms', 'lww-tm']);
+    const columns = result.intent_loss.map(
+      (a) => (a.summary.match(/ (status|milestone_id|team_slug|deleted_at)=/) ?? [])[1],
+    );
+    expect(columns.sort()).toEqual(['deleted_at', 'milestone_id', 'team_slug']);
+  });
+
+  test('a single author re-writing its own column is NOT an anomaly', async () => {
+    await store.createTask({ id: 'lww-solo', title: 'Solo writer' });
+    await store.appendEvent({
+      taskId: 'lww-solo',
+      kind: 'status_changed',
+      agent: 'ct-alice',
+      payload: { from: 'backlog', to: 'ready' },
+    });
+    await store.appendEvent({
+      taskId: 'lww-solo',
+      kind: 'status_changed',
+      agent: 'ct-alice',
+      payload: { from: 'ready', to: 'in_progress' },
+    });
+    const result = await detectMergeAnomalies(store, [], SINCE_EPOCH);
+    expect(result.intent_loss).toHaveLength(0);
+  });
+
+  test('"since last sync" watermark excludes pre-watermark concurrent writes', async () => {
+    await store.createTask({ id: 'lww-old', title: 'Pre-sync contend' });
+    // Both concurrent writes landed BEFORE the watermark — already reconciled in
+    // a prior sync, so they must NOT re-surface.
+    await store.appendEvent({
+      taskId: 'lww-old',
+      kind: 'status_changed',
+      agent: 'ct-alice',
+      ts: '2020-01-01T00:00:00.000Z',
+      payload: { from: 'backlog', to: 'done' },
+    });
+    await store.appendEvent({
+      taskId: 'lww-old',
+      kind: 'status_changed',
+      agent: 'ct-bob',
+      ts: '2020-01-01T00:00:01.000Z',
+      payload: { from: 'backlog', to: 'blocked' },
+    });
+
+    const watermark = '2021-01-01T00:00:00.000Z';
+    const result = await detectMergeAnomalies(store, [], watermark);
+    expect(result.intent_loss).toHaveLength(0);
+
+    // The same fixture scanned from the epoch DOES surface — proves the
+    // watermark, not the events, is what suppressed it above.
+    const scanAll = await detectMergeAnomalies(store, [], SINCE_EPOCH);
+    expect(scanAll.intent_loss).toHaveLength(1);
+  });
+
+  test('a null author counts as a distinct unattributed writer', async () => {
+    await store.createTask({ id: 'lww-null', title: 'Null author' });
+    await store.appendEvent({
+      taskId: 'lww-null',
+      kind: 'status_changed',
+      agent: 'ct-alice',
+      payload: { from: 'backlog', to: 'done' },
+    });
+    await store.appendEvent({
+      taskId: 'lww-null',
+      kind: 'status_changed',
+      agent: null,
+      payload: { from: 'backlog', to: 'blocked' },
+    });
+    const result = await detectMergeAnomalies(store, [], SINCE_EPOCH);
+    expect(result.intent_loss).toHaveLength(1);
+    expect(result.intent_loss[0]?.summary).toContain('<unattributed>');
+  });
+});
+
+describe('detectMergeAnomalies — cross-row invariants (C2/C3)', () => {
+  test('cross-team write-scope overlap surfaces', async () => {
+    await store.createTeam({ slug: 'alpha', teamType: 'stream_aligned' });
+    await store.createTeam({ slug: 'beta', teamType: 'platform' });
+    await store.setTeamScopes('alpha', { read: [], write: ['src/auth/**'] });
+    // beta's write set overlaps alpha's — but setTeamScopes rejects an overlap at
+    // write time, so simulate the MERGED post-pull state by inserting the
+    // conflicting scope row directly (what a concurrent offline scope-add lands).
+    const raw = store.getStore();
+    await raw.run('INSERT INTO scrum_team_scopes (team_slug, kind, glob) VALUES (?, ?, ?)', [
+      'beta',
+      'write',
+      'src/auth/login.ts',
+    ]);
+
+    const result = await detectMergeAnomalies(store, [], SINCE_EPOCH);
+    expect(result.scope_overlap).toHaveLength(1);
+    const anomaly = result.scope_overlap[0] as SurfacedAnomaly;
+    expect(anomaly.kind).toBe('scope_overlap');
+    expect(anomaly.summary).toContain('alpha');
+    expect(anomaly.summary).toContain('beta');
+  });
+
+  test('a dependency cycle formed by the merged edge set surfaces', async () => {
+    await store.createTask({ id: 'dep-a', title: 'A' });
+    await store.createTask({ id: 'dep-b', title: 'B' });
+    await store.createTask({ id: 'dep-c', title: 'C' });
+    // a blocks b, b blocks c, c blocks a — a cycle each edge alone did not form.
+    await store.addDep('dep-a', 'dep-b', 'blocks');
+    await store.addDep('dep-b', 'dep-c', 'blocks');
+    await store.addDep('dep-c', 'dep-a', 'blocks');
+
+    const result = await detectMergeAnomalies(store, [], SINCE_EPOCH);
+    expect(result.graph_cycle.map((a) => a.subject).sort()).toEqual(['dep-a', 'dep-b', 'dep-c']);
+    expect(result.graph_cycle.every((a) => a.kind === 'graph_cycle')).toBe(true);
+  });
+
+  test('a parent_id containment cycle surfaces', async () => {
+    await store.createTask({ id: 'par-a', title: 'A' });
+    await store.createTask({ id: 'par-b', title: 'B' });
+    // Form a parent_id cycle directly (createTask would reject a self/forward
+    // parent), simulating the merged state of two concurrent re-parents.
+    const raw = store.getStore();
+    await raw.run('UPDATE scrum_tasks SET parent_id = ? WHERE id = ?', ['par-b', 'par-a']);
+    await raw.run('UPDATE scrum_tasks SET parent_id = ? WHERE id = ?', ['par-a', 'par-b']);
+
+    const result = await detectMergeAnomalies(store, [], SINCE_EPOCH);
+    expect(result.graph_cycle.map((a) => a.subject).sort()).toEqual(['par-a', 'par-b']);
+  });
+
+  test('an acyclic graph surfaces no cycle anomaly', async () => {
+    await store.createTask({ id: 'lin-a', title: 'A' });
+    await store.createTask({ id: 'lin-b', title: 'B' });
+    await store.createTask({ id: 'lin-c', title: 'C' });
+    await store.addDep('lin-a', 'lin-b', 'blocks');
+    await store.addDep('lin-b', 'lin-c', 'blocks');
+    const result = await detectMergeAnomalies(store, [], SINCE_EPOCH);
+    expect(result.graph_cycle).toHaveLength(0);
+  });
+
+  test('residual dual-open operator + team-role intervals surface (advisory)', async () => {
+    const jane = await store.registerContributor({ slug: 'jane' });
+    const john = await store.registerContributor({ slug: 'john' });
+    // One clean open operator interval first, then a SECOND open row appended
+    // without closing the first — the residual dual-open a concurrent transfer
+    // rebase leaves.
+    await store.setOperatorOfRecord({ contributorId: jane.id });
+    const raw = store.getStore();
+    await raw.run(
+      'INSERT INTO scrum_operator_history (id, contributor_id, from_ts, to_ts, created_at, created_by) VALUES (?, ?, ?, NULL, ?, ?)',
+      ['op-extra', john.id, '2026-06-14T00:00:00.000Z', '2026-06-14T00:00:00.000Z', 'ct-bob'],
+    );
+    // A team role slot with two open intervals.
+    await store.createTeam({ slug: 'alpha', teamType: 'stream_aligned' });
+    await store.rotateTeamMember({ teamSlug: 'alpha', role: 'engineer', contributorId: jane.id });
+    await raw.run(
+      'INSERT INTO scrum_team_members (id, team_slug, role, contributor_id, from_ts, to_ts, reason, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?, ?)',
+      [
+        'tm-extra',
+        'alpha',
+        'engineer',
+        john.id,
+        '2026-06-14T00:00:00.000Z',
+        null,
+        '2026-06-14T00:00:00.000Z',
+      ],
+    );
+
+    const result = await detectMergeAnomalies(store, [], SINCE_EPOCH);
+    const scopes = result.dual_open_interval.map((a) => a.subject).sort();
+    expect(scopes).toEqual(['alpha/engineer', 'operator']);
+    expect(result.dual_open_interval.every((a) => a.kind === 'dual_open_interval')).toBe(true);
+  });
+});
+
+describe('detectMergeAnomalies — zero-writes invariant', () => {
+  /** A content fingerprint of every table the anomaly pass reads or could touch. */
+  async function snapshot(): Promise<string> {
+    const raw = store.getStore();
+    const tables = [
+      'scrum_tasks',
+      'scrum_events',
+      'scrum_deps',
+      'scrum_milestones',
+      'scrum_teams',
+      'scrum_team_scopes',
+      'scrum_team_members',
+      'scrum_operator_history',
+      'scrum_contributors',
+      'scrum_acceptance_criteria',
+    ];
+    const parts: string[] = [];
+    for (const table of tables) {
+      const rows = await raw.all<Record<string, unknown>>(`SELECT * FROM ${table} ORDER BY rowid`);
+      parts.push(`${table}=${JSON.stringify(rows)}`);
+    }
+    return parts.join('\n');
+  }
+
+  test('the pass performs ZERO writes — every read table is byte-identical after', async () => {
+    // Seed a store that fires EVERY anomaly source so the pass exercises all of
+    // its read paths against real rows.
+    await store.createTask({ id: 'z-1', title: 'Contended' });
+    await store.appendEvent({
+      taskId: 'z-1',
+      kind: 'status_changed',
+      agent: 'ct-alice',
+      payload: { from: 'backlog', to: 'done' },
+    });
+    await store.appendEvent({
+      taskId: 'z-1',
+      kind: 'status_changed',
+      agent: 'ct-bob',
+      payload: { from: 'backlog', to: 'blocked' },
+    });
+    await store.createTask({ id: 'z-a', title: 'A' });
+    await store.createTask({ id: 'z-b', title: 'B' });
+    await store.addDep('z-a', 'z-b', 'blocks');
+    await store.addDep('z-b', 'z-a', 'blocks');
+
+    const collisions: CollisionLike[] = [
+      { table: 'scrum_contributors', key: { slug: 'dup' }, skipped: { id: 'ct-z', slug: 'dup' } },
+    ];
+
+    const before = await snapshot();
+    const result = await detectMergeAnomalies(store, collisions, SINCE_EPOCH);
+    const after = await snapshot();
+
+    // The pass surfaced real anomalies AND wrote nothing.
+    const grouped = byKind(result.all);
+    expect(grouped.collision).toHaveLength(1);
+    expect(grouped.intent_loss).toHaveLength(1);
+    expect(grouped.graph_cycle?.length ?? 0).toBeGreaterThan(0);
+    expect(after).toBe(before);
   });
 });

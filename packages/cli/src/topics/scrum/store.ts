@@ -72,6 +72,7 @@ import type {
   Manifest,
   ManifestTeamEntry,
   MilestoneStatus,
+  MultiOpenInterval,
   NextReadyRow,
   OperatorHistoryRow,
   PromoteLoreToCodexInput,
@@ -2430,6 +2431,80 @@ export class ScrumStore {
       payload_json: string;
     }>;
     return rows.map((r) => decodeEvent(r));
+  }
+
+  /**
+   * Every event with `ts > sinceIso`, oldest-first. The post-pull anomaly pass
+   * reads this to scope its LWW intent-loss check to writes that landed "since
+   * the last sync" (the reconciler's last-sweep watermark): after a pull,
+   * concurrent peer writes appear here as the commutative `*_changed` events the
+   * head column folded to one winner. Not window-bounded — it returns the full
+   * tail past the watermark so a busy session never drops a concurrent intent.
+   * `sinceIso` is an exclusive lower bound (`>`), matching the half-open
+   * `[lastSync, now)` convention; pass the epoch to scan all events.
+   */
+  async listEventsSince(sinceIso: string): Promise<ScrumEvent[]> {
+    const rows = (await this.many(
+      'SELECT id, task_id, ts, kind, agent, payload_json FROM scrum_events WHERE ts > ? ORDER BY ts ASC, id ASC',
+      sinceIso,
+    )) as Array<{
+      id: string;
+      task_id: string;
+      ts: string;
+      kind: string;
+      agent: string | null;
+      payload_json: string;
+    }>;
+    return rows.map((r) => decodeEvent(r));
+  }
+
+  /**
+   * Every dependency edge in canonical `blocks` form across the whole store. The
+   * post-pull anomaly pass reads the full edge set to DFS for cycles a merge may
+   * have introduced (each writer's edge is individually valid; together they can
+   * close a loop). Append-only insert path means every offline edge survives the
+   * rebase, so this is the merged graph. Ordered for a deterministic walk.
+   */
+  async listAllDeps(): Promise<ScrumDep[]> {
+    return (await this.many(
+      "SELECT from_task_id, to_task_id, kind FROM scrum_deps WHERE kind = 'blocks' ORDER BY from_task_id ASC, to_task_id ASC",
+    )) as ScrumDep[];
+  }
+
+  /**
+   * Position-history slots that carry MORE THAN ONE open interval (`to_ts IS
+   * NULL`) — the residual dual-open hazard the post-pull anomaly pass surfaces as
+   * advisory. The interval-converge reshape made the current-holder READ
+   * commute (it folds the open rows by `max(from_ts)`), so a dual-open row is no
+   * longer a read-time corruption; but the raw multi-open state is still worth
+   * surfacing for an operator to reconcile. Covers both single-slot histories:
+   *   - `scrum_operator_history` — the org operator-of-record slot (one logical
+   *     slot, keyed by a fixed sentinel scope `operator`).
+   *   - `scrum_team_members` — each `(team_slug, role)` roster slot.
+   */
+  async listMultiOpenIntervals(): Promise<MultiOpenInterval[]> {
+    const operator = (await this.many(
+      'SELECT COUNT(*) AS open_count FROM scrum_operator_history WHERE to_ts IS NULL',
+    )) as Array<{ open_count: number }>;
+    const out: MultiOpenInterval[] = [];
+    const operatorOpen = operator[0]?.open_count ?? 0;
+    if (operatorOpen > 1) {
+      out.push({ table: 'scrum_operator_history', scope: 'operator', open_count: operatorOpen });
+    }
+
+    const members = (await this.many(
+      `SELECT team_slug, role, COUNT(*) AS open_count FROM scrum_team_members
+         WHERE to_ts IS NULL GROUP BY team_slug, role HAVING COUNT(*) > 1
+         ORDER BY team_slug ASC, role ASC`,
+    )) as Array<{ team_slug: string; role: string; open_count: number }>;
+    for (const row of members) {
+      out.push({
+        table: 'scrum_team_members',
+        scope: `${row.team_slug}/${row.role}`,
+        open_count: row.open_count,
+      });
+    }
+    return out;
   }
 
   // ==========================================================================
