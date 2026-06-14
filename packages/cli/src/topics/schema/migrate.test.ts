@@ -53,6 +53,9 @@
  *   'v7 to v8 seeds brief/memory/decomposition defaults'
  *   'v7 to v8 preserves existing brief/memory/decomposition (idempotent)'
  *   'v7 to v8 preserves all other top-level keys byte-for-byte'
+ *   'v11 to v12 is a pure version bump — cloud absent, none seeded'
+ *   'v11 to v12 preserves an existing cloud block byte-for-byte'
+ *   'v11 to v12 preserves all other top-level keys byte-for-byte'
  *   'full v0 to current chain applies all hops in order'
  *   'backup filename follows Python with_suffix semantics'
  */
@@ -562,8 +565,9 @@ describe('TestV4ToV5', () => {
     // v5->v6 (version bump + dev_mode add), v6->v7 (version bump only),
     // v7->v8 (version bump + brief/memory/decomposition seeds), v8->v9
     // (version bump only — triggers absent), v9->v10 (version bump only —
-    // artifacts absent), and v10->v11 (version bump only — no acb.config to
-    // strip). No tools.scrum mutation.
+    // artifacts absent), v10->v11 (version bump only — no acb.config to
+    // strip), and v11->v12 (version bump only — cloud absent). No tools.scrum
+    // mutation.
     const paths = changes.map((c) => c.path);
     expect(paths).toEqual([
       'schema_version',
@@ -574,6 +578,7 @@ describe('TestV4ToV5', () => {
       'brief',
       'memory',
       'decomposition',
+      'schema_version',
       'schema_version',
       'schema_version',
       'schema_version',
@@ -762,8 +767,9 @@ describe('TestV8ToV9', () => {
 
     expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     expect('triggers' in target).toBe(false);
-    // This hop and the v9->v10, v10->v11 follow-ons emit only version bumps.
+    // This hop and the v9->v10, v10->v11, v11->v12 follow-ons emit only version bumps.
     expect(changes.map((c) => c.path)).toEqual([
+      'schema_version',
       'schema_version',
       'schema_version',
       'schema_version',
@@ -796,8 +802,12 @@ describe('TestV9ToV10', () => {
 
     expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     expect('artifacts' in target).toBe(false);
-    // This hop and the v10->v11 follow-on emit only version bumps.
-    expect(changes.map((c) => c.path)).toEqual(['schema_version', 'schema_version']);
+    // This hop and the v10->v11, v11->v12 follow-ons emit only version bumps.
+    expect(changes.map((c) => c.path)).toEqual([
+      'schema_version',
+      'schema_version',
+      'schema_version',
+    ]);
   });
 
   test('v9 to v10 preserves an existing artifacts block byte-for-byte', () => {
@@ -892,7 +902,8 @@ describe('TestV10ToV11', () => {
     const [target, changes] = planMigration(config);
 
     expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
-    expect(changes.map((c) => c.path)).toEqual(['schema_version']);
+    // v10->v11 then v11->v12 are both pure version bumps with nothing to strip.
+    expect(changes.map((c) => c.path)).toEqual(['schema_version', 'schema_version']);
   });
 
   test('v10 to v11 drops only the present review_ui_* key', () => {
@@ -927,6 +938,63 @@ describe('TestV10ToV11', () => {
     };
     const errors = validateConfig(config, PROVE_SCHEMA);
     expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
+  });
+});
+
+describe('TestV11ToV12', () => {
+  test('v11 to v12 is a pure version bump — cloud absent, none seeded', () => {
+    const config = { schema_version: '11' };
+    const [target, changes] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    // Absent cloud stays absent — local-only with zero network is the default.
+    expect('cloud' in target).toBe(false);
+    expect(changes.map((c) => c.path)).toEqual(['schema_version']);
+  });
+
+  test('v11 to v12 preserves an existing cloud block byte-for-byte', () => {
+    const cloud = { enabled: true, org: 'acme', group: 'prove', db_name: 'prove-acme' };
+    const config = { schema_version: '11', cloud };
+    const [target] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect(target.cloud).toEqual(cloud);
+  });
+
+  test('v11 to v12 preserves all other top-level keys byte-for-byte', () => {
+    const config = {
+      schema_version: '11',
+      scopes: { skills: 'skills/' },
+      tools: { scrum: { enabled: true, scope: 'user', config: {} } },
+      memory: { stale_threshold_days: 90 },
+    };
+    const [target] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect(target.scopes).toEqual({ skills: 'skills/' });
+    expect(target.tools).toEqual({ scrum: { enabled: true, scope: 'user', config: {} } });
+    expect(target.memory).toEqual({ stale_threshold_days: 90 });
+  });
+
+  test('v12 config with a cloud block validates clean', () => {
+    const config = {
+      schema_version: '12',
+      cloud: { enabled: true, org: 'acme', group: 'prove', db_name: 'prove-acme' },
+    };
+    const errors = validateConfig(config, PROVE_SCHEMA);
+    expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
+  });
+
+  test('v12 config with cloud absent validates clean (local-only default)', () => {
+    const config = { schema_version: '12' };
+    const errors = validateConfig(config, PROVE_SCHEMA);
+    expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
+  });
+
+  test('a wrong-typed cloud.enabled is rejected', () => {
+    const config = { schema_version: '12', cloud: { enabled: 'yes' } };
+    const errors = validateConfig(config, PROVE_SCHEMA);
+    expect(errors.some((e) => e.severity === 'error')).toBe(true);
   });
 });
 
@@ -1000,6 +1068,10 @@ describe('TestFullChain', () => {
     });
     expect(target.memory).toEqual({ stale_threshold_days: 90 });
     expect(target.decomposition).toEqual({ auto_accept_through: 'none' });
+
+    // v11->v12 leaves cloud absent — a v0 input never opts into cloud, so the
+    // full chain ends local-only with zero network (the default invariant).
+    expect('cloud' in target).toBe(false);
   });
 
   test('full chain strips acb.config review_ui_image/tag carried from v0', () => {

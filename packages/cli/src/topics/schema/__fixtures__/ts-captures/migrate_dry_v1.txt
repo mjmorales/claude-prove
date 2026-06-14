@@ -1,4 +1,4 @@
-Migration plan for <FIXTURE_PATH> (v1 -> v11):
+Migration plan for <FIXTURE_PATH> (v1 -> v12):
   ~ schema_version: "1" -> "2"
   ~ validators[lint].stage: renamed "stage" -> "phase"
   ~ validators[test].stage: renamed "stage" -> "phase"
@@ -18,3 +18,4 @@ Migration plan for <FIXTURE_PATH> (v1 -> v11):
   ~ schema_version: "8" -> "9" (triggers added as optional — absent triggers preserves current behavior)
   ~ schema_version: "9" -> "10" (artifacts added as optional — absent artifacts.html_open means the platform default opener)
   ~ schema_version: "10" -> "11"
+  ~ schema_version: "11" -> "12" (cloud added as optional — absent cloud keeps prove local-only with zero network)

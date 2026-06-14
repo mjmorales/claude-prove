@@ -15,7 +15,9 @@ import {
   machineConfigBaseDir,
   machineConfigFilePath,
   readMachineConfig,
+  resolveCloudToken,
   resolveDefaultContributor,
+  setCloudToken,
   setDefaultContributor,
 } from './machine-config';
 
@@ -53,7 +55,7 @@ describe('readMachineConfig', () => {
       expect(existsSync(path)).toBe(false);
       const aside = readdirSync(base).filter((n) => n.includes('.corrupt-'));
       expect(aside.length).toBe(1);
-      expect(readFileSync(join(base, aside[0]), 'utf8')).toBe('{ this is not json');
+      expect(readFileSync(join(base, aside[0] as string), 'utf8')).toBe('{ this is not json');
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
@@ -157,6 +159,59 @@ describe('resolveDefaultContributor', () => {
     } finally {
       rmSync(base, { recursive: true, force: true });
       rmSync(legacy, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('cloud tokens', () => {
+  test('setCloudToken round-trips through resolveCloudToken keyed by db name', () => {
+    const base = makeBaseDir();
+    try {
+      setCloudToken('prove-acme', 'jwt-aaa', base);
+      expect(resolveCloudToken('prove-acme', base)).toBe('jwt-aaa');
+      // The token lives under cloud_tokens, not default_contributors.
+      expect(readMachineConfig(base).cloud_tokens).toEqual({ 'prove-acme': 'jwt-aaa' });
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test('resolveCloudToken returns null for an unprovisioned db', () => {
+    const base = makeBaseDir();
+    try {
+      expect(resolveCloudToken('prove-missing', base)).toBeNull();
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test('a second db token is added without clobbering the first or the contributor map', () => {
+    const base = makeBaseDir();
+    try {
+      setDefaultContributor('/repo/alpha', 'CT-aaaa', base);
+      setCloudToken('prove-alpha', 'jwt-alpha', base);
+      setCloudToken('prove-beta', 'jwt-beta', base);
+
+      const config = readMachineConfig(base);
+      expect(config.cloud_tokens).toEqual({
+        'prove-alpha': 'jwt-alpha',
+        'prove-beta': 'jwt-beta',
+      });
+      // The unrelated contributor mapping survived the token writes.
+      expect(config.default_contributors).toEqual({ '/repo/alpha': 'CT-aaaa' });
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  test('overwriting a db token replaces it (re-provision / rotation)', () => {
+    const base = makeBaseDir();
+    try {
+      setCloudToken('prove-acme', 'jwt-old', base);
+      setCloudToken('prove-acme', 'jwt-new', base);
+      expect(resolveCloudToken('prove-acme', base)).toBe('jwt-new');
+    } finally {
+      rmSync(base, { recursive: true, force: true });
     }
   });
 });

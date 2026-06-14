@@ -49,6 +49,15 @@ const CONFIG_FILENAME = 'config.json';
 /** On-disk config shape. Unrelated top-level keys are preserved on write. */
 export interface MachineConfig {
   default_contributors: Record<string, string>;
+  /**
+   * Db-scoped cloud sync tokens keyed by cloud database name (the
+   * `cloud.db_name` from a project's `.prove.json`). Each value is a
+   * least-privilege JWT scoped to exactly one database — the secret a
+   * contributor's machine holds. The org Platform API token (the admin
+   * bootstrap secret) is NEVER stored here. Optional: absent on a machine that
+   * has never provisioned a cloud db.
+   */
+  cloud_tokens?: Record<string, string>;
   // Forward-compatibility: any future top-level keys survive a round-trip.
   [key: string]: unknown;
 }
@@ -209,6 +218,35 @@ export function setDefaultContributor(
   config.default_contributors[key] = contributorId;
   writeMachineConfig(config, baseOverride);
   return key;
+}
+
+/**
+ * Resolve the db-scoped cloud sync token for `dbName` from the machine config,
+ * or `null` when the db has no token on this machine. The token is the
+ * least-privilege secret a contributor's machine holds — read from the new
+ * `~/.claude-prove/config.json` location only (cloud is post-XDG, so there is
+ * no legacy fallback). Never throws on a miss — an absent token means this
+ * machine has not provisioned the db, which the caller degrades to local-only.
+ */
+export function resolveCloudToken(dbName: string, baseOverride?: string): string | null {
+  const tokens = readMachineConfig(baseOverride).cloud_tokens ?? {};
+  const token = tokens[dbName];
+  return token !== undefined && token.length > 0 ? token : null;
+}
+
+/**
+ * Map cloud database `dbName` → its db-scoped `token` in the machine config and
+ * write it back to the new `~/.claude-prove/config.json` location only. Reads
+ * the current config first so unrelated keys (and other db tokens) survive, and
+ * writes atomically. This is the ONLY sanctioned write path for a cloud token —
+ * tokens never land in the committed `.prove.json`.
+ */
+export function setCloudToken(dbName: string, token: string, baseOverride?: string): void {
+  const config = readMachineConfig(baseOverride);
+  const tokens = { ...(config.cloud_tokens ?? {}) };
+  tokens[dbName] = token;
+  config.cloud_tokens = tokens;
+  writeMachineConfig(config, baseOverride);
 }
 
 /**

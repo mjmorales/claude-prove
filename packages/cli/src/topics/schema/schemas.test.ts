@@ -24,9 +24,9 @@ function specAt(path: string): FieldSpec {
 }
 
 describe('PROVE_SCHEMA version', () => {
-  test('current version is "11"', () => {
-    expect(CURRENT_SCHEMA_VERSION).toBe('11');
-    expect(PROVE_SCHEMA.version).toBe('11');
+  test('current version is "12"', () => {
+    expect(CURRENT_SCHEMA_VERSION).toBe('12');
+    expect(PROVE_SCHEMA.version).toBe('12');
   });
 });
 
@@ -90,6 +90,52 @@ describe('PROVE_SCHEMA decomposition group', () => {
     expect(spec.default).toBe('none');
     expect(spec.enum).toEqual(['none', 'epic', 'story', 'task']);
     expect(spec.description).toBeTruthy();
+  });
+});
+
+describe('PROVE_SCHEMA cloud group', () => {
+  test('cloud is an optional dict group', () => {
+    const cloud = specAt('cloud');
+    expect(cloud.type).toBe('dict');
+    expect(cloud.required).toBeFalsy();
+    expect(cloud.description).toBeTruthy();
+  });
+
+  test('enabled is bool, default false (local-only / zero network)', () => {
+    const spec = specAt('cloud.enabled');
+    expect(spec.type).toBe('bool');
+    expect(spec.default).toBe(false);
+    expect(spec.description).toBeTruthy();
+  });
+
+  test('org is str, no secret default', () => {
+    const spec = specAt('cloud.org');
+    expect(spec.type).toBe('str');
+    expect(spec.default).toBe('');
+    expect(spec.description).toBeTruthy();
+  });
+
+  test('group is str, default "prove"', () => {
+    const spec = specAt('cloud.group');
+    expect(spec.type).toBe('str');
+    expect(spec.default).toBe('prove');
+    expect(spec.description).toBeTruthy();
+  });
+
+  test('db_name is str, default empty', () => {
+    const spec = specAt('cloud.db_name');
+    expect(spec.type).toBe('str');
+    expect(spec.default).toBe('');
+    expect(spec.description).toBeTruthy();
+  });
+
+  test('a cloud block with no token field exists (secrets live off-config)', () => {
+    const cloud = specAt('cloud');
+    const keys = Object.keys(cloud.fields ?? {});
+    expect(keys).toEqual(['enabled', 'org', 'group', 'db_name']);
+    // No token/secret field — the db-scoped token lives in the machine config,
+    // the org Platform token in the environment.
+    expect(keys).not.toContain('token');
   });
 });
 

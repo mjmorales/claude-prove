@@ -10,7 +10,8 @@
     "./connection": "./src/connection.ts",
     "./paths": "./src/paths.ts",
     "./registry": "./src/registry.ts",
-    "./migrate": "./src/migrate.ts"
+    "./migrate": "./src/migrate.ts",
+    "./provision": "./src/provision.ts"
   },
   "scripts": {
     "test": "bun test",
@@ -19,6 +20,7 @@
   },
   "dependencies": {
     "@claude-prove/shared": "workspace:*",
+    "@tursodatabase/api": "^2.0.2",
     "@tursodatabase/database": "^0.6.1",
     "@tursodatabase/sync": "0.6.1"
   }

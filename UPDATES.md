@@ -8,6 +8,29 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — Opt-in cloud sync, slice 1: `store provision` + `cloud` config block (schema v12)
+
+*(New optional config block + new command. No automatic behavior change — cloud stays OFF by default, so existing local-only projects are unaffected and perform zero network I/O. Schema migrates automatically via `/prove:update`.)*
+
+This is the first slice of the optional multi-operator cloud-sync layer. It lands the opt-in surface and the provisioning command; the session-boundary push/pull lifecycle is a follow-on slice. Nothing here runs unless you explicitly enable cloud.
+
+- **`.prove.json` gains a non-secret `cloud` block** (schema v11 → v12): `cloud: { enabled, org, group, db_name }`. Absent or `{ "enabled": false }` (the default) keeps prove **local-only with zero network** — every sync code path is dead. The block is committed and carries no secrets: the org Platform API token and the per-machine db-scoped sync token live OUTSIDE this file.
+- **`claude-prove store provision`** provisions this project's cloud database and mints its machine-local token. It is idempotent (skips creating a database that already exists; always re-mints the db-scoped token so a machine that lost its token recovers) and least-privilege: the org Platform API token (the admin bootstrap secret) is read from the environment (`TURSO_PLATFORM_TOKEN`) and never persisted, while the token this command writes is scoped to exactly one database and lands only in the gitignored `~/.claude-prove/config.json` — never in `.prove.json`. Each contributor runs it once per machine to mint their own token.
+
+Usage (only after opting in):
+
+```
+# 1. Add the cloud block to .claude/.prove.json and set "enabled": true, org, db_name
+# 2. Export the org Platform API token (admin bootstrap secret), then:
+TURSO_PLATFORM_TOKEN=<org-platform-token> claude-prove store provision
+```
+
+Migration:
+- Manual: run `claude-prove schema migrate --file .claude/.prove.json` (bumps `schema_version` `"11"` → `"12"`; the `cloud` block is optional and is not seeded, so the file changes only its version stamp). Then delete the generated `.bak`.
+- `/prove:update`: applies the schema migration automatically and ships the new binary.
+
+Auto-adoption: the schema bump is automatic and behavior-neutral (cloud off by default). Provisioning is operator-invoked by design — you only run `store provision` if you opt a project into cloud sync.
+
 ## v4.2.2 — `store migrate-to-turso` no longer fails on legacy `acb_group_verdicts` rows
 
 *(Bug fix. No action required — `/prove:update` ships it with the next binary; no config or schema change. If a prior run aborted, just re-run the command — the legacy file was left untouched.)*

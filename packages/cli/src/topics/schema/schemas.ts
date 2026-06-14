@@ -40,7 +40,7 @@ export interface Schema {
   fields: Record<string, FieldSpec>;
 }
 
-export const CURRENT_SCHEMA_VERSION = '11';
+export const CURRENT_SCHEMA_VERSION = '12';
 
 /**
  * Shape of `tools.scrum` introduced in schema v5. The v4 -> v5 migration
@@ -357,6 +357,57 @@ export const PROVE_SCHEMA: Schema = {
       },
       description:
         'Declared trigger bindings: status-transition -> bound next-action. The scrum reconciler consults this table on session transitions (session-start / subagent-stop / stop) and surfaces the bound action via the session-start digest and next-ready. No resident evaluator — bindings fire only when a session reconciles; intra-run, a workflow script branches directly.',
+    },
+    cloud: {
+      type: 'dict',
+      required: false,
+      fields: {
+        enabled: {
+          type: 'bool',
+          required: false,
+          description:
+            'Master switch for the optional cloud-sync layer. When absent or ' +
+            'false (the default), prove is local-only and performs ZERO network ' +
+            'I/O — every sync code path is dead. Flip to true (after running ' +
+            '`store provision` to mint a machine-local db token) to opt this ' +
+            'project into session-boundary push/pull against the cloud primary.',
+          default: false,
+        },
+        org: {
+          type: 'str',
+          required: false,
+          description:
+            'Turso organization slug that owns the cloud database. Non-secret ' +
+            '(committed) — the admin Platform API token and the db-scoped sync ' +
+            'token are never stored here. Read only when cloud.enabled is true.',
+          default: '',
+        },
+        group: {
+          type: 'str',
+          required: false,
+          description:
+            'Turso group the database lives in (the provisioning group, e.g. ' +
+            '"prove"). Non-secret. Read only when cloud.enabled is true.',
+          default: 'prove',
+        },
+        db_name: {
+          type: 'str',
+          required: false,
+          description:
+            'Cloud database name for this project (e.g. "prove-<slug>"). ' +
+            'Non-secret. Used as the machine-config key under which the ' +
+            'db-scoped sync token is stored in ~/.claude-prove/config.json. ' +
+            'Read only when cloud.enabled is true.',
+          default: '',
+        },
+      },
+      description:
+        'Optional cloud-sync opt-in (added in schema v12). Non-secret config ' +
+        'only — the org Platform API token (admin bootstrap secret) and the ' +
+        'per-machine db-scoped sync token live OUTSIDE this file: the Platform ' +
+        'token in the environment, the db token in the gitignored machine ' +
+        'config ~/.claude-prove/config.json. Absent or { enabled: false } ' +
+        '(the default) keeps prove local-only with zero network I/O.',
     },
   },
 };

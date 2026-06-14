@@ -466,6 +466,31 @@ function migrateV10ToV11(config: ProveConfig): [ProveConfig, MigrationChange[]] 
   return [result, changes];
 }
 
+/**
+ * v11 -> v12: add the OPTIONAL top-level `cloud` field (cloud-sync opt-in:
+ * `{ enabled, org, group, db_name }`). Absent cloud = local-only with zero
+ * network I/O (the v11 behavior), so no key is seeded — this is a pure version
+ * bump. The db-scoped sync token and the org Platform API token are never
+ * stored in this file (machine config + environment respectively), so the hop
+ * touches nothing but the version. All other top-level keys pass through
+ * untouched.
+ *
+ * Hardcodes target version '12'. Do NOT reference CURRENT_SCHEMA_VERSION —
+ * migrations are frozen-in-time; later version bumps must not retroactively
+ * change what this migration does.
+ */
+function migrateV11ToV12(config: ProveConfig): [ProveConfig, MigrationChange[]] {
+  const result: ProveConfig = { ...config, schema_version: '12' };
+  const changes: MigrationChange[] = [
+    new MigrationChange(
+      'change',
+      'schema_version',
+      '"11" -> "12" (cloud added as optional — absent cloud keeps prove local-only with zero network)',
+    ),
+  ];
+  return [result, changes];
+}
+
 export const MIGRATIONS: Record<string, MigrationFn> = {
   '0_to_1': migrateV0ToV1,
   '1_to_2': migrateV1ToV2,
@@ -478,6 +503,7 @@ export const MIGRATIONS: Record<string, MigrationFn> = {
   '8_to_9': migrateV8ToV9,
   '9_to_10': migrateV9ToV10,
   '10_to_11': migrateV10ToV11,
+  '11_to_12': migrateV11ToV12,
 };
 
 /**

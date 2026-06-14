@@ -11,9 +11,22 @@ export {
   type MachineConfig,
   machineConfigFilePath,
   readMachineConfig,
+  resolveCloudToken,
   resolveDefaultContributor,
+  setCloudToken,
   setDefaultContributor,
 } from './machine-config';
+export {
+  type CreateApiClient,
+  DEFAULT_GROUP,
+  PLATFORM_TOKEN_ENV_VAR,
+  type ProvisionDeps,
+  type ProvisionInput,
+  type ProvisionResult,
+  ProvisionError,
+  provisionDatabase,
+  type TursoApiClient,
+} from './provision';
 export { type ResolveOptions, resolveDbPath } from './paths';
 export {
   add,
