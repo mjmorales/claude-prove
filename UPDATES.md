@@ -8,6 +8,16 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — `store migrate-to-turso` no longer fails on legacy `acb_group_verdicts` rows
+
+*(Bug fix. No action required — `/prove:update` ships it with the next binary; no config or schema change. If a prior run aborted, just re-run the command — the legacy file was left untouched.)*
+
+`store migrate-to-turso` aborted with `NOT NULL constraint failed: acb_group_verdicts.created_at` on any legacy store holding a non-empty `acb_group_verdicts` table. The legacy table carries only an `updated_at` column, but the v1 schema makes `created_at` NOT NULL — and the transform inserted no value for it. Because the whole load runs in one transaction, a single verdict row blocked migration of the entire store (every task, decision, milestone, and lore entry included).
+
+The transform now backfills the v1 `created_at` from the legacy `updated_at` for any legacy table that carries only `updated_at` (a row was created no later than its last update; for the append-only verdict rows the two instants are equal), so the row migrates with zero data loss. Empty `acb_group_verdicts` tables were never affected.
+
+Migration: none. Auto-adoption: automatic with the binary upgrade.
+
 ## v4.2.1 — store no longer drops writes under concurrent open
 
 *(Bug fix. No action required — `/prove:update` ships it with the next binary; no config or schema change.)*

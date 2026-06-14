@@ -24,6 +24,7 @@ CREATE TABLE scrum_tags (task_id TEXT NOT NULL, tag TEXT NOT NULL, added_at TEXT
 CREATE TABLE scrum_events (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, ts TEXT NOT NULL, kind TEXT NOT NULL, agent TEXT, payload_json TEXT NOT NULL);
 CREATE TABLE scrum_escalations (id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL, escalation_type TEXT NOT NULL, layer TEXT NOT NULL, state TEXT NOT NULL, summary TEXT NOT NULL, raised_by TEXT, resolution_mode TEXT, resolution_note TEXT, resolved_by TEXT, walked_up_from INTEGER, attributes TEXT, created_at TEXT NOT NULL, resolved_at TEXT);
 CREATE TABLE acb_acb_documents (id INTEGER PRIMARY KEY AUTOINCREMENT, branch TEXT NOT NULL UNIQUE, data TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE acb_group_verdicts (slug TEXT NOT NULL, group_id TEXT NOT NULL, verdict TEXT NOT NULL, note TEXT, fix_prompt TEXT, updated_at TEXT NOT NULL, PRIMARY KEY (slug, group_id));
 `;
 
 let dir: string;
@@ -87,6 +88,11 @@ async function buildLegacy(): Promise<Store> {
   );
   await store.run(
     "INSERT INTO acb_acb_documents (branch, data, created_at, updated_at) VALUES ('main', '{\"doc\":1}', '2026-01-01T00:00:00Z', '2026-01-04T00:00:00Z')",
+  );
+  // Legacy verdict row carrying ONLY `updated_at` — the v1 schema makes
+  // `created_at` NOT NULL, so the transform must backfill it from `updated_at`.
+  await store.run(
+    "INSERT INTO acb_group_verdicts (slug, group_id, verdict, note, updated_at) VALUES ('add-login', 'g1', 'pass', 'looks good', '2026-01-05T00:00:00Z')",
   );
   return store;
 }
@@ -175,6 +181,27 @@ describe('migrateLegacyToV1', () => {
       expect(isUlid(second?.walked_up_from as string)).toBe(true);
       // The dangling reference (legacy id 999, no such row) is nulled.
       expect(dangling?.walked_up_from).toBeNull();
+    } finally {
+      legacy.close();
+      target.close();
+    }
+  });
+
+  test('backfills a verdict-row created_at from updated_at when the legacy table lacks it', async () => {
+    const legacy = await buildLegacy();
+    const target = await buildV1Target();
+    try {
+      const report = await migrateLegacyToV1(legacy, target);
+      expect(report.fkViolations).toBe(0);
+
+      const verdict = await target.get<{ id: string; verdict: string; created_at: string }>(
+        'SELECT id, verdict, created_at FROM acb_group_verdicts WHERE slug = ? AND group_id = ?',
+        ['add-login', 'g1'],
+      );
+      expect(verdict?.verdict).toBe('pass');
+      expect(isUlid(verdict?.id as string)).toBe(true);
+      // created_at is filled from the legacy updated_at, never NULL.
+      expect(verdict?.created_at).toBe('2026-01-05T00:00:00Z');
     } finally {
       legacy.close();
       target.close();

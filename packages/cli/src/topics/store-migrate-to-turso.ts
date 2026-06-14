@@ -196,6 +196,15 @@ function projectRow(
       }
       continue;
     }
+    // Some legacy tables (e.g. acb_group_verdicts) carry only `updated_at` and no
+    // `created_at`, but the v1 schema makes `created_at` NOT NULL. Backfill it from
+    // `updated_at`: a row was created no later than its last update, and for the
+    // append-only verdict rows the two instants are equal — so the insert no longer
+    // violates the constraint and no data is lost.
+    if (col === 'created_at' && !(col in legacyRow) && 'updated_at' in legacyRow) {
+      out[col] = legacyRow.updated_at;
+      continue;
+    }
     if (col in legacyRow) out[col] = legacyRow[col];
   }
   return out;
