@@ -8,7 +8,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Unreleased — Standalone binary survives concurrent launches (fixes native-addon extraction race)
+## v4.1.1 — Standalone binary survives concurrent launches (fixes native-addon extraction race)
 
 *(No config or schema migration. The fix lands entirely in the compiled release binary — upgrade to get it.)*
 
