@@ -8,7 +8,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Unreleased — store no longer drops writes under concurrent open
+## v4.2.1 — store no longer drops writes under concurrent open
 
 *(Bug fix. No action required — `/prove:update` ships it with the next binary; no config or schema change.)*
 
