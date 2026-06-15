@@ -166,7 +166,12 @@ export async function openScrumStore(opts: StoreOptions = {}): Promise<ScrumStor
       throw err;
     }
   }
-  await runMigrations(store);
+  // A synced (injected) connection has its schema established on the remote
+  // primary and pulled in, so skip migrations here: running DDL on the synced
+  // handle would push it, and a replica DDL push panics the sync engine. The
+  // remote schema bootstrap (store provision) owns schema for the cloud path;
+  // the local store only validated compatibility above.
+  if (!opts.connection) await runMigrations(store);
   return new ScrumStore(store);
 }
 

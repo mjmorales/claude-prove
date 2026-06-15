@@ -27,11 +27,18 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
+  type CloudCoordinates,
   type ProvisionDeps,
   ProvisionError,
   type ProvisionResult,
+  openStore,
   provisionDatabase,
+  resolveCloudToken,
+  runMigrations,
+  syncRemoteUrl,
 } from '@claude-prove/store';
+import { type Connection, connect as connectRemote } from '@tursodatabase/serverless';
+import { ensureScrumSchemaRegistered } from './scrum/schemas';
 
 /** The non-secret cloud block as read from `.prove.json`. */
 export interface CloudConfig {
@@ -55,7 +62,7 @@ export interface ProvisionFlags {
  */
 export async function runProvision(
   flags: ProvisionFlags,
-  deps: Partial<ProvisionDeps> = {},
+  deps: Partial<ProvisionDeps> & { connectRemote?: typeof connectRemote } = {},
 ): Promise<number> {
   const workspaceRoot = flags.workspaceRoot ?? process.cwd();
 
@@ -83,6 +90,25 @@ export async function runProvision(
     const msg = err instanceof ProvisionError ? err.message : String(err);
     console.error(`store provision: ${msg}`);
     return 1;
+  }
+
+  // Establish the scrum schema on the remote primary. A replica cannot bootstrap
+  // schema by pushing its own DDL — the sync engine's replay generator panics on
+  // a write to a table the remote lacks — so create it here; replicas pull it
+  // before any data write. Skipped when no db-scoped token resolves (e.g. a test
+  // whose token write was redirected away from the machine config).
+  const bootstrapToken = resolveCloudToken(cloud.dbName);
+  if (bootstrapToken !== null && bootstrapToken.length > 0) {
+    try {
+      await bootstrapRemoteScrumSchema({ org: cloud.org, dbName: cloud.dbName }, bootstrapToken, {
+        connect: deps.connectRemote,
+      });
+    } catch (err) {
+      console.error(
+        `store provision: remote schema bootstrap failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return 1;
+    }
   }
 
   // Entity JSON on stdout; human trailer on stderr.
@@ -121,4 +147,75 @@ export function readCloudConfig(workspaceRoot: string): CloudConfig | null {
     group: typeof c.group === 'string' && c.group.length > 0 ? c.group : 'prove',
     dbName: typeof c.db_name === 'string' ? c.db_name : '',
   };
+}
+
+/**
+ * Establish the scrum schema on the REMOTE primary directly, over a
+ * `@tursodatabase/serverless` connection, using the same migration runner the
+ * local store uses. A replica cannot bootstrap schema by pushing its own DDL —
+ * the sync engine's replay generator panics on a write to a table the remote
+ * lacks — so schema is created here and replicas pull it before any data write.
+ * Idempotent: the migration runner skips already-applied migrations via
+ * `_migrations_log`, so a re-provision is a no-op against an up-to-date primary.
+ */
+export async function bootstrapRemoteScrumSchema(
+  coords: CloudCoordinates,
+  token: string,
+  deps: { connect?: (config: { url: string; authToken: string }) => Connection } = {},
+): Promise<void> {
+  ensureScrumSchemaRegistered();
+  // Build the schema locally — the migration runner is reliable on the local
+  // engine — then replicate the resulting objects to the remote primary one
+  // statement at a time (autocommit). Running the migration runner directly over
+  // the serverless HTTP connection is unreliable: its explicit BEGIN/COMMIT
+  // transaction wrapping does not persist tables across migrations there, and
+  // serverless binds parameters as a single array rather than spread positional.
+  const local = await openStore({ path: ':memory:' });
+  let objects: { sql: string }[];
+  let migrationsLog: Record<string, unknown>[];
+  try {
+    await runMigrations(local);
+    objects = await local.all<{ sql: string }>(
+      "SELECT sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid",
+    );
+    migrationsLog = await local.all<Record<string, unknown>>(
+      'SELECT * FROM _migrations_log ORDER BY rowid',
+    );
+  } finally {
+    local.close();
+  }
+
+  const open = deps.connect ?? connectRemote;
+  const url = syncRemoteUrl(coords);
+  // A just-created remote database can briefly 404 before it becomes routable;
+  // retry with linear backoff. The apply is idempotent — it no-ops when the
+  // schema is already present — so a retry after a transient failure is safe.
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const conn = open({ url, authToken: token });
+    try {
+      const present = await (
+        await conn.prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='scrum_contributors'",
+        )
+      ).all([]);
+      if (present.length === 0) {
+        for (const obj of objects) await conn.exec(obj.sql);
+        for (const row of migrationsLog) {
+          const cols = Object.keys(row);
+          const insert = `INSERT OR IGNORE INTO _migrations_log (${cols.join(', ')}) VALUES (${cols
+            .map(() => '?')
+            .join(', ')})`;
+          await (await conn.prepare(insert)).run(cols.map((c) => row[c]));
+        }
+      }
+      conn.close();
+      return;
+    } catch (err) {
+      lastErr = err;
+      conn.close();
+      await new Promise((resolve) => setTimeout(resolve, 1500 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
 }

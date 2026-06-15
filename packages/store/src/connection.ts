@@ -34,6 +34,16 @@ export interface StoreOptions extends ResolveOptions {
    * on every locked operation before failing. Defaults to `DEFAULT_BUSY_TIMEOUT_MS`.
    */
   busyTimeoutMs?: number;
+  /**
+   * An already-open connection to wrap instead of opening a new one. The
+   * cloud-sync path passes the synced `@tursodatabase/sync` handle here so the
+   * store's writes flow through the sync engine's per-handle change-capture and
+   * replicate on `push()`. Opening the store as a SEPARATE connection to the
+   * same file (the default path) leaves its writes invisible to sync. When set,
+   * `openStore` skips its own `connect()` and the WAL pragma — the supplied
+   * handle owns the file and its journaling — and `path` is informational only.
+   */
+  connection?: Database;
 }
 
 const MEMORY_PATH = ':memory:';
@@ -177,6 +187,14 @@ export async function withTx<T>(store: Store, fn: () => Promise<T>): Promise<T> 
  * `DEFAULT_BUSY_TIMEOUT_MS`). Async because the driver's `connect()` is async.
  */
 export async function openStore(opts: StoreOptions = {}): Promise<Store> {
+  if (opts.connection) {
+    // Wrap an externally-owned connection — the cloud-sync synced handle. The
+    // handle owns the file and its journaling, so skip the open + WAL pragma;
+    // foreign_keys is a connection-scoped pragma, not a CDC mutation, so it is
+    // safe to set on the synced connection.
+    await opts.connection.exec('PRAGMA foreign_keys = ON');
+    return new Store(opts.path ?? '<connection>', opts.connection);
+  }
   const path = opts.path ?? resolveDbPath({ cwd: opts.cwd, override: opts.override });
   if (path !== MEMORY_PATH && !opts.readonly) {
     mkdirSync(dirname(path), { recursive: true });

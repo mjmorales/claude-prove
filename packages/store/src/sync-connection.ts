@@ -27,6 +27,7 @@
  * anomaly the operator can deconflict, never a hard `pull()`/`push()` failure.
  */
 
+import type { Database } from '@tursodatabase/database';
 import type { DatabaseRowMutation, DatabaseRowTransformResult } from '@tursodatabase/sync';
 
 /**
@@ -77,6 +78,13 @@ export interface SyncOpenDeps {
 
 /** A live sync handle: the connected `Database` plus its pull/push surface. */
 export interface SyncDatabase {
+  /**
+   * The connected synced handle. The scrum store MUST be built on this
+   * connection (`openScrumStore({ connection })`) so its writes flow through the
+   * sync engine's per-handle change-capture and replicate on `push()`. A store
+   * opened as a separate connection to the same file is invisible to sync.
+   */
+  connection: Database;
   /** Pull remote changes onto the local store (atomic rollback-and-replay). */
   pull(): Promise<boolean>;
   /** Push queued local changes to the remote primary. */
@@ -147,6 +155,9 @@ export async function openSyncDatabase(
   await db.connect();
 
   return {
+    // The @tursodatabase/sync handle is structurally a `Database` (exec/prepare/
+    // close) plus pull/push; expose it so the scrum store binds to THIS handle.
+    connection: db as unknown as Database,
     pull: () => db.pull(),
     push: () => db.push(),
     close: () => db.close(),
