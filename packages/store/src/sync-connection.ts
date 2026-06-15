@@ -22,8 +22,8 @@
  * Transform + collision sink: the scrum `transform` (built by
  * `makeScrumSyncTransform` in the CLI layer) maps a known secondary-UNIQUE
  * collision to a `skip` and records it through the caller's `onCollision` sink.
- * The sink is wired by the lifecycle and DRAINED by the post-pull anomaly pass
- * (the `cloud-sync-s1-anomaly` task) — every surfaced collision becomes an
+ * The sink is wired by the lifecycle and DRAINED by the post-pull anomaly pass —
+ * every surfaced collision becomes an
  * anomaly the operator can deconflict, never a hard `pull()`/`push()` failure.
  */
 

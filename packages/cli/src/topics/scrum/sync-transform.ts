@@ -22,7 +22,7 @@
  *     hook degrades gracefully on any legacy v1 store still carrying the UNIQUE.
  *
  * This module DEFINES the mapping; it does NOT open a sync connection. The
- * `cloud-sync-s1-lifecycle` task wires `makeScrumSyncTransform(...)` into the
+ * sync lifecycle wires `makeScrumSyncTransform(...)` into the
  * sync `connect()` opts, binding `keyExists` to a SYNCHRONOUS current-state
  * lookup against the live connection (the engine's `transform` callback is
  * synchronous, so the predicate cannot be async — lifecycle supplies a sync

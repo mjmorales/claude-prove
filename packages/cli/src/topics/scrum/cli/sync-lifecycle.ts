@@ -24,7 +24,7 @@
  * a SYNCHRONOUS `keyExists` bound to a pre-pull snapshot of the existing
  * secondary-UNIQUE keys (the engine's transform callback cannot be async). Each
  * surfaced collision is recorded into the `collisions` sink, which the post-pull
- * anomaly pass (`cloud-sync-s1-anomaly`) drains.
+ * anomaly pass drains.
  */
 
 import {
