@@ -288,7 +288,7 @@ jobs:
           bun-version: 1.2.22
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile
+        run: bun install
 
       # Build packages/review-ui/web (vite) and pack web/dist into the tarball
       # run.ts embeds via `type: "file"`, so the compile below bakes the web

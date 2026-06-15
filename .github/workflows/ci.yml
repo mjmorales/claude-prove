@@ -17,7 +17,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.22
-      - run: bun install --frozen-lockfile
+      - run: bun install
       - run: bun run biome check .
 
   typecheck:
@@ -28,7 +28,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.22
-      - run: bun install --frozen-lockfile
+      - run: bun install
       - run: bun run tsc --build
       # tsc --build excludes **/*.test.ts (test files would emit .d.ts into the
       # published build), so the build above never typechecks tests. These
@@ -50,7 +50,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.22
-      - run: bun install --frozen-lockfile
+      - run: bun install
       - run: bun test
 
   build-binary:
@@ -73,7 +73,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: 1.2.22
-      - run: bun install --frozen-lockfile
+      - run: bun install
       # Build packages/review-ui/web (vite) and pack web/dist into the tarball
       # run.ts embeds via `type: "file"`, so the compile below bakes the web
       # bundle into the binary. Must run BEFORE the compile step.
