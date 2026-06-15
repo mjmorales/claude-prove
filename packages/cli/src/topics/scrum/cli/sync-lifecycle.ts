@@ -27,6 +27,8 @@
  * anomaly pass drains.
  */
 
+import { mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 import {
   type CloudCoordinates,
   type SyncDatabase,
@@ -98,82 +100,153 @@ export async function openStoreWithSync(
   boundary: SyncBoundary,
   deps: SyncLifecycleDeps = {},
 ): Promise<{ store: ScrumStore; result: SyncPhaseResult }> {
-  // Resolve the local db path ONCE via the canonical git-root walk so the
-  // store open and the sync engine materialize the same file.
-  const dbPath = resolveDbPath({ cwd: workspaceRoot });
-  const store = await openScrumStore({ override: dbPath });
-  const result = await runSyncPhase(store, workspaceRoot, dbPath, boundary, deps);
-  return { store, result };
+  const session = await openSyncSession(workspaceRoot, deps);
+  let result = session.result;
+  // session-start: flush a possibly-missed prior stop up first (so a pull's
+  // replay rebases onto an already-flushed remote, minimizing the collision
+  // surface), then pull peers' changes so the digest reflects fresh state.
+  // `result.ok` gates the caller's post-pull anomaly pass.
+  if (boundary === 'session-start' && session.result.attempted && session.result.ok) {
+    const flushed = await session.push();
+    result = flushed.ok ? await session.pull() : flushed;
+  }
+  // The caller owns the store's lifetime (`store.close()` closes the synced
+  // connection); ordinary `scrum` commands defer their push to the next boundary.
+  return { store: session.store, result };
 }
 
 /**
- * Run the session-boundary sync against an already-open local store. No-op
- * (returns `LOCAL_ONLY`) unless `cloud.enabled && token` resolve — the hard
- * default-off gate. Never throws: a degrade warns and returns
- * `{ attempted: true, ok: false }` so the caller proceeds local. `dbPath` is
- * the resolved local file both the store and the sync engine share.
+ * A cloud-sync session: the scrum store — built ON the synced
+ * `@tursodatabase/sync` connection when `cloud.enabled && token` resolve, so its
+ * writes are captured by the engine's per-handle change-log and ride the next
+ * `push()` — plus boundary `pull()` / `push()` and `close()`. With cloud
+ * off/unprovisioned, or on any sync-open failure, the store is a plain local
+ * store and pull/push are no-ops, so the command never blocks on the network.
+ *
+ * The change-log persists across connection opens, so ordinary `scrum` commands
+ * open a session, write, and close WITHOUT pull/push (zero network); their writes
+ * accumulate and ride the next session-boundary `push()`.
  */
-export async function runSyncPhase(
-  store: ScrumStore,
+export interface SyncSession {
+  store: ScrumStore;
+  /** The open result; `collisions` accumulates across this session's pull/push. */
+  result: SyncPhaseResult;
+  /** Pull peers' changes onto the local store (no-op when local-only). */
+  pull(): Promise<SyncPhaseResult>;
+  /** Push accumulated local writes to the remote (no-op when local-only). */
+  push(): Promise<SyncPhaseResult>;
+  /** Close the store and its underlying connection. */
+  close(): void;
+}
+
+function localSession(store: ScrumStore): SyncSession {
+  return {
+    store,
+    result: LOCAL_ONLY,
+    pull: async () => LOCAL_ONLY,
+    push: async () => LOCAL_ONLY,
+    close: () => store.close(),
+  };
+}
+
+/**
+ * Open a cloud-sync session. No-op cloud path (returns a `localSession`) unless
+ * `cloud.enabled && token` resolve — the hard default-off gate. Never throws on a
+ * sync-open failure: it degrades to a local store and warns, so the command
+ * proceeds. The returned `pull`/`push` are individually degrade-safe.
+ */
+export async function openSyncSession(
   workspaceRoot: string,
-  dbPath: string,
-  boundary: SyncBoundary,
   deps: SyncLifecycleDeps = {},
-): Promise<SyncPhaseResult> {
+  dbPath: string = resolveDbPath({ cwd: workspaceRoot }),
+): Promise<SyncSession> {
+  // `dbPath` defaults to the git-root-aware resolution the session-boundary hooks
+  // use; ordinary commands pass a fixed `<root>/.prove/prove.db` join instead (so a
+  // non-repo open does not throw on findGitRoot). The sync engine's connect() opens
+  // the replica file but does NOT create its parent dir, so ensure `.prove/` exists
+  // or a first cloud open fails with an I/O "entity not found" and degrades to
+  // local. (The local openStore path mkdirs its own parent.)
+  mkdirSync(dirname(dbPath), { recursive: true });
   const cloud = readCloudConfig(workspaceRoot);
   // Default-off: absent or disabled cloud block ⇒ dead code, zero network.
-  if (cloud === null || !cloud.enabled) return LOCAL_ONLY;
+  if (cloud === null || !cloud.enabled)
+    return localSession(await openScrumStore({ override: dbPath }));
 
   const resolveToken = deps.resolveToken ?? defaultResolveToken();
   const token = resolveToken(cloud.dbName);
   // No machine-local token ⇒ this machine has not provisioned ⇒ local-only.
-  if (token === null || token.length === 0) return LOCAL_ONLY;
+  if (token === null || token.length === 0)
+    return localSession(await openScrumStore({ override: dbPath }));
 
   const warn = deps.warn ?? ((line: string) => process.stderr.write(line));
   const timeoutMs = deps.timeoutMs ?? DEFAULT_SYNC_TIMEOUT_MS;
   const coords: CloudCoordinates = { org: cloud.org, dbName: cloud.dbName };
-
   const collisions: SurfacedCollision[] = [];
+
+  // The engine's transform callback is synchronous, so `keyExists` reads a frozen
+  // snapshot of the existing secondary-UNIQUE keys, populated right after the
+  // store opens (post-connect, pre-pull) through this mutable binding.
+  let keyExists: KeyExists = () => false;
+  const transform = makeScrumSyncTransform({
+    keyExists: (table, key) => keyExists(table, key),
+    onCollision: (c) => collisions.push(c),
+  });
 
   let sync: SyncDatabase | undefined;
   try {
-    // Pre-pull snapshot: the engine's transform callback is synchronous, so
-    // `keyExists` checks a frozen Set of the existing secondary-UNIQUE keys
-    // taken before replay rather than probing the live (async) connection.
-    const keyExists = await snapshotKeyExists(store);
-    const transform = makeScrumSyncTransform({
-      keyExists,
-      onCollision: (c) => collisions.push(c),
-    });
-
     sync = await openSyncDatabase({ path: dbPath, coords, token, transform }, deps);
-
-    if (boundary === 'session-start') {
-      // Flush a possibly-missed prior stop, then pull peer changes. Order:
-      // push our queued local writes up first so a pull's replay rebases onto
-      // an already-flushed remote, minimizing the collision surface.
-      await withTimeout(sync.push(), timeoutMs, 'flush-push');
-      await withTimeout(sync.pull(), timeoutMs, 'pull');
-    } else {
-      // stop / subagent-stop: push local writes to the remote.
-      await withTimeout(sync.push(), timeoutMs, 'push');
-    }
-
-    return { attempted: true, ok: true, collisions };
+    // Build the scrum store ON the synced connection so its writes flow through
+    // the engine's change-capture and replicate on push().
+    const store = await openScrumStore({ connection: sync.connection });
+    keyExists = await snapshotKeyExists(store);
+    const liveSync = sync;
+    const runPhase = async (
+      op: () => Promise<unknown>,
+      label: string,
+    ): Promise<SyncPhaseResult> => {
+      try {
+        await withTimeout(op(), timeoutMs, label);
+        return { attempted: true, ok: true, collisions };
+      } catch (err) {
+        const reason = errMsg(err);
+        warn(`scrum sync (${label}): ${reason} — proceeding local\n`);
+        return { attempted: true, ok: false, collisions, degradedReason: reason };
+      }
+    };
+    return {
+      store,
+      result: { attempted: true, ok: true, collisions },
+      pull: () => runPhase(() => liveSync.pull(), 'pull'),
+      push: () => runPhase(() => liveSync.push(), 'push'),
+      close: () => store.close(),
+    };
   } catch (err) {
+    // Sync open failed (offline, transport): degrade to a local-only store so the
+    // command proceeds. Writes made this session are NOT captured by sync and
+    // replicate only once a later open reconnects.
     const reason = errMsg(err);
-    warn(`scrum sync (${boundary}): ${reason} — proceeding local\n`);
-    return { attempted: true, ok: false, collisions, degradedReason: reason };
-  } finally {
+    warn(`scrum sync: ${reason} — proceeding local\n`);
     if (sync) {
-      // Closing the sync handle must never turn a successful command into a
-      // failure — swallow a close error after warning.
       try {
         await sync.close();
       } catch (closeErr) {
-        warn(`scrum sync (${boundary}): close failed: ${errMsg(closeErr)}\n`);
+        warn(`scrum sync close: ${errMsg(closeErr)}\n`);
       }
     }
+    const store = await openScrumStore({ override: dbPath });
+    const degraded: SyncPhaseResult = {
+      attempted: true,
+      ok: false,
+      collisions,
+      degradedReason: reason,
+    };
+    return {
+      store,
+      result: degraded,
+      pull: async () => degraded,
+      push: async () => degraded,
+      close: () => store.close(),
+    };
   }
 }
 

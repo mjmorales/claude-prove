@@ -189,10 +189,12 @@ export async function withTx<T>(store: Store, fn: () => Promise<T>): Promise<T> 
 export async function openStore(opts: StoreOptions = {}): Promise<Store> {
   if (opts.connection) {
     // Wrap an externally-owned connection — the cloud-sync synced handle. The
-    // handle owns the file and its journaling, so skip the open + WAL pragma;
-    // foreign_keys is a connection-scoped pragma, not a CDC mutation, so it is
-    // safe to set on the synced connection.
-    await opts.connection.exec('PRAGMA foreign_keys = ON');
+    // handle owns the file and its journaling, so skip the open + WAL pragma.
+    // Foreign keys are deliberately NOT enabled here: the sync engine replays a
+    // pull/push as an ordered stream of CDC mutations whose intermediate states
+    // can transiently violate FKs (e.g. an event row applied before its task
+    // row), so FK enforcement on the synced connection breaks replay. Referential
+    // integrity on the cloud path is upheld by the app's write logic.
     return new Store(opts.path ?? '<connection>', opts.connection);
   }
   const path = opts.path ?? resolveDbPath({ cwd: opts.cwd, override: opts.override });

@@ -19,12 +19,11 @@
 
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { resolveDbPath } from '@claude-prove/store';
 import { readDevMode } from '../acb/hook';
 import { resolveActiveRunDir } from '../run-state/hooks/capture';
 import { pyJsonDump } from '../run-state/hooks/json-compat';
 import { EMPTY_HOOK_RESULT, type HookResult, readCwd } from '../run-state/hooks/types';
-import { openStoreWithSync, runSyncPhase } from './cli/sync-lifecycle';
+import { openStoreWithSync, openSyncSession } from './cli/sync-lifecycle';
 import { type GateVerdict, evaluateSessionEndGate } from './handoff-gate';
 import {
   type BoundAction,
@@ -42,7 +41,7 @@ import {
   reconcileRunCompleted,
   sweepUnreconciled,
 } from './reconcile';
-import { type ScrumStore, openScrumStore } from './store';
+import type { ScrumStore } from './store';
 import type { EscalationPayload, ScrumEvent, ScrumTask } from './types';
 
 // ---------------------------------------------------------------------------
@@ -183,8 +182,11 @@ export async function onSubagentStop(payload: Record<string, unknown> | null): P
     const gate = evaluateSessionEndGate(dirname(statePath), readDevMode(project));
     if (!gate.ok) return blockSessionEnd(gate);
 
-    const dbPath = resolveDbPath({ cwd: project });
-    const store = await openScrumStore({ override: dbPath });
+    // Open the store ON the synced connection (when cloud-enabled) so the
+    // reconcile's writes are captured by the sync change-log and flush in the
+    // boundary push below; local-only (the default) is a plain store.
+    const session = await openSyncSession(project);
+    const store = session.store;
     try {
       // Pass `project` so rebuildContextBundle resolves run paths against the
       // correct root when firing from a linked worktree or a subdirectory.
@@ -198,10 +200,10 @@ export async function onSubagentStop(payload: Record<string, unknown> | null): P
       // reconcile outcome and the non-blocking exit code stand regardless.
       await raiseContributionMissIfAny(store, statePath, result);
       // Session-boundary cloud sync: push local writes AFTER reconcile so the
-      // reconcile's own writes are flushed in the same push. Gated on
-      // `cloud.enabled && token`; local-only (the default) is zero network. A
-      // degrade warns and never alters the reconcile outcome.
-      const sync = await runSyncPhase(store, project, dbPath, 'subagent-stop');
+      // reconcile's own writes (made THROUGH the synced connection) flush in the
+      // same push. Gated on `cloud.enabled && token`; local-only (the default)
+      // is zero network. A degrade warns and never alters the reconcile outcome.
+      const sync = await session.push();
       if (sync.attempted && !sync.ok && sync.degradedReason) {
         process.stderr.write(`scrum subagent-stop: cloud sync degraded (${sync.degradedReason})\n`);
       }
@@ -214,7 +216,7 @@ export async function onSubagentStop(payload: Record<string, unknown> | null): P
       });
       return { exitCode: 0, stdout: body, stderr: '' };
     } finally {
-      store.close();
+      session.close();
     }
   } catch (err) {
     return {
@@ -252,16 +254,18 @@ export async function onStop(payload: Record<string, unknown> | null): Promise<H
     if (!gate.ok) return blockSessionEnd(gate);
 
     const sinceTs = readLastSweep(project);
-    const dbPath = resolveDbPath({ cwd: project });
-    const store = await openScrumStore({ override: dbPath });
+    // Open the store ON the synced connection (when cloud-enabled) so the sweep's
+    // reconciliation writes are captured and flush in the boundary push below.
+    const session = await openSyncSession(project);
+    const store = session.store;
     try {
       const result = await sweepUnreconciled(store, sinceTs, project);
       writeLastSweep(project, Date.now());
       // Session-boundary cloud sync: push local writes AFTER the sweep so the
-      // sweep's reconciliation writes are flushed in the same push. Gated on
-      // `cloud.enabled && token`; local-only (the default) is zero network. A
-      // degrade warns and never blocks the stop hook (exit stays 0).
-      const sync = await runSyncPhase(store, project, dbPath, 'stop');
+      // sweep's reconciliation writes (made THROUGH the synced connection) flush
+      // in the same push. Gated on `cloud.enabled && token`; local-only (the
+      // default) is zero network. A degrade warns and never blocks stop (exit 0).
+      const sync = await session.push();
       if (sync.attempted && !sync.ok && sync.degradedReason) {
         process.stderr.write(`scrum stop: cloud sync degraded (${sync.degradedReason})\n`);
       }
@@ -275,7 +279,7 @@ export async function onStop(payload: Record<string, unknown> | null): Promise<H
       const body = pyJsonDump({ systemMessage: lines.join('\n') });
       return { exitCode: 0, stdout: body, stderr: '' };
     } finally {
-      store.close();
+      session.close();
     }
   } catch (err) {
     return {

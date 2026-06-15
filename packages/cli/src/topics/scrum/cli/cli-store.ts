@@ -18,7 +18,8 @@
 
 import { join } from 'node:path';
 import { resolveDefaultContributor } from '@claude-prove/store';
-import { type ScrumStore, openScrumStore } from '../store';
+import type { ScrumStore } from '../store';
+import { openSyncSession } from './sync-lifecycle';
 
 /**
  * Open the scrum store at `<workspaceRoot>/.prove/prove.db` with the ambient
@@ -30,7 +31,14 @@ export async function openCliStore(
   workspaceRoot: string,
   configBase?: string,
 ): Promise<ScrumStore> {
-  const store = await openScrumStore({ override: join(workspaceRoot, '.prove', 'prove.db') });
+  // Open the store on the synced connection when cloud is enabled, so this
+  // command's writes are captured by the sync change-log and ride the next
+  // session-boundary push; else a plain local store. No pull/push here — ordinary
+  // commands defer sync to the boundary hooks (the change-log persists across
+  // opens). `store.close()` closes the underlying (synced) connection.
+  const store = (
+    await openSyncSession(workspaceRoot, {}, join(workspaceRoot, '.prove', 'prove.db'))
+  ).store;
   try {
     store.defaultActor = resolveDefaultContributor(workspaceRoot, configBase);
   } catch (err) {
