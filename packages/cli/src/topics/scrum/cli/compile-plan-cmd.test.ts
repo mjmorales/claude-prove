@@ -65,7 +65,12 @@ interface PlanShape {
     acceptance_criteria: PlanCriterion[];
     bounds?: unknown;
     team_slug?: string;
-    steps: Array<{ acceptance_criteria: PlanCriterion[] }>;
+    steps: Array<{
+      id: string;
+      title: string;
+      description: string;
+      acceptance_criteria: PlanCriterion[];
+    }>;
   }>;
 }
 
@@ -78,6 +83,32 @@ function parsePlan(stdout: string): {
   team_map_path?: string;
 } {
   return JSON.parse(stdout.trim());
+}
+
+/**
+ * Look up `key` in a by-id map built from a known-present plan task, asserting
+ * the entry exists. Centralizes the `noUncheckedIndexedAccess` narrowing so
+ * assertions read `pick(byId, id).deps` instead of `byId[id]!.deps`; a missing
+ * key throws a descriptive error rather than yielding `undefined`.
+ */
+function pick<T>(record: Record<string, T>, key: string | undefined): T {
+  if (key === undefined) throw new Error('pick: undefined lookup key');
+  const value = record[key];
+  if (value === undefined) throw new Error(`pick: no entry for key '${key}'`);
+  return value;
+}
+
+/** Read array element `i`, asserting it exists (noUncheckedIndexedAccess). */
+function at<T>(arr: T[], i: number): T {
+  const value = arr[i];
+  if (value === undefined) throw new Error(`at: no element at index ${i}`);
+  return value;
+}
+
+/** Narrow an optional value to its defined type, throwing when absent. */
+function req<T>(value: T | undefined): T {
+  if (value === undefined) throw new Error('req: expected a defined value');
+  return value;
 }
 
 let workspace: string;
@@ -182,10 +213,10 @@ describe('runCompilePlanCmd — compilation', () => {
       ['3.1', 3],
     ]);
     const byId = Object.fromEntries(plan.tasks.map((t) => [t.id, t]));
-    expect(byId['1.1'].deps).toEqual([]);
-    expect(byId['2.1'].deps).toEqual(['1.1']);
-    expect(byId['3.1'].deps).toEqual(['2.1']);
-    expect(byId['1.1'].steps).toEqual([
+    expect(pick(byId, '1.1').deps).toEqual([]);
+    expect(pick(byId, '2.1').deps).toEqual(['1.1']);
+    expect(pick(byId, '3.1').deps).toEqual(['2.1']);
+    expect(pick(byId, '1.1').steps).toEqual([
       { id: '1.1.1', title: 'Task a', description: '', acceptance_criteria: [] },
     ]);
     expect(scrum_map).toEqual({ '1.1': 'a', '2.1': 'b', '3.1': 'c' });
@@ -211,11 +242,11 @@ describe('runCompilePlanCmd — compilation', () => {
     expect(plan.mode).toBe('full'); // 4 tasks
     const byScrum = Object.fromEntries(Object.entries(scrum_map).map(([p, s]) => [s, p]));
     const byId = Object.fromEntries(plan.tasks.map((t) => [t.id, t]));
-    expect(byId[byScrum.a].wave).toBe(1);
-    expect(byId[byScrum.b].wave).toBe(2);
-    expect(byId[byScrum.c].wave).toBe(2);
-    expect(byId[byScrum.d].wave).toBe(3);
-    expect(byId[byScrum.d].deps.sort()).toEqual([byScrum.b, byScrum.c].sort());
+    expect(pick(byId, byScrum.a).wave).toBe(1);
+    expect(pick(byId, byScrum.b).wave).toBe(2);
+    expect(pick(byId, byScrum.c).wave).toBe(2);
+    expect(pick(byId, byScrum.d).wave).toBe(3);
+    expect(pick(byId, byScrum.d).deps.sort()).toEqual([req(byScrum.b), req(byScrum.c)].sort());
   });
 
   test('dependency on a done (out-of-scope) task is dropped as satisfied', async () => {
@@ -230,8 +261,8 @@ describe('runCompilePlanCmd — compilation', () => {
     expect(res.exit).toBe(0);
     const { plan, scrum_map } = parsePlan(res.stdout);
     expect(plan.tasks).toHaveLength(1);
-    expect(plan.tasks[0].wave).toBe(1);
-    expect(plan.tasks[0].deps).toEqual([]);
+    expect(at(plan.tasks, 0).wave).toBe(1);
+    expect(at(plan.tasks, 0).deps).toEqual([]);
     expect(scrum_map).toEqual({ '1.1': 'b' });
   });
 
@@ -438,12 +469,13 @@ describe('runCompilePlanCmd — compilation', () => {
       status: 'accepted',
       createdAt: '2026-01-01T00:00:02.000Z',
     });
-    for (const [seq, [id, parent]] of [
+    const stories: Array<[string, string]> = [
       ['e1s1', 'e1'],
       ['e1s2', 'e1'],
       ['e2s1', 'e2'],
       ['e2s2', 'e2'],
-    ].entries()) {
+    ];
+    for (const [seq, [id, parent]] of stories.entries()) {
       await store.createTask({
         id,
         title: `Story ${id}`,
@@ -495,8 +527,8 @@ describe('runCompilePlanCmd — compilation', () => {
       ['3.1', 3],
     ]);
     const byId = Object.fromEntries(plan.tasks.map((t) => [t.id, t]));
-    expect(byId['2.1'].deps).toEqual(['1.1']);
-    expect(byId['3.1'].deps).toEqual(['2.1']);
+    expect(pick(byId, '2.1').deps).toEqual(['1.1']);
+    expect(pick(byId, '3.1').deps).toEqual(['2.1']);
     expect(scrum_map).toEqual({ '1.1': 'a', '2.1': 'b', '3.1': 'c' });
   });
 
@@ -598,10 +630,12 @@ describe('runCompilePlanCmd — compilation', () => {
     // No epic id emitted.
     expect(Object.values(scrum_map)).not.toContain('e1');
     // The two stories are sources (wave 1); the downstream depends on both.
-    expect(byId[byScrum.e1s1].wave).toBe(1);
-    expect(byId[byScrum.e1s2].wave).toBe(1);
-    expect(byId[byScrum.down].wave).toBe(2);
-    expect(byId[byScrum.down].deps.sort()).toEqual([byScrum.e1s1, byScrum.e1s2].sort());
+    expect(pick(byId, byScrum.e1s1).wave).toBe(1);
+    expect(pick(byId, byScrum.e1s2).wave).toBe(1);
+    expect(pick(byId, byScrum.down).wave).toBe(2);
+    expect(pick(byId, byScrum.down).deps.sort()).toEqual(
+      [req(byScrum.e1s1), req(byScrum.e1s2)].sort(),
+    );
   });
 
   test('a child blocked_by its own excluded parent drops the self-edge', async () => {
@@ -682,8 +716,8 @@ describe('runCompilePlanCmd — compilation', () => {
     const byScrum = Object.fromEntries(Object.entries(scrum_map).map(([p, s]) => [s, p]));
     const byId = Object.fromEntries(plan.tasks.map((t) => [t.id, t]));
     // The edge at the epic re-targets to the task-layer leaves several levels down.
-    expect(byId[byScrum.down].deps.sort()).toEqual([byScrum.t1, byScrum.t2].sort());
-    expect(byId[byScrum.down].wave).toBe(2);
+    expect(pick(byId, byScrum.down).deps.sort()).toEqual([req(byScrum.t1), req(byScrum.t2)].sort());
+    expect(pick(byId, byScrum.down).wave).toBe(2);
   });
 
   test('--out writes a team-map.json sibling alongside scrum-map.json', async () => {

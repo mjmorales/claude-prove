@@ -30,6 +30,13 @@ import {
 } from './migrate';
 import { validateData } from './validate';
 
+/** Read array element `i`, asserting it exists (noUncheckedIndexedAccess). */
+function at<T>(arr: T[], i: number): T {
+  const value = arr[i];
+  if (value === undefined) throw new Error(`at: no element at index ${i}`);
+  return value;
+}
+
 // --- shared markdown fixtures, identical to test_migrate.py -------------------
 
 const PRD_MD = `# Example PRD
@@ -147,7 +154,7 @@ describe('parsePlanMd', () => {
     const tasks = plan.tasks as Record<string, unknown>[];
     expect(tasks).toHaveLength(2);
 
-    const t1 = tasks[0];
+    const t1 = at(tasks, 0);
     expect(t1.id).toBe('1.1');
     expect(t1.title).toBe('First task');
     expect(t1.wave).toBe(1);
@@ -155,14 +162,14 @@ describe('parsePlanMd', () => {
     expect((t1.worktree as Record<string, unknown>).branch).toBe('orch/demo-1');
     const t1Steps = t1.steps as Record<string, unknown>[];
     expect(t1Steps).toHaveLength(2);
-    expect(t1Steps[0].id).toBe('1.1.1');
+    expect(at(t1Steps, 0).id).toBe('1.1.1');
 
-    const t2 = tasks[1];
+    const t2 = at(tasks, 1);
     expect(t2.id).toBe('2.1');
     expect(t2.wave).toBe(2);
     const t2Steps = t2.steps as Record<string, unknown>[];
     expect(t2Steps).toHaveLength(1); // implicit step
-    expect(t2Steps[0].id).toBe('2.1.1');
+    expect(at(t2Steps, 0).id).toBe('2.1.1');
   });
 
   test('validates', () => {
@@ -184,8 +191,8 @@ describe('deriveStateFromProgress', () => {
   test('applies statuses', () => {
     const plan = parsePlanMd(PLAN_MD);
     const state = deriveStateFromProgress(PROGRESS_MD, plan, 'demo', 'feature');
-    expect(state.tasks[0].status).toBe('completed');
-    expect(state.tasks[1].status).toBe('in_progress');
+    expect(at(state.tasks, 0).status).toBe('completed');
+    expect(at(state.tasks, 1).status).toBe('in_progress');
     expect(state.run_status).toBe('running');
   });
 

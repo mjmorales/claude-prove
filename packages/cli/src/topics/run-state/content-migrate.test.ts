@@ -23,6 +23,13 @@ import {
 import { MIGRATIONS as STRUCTURAL_MIGRATIONS, migrateRunArtifacts } from './schema-migrate';
 import { CURRENT_SCHEMA_VERSION } from './schemas';
 
+/** Read array element `i`, asserting it exists (noUncheckedIndexedAccess). */
+function at<T>(arr: T[], i: number): T {
+  const value = arr[i];
+  if (value === undefined) throw new Error(`at: no element at index ${i}`);
+  return value;
+}
+
 // --------------------------------------------------------------------------
 // Fixtures — a disposable runs root with hand-written JSON artifacts.
 // --------------------------------------------------------------------------
@@ -121,7 +128,7 @@ describe('planRunContentMigration', () => {
     writeArtifact(runDir, 'plan.json', { schema_version: '1', kind: 'plan' });
     const plan = planRunContentMigration(runDir);
     expect(plan.artifacts).toHaveLength(1);
-    const [a] = plan.artifacts;
+    const a = at(plan.artifacts, 0);
     expect(a.kind).toBe('plan');
     expect(a.fromVersion).toBe('1');
     expect(a.toVersion).toBe(CURRENT_SCHEMA_VERSION);
@@ -131,7 +138,7 @@ describe('planRunContentMigration', () => {
     const runDir = join(makeScratch(), 'main', 'add-login');
     writeArtifact(runDir, 'plan.json', { schema_version: '1', kind: 'plan' });
     const plan = planRunContentMigration(runDir);
-    expect(plan.artifacts[0].hops).toEqual([]);
+    expect(at(plan.artifacts, 0).hops).toEqual([]);
   });
 
   test('a content hop attaches to the matching behind-version artifact', () => {
@@ -140,8 +147,8 @@ describe('planRunContentMigration', () => {
     withHop('1_to_2', synthHop('1', '2', ['plan']), () => {
       withHop('2_to_3', synthHop('2', '3', ['plan']), () => {
         const plan = planRunContentMigration(runDir);
-        expect(plan.artifacts[0].hops).toHaveLength(2);
-        expect(plan.artifacts[0].hops[0].instructions).toBe(
+        expect(at(plan.artifacts, 0).hops).toHaveLength(2);
+        expect(at(at(plan.artifacts, 0).hops, 0).instructions).toBe(
           'skills/run-migrate/assets/v1-to-v2.md',
         );
       });
@@ -242,9 +249,9 @@ describe('migrate / migrate-runs agreement on a v3 plan.json', () => {
     // migrate-runs lists it (a structural hop applies, even with no content hop).
     const listed = planRunContentMigration(runDir);
     expect(listed.artifacts).toHaveLength(1);
-    expect(listed.artifacts[0].fromVersion).toBe('3');
-    expect(listed.artifacts[0].toVersion).toBe('4');
-    expect(listed.artifacts[0].hops).toEqual([]);
+    expect(at(listed.artifacts, 0).fromVersion).toBe('3');
+    expect(at(listed.artifacts, 0).toVersion).toBe('4');
+    expect(at(listed.artifacts, 0).hops).toEqual([]);
 
     // migrate (structural sweep) actually advances it to v4.
     const result = migrateRunArtifacts(runDir);

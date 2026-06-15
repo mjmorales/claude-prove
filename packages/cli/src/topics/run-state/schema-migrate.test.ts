@@ -20,6 +20,13 @@ import {
 } from './schema-migrate';
 import { CURRENT_SCHEMA_VERSION } from './schemas';
 
+/** Read array element `i`, asserting it exists (noUncheckedIndexedAccess). */
+function at<T>(arr: T[], i: number): T {
+  const value = arr[i];
+  if (value === undefined) throw new Error(`at: no element at index ${i}`);
+  return value;
+}
+
 describe('detectVersion', () => {
   test('reads an explicit schema_version', () => {
     expect(detectVersion({ schema_version: '1' })).toBe('1');
@@ -56,13 +63,13 @@ describe('v1 -> v2', () => {
     const [out, changes] = v1ToV2(v1Plan);
     expect(out.schema_version).toBe('2');
     expect(changes).toHaveLength(1);
-    expect(changes[0].path).toBe('schema_version');
+    expect(at(changes, 0).path).toBe('schema_version');
   });
 
   test('leaves bounds absent (absent = current behavior, no injection)', () => {
     const [out] = v1ToV2(v1Plan);
     const tasks = out.tasks as Record<string, unknown>[];
-    expect('bounds' in tasks[0]).toBe(false);
+    expect('bounds' in at(tasks, 0)).toBe(false);
   });
 
   test('preserves all other fields byte-for-byte', () => {
@@ -99,7 +106,7 @@ describe('v1 -> v2', () => {
     };
     const [out] = v1ToV2(withBounds);
     const tasks = out.tasks as Record<string, unknown>[];
-    expect(tasks[0].bounds).toEqual(withBounds.tasks[0].bounds);
+    expect(at(tasks, 0).bounds).toEqual(at(withBounds.tasks, 0).bounds);
   });
 });
 
@@ -126,13 +133,13 @@ describe('v2 -> v3', () => {
   test('bumps schema_version to "3"', () => {
     const [out, changes] = v2ToV3(v2Plan);
     expect(out.schema_version).toBe('3');
-    expect(changes[0].path).toBe('schema_version');
+    expect(at(changes, 0).path).toBe('schema_version');
   });
 
   test('wraps each task acceptance_criteria string as { text }', () => {
     const [out] = v2ToV3(v2Plan);
     const tasks = out.tasks as Record<string, unknown>[];
-    expect(tasks[0].acceptance_criteria).toEqual([
+    expect(at(tasks, 0).acceptance_criteria).toEqual([
       { text: 'builds clean' },
       { text: 'tests pass' },
     ]);
@@ -141,8 +148,8 @@ describe('v2 -> v3', () => {
   test('wraps step acceptance_criteria strings too', () => {
     const [out] = v2ToV3(v2Plan);
     const tasks = out.tasks as Record<string, unknown>[];
-    const steps = tasks[0].steps as Record<string, unknown>[];
-    expect(steps[0].acceptance_criteria).toEqual([{ text: 'step holds' }]);
+    const steps = at(tasks, 0).steps as Record<string, unknown>[];
+    expect(at(steps, 0).acceptance_criteria).toEqual([{ text: 'step holds' }]);
   });
 
   test('records a criteria-conversion change when strings were wrapped', () => {
@@ -166,7 +173,7 @@ describe('v2 -> v3', () => {
     };
     const [out, changes] = v2ToV3(structured);
     const tasks = out.tasks as Record<string, unknown>[];
-    expect(tasks[0].acceptance_criteria).toEqual([
+    expect(at(tasks, 0).acceptance_criteria).toEqual([
       { text: 'already', verifies_by: 'bash', check: 'x' },
     ]);
     expect(changes.find((c) => c.path === 'tasks[].acceptance_criteria')).toBeUndefined();
@@ -209,13 +216,13 @@ describe('v3 -> v4', () => {
     const [out, changes] = v3ToV4(v3Plan);
     expect(out.schema_version).toBe('4');
     expect(changes).toHaveLength(1);
-    expect(changes[0].path).toBe('schema_version');
+    expect(at(changes, 0).path).toBe('schema_version');
   });
 
   test('leaves execution absent (absent = run-once/no-retry/halt-on-fail/parallel, no injection)', () => {
     const [out] = v3ToV4(v3Plan);
     const tasks = out.tasks as Record<string, unknown>[];
-    expect('execution' in tasks[0]).toBe(false);
+    expect('execution' in at(tasks, 0)).toBe(false);
   });
 
   test('preserves all other fields byte-for-byte', () => {
@@ -247,7 +254,7 @@ describe('v3 -> v4', () => {
     };
     const [out] = v3ToV4(withExec);
     const tasks = out.tasks as Record<string, unknown>[];
-    expect(tasks[0].execution).toEqual(withExec.tasks[0].execution);
+    expect(at(tasks, 0).execution).toEqual(at(withExec.tasks, 0).execution);
   });
 });
 
@@ -275,9 +282,9 @@ describe('full chain to CURRENT_SCHEMA_VERSION', () => {
     const [out] = planMigration(v1Plan);
     expect(out.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     const tasks = out.tasks as Record<string, unknown>[];
-    expect(tasks[0].acceptance_criteria).toEqual([{ text: 'legacy criterion' }]);
-    const steps = tasks[0].steps as Record<string, unknown>[];
-    expect(steps[0].acceptance_criteria).toEqual([{ text: 'legacy step criterion' }]);
+    expect(at(tasks, 0).acceptance_criteria).toEqual([{ text: 'legacy criterion' }]);
+    const steps = at(tasks, 0).steps as Record<string, unknown>[];
+    expect(at(steps, 0).acceptance_criteria).toEqual([{ text: 'legacy step criterion' }]);
   });
 
   test('an already-current artifact is a no-op (no backup, no changes)', () => {
