@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'bun:test';
 import { isUlid, ulid } from './ulid';
 
+/** Read array element `i`, asserting it exists (noUncheckedIndexedAccess). */
+function at<T>(arr: T[], i: number): T {
+  const value = arr[i];
+  if (value === undefined) throw new Error(`at: no element at index ${i}`);
+  return value;
+}
+
 describe('ulid', () => {
   test('mints a 26-char Crockford-base32 id', () => {
     const id = ulid();
@@ -24,7 +31,7 @@ describe('ulid', () => {
     for (let i = 0; i < 50; i++) ids.push(ulid(fixed));
 
     for (let i = 1; i < ids.length; i++) {
-      expect(ids[i] > ids[i - 1]).toBe(true);
+      expect(at(ids, i) > at(ids, i - 1)).toBe(true);
     }
     // No collisions within the same millisecond.
     expect(new Set(ids).size).toBe(ids.length);

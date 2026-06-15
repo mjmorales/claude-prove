@@ -175,7 +175,7 @@ describe('writeSettingsHooks', () => {
       // User block (matcher Bash, no _tool) must be identical to its
       // pre-merge shape and stay at index 0.
       const userBlockAfter = after.hooks?.PostToolUse?.find((b) => b._tool === undefined);
-      expect(userBlockAfter).toEqual(userBlockBefore as object);
+      expect(userBlockAfter).toEqual(userBlockBefore);
       expect(userBlockAfter?._tool).toBeUndefined();
 
       // acb block gets appended since no matching prove block existed.

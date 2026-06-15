@@ -27,6 +27,13 @@ import {
   upsert,
 } from './project-registry';
 
+/** Read array element `i`, asserting it exists (noUncheckedIndexedAccess). */
+function at<T>(arr: T[], i: number): T {
+  const value = arr[i];
+  if (value === undefined) throw new Error(`at: no element at index ${i}`);
+  return value;
+}
+
 let base: string;
 
 beforeEach(() => {
@@ -85,7 +92,7 @@ describe('project-registry: atomicity', () => {
     const raw = readFileSync(registryFilePath(base), 'utf8');
     const parsed = JSON.parse(raw) as ProjectRegistry;
     expect(parsed.projects).toHaveLength(1);
-    expect(parsed.projects[0].path).toBe(root);
+    expect(at(parsed.projects, 0).path).toBe(root);
   });
 });
 
@@ -97,7 +104,7 @@ describe('project-registry: upsert new-or-stale gate', () => {
 
     const result = upsert(root, base);
     expect(result.last_seen).toBe(fresh); // unchanged
-    expect(read(base).projects[0].last_seen).toBe(fresh);
+    expect(at(read(base).projects, 0).last_seen).toBe(fresh);
   });
 
   test('a stale entry (older than 24h) IS bumped', () => {
@@ -136,7 +143,7 @@ describe('project-registry: worktree folding', () => {
     const result = upsert(worktree, base);
     expect(result.path).toBe(mainRoot);
     expect(read(base).projects).toHaveLength(1);
-    expect(read(base).projects[0].path).toBe(mainRoot);
+    expect(at(read(base).projects, 0).path).toBe(mainRoot);
   });
 });
 
@@ -149,7 +156,7 @@ describe('project-registry: corrupt file backup-aside', () => {
     const baks = readdirSync(base).filter((f) => f.includes('.bak'));
     expect(baks).toHaveLength(1);
     // The original corrupt bytes are preserved in the backup.
-    expect(readFileSync(join(base, baks[0]), 'utf8')).toBe('{ not valid json');
+    expect(readFileSync(join(base, at(baks, 0)), 'utf8')).toBe('{ not valid json');
   });
 
   test('a top-level JSON array is treated as empty AND backed up', () => {

@@ -2,6 +2,13 @@ import { describe, expect, test } from 'bun:test';
 import { type Store, openStore } from '../connection';
 import { type GroupVerdictRecord, appendGroupVerdict } from './acb-writes';
 
+/** Read array element `i`, asserting it exists (noUncheckedIndexedAccess). */
+function at<T>(arr: T[], i: number): T {
+  const value = arr[i];
+  if (value === undefined) throw new Error(`at: no element at index ${i}`);
+  return value;
+}
+
 /**
  * `acb_group_verdicts` (and its head view) is registered by the CLI-side acb
  * domain schema, not by `@claude-prove/store`'s own migration registry — so
@@ -132,10 +139,11 @@ describe('appendGroupVerdict', () => {
       // The head view collapses them to the latest revision.
       const rows = await headRowsFor(store, 'add-login');
       expect(rows).toHaveLength(1);
-      expect(rows[0].verdict).toBe('rework');
-      expect(rows[0].note).toBe('fix the thing');
-      expect(rows[0].fixPrompt).toBe('apply this patch');
-      expect(rows[0].updatedAt).toBe(bumped);
+      const head = at(rows, 0);
+      expect(head.verdict).toBe('rework');
+      expect(head.note).toBe('fix the thing');
+      expect(head.fixPrompt).toBe('apply this patch');
+      expect(head.updatedAt).toBe(bumped);
       expect(second.updatedAt).not.toBe(first.updatedAt);
     } finally {
       store.close();
