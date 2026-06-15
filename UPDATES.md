@@ -8,7 +8,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Unreleased — Opt-in cloud sync, slice 1: `store provision` + `cloud` config block (schema v12)
+## v4.3.0 — Opt-in cloud sync, slice 1: `store provision` + `cloud` config block (schema v12)
 
 *(New optional config block + new command + the session-boundary sync lifecycle. Cloud stays OFF by default, so existing local-only projects perform zero network I/O. **One non-optional change for every project:** the scrum **store** schema advances v1 → v2 on first write after upgrade — see Migration. Config schema migrates automatically via `/prove:update`.)*
 
