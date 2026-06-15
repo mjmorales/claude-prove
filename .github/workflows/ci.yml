@@ -30,6 +30,17 @@ jobs:
           bun-version: 1.2.22
       - run: bun install --frozen-lockfile
       - run: bun run tsc --build
+      # tsc --build excludes **/*.test.ts (test files would emit .d.ts into the
+      # published build), so the build above never typechecks tests. These
+      # per-package tsconfig.test.json projects typecheck the test + harness
+      # files under the same strict base, so a test-only type error fails CI.
+      - name: Typecheck test files
+        run: |
+          for pkg in cli store shared installer; do
+            echo "::group::typecheck packages/$pkg tests"
+            bunx tsc --noEmit -p "packages/$pkg/tsconfig.test.json"
+            echo "::endgroup::"
+          done
 
   test:
     name: Bun Test
