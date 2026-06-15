@@ -39,14 +39,14 @@ afterEach(async () => {
 async function seedTask(
   id: string,
   overrides: Partial<Parameters<ScrumStore['createTask']>[0]> = {},
-): Promise<void> {
+): Promise<Awaited<ReturnType<ScrumStore['createTask']>>> {
   return await store.createTask({ id, title: `Task ${id}`, ...overrides });
 }
 
 async function seedMilestone(
   id: string,
   overrides: Partial<Parameters<ScrumStore['createMilestone']>[0]> = {},
-): Promise<void> {
+): Promise<Awaited<ReturnType<ScrumStore['createMilestone']>>> {
   return await store.createMilestone({ id, title: `Milestone ${id}`, ...overrides });
 }
 
@@ -407,8 +407,9 @@ describe('ScrumStore — containment tree', () => {
     await seedTask('a', { status: 'review' });
     await seedTask('b', { status: 'ready' });
     const db = store.getStore().getDb();
-    db.prepare('UPDATE scrum_tasks SET parent_id = ? WHERE id = ?').run('b', 'a');
-    db.prepare('UPDATE scrum_tasks SET parent_id = ? WHERE id = ?').run('a', 'b');
+    // `prepare` is async — await it before binding/running (await-prepare rule).
+    await (await db.prepare('UPDATE scrum_tasks SET parent_id = ? WHERE id = ?')).run('b', 'a');
+    await (await db.prepare('UPDATE scrum_tasks SET parent_id = ? WHERE id = ?')).run('a', 'b');
 
     // a's child is b; b's child is a (re-entered -> short-circuits to authored).
     // Must terminate rather than recurse forever; assertion is liveness.
@@ -2151,9 +2152,12 @@ describe('ScrumStore — batched subtree read is bounded (no N+1)', () => {
     const box = { count: 0 };
     const db = target.getStore().getDb();
     const realPrepare = db.prepare.bind(db);
+    // `prepare` is async (the driver returns a Promise<Statement>); the store
+    // always `await`s it before binding, so the seam awaits the real prepare,
+    // then wraps `.all` on the resolved statement.
     // biome-ignore lint/suspicious/noExplicitAny: test seam over the driver's untyped statement
-    db.prepare = (sql: string): any => {
-      const stmt = realPrepare(sql);
+    db.prepare = async (sql: string): Promise<any> => {
+      const stmt = await realPrepare(sql);
       if (!sql.includes(SUBTREE_SELECT)) return stmt;
       const realAll = stmt.all.bind(stmt);
       // biome-ignore lint/suspicious/noExplicitAny: forward arbitrary bind params
@@ -3176,8 +3180,8 @@ describe('ScrumStore — team registry (v14)', () => {
   });
 
   test('createTeam rejects an off-vocabulary lifetime at the store boundary', async () => {
-    // @ts-expect-error — exercising the runtime closed-enum guard with a bad value.
     await expect(
+      // @ts-expect-error — exercising the runtime closed-enum guard with a bad value.
       store.createTeam({ slug: 'rogue', teamType: 'platform', lifetime: 'forever' }),
     ).rejects.toThrow(/invalid lifetime 'forever'/);
   });
@@ -3351,8 +3355,8 @@ describe('ScrumStore — team roster (v16)', () => {
       store.rotateTeamMember({ teamSlug: 'ghost', role: 'engineer', contributorId: 'ct-bob' }),
     ).rejects.toThrow(/unknown team 'ghost'/);
     // An off-vocabulary role is rejected at the boundary.
-    // @ts-expect-error — exercising the runtime closed-enum guard with a bad value.
     await expect(
+      // @ts-expect-error — exercising the runtime closed-enum guard with a bad value.
       store.rotateTeamMember({ teamSlug: 'payments', role: 'overlord', contributorId: 'ct-bob' }),
     ).rejects.toThrow(/invalid role 'overlord'/);
   });
@@ -3554,7 +3558,7 @@ describe('ScrumStore — team interface (v17)', () => {
   });
 
   test('supersedeTeamAccept rejects an unknown id and an already-superseded target', async () => {
-    await expect(store.supersedeTeamAccept(9999, 'gone')).rejects.toThrow(
+    await expect(store.supersedeTeamAccept('9999', 'gone')).rejects.toThrow(
       /unknown accept id '9999'/,
     );
     const accept = await store.addTeamAccept('payments', 'api-review');
@@ -3576,7 +3580,7 @@ describe('ScrumStore — team interface (v17)', () => {
   });
 
   test('supersedeTeamExpose rejects an unknown id and an already-superseded target', async () => {
-    await expect(store.supersedeTeamExpose(9999, 'gone')).rejects.toThrow(
+    await expect(store.supersedeTeamExpose('9999', 'gone')).rejects.toThrow(
       /unknown expose id '9999'/,
     );
     const expose = await store.addTeamExpose('payments', { name: 'E', schemaRef: 'e.json' });
@@ -4032,7 +4036,7 @@ describe('ScrumStore — team Lore layer (v19)', () => {
       authorContributorId: 'ct-lead',
     });
     expect((await store.getLore(row.id))?.body).toBe('pin the schema version');
-    expect(await store.getLore(999999)).toBeNull();
+    expect(await store.getLore('999999')).toBeNull();
   });
 });
 
@@ -4054,8 +4058,8 @@ describe('ScrumStore — Annotation layer (v20)', () => {
   });
 
   test('addAnnotation rejects a target_kind outside the closed enum, naming the set', async () => {
-    // @ts-expect-error — exercising the runtime boundary guard with an off-enum kind.
     await expect(
+      // @ts-expect-error — exercising the runtime boundary guard with an off-enum kind.
       store.addAnnotation({ targetKind: 'milestone', targetRef: 'm1', body: 'x', author: 'CT-a' }),
     ).rejects.toThrow(/invalid target_kind 'milestone'; expected one of: task, team, decision/);
     expect(await store.listAnnotations('task', 'm1')).toEqual([]);
@@ -4329,7 +4333,9 @@ describe('ScrumStore — promoteLoreToCodex (v22)', () => {
   });
 
   /** Append one Lore entry to `payments` and return its row. */
-  async function seedLore(body: string): Promise<void> {
+  async function seedLore(
+    body: string,
+  ): Promise<Awaited<ReturnType<ScrumStore['recordLore']>>['row']> {
     return (await store.recordLore({ teamSlug: 'payments', body, authorContributorId: 'ct-lead' }))
       .row;
   }
@@ -4422,7 +4428,7 @@ describe('ScrumStore — promoteLoreToCodex (v22)', () => {
   });
 
   test('rejects an unknown lore id', async () => {
-    await expect(store.promoteLoreToCodex({ loreId: 99999 })).rejects.toThrow(
+    await expect(store.promoteLoreToCodex({ loreId: '99999' })).rejects.toThrow(
       /unknown lore id '99999'/,
     );
   });
@@ -4439,7 +4445,9 @@ describe('ScrumStore — Lore supersession (v28)', () => {
   });
 
   /** Append one Lore entry to `payments` and return its row. */
-  async function seedLore(body: string): Promise<void> {
+  async function seedLore(
+    body: string,
+  ): Promise<Awaited<ReturnType<ScrumStore['recordLore']>>['row']> {
     return (await store.recordLore({ teamSlug: 'payments', body, authorContributorId: 'ct-lead' }))
       .row;
   }
@@ -4529,7 +4537,7 @@ describe('ScrumStore — Lore supersession (v28)', () => {
     const lore = await seedLore('a');
     await expect(
       store.supersedeLore({
-        loreId: 999,
+        loreId: '999',
         byLoreId: lore.id,
         reason: 'r',
         authorContributorId: 'ct-lead',
@@ -4538,7 +4546,7 @@ describe('ScrumStore — Lore supersession (v28)', () => {
     await expect(
       store.supersedeLore({
         loreId: lore.id,
-        byLoreId: 999,
+        byLoreId: '999',
         reason: 'r',
         authorContributorId: 'ct-lead',
       }),
@@ -4557,7 +4565,7 @@ describe('ScrumStore — Lore supersession (v28)', () => {
     await expect(
       store.supersedeLore({
         loreId: lore.id,
-        byLoreId: 1,
+        byLoreId: '1',
         byDecisionId: 'd',
         reason: 'r',
         authorContributorId: 'ct-lead',
@@ -4903,7 +4911,7 @@ describe('ScrumStore — cross-team ask protocol (v23)', () => {
         blockingArtifact: 'no-such-task',
       }),
     ).rejects.toThrow();
-    expect(await store.getAsk(1)).toBeNull();
+    expect(await store.getAsk('1')).toBeNull();
     const filed = (await store.listEventsForTask('blocked-1')).filter(
       (e) => e.kind === 'ask_filed',
     );
@@ -4911,7 +4919,7 @@ describe('ScrumStore — cross-team ask protocol (v23)', () => {
   });
 
   test('getAsk returns null for an unknown id', async () => {
-    expect(await store.getAsk(9999)).toBeNull();
+    expect(await store.getAsk('9999')).toBeNull();
   });
 });
 
@@ -5047,7 +5055,7 @@ describe('ScrumStore — ask triage/respond (v25)', () => {
   });
 
   test('respondAsk rejects an unknown ask id', async () => {
-    await expect(store.respondAsk({ id: 9999, verdict: 'accept' })).rejects.toThrow(
+    await expect(store.respondAsk({ id: '9999', verdict: 'accept' })).rejects.toThrow(
       /unknown ask id '9999'/,
     );
   });
@@ -5204,7 +5212,7 @@ describe('ScrumStore — awaitAsk (team-as-workflow-kind sugar)', () => {
   });
 
   test('awaitAsk rejects an unknown ask id (the one error path)', async () => {
-    await expect(store.awaitAsk(9999)).rejects.toThrow(/unknown ask id '9999'/);
+    await expect(store.awaitAsk('9999')).rejects.toThrow(/unknown ask id '9999'/);
   });
 });
 
@@ -5401,7 +5409,7 @@ describe('ScrumStore — escalation protocol (v24)', () => {
   });
 
   test('resolveEscalation rejects an unknown id', async () => {
-    await expect(store.resolveEscalation({ id: 999, mode: 'resolve' })).rejects.toThrow(
+    await expect(store.resolveEscalation({ id: '999', mode: 'resolve' })).rejects.toThrow(
       /unknown escalation id '999'/,
     );
   });
