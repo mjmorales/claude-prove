@@ -17,6 +17,13 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { connect } from '@tursodatabase/database';
 
+/** Read array element `i`, asserting it exists (noUncheckedIndexedAccess). */
+function at<T>(arr: T[], i: number): T {
+  const value = arr[i];
+  if (value === undefined) throw new Error(`at: no element at index ${i}`);
+  return value;
+}
+
 // ---------------------------------------------------------------------------
 // Test harness — locate `bin/run.ts`, spawn `bun run` against it
 // ---------------------------------------------------------------------------
@@ -222,8 +229,9 @@ describe('claude-prove acb assemble', () => {
     const m1 = validManifest(sha);
     const m2 = validManifest(sha);
     // Force a distinct intent group id so both manifests contribute.
-    (m2.intent_groups as Array<Record<string, unknown>>)[0].id = 'g2';
-    (m2.intent_groups as Array<Record<string, unknown>>)[0].title = 'Second';
+    const g0 = at(m2.intent_groups as Array<Record<string, unknown>>, 0);
+    g0.id = 'g2';
+    g0.title = 'Second';
 
     const r1 = runAcb(
       ['save-manifest', '--workspace-root', repo, '--branch', 'feat/x', '--sha', sha],

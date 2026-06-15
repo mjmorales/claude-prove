@@ -212,7 +212,6 @@ describe('runSubagentStop', () => {
     const { root } = initGitRepo();
     const original = process.stderr.write.bind(process.stderr);
     const captured: string[] = [];
-    // @ts-expect-error narrow override for the test
     process.stderr.write = (chunk: string) => {
       captured.push(String(chunk));
       return true;

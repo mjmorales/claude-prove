@@ -4,6 +4,13 @@ import { join } from 'node:path';
 import { fieldSpecToJsonSchema, proveJsonSchema } from './json-schema';
 import { CURRENT_SCHEMA_VERSION } from './schemas';
 
+/** Look up `key`, asserting the entry exists (noUncheckedIndexedAccess). */
+function pick<T>(record: Record<string, T>, key: string): T {
+  const value = record[key];
+  if (value === undefined) throw new Error(`pick: no entry for key '${key}'`);
+  return value;
+}
+
 describe('fieldSpecToJsonSchema', () => {
   test('scalar types map with enum, description, and default', () => {
     expect(
@@ -86,16 +93,16 @@ describe('proveJsonSchema', () => {
   });
 
   test('validator phase enum survives the conversion', () => {
-    const items = properties.validators.items as Record<string, unknown>;
+    const items = pick(properties, 'validators').items as Record<string, unknown>;
     const itemProps = items.properties as Record<string, Record<string, unknown>>;
-    expect(itemProps.phase.enum).toEqual(['build', 'lint', 'test', 'custom', 'llm']);
+    expect(pick(itemProps, 'phase').enum).toEqual(['build', 'lint', 'test', 'custom', 'llm']);
     expect(items.required).toEqual(['name', 'phase']);
   });
 
   test('trigger status enum survives the conversion', () => {
-    const items = properties.triggers.items as Record<string, unknown>;
+    const items = pick(properties, 'triggers').items as Record<string, unknown>;
     const itemProps = items.properties as Record<string, Record<string, unknown>>;
-    expect(itemProps.on.enum).toEqual([
+    expect(pick(itemProps, 'on').enum).toEqual([
       'backlog',
       'proposed',
       'accepted',
@@ -109,7 +116,7 @@ describe('proveJsonSchema', () => {
   });
 
   test('tools maps to per-tool value schema via additionalProperties', () => {
-    const tools = properties.tools;
+    const tools = pick(properties, 'tools');
     const valueSchema = tools.additionalProperties as Record<string, unknown>;
     expect(valueSchema.type).toBe('object');
     expect(valueSchema.required).toEqual(['enabled']);

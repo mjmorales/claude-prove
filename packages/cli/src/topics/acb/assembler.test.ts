@@ -14,6 +14,7 @@ import {
   AGENT_ID,
   type AcbDocument,
   type IntentGroup,
+  type NegativeSpaceEntry,
   assemble,
   collectNegativeSpace,
   collectOpenQuestions,
@@ -472,7 +473,7 @@ describe('python-captures fixtures', () => {
         expect(mergeIntentGroups(payload.manifests)).toEqual(payload.expected as IntentGroup[]);
       } else if (payload.kind === 'negative_space') {
         expect(collectNegativeSpace(payload.manifests)).toEqual(
-          payload.expected as Array<Record<string, unknown>>,
+          payload.expected as NegativeSpaceEntry[],
         );
       }
     });

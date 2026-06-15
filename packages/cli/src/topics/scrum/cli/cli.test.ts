@@ -4152,7 +4152,7 @@ describe('runTeamCmd', () => {
 // ---------------------------------------------------------------------------
 
 interface LoreRow {
-  id: number;
+  id: string;
   team_slug: string;
   body: string;
   author_contributor_id: string;
@@ -5265,7 +5265,7 @@ describe('runAskCmd', () => {
       task: { id: string; layer: string | null };
       tags: Array<{ tag: string }>;
     };
-    expect(child.task.id).toBe(row.mapped_artifact);
+    expect(child.task.id).toBe(row.mapped_artifact as string);
     expect(child.task.layer).toBe('story');
     expect(child.tags.map((t) => t.tag)).toContain('identity');
     // The from-team's blocking artifact is now blocked_by the new child.

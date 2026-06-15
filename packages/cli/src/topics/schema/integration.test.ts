@@ -72,7 +72,7 @@ function readCapture(name: string): string {
   return readFileSync(join(TS_CAPTURES, name), 'utf8');
 }
 
-describe.each(VERSIONS)('schema CLI parity against %s fixture', (version) => {
+describe.each([...VERSIONS])('schema CLI parity against %s fixture', (version) => {
   test('validate output matches ts-capture', () => {
     const actual = withFixture(version, (provePath) => {
       const { stdout } = runCli(['schema', 'validate', '--file', provePath]);

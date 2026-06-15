@@ -41,6 +41,12 @@ import {
 import { type ScrumStore, openScrumStore } from './store';
 import { STALENESS_THRESHOLD_HOURS } from './types';
 
+/** Narrow an optional value to its defined type, throwing when absent. */
+function req<T>(value: T | undefined | null): T {
+  if (value === undefined || value === null) throw new Error('req: expected a defined value');
+  return value;
+}
+
 // ---------------------------------------------------------------------------
 // Test harness
 // ---------------------------------------------------------------------------
@@ -1090,7 +1096,7 @@ describe('bubbleStaleEscalations', () => {
     expect(closed?.attributes?.linked_escalation).toBe(result.bubbled[0]?.to_id);
 
     // A fresh open row exists exactly one rung up, back-pointing at the original.
-    const fresh = await store.getEscalation(result.bubbled[0]?.to_id as number);
+    const fresh = await store.getEscalation(req(result.bubbled[0]?.to_id));
     expect(fresh?.state).toBe('open');
     expect(fresh?.layer).toBe('engineer');
     expect(fresh?.walked_up_from).toBe(stale.id);
@@ -1159,11 +1165,11 @@ describe('bubbleStaleEscalations', () => {
     // Exactly one bubble: the successor row is created with created_at = NOW_MS,
     // so it is not stale within the same pass and is not re-bubbled.
     expect(result.bubbled).toHaveLength(1);
-    const fresh = await store.getEscalation(result.bubbled[0]?.to_id as number);
+    const fresh = await store.getEscalation(req(result.bubbled[0]?.to_id));
     expect(fresh?.layer).toBe('engineer');
     expect(fresh?.state).toBe('open');
     // The chain back-link is intact for a future pass to continue from.
-    expect((await store.getEscalationChain(fresh?.id as number)).map((e) => e.layer)).toEqual([
+    expect((await store.getEscalationChain(req(fresh?.id))).map((e) => e.layer)).toEqual([
       'implementer',
       'engineer',
     ]);

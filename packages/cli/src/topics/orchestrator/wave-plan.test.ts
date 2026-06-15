@@ -13,6 +13,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runWavePlan } from './wave-plan';
 
+/** Read array element `i`, asserting it exists (noUncheckedIndexedAccess). */
+function at<T>(arr: T[], i: number): T {
+  const value = arr[i];
+  if (value === undefined) throw new Error(`at: no element at index ${i}`);
+  return value;
+}
+
 let runDir: string;
 let stdoutBuf: string;
 let stderrBuf: string;
@@ -137,7 +144,7 @@ describe('runWavePlan — scheduling', () => {
     const s: ScheduleShape = JSON.parse(res.stdout.trim());
     expect(s.max_agents).toBe(2);
     expect(s.waves).toHaveLength(1);
-    expect(s.waves[0].batches).toEqual([['1.1', '1.2'], ['1.3', '1.4'], ['1.5']]);
+    expect(at(s.waves, 0).batches).toEqual([['1.1', '1.2'], ['1.3', '1.4'], ['1.5']]);
     expect(s.dispatch_rounds).toBe(3); // 3 sequential batches
     expect(s.peak_concurrency).toBe(2); // cap honored
   });
@@ -180,7 +187,7 @@ describe('runWavePlan — scheduling', () => {
     const res = run();
     const s: ScheduleShape = JSON.parse(res.stdout.trim());
     expect(s.wave_count).toBe(1);
-    expect(s.waves[0].tasks).toEqual(['a', 'b']);
+    expect(at(s.waves, 0).tasks).toEqual(['a', 'b']);
   });
 });
 

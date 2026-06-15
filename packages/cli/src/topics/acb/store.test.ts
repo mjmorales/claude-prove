@@ -12,6 +12,13 @@ import { listDomains, openStore, runMigrations } from '@claude-prove/store';
 import type { AcbStore } from './store';
 import { coerceLegacyVerdict, ensureAcbSchemaRegistered, openAcbStore } from './store';
 
+/** Read array element `i`, asserting it exists (noUncheckedIndexedAccess). */
+function at<T>(arr: T[], i: number): T {
+  const value = arr[i];
+  if (value === undefined) throw new Error(`at: no element at index ${i}`);
+  return value;
+}
+
 function makeManifest(sha: string): Record<string, unknown> {
   return {
     acb_manifest_version: '0.2',
@@ -259,7 +266,7 @@ describe('AcbStore: group verdicts', () => {
     // The head view collapses the two revisions to the latest one.
     const rows = await store.listGroupVerdicts('my-slug');
     expect(rows).toHaveLength(1);
-    expect(rows[0].verdict).toBe('rework');
+    expect(at(rows, 0).verdict).toBe('rework');
 
     // The prior revision is retained in the append-only base table — nothing
     // was overwritten, so both ULID-keyed rows survive.
@@ -285,7 +292,7 @@ describe('AcbStore: group verdicts', () => {
     await store.upsertGroupVerdict('slug-b', 'g1', 'rejected', null, null);
     const rowsA = await store.listGroupVerdicts('slug-a');
     expect(rowsA).toHaveLength(1);
-    expect(rowsA[0].verdict).toBe('accepted');
+    expect(at(rowsA, 0).verdict).toBe('accepted');
   });
 });
 

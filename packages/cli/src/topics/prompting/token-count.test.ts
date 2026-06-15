@@ -28,6 +28,13 @@ function loadGolden(name: string): GoldenEntry[] {
   return JSON.parse(readFileSync(join(FIXTURES_DIR, name), 'utf8')) as GoldenEntry[];
 }
 
+/** Read array element `i`, asserting it exists (noUncheckedIndexedAccess). */
+function at<T>(arr: T[], i: number): T {
+  const value = arr[i];
+  if (value === undefined) throw new Error(`at: no element at index ${i}`);
+  return value;
+}
+
 describe('tokenizer', () => {
   test('countTokens splits camelCase boundaries', () => {
     // Python: re.findall(_TOKEN_RE, "camelCase") → ['camel', 'Case'] → 2
@@ -79,9 +86,11 @@ describe('measureFiles — parity with Python golden', () => {
     const golden = loadGolden('golden.json');
     const entries = measureFiles([AGENT_FIXTURE, COMMAND_FIXTURE], true);
     for (let i = 0; i < golden.length; i += 1) {
-      expect(entries[i].tokens).toBe(golden[i].tokens);
-      expect(entries[i].lines).toBe(golden[i].lines);
-      expect(entries[i].chars).toBe(golden[i].chars);
+      const entry = at(entries, i);
+      const want = at(golden, i);
+      expect(entry.tokens).toBe(want.tokens);
+      expect(entry.lines).toBe(want.lines);
+      expect(entry.chars).toBe(want.chars);
     }
   });
 
@@ -89,9 +98,11 @@ describe('measureFiles — parity with Python golden', () => {
     const golden = loadGolden('golden-no-strip.json');
     const entries = measureFiles([AGENT_FIXTURE, COMMAND_FIXTURE], false);
     for (let i = 0; i < golden.length; i += 1) {
-      expect(entries[i].tokens).toBe(golden[i].tokens);
-      expect(entries[i].lines).toBe(golden[i].lines);
-      expect(entries[i].chars).toBe(golden[i].chars);
+      const entry = at(entries, i);
+      const want = at(golden, i);
+      expect(entry.tokens).toBe(want.tokens);
+      expect(entry.lines).toBe(want.lines);
+      expect(entry.chars).toBe(want.chars);
     }
   });
 });

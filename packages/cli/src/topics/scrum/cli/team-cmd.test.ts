@@ -28,6 +28,13 @@ import { join } from 'node:path';
 import { TEAM_ROLES, type TeamRole } from '../types';
 import { runTeamCmd } from './team-cmd';
 
+/** Read array element `i`, asserting it exists (noUncheckedIndexedAccess). */
+function at<T>(arr: T[], i: number): T {
+  const value = arr[i];
+  if (value === undefined) throw new Error(`at: no element at index ${i}`);
+  return value;
+}
+
 const BEGIN_MARKER = '<!-- BEGIN GENERATED: team-context-protocol -->';
 const END_MARKER = '<!-- END GENERATED: team-context-protocol -->';
 
@@ -257,7 +264,7 @@ describe('runTeamCmd sync-agents', () => {
     expect(res.exit).toBe(0);
 
     TEAM_ROLES.forEach((role, i) => {
-      expect(readFileSync(agentPath('stable', role), 'utf8')).toBe(firstPass[i]);
+      expect(readFileSync(agentPath('stable', role), 'utf8')).toBe(at(firstPass, i));
     });
   });
 });

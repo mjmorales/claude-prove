@@ -26,6 +26,13 @@ import {
   scanTeamAgents,
 } from './scanner';
 
+/** Read array element `i`, asserting it exists (noUncheckedIndexedAccess). */
+function at<T>(arr: T[], i: number): T {
+  const value = arr[i];
+  if (value === undefined) throw new Error(`at: no element at index ${i}`);
+  return value;
+}
+
 function tmp(): string {
   return mkdtempSync(join(tmpdir(), 'claude-md-scanner-'));
 }
@@ -382,7 +389,7 @@ describe('scanCoreCommands', () => {
     const root = tmp();
     created.push(root);
     write(root, 'commands/test.md', '---\ndescription: Run all tests\ncore: true\n---\n');
-    expect(scanCoreCommands(root)[0].summary).toBe('Run all tests');
+    expect(at(scanCoreCommands(root), 0).summary).toBe('Run all tests');
   });
 
   test('skips files without frontmatter', () => {

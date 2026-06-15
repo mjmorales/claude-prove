@@ -15,6 +15,13 @@ function envelope(type: string, id: string, ts: string): Record<string, unknown>
   return { id, ts, type, agent: 'engineer', run_path: '.prove/runs/main/x', body: 'b' };
 }
 
+/** Look up `key`, asserting the entry exists (noUncheckedIndexedAccess). */
+function pick<T>(record: Record<string, T>, key: string): T {
+  const value = record[key];
+  if (value === undefined) throw new Error(`pick: no entry for key '${key}'`);
+  return value;
+}
+
 function validEntries(): Record<string, Record<string, unknown>> {
   return {
     decision: {
@@ -87,7 +94,7 @@ describe('validateLogEntry — round-trip', () => {
   });
 
   test('capture requires the tool field', () => {
-    const { tool, ...e } = validEntries().capture;
+    const { tool, ...e } = pick(validEntries(), 'capture');
     expect(validateLogEntry(e)).toContain("Missing required field for type 'capture': tool");
   });
 
@@ -122,7 +129,7 @@ describe('validateLogEntry — strict rejection', () => {
   });
 
   test('rejects missing per-type required field', () => {
-    const { selected_rationale, ...e } = validEntries().decision;
+    const { selected_rationale, ...e } = pick(validEntries(), 'decision');
     expect(validateLogEntry(e)).toContain(
       "Missing required field for type 'decision': selected_rationale",
     );
@@ -134,7 +141,7 @@ describe('validateLogEntry — strict rejection', () => {
   });
 
   test('rejects missing envelope field', () => {
-    const { agent, ...e } = validEntries().discovery;
+    const { agent, ...e } = pick(validEntries(), 'discovery');
     expect(validateLogEntry(e)).toContain('Missing required field: agent');
   });
 
