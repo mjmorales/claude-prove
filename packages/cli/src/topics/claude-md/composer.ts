@@ -313,11 +313,13 @@ function renderTeamAgents(teamAgents: TeamAgentSummary[], prefix: string): strin
     '- Every dispatched team agent must honor its memory protocol: read its team bundle ' +
       '`teams/<slug>.md` (scope, roster, recent Lore) before acting, and record what it learns:',
   );
-  lines.push(`  - seat notes with \`${prefix} scrum annotation add --target-kind team\``);
   lines.push(
-    `  - team Lore with \`${prefix} scrum lore record\` (tech_lead seat; non-lead seats route journal-worthy findings to a seat annotation instead)`,
+    `  - seat notes with \`${prefix} scrum annotation add --target-kind team --target <team-slug> --body <text> --author <CT-UUID>\``,
   );
-  lines.push(`  - durable decisions with \`${prefix} scrum decision record\``);
+  lines.push(
+    `  - team Lore with \`${prefix} scrum lore record <team-slug> --body <text> --author <CT-UUID>\` (tech_lead seat; non-lead seats route journal-worthy findings to a seat annotation instead)`,
+  );
+  lines.push(`  - durable decisions with \`${prefix} scrum decision record <path> --kind adr\``);
   lines.push('');
   return lines.join('\n');
 }

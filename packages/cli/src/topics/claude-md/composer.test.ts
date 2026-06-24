@@ -357,11 +357,13 @@ describe('team agents', () => {
     expect(r).toContain('Dispatch and memory protocol:');
     expect(r).toContain("dispatch that team's role agent");
     expect(r).toContain('read its team bundle `teams/<slug>.md`');
-    expect(r).toContain('`claude-prove scrum annotation add --target-kind team`');
     expect(r).toContain(
-      '`claude-prove scrum lore record` (tech_lead seat; non-lead seats route journal-worthy findings to a seat annotation instead)',
+      '`claude-prove scrum annotation add --target-kind team --target <team-slug> --body <text> --author <CT-UUID>`',
     );
-    expect(r).toContain('`claude-prove scrum decision record`');
+    expect(r).toContain(
+      '`claude-prove scrum lore record <team-slug> --body <text> --author <CT-UUID>` (tech_lead seat; non-lead seats route journal-worthy findings to a seat annotation instead)',
+    );
+    expect(r).toContain('`claude-prove scrum decision record <path> --kind adr`');
   });
 
   test('memory-protocol commands use the dev prefix in dev mode', () => {

@@ -192,10 +192,12 @@ function PROTOCOL_PROSE(team: Team, role: TeamRole): string {
  */
 function writeCommitments(role: TeamRole): string[] {
   const lines = [
-    '- Record annotations with `claude-prove scrum annotation add` (open to every role).',
+    '- Record annotations with `claude-prove scrum annotation add --target-kind <task|team|decision> --target <ref> --body <text> --author <CT-UUID>` (open to every role).',
   ];
   if (role === 'tech_lead') {
-    lines.push('- Record team Lore with `claude-prove scrum lore record` (tech_lead only).');
+    lines.push(
+      '- Record team Lore with `claude-prove scrum lore record <team-slug> --body <text> --author <CT-UUID>` (tech_lead only).',
+    );
   } else {
     lines.push(
       '- Do NOT record Lore — `claude-prove scrum lore record` is the tech_lead seat alone.',
