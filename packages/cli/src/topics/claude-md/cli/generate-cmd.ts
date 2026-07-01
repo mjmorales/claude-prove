@@ -18,32 +18,65 @@
  * Exit codes: 0 success, 2 on the ~/.claude safety guard trip.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { ensureProjectLink, ensureStableRoot } from '@claude-prove/installer';
+import {
+  PLUGIN_DIR_ENV_VAR,
+  PROJECT_LINK_REL,
+  ensureProjectLink,
+  ensureStableRoot,
+  resolvePluginRoot,
+  stableRootPath,
+} from '@claude-prove/installer';
 import { compose, composeSubagentContext, writeClaudeMd } from '../composer';
-import { scanProject } from '../scanner';
+import { type ScanResult, scanProject } from '../scanner';
 
 export interface ClaudeMdOpts {
   projectRoot?: string;
   pluginDir?: string;
 }
 
-/** Default plugin dir when the caller omits `--plugin-dir`.  */
-function derivePluginDir(): string {
-  // The real prove CLI lives at <plugin>/packages/cli/bin/run.ts. From this
-  // compiled file location (src/topics/claude-md/cli/generate-cmd.ts) the
-  // plugin root is five levels up.
-  return resolve(__dirname, '..', '..', '..', '..', '..');
-}
-
 function resolveProjectRoot(opts: ClaudeMdOpts): string {
   return resolve(opts.projectRoot ?? process.cwd());
 }
 
-function resolvePluginDir(opts: ClaudeMdOpts): string {
-  return resolve(opts.pluginDir ?? derivePluginDir());
+function isPluginDir(dir: string): boolean {
+  return existsSync(join(dir, '.claude-plugin', 'plugin.json'));
+}
+
+function pluginDirCandidate(dir: string | undefined): string | null {
+  if (!dir) return null;
+  try {
+    const real = realpathSync(dir);
+    return isPluginDir(real) ? real : null;
+  } catch {
+    return null;
+  }
+}
+
+// resolvePluginRoot honors $CLAUDE_PROVE_PLUGIN_DIR/$CLAUDE_PLUGIN_ROOT plus a
+// dev-checkout walk-up, but a release binary run from a bare shell has neither
+// (its walk-up starts at the CI build path; the installer default is wrong
+// under claude-env), so fall back to prove's own symlink chain before it.
+export function resolvePluginDir(opts: ClaudeMdOpts, projectRoot: string): string {
+  if (opts.pluginDir) return resolve(opts.pluginDir);
+  const viaResolver = resolvePluginRoot();
+  if (isPluginDir(viaResolver)) return viaResolver;
+  return (
+    pluginDirCandidate(join(projectRoot, PROJECT_LINK_REL)) ??
+    pluginDirCandidate(stableRootPath()) ??
+    viaResolver
+  );
+}
+
+// prove.exists with no version and no commands means the plugin dir resolved to
+// a non-plugin path: the file would drop the version banner and command list.
+export function pluginMetadataMissing(scan: ScanResult): boolean {
+  return (
+    scan.prove_config.exists &&
+    (scan.plugin_version === 'unknown' || scan.core_commands.length === 0)
+  );
 }
 
 /**
@@ -69,14 +102,12 @@ function assertNotPluginInstall(projectRoot: string): number | null {
 /** `generate` — scan project and write CLAUDE.md; prints JSON status to stdout. */
 export function runGenerate(opts: ClaudeMdOpts): number {
   const projectRoot = resolveProjectRoot(opts);
-  const pluginDir = resolvePluginDir(opts);
+  const pluginDir = resolvePluginDir(opts, projectRoot);
   const guard = assertNotPluginInstall(projectRoot);
   if (guard !== null) return guard;
 
-  // The composed References section hardcodes .claude/prove-plugin/...;
-  // refresh both hops of the symlink chain (project link -> stable root ->
-  // plugin dir) so the imports resolve the moment the file is written.
-  // Secondary writes: a failure warns without blocking generation.
+  // Refresh both symlink hops so the hardcoded .claude/prove-plugin/...
+  // @-references resolve when the file is written; failure warns, never blocks.
   try {
     ensureStableRoot(pluginDir);
     ensureProjectLink(projectRoot);
@@ -87,10 +118,13 @@ export function runGenerate(opts: ClaudeMdOpts): number {
   }
 
   const scan = scanProject(projectRoot, pluginDir);
+  if (pluginMetadataMissing(scan)) {
+    process.stderr.write(
+      `WARN: prove is configured but the plugin dir did not resolve at ${pluginDir} (plugin_version=${scan.plugin_version}, core_commands=${scan.core_commands.length}); CLAUDE.md will omit the version banner and Prove Commands list — pass --plugin-dir or set ${PLUGIN_DIR_ENV_VAR}.\n`,
+    );
+  }
 
-  // compose and writeClaudeMd each call readFileSync/writeFileSync with no
-  // internal error handling; guard them so a permission error or missing parent
-  // directory exits cleanly rather than throwing an unhandled exception.
+  // Guard compose/write so a permission or missing-parent error exits cleanly.
   let content: string;
   let path: string;
   try {
@@ -115,7 +149,7 @@ export function runGenerate(opts: ClaudeMdOpts): number {
 /** `scan` — run scanner only, emit scan dict as pretty JSON. */
 export function runScan(opts: ClaudeMdOpts): number {
   const projectRoot = resolveProjectRoot(opts);
-  const pluginDir = resolvePluginDir(opts);
+  const pluginDir = resolvePluginDir(opts, projectRoot);
   const guard = assertNotPluginInstall(projectRoot);
   if (guard !== null) return guard;
 
@@ -127,7 +161,7 @@ export function runScan(opts: ClaudeMdOpts): number {
 /** `subagent-context` — emit the compact discovery context block as markdown. */
 export function runSubagentContext(opts: ClaudeMdOpts): number {
   const projectRoot = resolveProjectRoot(opts);
-  const pluginDir = resolvePluginDir(opts);
+  const pluginDir = resolvePluginDir(opts, projectRoot);
   const guard = assertNotPluginInstall(projectRoot);
   if (guard !== null) return guard;
 
