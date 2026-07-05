@@ -8,7 +8,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Unreleased — `scrum milestone update` + milestone annotations
+## v4.4.0 — `scrum milestone update` + milestone annotations
 
 *(New CLI action + an extended annotation target-kind. No config-schema or DB-schema migration — both are live on existing stores the moment you update.)*
 
