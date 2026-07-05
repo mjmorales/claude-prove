@@ -240,6 +240,22 @@ export interface CreateMilestoneInput {
   createdAt?: string;
 }
 
+/**
+ * Fields `updateMilestone` may amend on an existing milestone. A sparse patch:
+ * only the keys present are written. `undefined` (key absent) leaves that
+ * column untouched; an explicit `null` on a nullable field clears it. `title`
+ * is the sole non-nullable field — pass a non-empty string or omit it. `status`
+ * is intentionally absent: transitions go through `setMilestoneStatus` /
+ * `closeMilestone`, keeping the lifecycle on its dedicated, invariant-checked
+ * path.
+ */
+export interface UpdateMilestoneInput {
+  title?: string;
+  description?: string | null;
+  targetState?: string | null;
+  initiative?: string | null;
+}
+
 export interface AppendEventInput {
   taskId: string;
   kind: EventKind;
@@ -2216,6 +2232,66 @@ export class ScrumStore {
     await this.exec('UPDATE scrum_milestones SET status = ? WHERE id = ?', status, id);
     const updated = await this.getMilestone(id);
     if (!updated) throw new Error(`setMilestoneStatus: milestone '${id}' vanished mid-update`);
+    return updated;
+  }
+
+  /**
+   * Amend a milestone's mutable descriptive fields (`title`, `description`,
+   * `target_state`, `initiative`) after creation — the write path for scope that
+   * legitimately evolves while a milestone is still planned or active (e.g. a
+   * later requirement widens the target state). Only the fields present in
+   * `patch` are written: an absent key leaves the column untouched, an explicit
+   * `null` clears a nullable column, and an empty patch re-reads and returns the
+   * row without writing.
+   *
+   * Rejects a closed milestone: closed is terminal (matching `setMilestoneStatus`
+   * and `closeMilestone`), so an archived milestone's record stays frozen —
+   * append-only context for a closed milestone belongs on an annotation
+   * (`annotation add --target-kind milestone`), not a row edit. `title` is
+   * non-nullable; an empty string is rejected. Status is not amendable here —
+   * transitions stay on `setMilestoneStatus` / `closeMilestone`.
+   *
+   * Like the other milestone mutations, this emits NO `scrum_events` row: the
+   * events table is task-scoped (`task_id NOT NULL`), so the milestone tier
+   * carries no per-row event log and operators follow amendments via the row
+   * itself.
+   */
+  async updateMilestone(id: string, patch: UpdateMilestoneInput): Promise<ScrumMilestone> {
+    const existing = await this.getMilestone(id);
+    if (!existing) throw new Error(`updateMilestone: unknown milestone '${id}'`);
+    if (existing.status === 'closed') {
+      throw new Error(
+        `updateMilestone: cannot amend closed milestone '${id}' (closed is terminal)`,
+      );
+    }
+    if (patch.title !== undefined && patch.title.length === 0) {
+      throw new Error('updateMilestone: title cannot be empty');
+    }
+
+    const sets: string[] = [];
+    const params: (string | null)[] = [];
+    if (patch.title !== undefined) {
+      sets.push('title = ?');
+      params.push(patch.title);
+    }
+    if (patch.description !== undefined) {
+      sets.push('description = ?');
+      params.push(patch.description);
+    }
+    if (patch.targetState !== undefined) {
+      sets.push('target_state = ?');
+      params.push(patch.targetState);
+    }
+    if (patch.initiative !== undefined) {
+      sets.push('initiative = ?');
+      params.push(patch.initiative);
+    }
+
+    if (sets.length === 0) return existing;
+
+    await this.exec(`UPDATE scrum_milestones SET ${sets.join(', ')} WHERE id = ?`, ...params, id);
+    const updated = await this.getMilestone(id);
+    if (!updated) throw new Error(`updateMilestone: milestone '${id}' vanished mid-update`);
     return updated;
   }
 
@@ -4728,11 +4804,12 @@ export class ScrumStore {
    * may annotate any target) — `author` is recorded, not enforced.
    *
    * `targetKind` MUST be a member of the closed `AnnotationTargetKind` set
-   * (`task` | `team` | `decision`) — an unknown kind throws WITHOUT writing,
-   * the boundary guard matching `createTeam`'s team_type check. `targetRef` is a
-   * SOFT reference: the store does NOT verify the named task / team / decision
-   * exists (the ref spans multiple tables by kind, so it carries no FK), exactly
-   * as the roster and operator history hold their referents without one.
+   * (`task` | `team` | `decision` | `milestone`) — an unknown kind throws
+   * WITHOUT writing, the boundary guard matching `createTeam`'s team_type check.
+   * `targetRef` is a SOFT reference: the store does NOT verify the named
+   * task / team / decision / milestone exists (the ref spans multiple tables by
+   * kind, so it carries no FK), exactly as the roster and operator history hold
+   * their referents without one.
    *
    * Append-only: an entry is never updated or deleted — a correction is a fresh
    * `addAnnotation`, not an edit, so the full history survives.

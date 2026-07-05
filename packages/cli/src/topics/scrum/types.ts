@@ -1829,19 +1829,28 @@ export interface PromoteLoreToCodexInput {
 
 /**
  * The kind of artifact an Annotation is attached to. A closed set: an
- * Annotation hangs off a task, a team, or a decision. Matches the
+ * Annotation hangs off a task, a team, a decision, or a milestone. Matches the
  * `scrum_annotations.target_kind` column; the column carries no CHECK
  * constraint, so this union documents the canonical set and the store boundary
  * enforces it (`addAnnotation` rejects any value outside this list).
  *
- *   task     — the target_ref is a `scrum_tasks.id`.
- *   team     — the target_ref is a `scrum_teams.slug`.
- *   decision — the target_ref is a `scrum_decisions.id`.
+ *   task      — the target_ref is a `scrum_tasks.id`.
+ *   team      — the target_ref is a `scrum_teams.slug`.
+ *   decision  — the target_ref is a `scrum_decisions.id`.
+ *   milestone — the target_ref is a `scrum_milestones.id`. Append-only context
+ *               for a milestone whose row-level fields are amended via
+ *               `milestone update` — a note survives even when the row itself
+ *               stays frozen (e.g. after close).
  */
-export type AnnotationTargetKind = 'task' | 'team' | 'decision';
+export type AnnotationTargetKind = 'task' | 'team' | 'decision' | 'milestone';
 
 /** Runtime-checkable list of the closed `AnnotationTargetKind` set. */
-export const ANNOTATION_TARGET_KINDS: AnnotationTargetKind[] = ['task', 'team', 'decision'];
+export const ANNOTATION_TARGET_KINDS: AnnotationTargetKind[] = [
+  'task',
+  'team',
+  'decision',
+  'milestone',
+];
 
 /**
  * A row in `scrum_annotations` (v20) — the Annotation memory layer. An
@@ -1852,9 +1861,10 @@ export const ANNOTATION_TARGET_KINDS: AnnotationTargetKind[] = ['task', 'team', 
  *
  *   id          — ULID surrogate.
  *   target_kind — which artifact class the note attaches to (`task` | `team` |
- *                 `decision`). A closed enum, guarded at the store boundary.
+ *                 `decision` | `milestone`). A closed enum, guarded at the store
+ *                 boundary.
  *   target_ref  — the specific target's identifier within that class: a task id,
- *                 a team slug, or a decision id. A SOFT reference — it spans
+ *                 a team slug, a decision id, or a milestone id. A SOFT reference — it spans
  *                 multiple tables by `target_kind`, so it carries NO foreign key
  *                 and the store does NOT verify the target row exists (matching
  *                 how `author_contributor_id` and the operator history hold their

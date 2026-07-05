@@ -2,14 +2,14 @@
  * `claude-prove scrum annotation <action> [flags]`
  *
  * The Annotation memory layer — per-artifact notes captured during work. The
- * lightest layer: a note attaches to one target artifact (a task, a team, or a
- * decision) and is visible to ANYONE reading that target. There is no
- * authorship gate — any author may annotate any target; `--author` is recorded,
- * not enforced. Append-only: a correction is a NEW entry, never an edit, so the
- * full history survives.
+ * lightest layer: a note attaches to one target artifact (a task, a team, a
+ * decision, or a milestone) and is visible to ANYONE reading that target. There
+ * is no authorship gate — any author may annotate any target; `--author` is
+ * recorded, not enforced. Append-only: a correction is a NEW entry, never an
+ * edit, so the full history survives.
  *
  * Action dispatch:
- *   add  --target-kind <task|team|decision> --target <ref> --body <text>
+ *   add  --target-kind <task|team|decision|milestone> --target <ref> --body <text>
  *        --author <id>
  *                              Append one Annotation to the target. The store
  *                              guards `--target-kind` against the closed enum
@@ -30,14 +30,13 @@
  *   1  usage error, unknown action, or an invalid `--target-kind` on any action
  */
 
-import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
 import type { ScrumStore } from '../store';
 import { ANNOTATION_TARGET_KINDS, type AnnotationRow, type AnnotationTargetKind } from '../types';
 import { openCliStore } from './cli-store';
 
 export interface AnnotationCmdFlags {
-  /** `add`/`list`: the target's artifact class (task | team | decision). */
+  /** `add`/`list`: the target's artifact class (task | team | decision | milestone). */
   targetKind?: string;
   /** `add`/`list`: the target's identifier within that class (a soft reference). */
   target?: string;

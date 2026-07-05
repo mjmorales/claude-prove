@@ -59,6 +59,10 @@ Reassign via `claude-prove scrum task move <task-id> --milestone <milestone-id>`
 - Bulk grooming (e.g., closing M4, moving 45 tasks onto M5/M6/M7): confirm the plan via AskUserQuestion once, then loop `task move` invocations. Surface the final `status` summary when done.
 - Moving into a closed milestone is allowed but stderr carries a warning — relay it to the operator verbatim rather than swallowing it.
 
+## Amending a milestone's own scope
+
+When a milestone's own fields drift (a later requirement widens its target state, its description goes stale), amend the row with `claude-prove scrum milestone update <id> [--title T] [--description D] [--target-state S] [--initiative I]` — only the passed flags write, an empty value clears a nullable field, and status is untouched. Never patch a milestone via `sqlite3 UPDATE`. A **closed** milestone is terminal and rejects `update`; for context on a frozen milestone, append `claude-prove scrum annotation add --target-kind milestone --target <id> --body <text> --author <who>` instead — a soft-referenced, append-only note that survives even when the row cannot change.
+
 ## Workflow
 
 1. Read state — `claude-prove scrum status --human` cold; targeted reads when zooming in.

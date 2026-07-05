@@ -8,6 +8,17 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — `scrum milestone update` + milestone annotations
+
+*(New CLI action + an extended annotation target-kind. No config-schema or DB-schema migration — both are live on existing stores the moment you update.)*
+
+Milestones were effectively immutable after creation: the surface was `create|list|show|close|activate|reopen`, so a milestone whose scope legitimately evolved (a later requirement widening its target state) could not be amended — the only recourse was scattering the change across task descriptions and acceptance criteria while the milestone row stayed stale, and raw SQL against `.prove/prove.db` is off-limits. This adds the missing write path.
+
+- **`claude-prove scrum milestone update <id> [--title T] [--description D] [--target-state S] [--initiative I]`** amends a milestone's descriptive fields after creation. Only the flags you pass are written; omitting a flag leaves that column untouched, and passing a nullable field empty (`--description ""`) clears it to NULL. Status is intentionally not amendable here — lifecycle transitions stay on `activate` / `reopen` / `close`. A **closed** milestone is rejected (closed is terminal, matching the existing lifecycle invariant) — annotate it instead.
+- **`claude-prove scrum annotation add|list --target-kind milestone`** — the annotation target-kind set gains `milestone` (now `task | team | decision | milestone`), so append-only context can hang off a milestone as a soft reference (the row need not exist). This is the right tool for context on a milestone that is already closed and frozen.
+
+**Migration:** none. No `.claude/.prove.json` change and no store-schema bump — the `scrum_annotations.target_kind` column carries no CHECK constraint, so existing databases accept `milestone` rows immediately. Both surfaces are auto-adopted: available as soon as the updated CLI is on PATH, no `/prove:update` action required.
+
 ## v4.3.0 — Opt-in cloud sync, slice 1: `store provision` + `cloud` config block (schema v12)
 
 *(New optional config block + new command + the session-boundary sync lifecycle. Cloud stays OFF by default, so existing local-only projects perform zero network I/O. **One non-optional change for every project:** the scrum **store** schema advances v1 → v2 on first write after upgrade — see Migration. Config schema migrates automatically via `/prove:update`.)*

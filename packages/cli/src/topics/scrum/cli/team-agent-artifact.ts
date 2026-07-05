@@ -192,7 +192,7 @@ function PROTOCOL_PROSE(team: Team, role: TeamRole): string {
  */
 function writeCommitments(role: TeamRole): string[] {
   const lines = [
-    '- Record annotations with `claude-prove scrum annotation add --target-kind <task|team|decision> --target <ref> --body <text> --author <CT-UUID>` (open to every role).',
+    '- Record annotations with `claude-prove scrum annotation add --target-kind <task|team|decision|milestone> --target <ref> --body <text> --author <CT-UUID>` (open to every role).',
   ];
   if (role === 'tech_lead') {
     lines.push(

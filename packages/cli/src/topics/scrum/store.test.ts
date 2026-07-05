@@ -716,6 +716,79 @@ describe('ScrumStore — setMilestoneStatus', () => {
 });
 
 // ===========================================================================
+// updateMilestone
+// ===========================================================================
+
+describe('ScrumStore — updateMilestone', () => {
+  test('amends every mutable field and returns the updated row', async () => {
+    await seedMilestone('m1', { description: 'old', targetState: 'draft', initiative: 'infra' });
+    const updated = await store.updateMilestone('m1', {
+      title: 'New title',
+      description: 'new',
+      targetState: 'shipped',
+      initiative: 'growth',
+    });
+    expect(updated.title).toBe('New title');
+    expect(updated.description).toBe('new');
+    expect(updated.target_state).toBe('shipped');
+    expect(updated.initiative).toBe('growth');
+
+    const reloaded = await store.getMilestone('m1');
+    expect(reloaded?.title).toBe('New title');
+    expect(reloaded?.target_state).toBe('shipped');
+  });
+
+  test('writes only the fields present in the patch, leaving the rest untouched', async () => {
+    await seedMilestone('m1', { description: 'keep me', targetState: 'draft' });
+    const updated = await store.updateMilestone('m1', { targetState: 'shipped' });
+    expect(updated.description).toBe('keep me');
+    expect(updated.target_state).toBe('shipped');
+    expect(updated.title).toBe('Milestone m1');
+  });
+
+  test('explicit null clears a nullable field', async () => {
+    await seedMilestone('m1', { description: 'ship v1', initiative: 'infra' });
+    const updated = await store.updateMilestone('m1', { description: null, initiative: null });
+    expect(updated.description).toBeNull();
+    expect(updated.initiative).toBeNull();
+  });
+
+  test('empty patch is a no-op that returns the current row without writing', async () => {
+    await seedMilestone('m1', { description: 'unchanged' });
+    const updated = await store.updateMilestone('m1', {});
+    expect(updated.description).toBe('unchanged');
+    expect(updated.title).toBe('Milestone m1');
+  });
+
+  test('does not change status — the milestone stays planned', async () => {
+    await seedMilestone('m1');
+    const updated = await store.updateMilestone('m1', { description: 'scope grew' });
+    expect(updated.status).toBe('planned');
+  });
+
+  test('throws on unknown id', async () => {
+    await expect(store.updateMilestone('missing', { description: 'x' })).rejects.toThrow(
+      /unknown milestone/,
+    );
+  });
+
+  test('throws on an empty title', async () => {
+    await seedMilestone('m1');
+    await expect(store.updateMilestone('m1', { title: '' })).rejects.toThrow(
+      /title cannot be empty/,
+    );
+  });
+
+  test('rejects amending a closed milestone (closed is terminal)', async () => {
+    await seedMilestone('m1', { status: 'active' });
+    await store.closeMilestone('m1');
+    await expect(store.updateMilestone('m1', { description: 'too late' })).rejects.toThrow(
+      /closed milestone/,
+    );
+  });
+});
+
+// ===========================================================================
 // Tags
 // ===========================================================================
 
@@ -4060,9 +4133,24 @@ describe('ScrumStore — Annotation layer (v20)', () => {
   test('addAnnotation rejects a target_kind outside the closed enum, naming the set', async () => {
     await expect(
       // @ts-expect-error — exercising the runtime boundary guard with an off-enum kind.
-      store.addAnnotation({ targetKind: 'milestone', targetRef: 'm1', body: 'x', author: 'CT-a' }),
-    ).rejects.toThrow(/invalid target_kind 'milestone'; expected one of: task, team, decision/);
-    expect(await store.listAnnotations('task', 'm1')).toEqual([]);
+      store.addAnnotation({ targetKind: 'sprint', targetRef: 's1', body: 'x', author: 'CT-a' }),
+    ).rejects.toThrow(
+      /invalid target_kind 'sprint'; expected one of: task, team, decision, milestone/,
+    );
+    expect(await store.listAnnotations('task', 's1')).toEqual([]);
+  });
+
+  test('addAnnotation accepts a milestone target as a soft reference', async () => {
+    const row = await store.addAnnotation({
+      targetKind: 'milestone',
+      targetRef: 'm1',
+      body: 'ADR-42 widened the target state',
+      author: 'CT-a',
+    });
+    expect(row.target_kind).toBe('milestone');
+    expect((await store.listAnnotations('milestone', 'm1')).map((a) => a.body)).toEqual([
+      'ADR-42 widened the target state',
+    ]);
   });
 
   test('target_ref is a soft reference — the target row need not exist', async () => {

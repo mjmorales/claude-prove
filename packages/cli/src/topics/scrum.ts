@@ -28,6 +28,7 @@
  *   claude-prove scrum milestone create          --title X [--description Y] [--target-state S] [--id I] [--initiative N]
  *   claude-prove scrum milestone list            [--status S] [--initiative N]
  *   claude-prove scrum milestone show <id>
+ *   claude-prove scrum milestone update <id>     [--title T] [--description D] [--target-state S] [--initiative N]
  *   claude-prove scrum milestone activate <id>
  *   claude-prove scrum milestone reopen <id>
  *   claude-prove scrum milestone close <id>
@@ -67,7 +68,7 @@
  *   claude-prove scrum lore show <id>            (one Lore entry by id)
  *   claude-prove scrum lore supersede <id>       (--by LORE-ID | --by-decision DECISION-ID) --reason R --author CT-UUID   (retire a live entry by pointer; never deletes)
  *   claude-prove scrum lore promote <id>         [--kind adr|glossary|pattern] [--title T] [--id D] (lift Lore into the Codex as a gated draft; approve auto-retires the source)
- *   claude-prove scrum annotation add            --target-kind task|team|decision --target REF --body TEXT --author ID   (append a per-artifact note; target is a soft reference, no authorship gate)
+ *   claude-prove scrum annotation add            --target-kind task|team|decision|milestone --target REF --body TEXT --author ID   (append a per-artifact note; target is a soft reference, no authorship gate)
  *   claude-prove scrum annotation list           --target-kind K --target REF [--human]   (a target's notes, oldest-first)
  *   claude-prove scrum escalation raise          --task ID --type blocked|ambiguous|conflict|missing_context --summary TEXT [--layer RUNG] [--by ID]   (raise a typed escalation at a rung of the walk-up chain; default layer implementer)
  *   claude-prove scrum escalation show <id>      (one escalation by id)
@@ -290,7 +291,7 @@ export function register(cli: CAC): void {
       '--team <slug>',
       "task create / task move: bind the task to a registered team (validated against the registry); on move, --team='' unbinds",
     )
-    .option('--title <t>', 'Task or milestone title (create actions)')
+    .option('--title <t>', 'Task or milestone title (create actions; milestone update amends)')
     .option('--description <d>', 'Task or milestone description')
     .option('--id <id>', 'Explicit id (create actions; default: generated from title)')
     .option('--parent <id>', 'Parent task id for `task create` (the epic→story→task tree)')
@@ -299,10 +300,10 @@ export function register(cli: CAC): void {
     .option('--tag <t>', 'Tag filter')
     .option('--task <id>', 'Task filter for `tag list`; owning task for `gate respond`')
     .option('--topic <t>', 'Topic filter for `decision list`')
-    .option('--target-state <s>', 'Milestone target state (milestone create)')
+    .option('--target-state <s>', 'Milestone target state (milestone create / update)')
     .option(
       '--initiative <i>',
-      'Initiative grouping (milestone create sets it; milestone list filters by it)',
+      'Initiative grouping (milestone create / update sets it; milestone list filters by it)',
     )
     .option('--branch <b>', 'Branch name for link-run')
     .option('--slug <g>', 'Run slug for link-run')
@@ -552,7 +553,7 @@ async function dispatch(
     case 'milestone':
       if (arg1 === undefined) {
         console.error(
-          'error: scrum milestone: sub-action required (one of: create | list | show | close | activate | reopen)',
+          'error: scrum milestone: sub-action required (one of: create | list | show | update | close | activate | reopen)',
         );
         return 1;
       }

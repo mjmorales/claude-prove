@@ -449,6 +449,87 @@ describe('runMilestoneCmd initiative grouping', () => {
 });
 
 // ---------------------------------------------------------------------------
+// milestone-cmd — update (amend descriptive fields after create)
+// ---------------------------------------------------------------------------
+
+interface MilestoneRow {
+  id: string;
+  title: string;
+  description: string | null;
+  target_state: string | null;
+  initiative: string | null;
+  status: string;
+}
+
+describe('runMilestoneCmd update', () => {
+  async function seed(id: string, flags: Record<string, string> = {}): Promise<void> {
+    await withCapture(() =>
+      runMilestoneCmd('create', [undefined, undefined], { title: `M ${id}`, id, ...flags }),
+    );
+  }
+
+  test('amends the passed fields and prints the updated JSON row', async () => {
+    await seed('m1', { description: 'old', targetState: 'draft' });
+    const res = await withCapture(() =>
+      runMilestoneCmd('update', ['m1', undefined], {
+        description: 'new scope',
+        targetState: 'shipped',
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as MilestoneRow;
+    expect(row.description).toBe('new scope');
+    expect(row.target_state).toBe('shipped');
+    expect(row.title).toBe('M m1');
+  });
+
+  test('an empty value clears a nullable field to null', async () => {
+    await seed('m1', { description: 'ship v1', initiative: 'infra' });
+    const res = await withCapture(() =>
+      runMilestoneCmd('update', ['m1', undefined], { description: '', initiative: '' }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as MilestoneRow;
+    expect(row.description).toBeNull();
+    expect(row.initiative).toBeNull();
+  });
+
+  test('no field flags → exit 1 with usage hint', async () => {
+    await seed('m1');
+    const res = await withCapture(() => runMilestoneCmd('update', ['m1', undefined], {}));
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('at least one of');
+  });
+
+  test('missing <id> → exit 1', async () => {
+    const res = await withCapture(() =>
+      runMilestoneCmd('update', [undefined, undefined], { description: 'x' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('<id> positional argument required');
+  });
+
+  test('empty --title → exit 1', async () => {
+    await seed('m1');
+    const res = await withCapture(() =>
+      runMilestoneCmd('update', ['m1', undefined], { title: '' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('--title cannot be empty');
+  });
+
+  test('amending a closed milestone → exit 1, store error bubbles through', async () => {
+    await seed('m1', { status: 'active' });
+    await withCapture(() => runMilestoneCmd('close', ['m1', undefined], {}));
+    const res = await withCapture(() =>
+      runMilestoneCmd('update', ['m1', undefined], { description: 'too late' }),
+    );
+    expect(res.exit).toBe(1);
+    expect(res.stderr).toContain('closed milestone');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // next-ready-cmd
 // ---------------------------------------------------------------------------
 
@@ -4553,8 +4634,8 @@ describe('runAnnotationCmd', () => {
   test('add rejects a target_kind outside the closed enum, naming the valid set', async () => {
     const res = await withCapture(() =>
       runAnnotationCmd('add', {
-        targetKind: 'milestone',
-        target: 'm1',
+        targetKind: 'sprint',
+        target: 's1',
         body: 'x',
         author: 'CT-a',
         workspaceRoot: workspace,
@@ -4562,7 +4643,23 @@ describe('runAnnotationCmd', () => {
     );
     expect(res.exit).toBe(1);
     expect(res.stderr).toContain('--target-kind');
-    expect(res.stderr).toContain('task|team|decision');
+    expect(res.stderr).toContain('task|team|decision|milestone');
+  });
+
+  test('add accepts a milestone target as a soft reference', async () => {
+    const res = await withCapture(() =>
+      runAnnotationCmd('add', {
+        targetKind: 'milestone',
+        target: 'm1',
+        body: 'ADR-42 widened the target state',
+        author: 'CT-a',
+        workspaceRoot: workspace,
+      }),
+    );
+    expect(res.exit).toBe(0);
+    const row = JSON.parse(res.stdout.trim()) as AnnotationRow;
+    expect(row.target_kind).toBe('milestone');
+    expect(row.target_ref).toBe('m1');
   });
 
   test('add requires --target, --body, and --author', async () => {

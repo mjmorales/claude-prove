@@ -5,19 +5,24 @@
  *   create --title X [--description Y] [--target-state S] [--id I]
  *   list   [--status planned|active|closed]
  *   show <id>
+ *   update <id> [--title T] [--description D] [--target-state S] [--initiative I]
  *   close <id>
  *   activate <id>
  *   reopen <id>
+ *
+ * `update` amends a milestone's descriptive fields after creation. Only the
+ * flags passed are written; a nullable field (`--description`, `--target-state`,
+ * `--initiative`) passed empty (`--description ""`) clears it to NULL. Rejects a
+ * closed milestone (closed is terminal — annotate it instead).
  *
  * Exit codes:
  *   0  success
  *   1  usage error, unknown action, or missing milestone
  */
 
-import { join } from 'node:path';
 import { mainWorktreeRoot } from '@claude-prove/shared';
 import { gatherMilestoneStories, reconcileMilestoneClosed } from '../reconcile';
-import type { ScrumStore } from '../store';
+import type { ScrumStore, UpdateMilestoneInput } from '../store';
 import type { MilestoneStatus } from '../types';
 import { openCliStore } from './cli-store';
 import { generateId } from './scrum-utils';
@@ -33,12 +38,20 @@ export interface MilestoneCmdFlags {
   workspaceRoot?: string;
 }
 
-export type MilestoneAction = 'create' | 'list' | 'show' | 'close' | 'activate' | 'reopen';
+export type MilestoneAction =
+  | 'create'
+  | 'list'
+  | 'show'
+  | 'update'
+  | 'close'
+  | 'activate'
+  | 'reopen';
 
 const MILESTONE_ACTIONS: MilestoneAction[] = [
   'create',
   'list',
   'show',
+  'update',
   'close',
   'activate',
   'reopen',
@@ -70,6 +83,8 @@ export async function runMilestoneCmd(
         return await doList(store, flags);
       case 'show':
         return await doShow(store, positional[0]);
+      case 'update':
+        return await doUpdate(store, positional[0], flags);
       case 'close':
         return await doClose(store, positional[0], workspaceRoot);
       case 'activate':
@@ -141,6 +156,50 @@ async function doShow(store: ScrumStore, id: string | undefined): Promise<number
   process.stderr.write(
     `scrum milestone show: ${id} (${milestone.status}, ${tasks.length} tasks)\n`,
   );
+  return 0;
+}
+
+async function doUpdate(
+  store: ScrumStore,
+  id: string | undefined,
+  flags: MilestoneCmdFlags,
+): Promise<number> {
+  if (id === undefined || id.length === 0) {
+    process.stderr.write('scrum milestone update: <id> positional argument required\n');
+    return 1;
+  }
+
+  const patch: UpdateMilestoneInput = {};
+  if (flags.title !== undefined) {
+    if (flags.title.length === 0) {
+      process.stderr.write('scrum milestone update: --title cannot be empty\n');
+      return 1;
+    }
+    patch.title = flags.title;
+  }
+  // The nullable fields follow one convention: a non-empty value sets the
+  // column, an empty value (`--description ""`) clears it to NULL, and omitting
+  // the flag leaves it untouched.
+  if (flags.description !== undefined) {
+    patch.description = flags.description.length > 0 ? flags.description : null;
+  }
+  if (flags.targetState !== undefined) {
+    patch.targetState = flags.targetState.length > 0 ? flags.targetState : null;
+  }
+  if (flags.initiative !== undefined) {
+    patch.initiative = flags.initiative.length > 0 ? flags.initiative : null;
+  }
+
+  if (Object.keys(patch).length === 0) {
+    process.stderr.write(
+      'scrum milestone update: at least one of --title, --description, --target-state, --initiative required\n',
+    );
+    return 1;
+  }
+
+  const milestone = await store.updateMilestone(id, patch);
+  process.stdout.write(`${JSON.stringify(milestone)}\n`);
+  process.stderr.write(`scrum milestone update: ${id}\n`);
   return 0;
 }
 
