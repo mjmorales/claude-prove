@@ -39,7 +39,7 @@ import {
 } from '@claude-prove/store';
 import { readCloudConfig } from '../../store-provision';
 import { type ScrumStore, openScrumStore } from '../store';
-import { type KeyExists, type SurfacedCollision, makeScrumSyncTransform } from '../sync-transform';
+import { type KeyOwner, type SurfacedCollision, makeScrumSyncTransform } from '../sync-transform';
 
 /** Default wall-clock budget (ms) for a single pull or push before degrading. */
 export const DEFAULT_SYNC_TIMEOUT_MS = 5000;
@@ -183,12 +183,13 @@ export async function openSyncSession(
   const coords: CloudCoordinates = { org: cloud.org, dbName: cloud.dbName };
   const collisions: SurfacedCollision[] = [];
 
-  // The engine's transform callback is synchronous, so `keyExists` reads a frozen
-  // snapshot of the existing secondary-UNIQUE keys, populated right after the
-  // store opens (post-connect, pre-pull) through this mutable binding.
-  let keyExists: KeyExists = () => false;
+  // The engine's transform callback is synchronous, so `keyOwner` reads a frozen
+  // snapshot mapping each existing secondary-UNIQUE key to its owning row id,
+  // populated right after the store opens (post-connect, pre-pull) through this
+  // mutable binding.
+  let keyOwner: KeyOwner = () => null;
   const transform = makeScrumSyncTransform({
-    keyExists: (table, key) => keyExists(table, key),
+    keyOwner: (table, key) => keyOwner(table, key),
     onCollision: (c) => collisions.push(c),
   });
 
@@ -198,7 +199,7 @@ export async function openSyncSession(
     // Build the scrum store ON the synced connection so its writes flow through
     // the engine's change-capture and replicate on push().
     const store = await openScrumStore({ connection: sync.connection });
-    keyExists = await snapshotKeyExists(store);
+    keyOwner = await snapshotKeyOwner(store);
     const liveSync = sync;
     const runPhase = async (
       op: () => Promise<unknown>,
@@ -251,17 +252,18 @@ export async function openSyncSession(
 }
 
 /**
- * Snapshot every existing secondary-UNIQUE key into an in-memory Set and return
- * a SYNCHRONOUS membership probe over it. Taken once before pull/push so the
- * engine's sync `transform` callback can decide a collision without an async
- * driver round-trip. A null/absent key column is skipped (SQLite treats
- * distinct NULLs as non-equal, so it cannot collide).
+ * Snapshot every existing secondary-UNIQUE key into an in-memory key → owning
+ * row id map and return a SYNCHRONOUS ownership probe over it. Taken once
+ * before pull/push so the engine's sync `transform` callback can distinguish a
+ * true cross-writer duplicate from the push-phase replay of a row this writer
+ * itself committed (whose key maps to its OWN id). A null/absent key column is
+ * skipped (SQLite treats distinct NULLs as non-equal, so it cannot collide).
  */
-async function snapshotKeyExists(store: ScrumStore): Promise<KeyExists> {
-  const present = new Set<string>();
+async function snapshotKeyOwner(store: ScrumStore): Promise<KeyOwner> {
+  const owners = new Map<string, string>();
   const raw = store.getStore();
   for (const [table, columns] of Object.entries(SNAPSHOT_KEYS)) {
-    const cols = columns.join(', ');
+    const cols = ['id', ...columns].join(', ');
     let rows: Record<string, unknown>[];
     try {
       rows = await raw.all<Record<string, unknown>>(`SELECT ${cols} FROM ${table}`);
@@ -271,15 +273,17 @@ async function snapshotKeyExists(store: ScrumStore): Promise<KeyExists> {
     }
     for (const row of rows) {
       const composite = compositeKey(columns, row);
-      if (composite !== null) present.add(`${table} ${composite}`);
+      const id = row.id;
+      if (composite !== null && id !== null && id !== undefined)
+        owners.set(`${table} ${composite}`, String(id));
     }
   }
   return (table: string, key: Record<string, unknown>) => {
     const columns = SNAPSHOT_KEYS[table];
-    if (columns === undefined) return false;
+    if (columns === undefined) return null;
     const composite = compositeKey(columns, key);
-    if (composite === null) return false;
-    return present.has(`${table} ${composite}`);
+    if (composite === null) return null;
+    return owners.get(`${table} ${composite}`) ?? null;
   };
 }
 

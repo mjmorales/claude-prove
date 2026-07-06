@@ -90,7 +90,7 @@ let engineBackings: string[] = [];
  * validates compatibility). `behavior` overrides any record-only stub (e.g. a
  * `push`/`pull` rejection or a `connect` that fires the transform); `seed` (when
  * given) writes rows into the pre-migrated file BEFORE the synced store opens, so
- * the open-time `snapshotKeyExists` snapshot already sees them.
+ * the open-time `snapshotKeyOwner` snapshot already sees them.
  */
 async function makeFakeEngine(
   behavior: Partial<SyncEngineDatabase> = {},
@@ -129,7 +129,7 @@ async function makeFakeEngine(
       engine.connection.close();
     },
     // The store's exec/prepare flow to the real backing connection so writes and
-    // the open-time `snapshotKeyExists` read hit a live schema'd db.
+    // the open-time `snapshotKeyOwner` read hit a live schema'd db.
     exec: (sql: string) => engine.connection.exec(sql),
     prepare: (sql: string) => engine.connection.prepare(sql),
     ...behavior,
@@ -271,7 +271,7 @@ describe('gated lifecycle — pull/push/flush-push per boundary', () => {
       expect(result.attempted).toBe(true);
       expect(result.ok).toBe(true);
       expect(connectCalls.count).toBe(1);
-      // The store reads at open (snapshotKeyExists) hit the backing connection's
+      // The store reads at open (snapshotKeyOwner) hit the backing connection's
       // exec/prepare, NOT the sync engine — so they do not appear in `calls`.
       // flush-push recovers a missed prior stop, then pull peer changes. The
       // connection has NOT closed yet — the caller owns the store's lifetime.
