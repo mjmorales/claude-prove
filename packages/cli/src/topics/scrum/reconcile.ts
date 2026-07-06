@@ -419,6 +419,8 @@ export interface CollisionLike {
   table: string;
   key: Record<string, unknown>;
   skipped: Record<string, unknown>;
+  /** PRIMARY-KEY id of the incumbent row that won the key, when the source knows it. */
+  existingId?: string;
 }
 
 /**
@@ -430,7 +432,9 @@ function drainCollisions(collisions: CollisionLike[]): SurfacedAnomaly[] {
   return collisions.map((c) => ({
     kind: 'collision' as const,
     subject: c.table,
-    summary: `sync dropped a colliding ${c.table} row on replay (key ${formatKey(c.key)}); the losing write needs deconfliction`,
+    summary: `sync dropped a colliding ${c.table} row (key ${formatKey(c.key)}${
+      c.existingId === undefined ? '' : `, already held by ${c.existingId}`
+    }); the losing write needs deconfliction`,
   }));
 }
 

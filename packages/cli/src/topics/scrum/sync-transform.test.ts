@@ -14,10 +14,11 @@ function mutation(over: Partial<DatabaseRowMutation>): DatabaseRowMutation {
 }
 
 describe('makeScrumSyncTransform', () => {
-  test('skips a contributor INSERT whose slug already exists, surfacing the collision', () => {
+  test('skips a contributor INSERT whose slug a DIFFERENT row holds, surfacing the collision', () => {
     const surfaced: SurfacedCollision[] = [];
     const transform = makeScrumSyncTransform({
-      keyExists: (table, key) => table === 'scrum_contributors' && key.slug === 'dup',
+      keyOwner: (table, key) =>
+        table === 'scrum_contributors' && key.slug === 'dup' ? 'ct-A' : null,
       onCollision: (c) => surfaced.push(c),
     });
 
@@ -34,13 +35,32 @@ describe('makeScrumSyncTransform', () => {
       table: 'scrum_contributors',
       key: { slug: 'dup' },
       skipped: { id: 'ct-B', slug: 'dup', status: 'active' },
+      existingId: 'ct-A',
     });
   });
 
-  test('keeps a contributor INSERT whose slug is unique (null result, no surface)', () => {
+  test("keeps an INSERT whose key the mutation's OWN row holds (push replay of a local write)", () => {
     const surfaced: SurfacedCollision[] = [];
     const transform = makeScrumSyncTransform({
-      keyExists: () => false,
+      keyOwner: () => 'sur-B',
+      onCollision: (c) => surfaced.push(c),
+    });
+
+    const result = transform(
+      mutation({
+        tableName: 'scrum_acceptance_criteria',
+        after: { id: 'sur-B', task_id: 't1', criterion_id: 'c1', text: 'mine' },
+      }),
+    );
+
+    expect(result).toBeNull();
+    expect(surfaced).toHaveLength(0);
+  });
+
+  test('keeps a contributor INSERT whose slug is unclaimed (null result, no surface)', () => {
+    const surfaced: SurfacedCollision[] = [];
+    const transform = makeScrumSyncTransform({
+      keyOwner: () => null,
       onCollision: (c) => surfaced.push(c),
     });
 
@@ -52,11 +72,13 @@ describe('makeScrumSyncTransform', () => {
     expect(surfaced).toHaveLength(0);
   });
 
-  test('skips a criterion INSERT colliding on the composite (task_id, criterion_id)', () => {
+  test('skips a criterion INSERT colliding on (task_id, criterion_id) held by another row', () => {
     const surfaced: SurfacedCollision[] = [];
     const transform = makeScrumSyncTransform({
-      keyExists: (table, key) =>
-        table === 'scrum_acceptance_criteria' && key.task_id === 't1' && key.criterion_id === 'c1',
+      keyOwner: (table, key) =>
+        table === 'scrum_acceptance_criteria' && key.task_id === 't1' && key.criterion_id === 'c1'
+          ? 'sur-A'
+          : null,
       onCollision: (c) => surfaced.push(c),
     });
 
@@ -69,11 +91,12 @@ describe('makeScrumSyncTransform', () => {
 
     expect(result).toEqual({ operation: 'skip' });
     expect(surfaced[0]?.key).toEqual({ task_id: 't1', criterion_id: 'c1' });
+    expect(surfaced[0]?.existingId).toBe('sur-A');
   });
 
   test('passes through non-insert mutations and unguarded tables unchanged', () => {
     const transform = makeScrumSyncTransform({
-      keyExists: () => true,
+      keyOwner: () => 'someone-else',
       onCollision: () => {
         throw new Error('should not surface on an unguarded mutation');
       },
@@ -100,13 +123,12 @@ describe('makeScrumSyncTransform', () => {
 
   test('keeps an INSERT with a null key column (a NULL never collides on UNIQUE)', () => {
     const transform = makeScrumSyncTransform({
-      keyExists: () => true,
+      keyOwner: () => 'someone-else',
       onCollision: () => {
         throw new Error('should not surface when the key column is null');
       },
     });
 
-    // Missing `after` and a null slug both decline to a passthrough.
     expect(transform(mutation({ tableName: 'scrum_contributors', after: undefined }))).toBeNull();
     expect(
       transform(mutation({ tableName: 'scrum_contributors', after: { id: 'ct', slug: null } })),

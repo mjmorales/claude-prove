@@ -814,29 +814,33 @@ describe('Class D — collision outcomes on replay (no silent drop)', () => {
     // factory `makeScrumSyncTransform`, fired per CDC mutation, that maps a known
     // slug collision to `skip` and surfaces it for the anomaly pass. This is the
     // exact function lifecycle wires at connect(); here we drive it through the
-    // harness via `wrapScrumTransform`, binding its synchronous `keyExists` to a
-    // pre-fetched snapshot of the server's current slugs (the engine's transform
-    // callback is synchronous, so the existence probe cannot be async — lifecycle
-    // binds it to a sync probe of the live connection).
-    const serverSlugs = new Set(
-      (await server.store.all<{ slug: string }>('SELECT slug FROM scrum_contributors')).map(
-        (r) => r.slug,
-      ),
+    // harness via `wrapScrumTransform`, binding its synchronous `keyOwner` to a
+    // pre-fetched snapshot of the server's current slug owners (the engine's
+    // transform callback is synchronous, so the ownership probe cannot be async —
+    // lifecycle binds it to a sync probe of the live connection).
+    const serverSlugOwners = new Map(
+      (
+        await server.store.all<{ id: string; slug: string }>(
+          'SELECT id, slug FROM scrum_contributors',
+        )
+      ).map((r) => [r.slug, r.id]),
     );
     const surfaced: SurfacedCollision[] = [];
     const transform = wrapScrumTransform(
       makeScrumSyncTransform({
-        keyExists: (table, key) =>
-          table === 'scrum_contributors' && serverSlugs.has(String(key.slug)),
+        keyOwner: (table, key) =>
+          table === 'scrum_contributors' ? (serverSlugOwners.get(String(key.slug)) ?? null) : null,
         onCollision: (c) => surfaced.push(c),
       }),
     );
 
     await sim.push(opB, transform); // no throw — degraded to skip.
 
-    // The collision was surfaced (recorded), not silently dropped.
+    // The collision was surfaced (recorded), not silently dropped, and names the
+    // incumbent row that won the slug.
     expect(surfaced.length).toBe(1);
     expect(surfaced[0]?.key).toEqual({ slug: 'dup' });
+    expect(surfaced[0]?.existingId).toBe('ct-A-dup');
     // The server kept the winning writer's row (ct-A-dup); B's losing insert was
     // skipped, so exactly one 'dup' contributor exists.
     expect(
