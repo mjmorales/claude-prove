@@ -97,6 +97,42 @@ describe('renderIntakeForm', () => {
     expect(html).not.toContain('<b>L</b>');
   });
 
+  test('renders html blocks verbatim and injects author css/js', () => {
+    const html = renderIntakeForm(
+      form({
+        css: '.evidence{border:1px solid #ccc}',
+        js: "document.title = 'evidence'",
+        fields: [
+          { type: 'html', html: '<table id="ev"><tr><td>A vs B</td></tr></table>' },
+          { id: 'a', label: 'A', type: 'text' },
+        ],
+      }),
+    );
+    expect(html).toContain('<div class="html-block">');
+    expect(html).toContain('<table id="ev"><tr><td>A vs B</td></tr></table>');
+    expect(html).toContain('<style>.evidence{border:1px solid #ccc}</style>');
+    expect(html).toContain("<script>document.title = 'evidence'</script>");
+  });
+
+  test('the in-page builder skips html blocks when gathering answers', () => {
+    const html = renderIntakeForm(
+      form({
+        fields: [
+          { type: 'html', html: '<p>evidence</p>' },
+          { id: 'a', label: 'A', type: 'text' },
+        ],
+      }),
+    );
+    expect(html).toContain("if (field.type === 'html') continue;");
+  });
+
+  test('a form without author css/js renders neither injection slot', () => {
+    const html = renderIntakeForm(form());
+    expect(html).not.toContain('<style></style>');
+    expect(html.match(/<style>/g)?.length).toBe(1);
+    expect(html.match(/<script>/g)?.length).toBe(1);
+  });
+
   test('is deterministic — same form renders byte-identical', () => {
     const f = form({ fields: [{ id: 'a', label: 'A', type: 'choice', choices: ['x'] }] });
     expect(renderIntakeForm(f)).toBe(renderIntakeForm(f));

@@ -11,10 +11,17 @@
  * while a form takes input back (interactive). Mixing the two would break
  * report/v1's byte-stability, so intake owns its own closed model.
  *
- * The field-type set is CLOSED. `secret` and `file` are deliberately
+ * The INPUT field-type set is CLOSED. `secret` and `file` are deliberately
  * KNOWN-BUT-FORBIDDEN: a secret value or a local file path would leak through
  * the copy-to-clipboard roundtrip, so spec validation rejects them with a
  * security message rather than ever rendering an input for them.
+ *
+ * Alongside input fields a spec may interleave `html` DISPLAY entries and carry
+ * top-level `css`/`js`, all injected into the page VERBATIM — evidence (tables,
+ * diagrams, charts, links) the escaped prose surfaces cannot express. The spec
+ * author already controls everything the operator sees, so raw injection widens
+ * expressiveness, not the trust boundary; display entries gather no answer, so
+ * the payload shape and `schema_version` are unchanged.
  */
 
 /** Input types an intake form field can render (closed enum). */
@@ -59,17 +66,41 @@ export interface IntakeField {
   default?: string;
 }
 
+/** Discriminant for display entries; not a member of the input `FieldType` set. */
+export const HTML_BLOCK_TYPE = 'html';
+
 /**
- * An intake form: a titled, ordered list of fields. `form` is the form's
+ * A display entry: author-supplied markup rendered into the page verbatim at
+ * its position among the fields. Gathers no answer, so it never appears in the
+ * payload. Trusted author content — the renderer does not escape it.
+ */
+export interface IntakeHtmlBlock {
+  type: typeof HTML_BLOCK_TYPE;
+  html: string;
+}
+
+/** One entry in a form's `fields` list: an input field or a display block. */
+export type IntakeEntry = IntakeField | IntakeHtmlBlock;
+
+/** Narrows an entry to an answer-bearing input field. */
+export function isInputField(entry: IntakeEntry): entry is IntakeField {
+  return entry.type !== HTML_BLOCK_TYPE;
+}
+
+/**
+ * An intake form: a titled, ordered list of entries. `form` is the form's
  * identity (e.g. `charter`) — the renderer embeds it and the payload echoes it,
- * so `validate` can confirm a payload was produced for this form.
+ * so `validate` can confirm a payload was produced for this form. `css` and
+ * `js` are appended verbatim to the page's base stylesheet and script.
  */
 export interface IntakeForm {
   schema_version: '1';
   form: string;
   title: string;
   description?: string;
-  fields: IntakeField[];
+  css?: string;
+  js?: string;
+  fields: IntakeEntry[];
 }
 
 /** Current intake-form model version. Bump on a closed-set change. */
@@ -102,8 +133,10 @@ export function validateFormSpec(value: unknown): string[] {
   if (typeof spec.title !== 'string') {
     errors.push(`title must be a string, got ${stringify(spec.title)}`);
   }
-  if (spec.description !== undefined && typeof spec.description !== 'string') {
-    errors.push(`description must be a string, got ${stringify(spec.description)}`);
+  for (const k of ['description', 'css', 'js'] as const) {
+    if (spec[k] !== undefined && typeof spec[k] !== 'string') {
+      errors.push(`${k} must be a string, got ${stringify(spec[k])}`);
+    }
   }
   if (!Array.isArray(spec.fields)) {
     errors.push(`fields must be an array, got ${stringify(spec.fields)}`);
@@ -114,17 +147,61 @@ export function validateFormSpec(value: unknown): string[] {
   }
 
   const seen = new Set<string>();
-  spec.fields.forEach((field, i) => validateField(field, `fields[${i}]`, seen, errors));
+  let inputFieldCount = 0;
+  spec.fields.forEach((entry, i) => {
+    const path = `fields[${i}]`;
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
+      errors.push(`${path}: field must be a JSON object`);
+      return;
+    }
+    const record = entry as Record<string, unknown>;
+    if (record.type === HTML_BLOCK_TYPE) {
+      validateHtmlBlock(record, path, errors);
+      return;
+    }
+    inputFieldCount += 1;
+    validateField(record, path, seen, errors);
+  });
+  if (spec.fields.length > 0 && inputFieldCount === 0) {
+    errors.push(
+      'fields must contain at least one input field — a form of only html blocks gathers no answers',
+    );
+  }
   return errors;
 }
 
-function validateField(value: unknown, path: string, seen: Set<string>, errors: string[]): void {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    errors.push(`${path}: field must be a JSON object`);
-    return;
-  }
-  const field = value as Record<string, unknown>;
+/** Keys that mark a misauthored input field; an html block renders markup only. */
+const HTML_BLOCK_FORBIDDEN_KEYS = [
+  'id',
+  'label',
+  'required',
+  'choices',
+  'help',
+  'placeholder',
+  'default',
+] as const;
 
+function validateHtmlBlock(block: Record<string, unknown>, path: string, errors: string[]): void {
+  if (typeof block.html !== 'string' || block.html.length === 0) {
+    errors.push(
+      `${path}.html: must be a non-empty string for an html block, got ${stringify(block.html)}`,
+    );
+  }
+  for (const k of HTML_BLOCK_FORBIDDEN_KEYS) {
+    if (block[k] !== undefined) {
+      errors.push(
+        `${path}.${k}: not allowed on an html block — it renders markup and gathers no answer`,
+      );
+    }
+  }
+}
+
+function validateField(
+  field: Record<string, unknown>,
+  path: string,
+  seen: Set<string>,
+  errors: string[],
+): void {
   // id — safe identifier, unique.
   if (typeof field.id !== 'string' || !FIELD_ID_RE.test(field.id)) {
     errors.push(

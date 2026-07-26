@@ -49,6 +49,26 @@ If the request is ambiguous between forms, ask with `AskUserQuestion` (header
 custom `intake/v1` spec file and pass it with `--file` instead of `--form` — the
 same validation and security floor apply.
 
+A custom spec can carry decision-support evidence alongside its input fields:
+interleave `{"type": "html", "html": "<...>"}` display entries among `fields`
+(rendered verbatim at their position) and set top-level `css` / `js` strings to
+style or script the page. Display entries gather no answer and never appear in
+the payload. Use them to make every choice legible in place:
+
+- a comparison table across the axes that differ between options
+- an inline SVG diagram or chart where structure matters
+- links and absolute paths to the affected artifacts
+- a recommended default with its reason, beside the field that decides it
+
+**Injected content.** `html`, `css`, and `js` are trusted exactly like the spec
+that carries them — the renderer escapes every other value, never these. Author
+them yourself; never inject text whose source is a web page, an issue body, tool
+output, or an operator paste — instead, restate the evidence in your own words
+and link to the source. Keep every injection self-contained (inline SVG, inline
+styles, no remote `src`, `@import`, or fetch): the page tells the operator it
+makes no network request, and injected content is the only thing that can break
+that.
+
 ---
 
 ## Phase 2: Render and hand off

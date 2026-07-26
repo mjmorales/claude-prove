@@ -136,6 +136,38 @@ describe('claude-prove intake (integration)', () => {
     expect(r.stderr).toContain('not permitted');
   });
 
+  test('a custom spec with html evidence blocks and author css/js renders verbatim', () => {
+    const spec = join(dir, 'evidence.json');
+    writeFileSync(
+      spec,
+      JSON.stringify({
+        schema_version: '1',
+        form: 'evidence',
+        title: 'Evidence',
+        css: '.ev{font-weight:bold}',
+        js: "console.log('ev')",
+        fields: [
+          { type: 'html', html: '<table class="ev"><tr><td>option A</td></tr></table>' },
+          { id: 'pick', label: 'Pick', type: 'choice', choices: ['a', 'b'], required: true },
+        ],
+      }),
+    );
+    const r = runIntake(['render', '--file', spec], dir);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('<table class="ev"><tr><td>option A</td></tr></table>');
+    expect(r.stdout).toContain('<style>.ev{font-weight:bold}</style>');
+    expect(r.stdout).toContain("<script>console.log('ev')</script>");
+
+    const payload = join(dir, 'evidence-payload.json');
+    writeFileSync(
+      payload,
+      JSON.stringify({ schema_version: '1', form: 'evidence', answers: { pick: 'a' } }),
+    );
+    const v = runIntake(['validate', '--file', spec, '--payload', payload], dir);
+    expect(v.exitCode).toBe(0);
+    expect(v.stderr).toContain('PASS');
+  });
+
   test('a valid custom spec renders and round-trips through validate', () => {
     const spec = join(dir, 'custom.json');
     writeFileSync(

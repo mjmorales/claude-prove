@@ -1,8 +1,10 @@
 /**
  * intake/v1 static renderer — maps an `IntakeForm` (see `forms.ts`) to a single
  * self-contained interactive HTML page. Vendored and deterministic: inline CSS,
- * inline JS, no network references, every text node HTML-escaped, output
- * byte-stable for a given form (so it can be snapshot-tested).
+ * inline JS, no network references of its own, every text node HTML-escaped,
+ * output byte-stable for a given form (so it can be snapshot-tested). The one
+ * escape hatch is author-supplied content — `html` blocks and top-level
+ * `css`/`js` inject verbatim, trusted exactly like the spec that carries them.
  *
  * Interactivity is the whole point — unlike the read-only report/v1 renderer,
  * this page takes input back. The operator fills the fields and clicks Copy; the
@@ -13,17 +15,19 @@
  *
  * The form spec is embedded once in a `<script type="application/json">` block
  * (script-safe: `<`/`>`/`&` are `\uXXXX`-escaped), and the JS reads field shapes
- * from it. No untrusted value is ever interpolated into executable JS.
+ * from it. Only trusted author content (`js`) reaches executable script.
  */
 
-import type { IntakeField, IntakeForm } from './forms';
+import { type IntakeEntry, type IntakeField, type IntakeForm, isInputField } from './forms';
 
 /** Render an intake form to a complete, self-contained interactive HTML page. */
 export function renderIntakeForm(form: IntakeForm): string {
-  const fields = form.fields.map(renderField).join('\n');
+  const fields = form.fields.map(renderEntry).join('\n');
   const description = form.description
     ? `<p class="form-desc">${escapeHtml(form.description)}</p>`
     : '';
+  const authorStyle = form.css ? `<style>${form.css}</style>` : '';
+  const authorScript = form.js ? `<script>${form.js}</script>` : '';
   return [
     '<!doctype html>',
     '<html lang="en">',
@@ -32,6 +36,7 @@ export function renderIntakeForm(form: IntakeForm): string {
     '<meta name="viewport" content="width=device-width, initial-scale=1">',
     `<title>${escapeHtml(form.title)}</title>`,
     `<style>${STYLE}</style>`,
+    authorStyle,
     '</head>',
     '<body>',
     '<main class="intake">',
@@ -50,10 +55,19 @@ export function renderIntakeForm(form: IntakeForm): string {
     '</main>',
     embedSpec(form),
     `<script>${SCRIPT}</script>`,
+    authorScript,
     '</body>',
     '</html>',
     '',
   ].join('\n');
+}
+
+/** Render one entry: an input field's wrapper, or an html block verbatim. */
+function renderEntry(entry: IntakeEntry): string {
+  if (!isInputField(entry)) {
+    return `<div class="html-block">\n${entry.html}\n</div>`;
+  }
+  return renderField(entry);
 }
 
 /** Render one field's wrapper (label + input + help + error placeholder). */
@@ -168,6 +182,7 @@ const SCRIPT = [
   '    var missing = [];',
   '    for (var i = 0; i < spec.fields.length; i++) {',
   '      var field = spec.fields[i];',
+  "      if (field.type === 'html') continue;",
   '      var val = readField(field);',
   '      answers[field.id] = val;',
   "      var fieldEl = document.querySelector('[data-field=\"' + field.id + '\"]');",
@@ -218,6 +233,7 @@ const STYLE = [
   '.callout-info{border-color:var(--accent);background:#eff6ff}',
   '.callout-body{white-space:pre-wrap}',
   '.field{margin:1.1rem 0}',
+  '.html-block{margin:1.1rem 0}',
   '.field-label{display:block;font-weight:600;margin-bottom:.3rem}',
   '.req{color:#dc2626}',
   '.field-help{margin:.25rem 0 0;font-size:.85rem;color:var(--muted)}',

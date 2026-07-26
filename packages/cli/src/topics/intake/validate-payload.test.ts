@@ -63,6 +63,14 @@ describe('validatePayload', () => {
     expect(errors.some((e) => e.includes('answers.active') && e.includes('boolean'))).toBe(true);
   });
 
+  test('html blocks carry no answers and demand none', () => {
+    const withEvidence: IntakeForm = {
+      ...FORM,
+      fields: [{ type: 'html', html: '<p>evidence</p>' }, ...FORM.fields],
+    };
+    expect(validatePayload(withEvidence, payload({ name: 'Ada', role: 'lead' }))).toEqual([]);
+  });
+
   test('rejects an answer key the form does not declare', () => {
     const errors = validatePayload(FORM, payload({ name: 'Ada', role: 'eng', bogus: 'x' }));
     expect(errors.some((e) => e.includes('answers.bogus') && e.includes('not a field'))).toBe(true);

@@ -11,7 +11,7 @@
  * and checks the payload against it.
  */
 
-import { INTAKE_SCHEMA_VERSION, type IntakeForm } from './forms';
+import { INTAKE_SCHEMA_VERSION, type IntakeField, type IntakeForm, isInputField } from './forms';
 
 /** An answer value: free text, a multichoice selection, or a boolean. */
 export type AnswerValue = string | string[] | boolean;
@@ -52,12 +52,13 @@ export function validatePayload(form: IntakeForm, payload: unknown): string[] {
   }
   const answers = p.answers as Record<string, unknown>;
 
-  const known = new Set(form.fields.map((f) => f.id));
+  const inputFields = form.fields.filter(isInputField);
+  const known = new Set(inputFields.map((f) => f.id));
   for (const key of Object.keys(answers)) {
     if (!known.has(key)) errors.push(`answers.${key}: not a field of form "${form.form}"`);
   }
 
-  for (const field of form.fields) {
+  for (const field of inputFields) {
     const has = Object.prototype.hasOwnProperty.call(answers, field.id);
     if (!has) {
       if (field.required) errors.push(`answers.${field.id}: required field is missing`);
@@ -69,11 +70,7 @@ export function validatePayload(form: IntakeForm, payload: unknown): string[] {
   return errors;
 }
 
-function validateAnswer(
-  field: IntakeForm['fields'][number],
-  value: unknown,
-  errors: string[],
-): void {
+function validateAnswer(field: IntakeField, value: unknown, errors: string[]): void {
   const at = `answers.${field.id}`;
   switch (field.type) {
     case 'text':

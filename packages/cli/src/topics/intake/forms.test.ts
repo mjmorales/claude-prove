@@ -107,6 +107,50 @@ describe('validateFormSpec', () => {
     expect(errors.some((e) => e.includes('fields[0].default'))).toBe(true);
   });
 
+  test('accepts html display blocks interleaved with input fields, plus author css/js', () => {
+    const f = form({
+      css: '.evidence{color:#333}',
+      js: "console.log('evidence')",
+      fields: [
+        { type: 'html', html: '<table><tr><td>A vs B</td></tr></table>' },
+        { id: 'name', label: 'Name', type: 'text' },
+        { type: 'html', html: '<svg><circle r="4"/></svg>' },
+      ],
+    });
+    expect(validateFormSpec(f)).toEqual([]);
+  });
+
+  test('rejects an html block without a non-empty html string', () => {
+    const errors = validateFormSpec(
+      form({ fields: [{ type: 'html' } as never, { id: 'n', label: 'N', type: 'text' }] }),
+    );
+    expect(errors.some((e) => e.includes('fields[0].html'))).toBe(true);
+  });
+
+  test('rejects input-field keys on an html block', () => {
+    const errors = validateFormSpec(
+      form({
+        fields: [
+          { type: 'html', html: '<p>x</p>', id: 'x', required: true } as never,
+          { id: 'n', label: 'N', type: 'text' },
+        ],
+      }),
+    );
+    expect(errors.some((e) => e.includes('fields[0].id') && e.includes('not allowed'))).toBe(true);
+    expect(errors.some((e) => e.includes('fields[0].required'))).toBe(true);
+  });
+
+  test('rejects a form whose fields are all html blocks', () => {
+    const errors = validateFormSpec(form({ fields: [{ type: 'html', html: '<p>x</p>' }] }));
+    expect(errors.some((e) => e.includes('at least one input field'))).toBe(true);
+  });
+
+  test('rejects non-string css/js', () => {
+    const errors = validateFormSpec(form({ css: 5 as never, js: {} as never }));
+    expect(errors.some((e) => e.includes('css must be a string'))).toBe(true);
+    expect(errors.some((e) => e.includes('js must be a string'))).toBe(true);
+  });
+
   test('a non-object spec is rejected', () => {
     expect(validateFormSpec(null)).toEqual(['form spec must be a JSON object']);
     expect(validateFormSpec([])).toEqual(['form spec must be a JSON object']);

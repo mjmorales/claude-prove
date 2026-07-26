@@ -8,6 +8,18 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — intake/v1 evidence injection: `html` display blocks + form-level `css`/`js`
+
+*(Additive form-spec surface. No config-schema, DB-schema, or payload change — `schema_version` stays `1`, and existing specs/payloads are untouched.)*
+
+An intake form could only show escaped prose (`title`, `description`, `label`, `help`), so a form that needed decision-support evidence — a comparison table, a diagram, a chart, a clickable link — had nowhere to put it. Custom `intake/v1` specs can now inject arbitrary author-supplied HTML/CSS/JS:
+
+- **`{"type": "html", "html": "<...>"}` display entries** interleave among `fields` and render verbatim at their position (wrapped in `<div class="html-block">`). They gather no answer, never appear in the payload, and a spec must still contain at least one input field. Spec validation rejects an html block missing a non-empty `html` string or carrying input-field keys (`id`, `label`, `required`, `choices`, `help`, `placeholder`, `default`).
+- **Top-level `css` / `js` strings** append verbatim as an extra `<style>` (after the base stylesheet, so author rules win the cascade) and `<script>` (after the payload builder, so the copy wiring is already live).
+- **Trust model:** injected content is trusted exactly like the spec that carries it — the spec author already controls everything the operator sees, so raw injection widens expressiveness, not the trust boundary. The base page still makes no network requests of its own, output stays byte-stable per form, and the `secret`/`file` field ban is unchanged. Author injected markup yourself; never inject text from an untrusted source — restate the evidence in your own words and link to it.
+
+**Migration:** none. Auto-adopted — available to `claude-prove intake render|validate|spec --file` as soon as the updated CLI is on PATH. Built-in forms (`charter`/`team`/`decompose`) are unchanged.
+
 ## v4.4.0 — `scrum milestone update` + milestone annotations
 
 *(New CLI action + an extended annotation target-kind. No config-schema or DB-schema migration — both are live on existing stores the moment you update.)*
