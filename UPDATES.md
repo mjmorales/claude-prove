@@ -8,7 +8,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Unreleased — intake/v1 evidence injection: `html` display blocks + form-level `css`/`js`
+## v4.5.0 — intake/v1 evidence injection: `html` display blocks + form-level `css`/`js`
 
 *(Additive form-spec surface. No config-schema, DB-schema, or payload change — `schema_version` stays `1`, and existing specs/payloads are untouched.)*
 
