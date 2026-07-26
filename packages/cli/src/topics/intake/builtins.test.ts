@@ -6,7 +6,11 @@
 
 import { describe, expect, test } from 'bun:test';
 import { BUILTIN_FORM_NAMES, getBuiltinForm } from './builtins';
-import { validateFormSpec } from './forms';
+import { isInputField, validateFormSpec } from './forms';
+
+function inputFields(name: string) {
+  return (getBuiltinForm(name)?.fields ?? []).filter(isInputField);
+}
 
 describe('built-in intake forms', () => {
   test('exposes charter, team, and decompose', () => {
@@ -22,27 +26,26 @@ describe('built-in intake forms', () => {
   });
 
   test('the charter form gathers the three charter.md body prompts', () => {
-    const form = getBuiltinForm('charter');
-    expect(form?.fields.map((f) => f.id)).toEqual(['vision', 'mission', 'outcome_bet']);
-    expect(form?.fields.every((f) => f.required)).toBe(true);
+    const fields = inputFields('charter');
+    expect(fields.map((f) => f.id)).toEqual(['vision', 'mission', 'outcome_bet']);
+    expect(fields.every((f) => f.required)).toBe(true);
   });
 
   test('the team form mirrors the team_type and lifetime closed enums', () => {
-    const form = getBuiltinForm('team');
-    const teamType = form?.fields.find((f) => f.id === 'team_type');
+    const fields = inputFields('team');
+    const teamType = fields.find((f) => f.id === 'team_type');
     expect(teamType?.choices).toEqual([
       'stream_aligned',
       'platform',
       'enabling',
       'complicated_subsystem',
     ]);
-    const lifetime = form?.fields.find((f) => f.id === 'lifetime');
+    const lifetime = fields.find((f) => f.id === 'lifetime');
     expect(lifetime?.choices).toEqual(['persistent', 'terminates_on_milestone']);
   });
 
   test('the decompose form gathers the kickoff layer enum', () => {
-    const form = getBuiltinForm('decompose');
-    const layer = form?.fields.find((f) => f.id === 'layer');
+    const layer = inputFields('decompose').find((f) => f.id === 'layer');
     expect(layer?.choices).toEqual(['epic', 'story', 'task']);
   });
 
