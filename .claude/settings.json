@@ -77,7 +77,7 @@
           {
             "type": "command",
             "command": "bun run \"${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts\" scrum hook session-start",
-            "timeout": 3000
+            "timeout": 30000
           }
         ],
         "_tool": "scrum"
@@ -101,7 +101,7 @@
           {
             "type": "command",
             "command": "bun run \"${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts\" scrum hook stop",
-            "timeout": 3000
+            "timeout": 20000
           }
         ],
         "_tool": "scrum"
@@ -125,7 +125,7 @@
           {
             "type": "command",
             "command": "bun run \"${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts\" scrum hook subagent-stop",
-            "timeout": 5000
+            "timeout": 20000
           }
         ],
         "_tool": "scrum"

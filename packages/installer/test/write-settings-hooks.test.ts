@@ -13,10 +13,18 @@ import { join, resolve } from 'node:path';
 import { DEV_INVOCATION_PREFIX } from '../src/resolve-binary-path';
 import {
   PROVE_HOOK_BLOCKS,
+  SYNC_BOUNDARY_SUFFIXES,
   type SettingsFile,
   SettingsParseError,
   writeSettingsHooks,
 } from '../src/write-settings-hooks';
+
+/**
+ * Mirrors `DEFAULT_SYNC_TIMEOUT_MS` in the CLI's sync lifecycle. The installer
+ * cannot import the CLI (the dependency runs the other way), so the budget is
+ * restated here and the invariant below pins the ordering between them.
+ */
+const LIFECYCLE_SYNC_TIMEOUT_MS = 10000;
 
 const PREFIX = DEV_INVOCATION_PREFIX;
 const FIXTURES = resolve(__dirname, '__fixtures__/settings');
@@ -348,5 +356,24 @@ describe('writeSettingsHooks', () => {
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe('sync-boundary hook budgets', () => {
+  test('every network-reaching hook outlives the lifecycle sync timeout', () => {
+    for (const suffix of SYNC_BOUNDARY_SUFFIXES) {
+      const spec = PROVE_HOOK_BLOCKS.find((b) => b.commandSuffix === suffix);
+      expect(spec).toBeDefined();
+      // A hook killed mid-pull wedges the engine's WAL watermark, so the
+      // lifecycle's own degrade must always fire first.
+      expect(spec?.timeout ?? 0).toBeGreaterThan(LIFECYCLE_SYNC_TIMEOUT_MS);
+    }
+  });
+
+  test('the sync boundaries are the only hooks granted the larger budget', () => {
+    const oversized = PROVE_HOOK_BLOCKS.filter((b) => b.timeout > LIFECYCLE_SYNC_TIMEOUT_MS).map(
+      (b) => b.commandSuffix,
+    );
+    expect(oversized.sort()).toEqual([...SYNC_BOUNDARY_SUFFIXES].sort());
   });
 });

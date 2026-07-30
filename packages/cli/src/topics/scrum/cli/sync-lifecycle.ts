@@ -39,10 +39,51 @@ import {
 } from '@claude-prove/store';
 import { readCloudConfig } from '../../store-provision';
 import { type ScrumStore, openScrumStore } from '../store';
-import { type KeyExists, type SurfacedCollision, makeScrumSyncTransform } from '../sync-transform';
+import {
+  type KeyExists,
+  type SurfacedCollision,
+  type SyncDirection,
+  makeScrumSyncTransform,
+} from '../sync-transform';
 
-/** Default wall-clock budget (ms) for a single pull or push before degrading. */
-export const DEFAULT_SYNC_TIMEOUT_MS = 5000;
+/**
+ * Default wall-clock budget (ms) for a single pull or push before degrading.
+ *
+ * MUST stay below the hook timeouts the installer writes for the three sync
+ * boundaries (`SYNC_BOUNDARY_SUFFIXES`), so a slow network loses the race to
+ * this graceful degrade rather than to a hook kill. A kill during a pull leaves
+ * the engine's WAL watermark ahead of the WAL it describes, wedging every later
+ * pull until `store repair-sync` runs.
+ */
+export const DEFAULT_SYNC_TIMEOUT_MS = 10000;
+
+/**
+ * The engine aborts a pull when the local WAL is SHORTER than the watermark its
+ * metadata recorded (`wal_max_frame < revert_since_wal_watermark`), which happens
+ * once a plain non-sync connection checkpoints the shared db file and resets the
+ * WAL out from under the sync metadata. The condition never clears on its own:
+ * every later pull re-reads the same stale watermark and fails identically, so
+ * inbound sync stays dead while push keeps working.
+ */
+const STALE_WATERMARK_RE = /wal_max_frame:\s*(\d+)[\s\S]*?watermark=(\d+)/;
+
+/** Actionable next step printed the moment a stale watermark is recognized. */
+const STALE_WATERMARK_HINT =
+  'scrum sync: local WAL is behind the recorded sync watermark — inbound sync is stuck and will NOT recover on its own. Run `claude-prove store repair-sync` to inspect and repair.\n';
+
+/**
+ * Parse the stale-watermark signature out of an engine error, or `null` when the
+ * failure is anything else. Reported as `{ walMaxFrame, watermark }` so the
+ * repair path can clamp the watermark to a frame the WAL actually holds.
+ */
+export function staleWatermark(reason: string): { walMaxFrame: number; watermark: number } | null {
+  const match = STALE_WATERMARK_RE.exec(reason);
+  if (match === null) return null;
+  const walMaxFrame = Number(match[1]);
+  const watermark = Number(match[2]);
+  if (!Number.isFinite(walMaxFrame) || !Number.isFinite(watermark)) return null;
+  return walMaxFrame < watermark ? { walMaxFrame, watermark } : null;
+}
 
 /** Which session boundary the sync phase fires at. */
 export type SyncBoundary = 'session-start' | 'stop' | 'subagent-stop';
@@ -187,9 +228,14 @@ export async function openSyncSession(
   // snapshot of the existing secondary-UNIQUE keys, populated right after the
   // store opens (post-connect, pre-pull) through this mutable binding.
   let keyExists: KeyExists = () => false;
+  // The engine fires ONE registered transform for both directions, so the phase
+  // is tracked here and read back per mutation; the guard applies to `replay`
+  // only (see `SyncDirection`).
+  let direction: SyncDirection = 'idle';
   const transform = makeScrumSyncTransform({
     keyExists: (table, key) => keyExists(table, key),
     onCollision: (c) => collisions.push(c),
+    direction: () => direction,
   });
 
   let sync: SyncDatabase | undefined;
@@ -203,21 +249,26 @@ export async function openSyncSession(
     const runPhase = async (
       op: () => Promise<unknown>,
       label: string,
+      phase: SyncDirection,
     ): Promise<SyncPhaseResult> => {
+      direction = phase;
       try {
         await withTimeout(op(), timeoutMs, label);
         return { attempted: true, ok: true, collisions };
       } catch (err) {
         const reason = errMsg(err);
         warn(`scrum sync (${label}): ${reason} — proceeding local\n`);
+        if (staleWatermark(reason) !== null) warn(STALE_WATERMARK_HINT);
         return { attempted: true, ok: false, collisions, degradedReason: reason };
+      } finally {
+        direction = 'idle';
       }
     };
     return {
       store,
       result: { attempted: true, ok: true, collisions },
-      pull: () => runPhase(() => liveSync.pull(), 'pull'),
-      push: () => runPhase(() => liveSync.push(), 'push'),
+      pull: () => runPhase(() => liveSync.pull(), 'pull', 'replay'),
+      push: () => runPhase(() => liveSync.push(), 'push', 'push'),
       close: () => store.close(),
     };
   } catch (err) {

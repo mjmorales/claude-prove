@@ -144,27 +144,41 @@ export const PROVE_HOOK_BLOCKS: readonly ProveHookSpec[] = [
     commandSuffix: 'run-state hook subagent-stop',
     timeout: 5000,
   },
+  // The three scrum boundaries below are the ONLY hooks that reach the network:
+  // session-start pulls, stop/subagent-stop push. Their budget must exceed the
+  // lifecycle's own per-op budget (`DEFAULT_SYNC_TIMEOUT_MS`) so the graceful
+  // degrade always wins the race. A hook killed mid-pull tears the sync engine
+  // down after it has recorded its WAL watermark but before it checkpoints,
+  // which leaves the watermark permanently ahead of the WAL and wedges every
+  // later pull — a state only `store repair-sync` clears.
   {
     event: 'SessionStart',
     matcher: 'startup|resume|compact',
     tool: 'scrum',
     commandSuffix: 'scrum hook session-start',
-    timeout: 3000,
+    timeout: 30000,
   },
   {
     event: 'Stop',
     matcher: '',
     tool: 'scrum',
     commandSuffix: 'scrum hook stop',
-    timeout: 3000,
+    timeout: 20000,
   },
   {
     event: 'SubagentStop',
     matcher: '',
     tool: 'scrum',
     commandSuffix: 'scrum hook subagent-stop',
-    timeout: 5000,
+    timeout: 20000,
   },
+] as const;
+
+/** The hooks whose command performs a cloud pull or push. */
+export const SYNC_BOUNDARY_SUFFIXES = [
+  'scrum hook session-start',
+  'scrum hook stop',
+  'scrum hook subagent-stop',
 ] as const;
 
 /**

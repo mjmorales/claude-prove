@@ -19,6 +19,7 @@ describe('makeScrumSyncTransform', () => {
     const transform = makeScrumSyncTransform({
       keyExists: (table, key) => table === 'scrum_contributors' && key.slug === 'dup',
       onCollision: (c) => surfaced.push(c),
+      direction: () => 'replay',
     });
 
     const result = transform(
@@ -42,6 +43,7 @@ describe('makeScrumSyncTransform', () => {
     const transform = makeScrumSyncTransform({
       keyExists: () => false,
       onCollision: (c) => surfaced.push(c),
+      direction: () => 'replay',
     });
 
     const result = transform(
@@ -58,6 +60,7 @@ describe('makeScrumSyncTransform', () => {
       keyExists: (table, key) =>
         table === 'scrum_acceptance_criteria' && key.task_id === 't1' && key.criterion_id === 'c1',
       onCollision: (c) => surfaced.push(c),
+      direction: () => 'replay',
     });
 
     const result = transform(
@@ -74,6 +77,7 @@ describe('makeScrumSyncTransform', () => {
   test('passes through non-insert mutations and unguarded tables unchanged', () => {
     const transform = makeScrumSyncTransform({
       keyExists: () => true,
+      direction: () => 'replay',
       onCollision: () => {
         throw new Error('should not surface on an unguarded mutation');
       },
@@ -101,6 +105,7 @@ describe('makeScrumSyncTransform', () => {
   test('keeps an INSERT with a null key column (a NULL never collides on UNIQUE)', () => {
     const transform = makeScrumSyncTransform({
       keyExists: () => true,
+      direction: () => 'replay',
       onCollision: () => {
         throw new Error('should not surface when the key column is null');
       },
@@ -111,5 +116,65 @@ describe('makeScrumSyncTransform', () => {
     expect(
       transform(mutation({ tableName: 'scrum_contributors', after: { id: 'ct', slug: null } })),
     ).toBeNull();
+  });
+
+  test('keeps a guarded INSERT while pushing, even when the local key probe matches', () => {
+    const surfaced: SurfacedCollision[] = [];
+    const transform = makeScrumSyncTransform({
+      keyExists: () => true,
+      onCollision: (c) => surfaced.push(c),
+      direction: () => 'push',
+    });
+
+    expect(
+      transform(
+        mutation({
+          tableName: 'scrum_contributors',
+          after: { id: 'ct-A', slug: 'only-local', status: 'active' },
+        }),
+      ),
+    ).toBeNull();
+    expect(
+      transform(
+        mutation({
+          tableName: 'scrum_acceptance_criteria',
+          after: { id: 'ac-A', task_id: 't1', criterion_id: 'c1' },
+        }),
+      ),
+    ).toBeNull();
+    expect(surfaced).toHaveLength(0);
+  });
+
+  test('keeps a guarded INSERT when no sync phase is running', () => {
+    const transform = makeScrumSyncTransform({
+      keyExists: () => true,
+      onCollision: () => {
+        throw new Error('should not surface outside a replay');
+      },
+      direction: () => 'idle',
+    });
+
+    expect(
+      transform(mutation({ tableName: 'scrum_contributors', after: { id: 'ct-A', slug: 'dup' } })),
+    ).toBeNull();
+  });
+
+  test('the same registered hook guards replay and passes push, as the engine fires both', () => {
+    let phase: 'push' | 'replay' = 'push';
+    const surfaced: SurfacedCollision[] = [];
+    const transform = makeScrumSyncTransform({
+      keyExists: () => true,
+      onCollision: (c) => surfaced.push(c),
+      direction: () => phase,
+    });
+    const insert = mutation({
+      tableName: 'scrum_contributors',
+      after: { id: 'ct-A', slug: 'dup' },
+    });
+
+    expect(transform(insert)).toBeNull();
+    phase = 'replay';
+    expect(transform(insert)).toEqual({ operation: 'skip' });
+    expect(surfaced).toHaveLength(1);
   });
 });

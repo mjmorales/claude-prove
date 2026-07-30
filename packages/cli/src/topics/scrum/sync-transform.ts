@@ -11,6 +11,12 @@
  * mutation (never the conflicting remote row), and returns `skip` to drop the
  * mutation, `rewrite` to replace it, or `null` to keep it.
  *
+ * Because the engine fires it in BOTH directions off one registration, the hook
+ * is direction-gated (`SyncDirection`): it guards `replay` only. On `push` the
+ * probe would match the very row being pushed, so an ungated guard drops every
+ * INSERT into a guarded table from the outbound stream and the row never leaves
+ * the machine — invisibly, because the remote simply never grows a row.
+ *
  * Two scrum secondary-UNIQUEs can collide cross-writer:
  *   - `scrum_acceptance_criteria UNIQUE(task_id, criterion_id)` — auto-generated
  *     criterion ids now carry a random suffix, so this only fires on an explicit
@@ -52,11 +58,26 @@ export interface SurfacedCollision {
  */
 export type KeyExists = (table: string, key: Record<string, unknown>) => boolean;
 
+/**
+ * Which sync direction the engine is draining mutations for. The collision
+ * guard is meaningful ONLY in `replay` (a pull's local-replay pass, where a
+ * guarded key can collide with a peer row that arrived in the same pull). In
+ * `push` every guarded key matches the local snapshot because the probed row IS
+ * the row being pushed, so a skip there strands the row on this machine forever.
+ */
+export type SyncDirection = 'idle' | 'push' | 'replay';
+
 export interface ScrumSyncTransformOptions {
   /** Current-state existence probe (lifecycle binds it to the live connection). */
   keyExists: KeyExists;
   /** Sink for each surfaced collision, drained by the post-pull anomaly pass. */
   onCollision: (collision: SurfacedCollision) => void;
+  /**
+   * Reads the direction the engine is draining for RIGHT NOW. The lifecycle
+   * flips it around each `pull()` / `push()` call; the guard applies only to
+   * `replay`.
+   */
+  direction: () => SyncDirection;
 }
 
 /** The secondary-UNIQUE key columns this hook guards, per table. */
@@ -81,6 +102,7 @@ export function makeScrumSyncTransform(
   opts: ScrumSyncTransformOptions,
 ): (mutation: DatabaseRowMutation) => DatabaseRowTransformResult {
   return (mutation: DatabaseRowMutation): DatabaseRowTransformResult => {
+    if (opts.direction() !== 'replay') return null;
     if (mutation.changeType !== 'insert') return null;
 
     const keyColumns = SECONDARY_UNIQUE_KEYS[mutation.tableName];

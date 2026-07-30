@@ -52,6 +52,7 @@ import {
   type SyncLifecycleDeps,
   openStoreWithSync,
   openSyncSession,
+  staleWatermark,
   withTimeout,
 } from './sync-lifecycle';
 
@@ -388,33 +389,47 @@ describe('degrade — pull/push failure warns + proceeds local (exit 0, no block
   });
 });
 
+/** A contributor INSERT the transform guards, as the engine would hand it over. */
+function contributorInsert(
+  slug: string,
+): Parameters<NonNullable<SyncConnectOptions['transform']>>[0] {
+  return {
+    changeTime: 0,
+    tableName: 'scrum_contributors',
+    id: 1,
+    changeType: 'insert' as never,
+    after: { slug, display_name: slug },
+  };
+}
+
 describe('transform + collision sink — surfaced for the anomaly pass', () => {
-  test('a secondary-UNIQUE INSERT on an existing key is skipped and surfaced', async () => {
+  test('a secondary-UNIQUE INSERT on an existing key is skipped and surfaced during a pull', async () => {
     const root = project(CLOUD_ON);
     // Seed 'alice' into the backing db BEFORE the synced store opens, so the
     // open-time snapshot the transform probes already holds her slug.
-    const engine = await makeFakeEngine({}, async (store) => {
-      await store.registerContributor({ slug: 'alice', displayName: 'Alice' });
-    });
+    const outcomes: unknown[] = [];
+    const engine = await makeFakeEngine(
+      {
+        async pull() {
+          // The engine drains mutations through the registered hook DURING the
+          // pull, which is the only phase the collision guard applies to.
+          outcomes.push(engine.connectOpts?.transform?.(contributorInsert('alice')));
+          return true;
+        },
+      },
+      async (store) => {
+        await store.registerContributor({ slug: 'alice', displayName: 'Alice' });
+      },
+    );
     const { deps } = makeDeps(engine);
 
     const session = await openSyncSession(root, deps);
     try {
-      // Fire the transform the lifecycle registered at connect(), simulating a
-      // replay of a peer's INSERT of a contributor with the SAME slug.
-      const out = engine.connectOpts?.transform?.({
-        changeTime: 0,
-        tableName: 'scrum_contributors',
-        id: 1,
-        changeType: 'insert' as never,
-        after: { slug: 'alice', display_name: 'Alice (peer)' },
-      });
-      // The transform returns `skip` for a colliding INSERT.
-      expect(out).toEqual({ operation: 'skip' });
-      // The collision was recorded into the sink the anomaly pass drains.
-      expect(session.result.collisions).toHaveLength(1);
-      expect(session.result.collisions[0]?.table).toBe('scrum_contributors');
-      expect(session.result.collisions[0]?.key).toEqual({ slug: 'alice' });
+      const result = await session.pull();
+      expect(outcomes).toEqual([{ operation: 'skip' }]);
+      expect(result.collisions).toHaveLength(1);
+      expect(result.collisions[0]?.table).toBe('scrum_contributors');
+      expect(result.collisions[0]?.key).toEqual({ slug: 'alice' });
     } finally {
       session.close();
     }
@@ -422,20 +437,99 @@ describe('transform + collision sink — surfaced for the anomaly pass', () => {
 
   test('a non-colliding INSERT passes through (null) — no surfaced collision', async () => {
     const root = project(CLOUD_ON);
-    const engine = await makeFakeEngine();
+    const outcomes: unknown[] = [];
+    const engine = await makeFakeEngine({
+      async pull() {
+        outcomes.push(engine.connectOpts?.transform?.(contributorInsert('bob')));
+        return true;
+      },
+    });
     const { deps } = makeDeps(engine);
 
     const session = await openSyncSession(root, deps);
     try {
-      const out = engine.connectOpts?.transform?.({
-        changeTime: 0,
-        tableName: 'scrum_contributors',
-        id: 2,
-        changeType: 'insert' as never,
-        after: { slug: 'bob', display_name: 'Bob' },
-      });
-      expect(out).toBeNull();
+      const result = await session.pull();
+      expect(outcomes).toEqual([null]);
+      expect(result.collisions).toEqual([]);
+    } finally {
+      session.close();
+    }
+  });
+
+  test('a locally-present key is NOT skipped while pushing — the row must reach the remote', async () => {
+    const root = project(CLOUD_ON);
+    const outcomes: unknown[] = [];
+    const engine = await makeFakeEngine(
+      {
+        async push() {
+          // On push the probe necessarily matches: the snapshot holds the very
+          // row being pushed. Skipping here would strand it on this machine.
+          outcomes.push(engine.connectOpts?.transform?.(contributorInsert('alice')));
+        },
+      },
+      async (store) => {
+        await store.registerContributor({ slug: 'alice', displayName: 'Alice' });
+      },
+    );
+    const { deps } = makeDeps(engine);
+
+    const session = await openSyncSession(root, deps);
+    try {
+      const result = await session.push();
+      expect(outcomes).toEqual([null]);
+      expect(result.collisions).toEqual([]);
+    } finally {
+      session.close();
+    }
+  });
+
+  test('the guard is off outside a sync phase, so a stray mutation is never dropped', async () => {
+    const root = project(CLOUD_ON);
+    const engine = await makeFakeEngine({}, async (store) => {
+      await store.registerContributor({ slug: 'alice', displayName: 'Alice' });
+    });
+    const { deps } = makeDeps(engine);
+
+    const session = await openSyncSession(root, deps);
+    try {
+      expect(engine.connectOpts?.transform?.(contributorInsert('alice'))).toBeNull();
       expect(session.result.collisions).toEqual([]);
+    } finally {
+      session.close();
+    }
+  });
+});
+
+describe('stale WAL watermark — recognized and routed to the repair', () => {
+  const ENGINE_ERROR =
+    'sync engine operation failed: database sync engine error: unable to checkpoint synced portion of WAL: result=CheckpointResult { wal_max_frame: 365, wal_total_backfilled: 365, wal_checkpoint_backfilled: 365, maybe_guard: None, db_truncate_sent: false, db_sync_sent: true, wal_truncate_sent: false, wal_sync_sent: false }, watermark=19321';
+
+  test('parses the frame/watermark pair out of the engine error', () => {
+    expect(staleWatermark(ENGINE_ERROR)).toEqual({ walMaxFrame: 365, watermark: 19321 });
+  });
+
+  test('ignores an unrelated failure and a WAL that already satisfies the watermark', () => {
+    expect(staleWatermark('pull timed out after 200ms')).toBeNull();
+    expect(
+      staleWatermark('result=CheckpointResult { wal_max_frame: 400, ... }, watermark=365'),
+    ).toBeNull();
+  });
+
+  test('a pull that fails on it warns with the repair command, not just the raw error', async () => {
+    const root = project(CLOUD_ON);
+    const engine = await makeFakeEngine({
+      async pull() {
+        throw new Error(ENGINE_ERROR);
+      },
+    });
+    const warns: string[] = [];
+    const { deps } = makeDeps(engine, { warns });
+
+    const session = await openSyncSession(root, deps);
+    try {
+      const result = await session.pull();
+      expect(result.ok).toBe(false);
+      expect(warns.join('')).toContain('claude-prove store repair-sync');
     } finally {
       session.close();
     }

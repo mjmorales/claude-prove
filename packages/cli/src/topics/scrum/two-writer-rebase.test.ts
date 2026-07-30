@@ -804,22 +804,20 @@ describe('Class D — collision outcomes on replay (no silent drop)', () => {
     expect(dupSlugs).toEqual([{ slug: 'dup', n: 2 }]);
   });
 
-  test('the scrum transform hook degrades a slug collision to a surfaced skip (the item-6 hook lifecycle wires)', async () => {
+  test('the scrum transform hook degrades a slug collision to a surfaced skip on REPLAY', async () => {
     await seedCommonBase(async () => {});
     await opA.scrum.registerContributor({ slug: 'dup', id: 'ct-A-dup' });
     await opB.scrum.registerContributor({ slug: 'dup', id: 'ct-B-dup' });
     await sim.push(opA);
 
-    // The policy's item-6 hook: the one-sided `transform` from the production
-    // factory `makeScrumSyncTransform`, fired per CDC mutation, that maps a known
-    // slug collision to `skip` and surfaces it for the anomaly pass. This is the
-    // exact function lifecycle wires at connect(); here we drive it through the
-    // harness via `wrapScrumTransform`, binding its synchronous `keyExists` to a
-    // pre-fetched snapshot of the server's current slugs (the engine's transform
-    // callback is synchronous, so the existence probe cannot be async — lifecycle
-    // binds it to a sync probe of the live connection).
-    const serverSlugs = new Set(
-      (await server.store.all<{ slug: string }>('SELECT slug FROM scrum_contributors')).map(
+    // The one-sided `transform` from the production factory
+    // `makeScrumSyncTransform`, driven here through the harness via
+    // `wrapScrumTransform`. Its synchronous `keyExists` is bound the way the
+    // lifecycle binds it: a snapshot of the LOCAL store taken before the phase
+    // runs, never a probe of the server (the engine hands the hook only the
+    // local mutation and cannot see the remote row).
+    const localSlugs = new Set(
+      (await opB.store.all<{ slug: string }>('SELECT slug FROM scrum_contributors')).map(
         (r) => r.slug,
       ),
     );
@@ -827,23 +825,54 @@ describe('Class D — collision outcomes on replay (no silent drop)', () => {
     const transform = wrapScrumTransform(
       makeScrumSyncTransform({
         keyExists: (table, key) =>
-          table === 'scrum_contributors' && serverSlugs.has(String(key.slug)),
+          table === 'scrum_contributors' && localSlugs.has(String(key.slug)),
         onCollision: (c) => surfaced.push(c),
+        direction: () => 'replay',
       }),
     );
 
-    await sim.push(opB, transform); // no throw — degraded to skip.
+    // B pulls: local is overwritten with the server's state (carrying A's row),
+    // then B's own un-pushed insert replays on top and collides.
+    await sim.pull(opB, transform); // no throw — degraded to skip.
 
     // The collision was surfaced (recorded), not silently dropped.
     expect(surfaced.length).toBe(1);
     expect(surfaced[0]?.key).toEqual({ slug: 'dup' });
-    // The server kept the winning writer's row (ct-A-dup); B's losing insert was
-    // skipped, so exactly one 'dup' contributor exists.
-    expect(
-      await count(server, "SELECT COUNT(*) n FROM scrum_contributors WHERE slug = 'dup'"),
-    ).toBe(1);
-    const dup = await server.scrum.getContributorBySlug('dup');
+    // B converged on the winning writer's row; its losing insert was skipped.
+    expect(await count(opB, "SELECT COUNT(*) n FROM scrum_contributors WHERE slug = 'dup'")).toBe(
+      1,
+    );
+    const dup = await opB.scrum.getContributorBySlug('dup');
     expect(dup?.id).toBe('ct-A-dup');
+  });
+
+  test('the same hook never skips on PUSH, so a local-only row always reaches the server', async () => {
+    await seedCommonBase(async () => {});
+    await opB.scrum.registerContributor({ slug: 'only-b', id: 'ct-B-only' });
+
+    // Bound exactly as the lifecycle binds it: B's own slug is in the local
+    // snapshot, so an ungated guard would match the very row being pushed and
+    // strand it on B forever.
+    const localSlugs = new Set(
+      (await opB.store.all<{ slug: string }>('SELECT slug FROM scrum_contributors')).map(
+        (r) => r.slug,
+      ),
+    );
+    const surfaced: SurfacedCollision[] = [];
+    const transform = wrapScrumTransform(
+      makeScrumSyncTransform({
+        keyExists: (table, key) =>
+          table === 'scrum_contributors' && localSlugs.has(String(key.slug)),
+        onCollision: (c) => surfaced.push(c),
+        direction: () => 'push',
+      }),
+    );
+
+    await sim.push(opB, transform);
+
+    expect(surfaced).toEqual([]);
+    const landed = await server.scrum.getContributorBySlug('only-b');
+    expect(landed?.id).toBe('ct-B-only');
   });
 
   test('auto-generated criterion ids do NOT collide across two offline adds to the same task (random suffix)', async () => {
