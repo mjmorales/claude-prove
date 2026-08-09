@@ -301,7 +301,7 @@ describe('record + floors', () => {
     const res = run({ action: 'ledger', now: at(30) });
     const rows = res.out as unknown as Array<{ event: string; task: string | null }>;
     expect(rows.map((r) => r.event)).toEqual(['enabled', 'task-started', 'trunk-red']);
-    expect(rows[1].task).toBe('t1');
+    expect(rows[1]?.task).toBe('t1');
   });
 
   test('record after disable is a usage error', () => {
