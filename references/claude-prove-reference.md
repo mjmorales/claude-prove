@@ -25,6 +25,7 @@ Examples below omit the prefix.
 - Create/remove/reset sub-task git worktrees -> `worktree`
 - Gather session-handoff context (git + artifacts) -> `handoff`
 - Dispatch reporter event (Slack/Discord/MCP) -> `notify`
+- Night-shift lease/floors/ledger (overnight driver state) -> `nightshift`
 - Inspect/migrate/reset `.prove/prove.db` -> `store`
 - Serve/inspect the review UI daemon, manage its project registry -> `review-ui`; commit message check -> `commit`
 - Render an HTML surface (brief, dashboard, timeline, decompose preview) -> `report`; interactive intake form (charter/team/decompose) -> `intake`
@@ -134,8 +135,16 @@ Ex: `handoff gather --project-root "$PWD" --plugin-dir "$PLUGIN_DIR"`
 
 ### notify — reporter event dispatcher
 
-Actions: `dispatch <event>` `test [event]`. Flags: `--project-root` `--config` `--branch` `--slug`.
+Actions: `dispatch <event>` `test [event]`. Flags: `--project-root` `--config` `--branch` `--slug` `--night`.
 Ex: `notify dispatch step-complete --branch main --slug add-login`. Events: see `references/validation-config.md`.
+`dispatch <event> --night` anchors on the open night (`.prove/nightshift/night.json`) instead of a run — no run-state ledger required, no dedup; the night ledger is the audit trail. Used by the night-shift driver for its lifecycle events.
+
+### nightshift — overnight driver state (lease, floors, ledger)
+
+Actions: `enable` `disable` `status` `lease <acquire|heartbeat|release>` `record <event>` `ledger`.
+Flags: `--project-root` `--milestone` (enable, req) `--deadline HH:MM` (default 07:00) `--task-cap` (default 10) `--max-heals` (per PR, default 2) `--max-parked` (halt floor, default 3) `--reason` `--holder` (lease, req) `--ttl-seconds` (default 900) `--force` `--task` `--pr` (record; req for `heal-attempt`) `--detail`.
+Every action prints one JSON verdict on stdout. The engine owns night config, the heartbeat lease, floor counters, and the append-only ledger under `.prove/nightshift/`; the nightshift skills own all judgment. `enable` resolves `--deadline` to an absolute `deadline_at` (midnight-crossing safe) and archives a previously closed night under `history/`; `disable` closes the night and drops the lease. `status` returns `{ night, floors, lease }` in one read. `lease acquire` exits 0 holding the lease (stale leases are taken over, reported via `stale_takeover`) and exits 1 on fresh contention — a tick that loses simply exits. `record <event>` (closed enum: `task-started` `task-landed` `heal-attempt` `task-parked` `trunk-red` `halted` `morning-digest`) appends a ledger row, bumps counters, and returns floor verdicts (`can_start_task`, `past_deadline`, `halt`, per-PR heal cap); the parked floor halts the night mechanically. Ticks branch on verdicts, never recompute them.
+Ex: `nightshift enable --milestone auth-v1 --deadline 06:30` · `nightshift lease acquire --holder tick-$SESSION` · `nightshift record heal-attempt --pr 42 --task add-login`
 
 ## Reserved / Out of scope
 

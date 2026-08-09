@@ -21,6 +21,7 @@ import { register as registerHandoff } from '../src/topics/handoff';
 import { register as registerHook } from '../src/topics/hook';
 import { register as registerInstall } from '../src/topics/install';
 import { register as registerIntake } from '../src/topics/intake';
+import { register as registerNightshift } from '../src/topics/nightshift';
 import { register as registerNotify } from '../src/topics/notify';
 import { register as registerOrchestrator } from '../src/topics/orchestrator';
 import { register as registerPcd } from '../src/topics/pcd';
@@ -59,6 +60,7 @@ registerNotify(cli);
 registerHook(cli);
 registerWorktree(cli);
 registerHandoff(cli);
+registerNightshift(cli);
 
 cli.help();
 cli.version(pjson.version);

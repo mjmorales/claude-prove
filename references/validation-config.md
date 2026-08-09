@@ -249,6 +249,18 @@ Appended to the run-log per validator:
 | `validation-pass` | LLM validation agent returns PASS |
 | `validation-fail` | LLM validation agent returns FAIL |
 
+Night-shift lifecycle events (fired via `notify dispatch <event> --night`, anchored on the open night instead of a run — no run-state ledger, no dedup):
+
+| Event | Fires When |
+|-------|-----------|
+| `nightshift-enabled` | Operator enables a night — opens the night's Slack thread |
+| `task-landed` | A night-shift PR clears the merge queue onto trunk |
+| `heal-attempt` | The driver starts a fix-forward attempt on its own ejected PR |
+| `task-parked` | A task is parked `blocked` after exhausting its heal cap |
+| `trunk-red` | Trunk goes red from a commit the driver did not author — night pauses |
+| `halted` | A halt floor tripped (parked-task floor) or the driver halted explicitly |
+| `morning-digest` | The night closes — digest of landings, parks, and releases |
+
 ## Reporter Environment Variables
 
 - `PROVE_EVENT`: event name

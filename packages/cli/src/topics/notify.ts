@@ -30,6 +30,7 @@ interface NotifyFlags {
   config?: string;
   branch?: string;
   slug?: string;
+  night?: boolean;
 }
 
 export function register(cli: CAC): void {
@@ -39,6 +40,7 @@ export function register(cli: CAC): void {
     .option('--config <c>', 'Config path override (default: <project-root>/.claude/.prove.json)')
     .option('--branch <b>', 'PROVE_RUN_BRANCH override (dispatch only)')
     .option('--slug <s>', 'PROVE_RUN_SLUG override (dispatch only)')
+    .option('--night', 'Anchor on the open night instead of a run (dispatch only)')
     .action((action: string, event: string | undefined, flags: NotifyFlags) => {
       if (!isNotifyAction(action)) {
         console.error(
@@ -69,6 +71,7 @@ function dispatch(action: NotifyAction, event: string | undefined, flags: Notify
         configPath: flags.config,
         branch: flags.branch,
         slug: flags.slug,
+        night: flags.night,
       });
     case 'test':
       return runNotifyTest({

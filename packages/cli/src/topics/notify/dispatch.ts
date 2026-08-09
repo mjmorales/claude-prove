@@ -35,6 +35,13 @@ export interface NotifyDispatchOpts {
   /** Branch / slug override (else read from env). */
   branch?: string;
   slug?: string;
+  /**
+   * Night-shift mode: anchor on `.prove/nightshift/night.json` instead of a
+   * run-state ledger. No branch/slug requirement and no dedup — the tick fires
+   * each night event deliberately once, and the night ledger is the audit
+   * trail. PROVE_TASK / PROVE_DETAIL still flow through from env.
+   */
+  night?: boolean;
 }
 
 interface ReporterEntry {
@@ -51,6 +58,8 @@ export function runNotifyDispatch(opts: NotifyDispatchOpts): number {
   }
 
   const projectRoot = resolve(opts.projectRoot ?? process.cwd());
+  if (opts.night) return dispatchNightEvent(event, projectRoot, opts.configPath);
+
   const branch = opts.branch ?? process.env.PROVE_RUN_BRANCH ?? '';
   const slug = opts.slug ?? process.env.PROVE_RUN_SLUG ?? '';
 
@@ -81,15 +90,7 @@ export function runNotifyDispatch(opts: NotifyDispatchOpts): number {
   const reporters = loadReporters(configPath);
   const matches = reporters.filter((r) => (r.events ?? []).includes(event));
 
-  const reporterEnv = buildReporterEnv(event, branch, slug);
-  for (const entry of matches) {
-    const name = entry.name ?? 'unnamed';
-    const command = entry.command ?? '';
-    if (!command) continue;
-
-    process.stderr.write(`dispatch-event: firing ${name} for ${event}\n`);
-    fireReporter(name, command, projectRoot, reporterEnv);
-  }
+  fireMatchingReporters(matches, event, projectRoot, buildReporterEnv(event, branch, slug));
 
   try {
     dispatchRecord(paths, dedupKey, event);
@@ -98,6 +99,61 @@ export function runNotifyDispatch(opts: NotifyDispatchOpts): number {
   }
 
   return 0;
+}
+
+/**
+ * Night-shift dispatch path: requires an open night (its id becomes the slug),
+ * skips the run-state anchor and the dedup ledger entirely. Best-effort like
+ * the run path — a missing night or config exits 0 with a stderr diagnostic.
+ */
+function dispatchNightEvent(
+  event: string,
+  projectRoot: string,
+  configPathOverride?: string,
+): number {
+  const nightPath = join(projectRoot, '.prove', 'nightshift', 'night.json');
+  let nightId = '';
+  try {
+    const parsed = JSON.parse(readFileSync(nightPath, 'utf8')) as { night_id?: string };
+    nightId = parsed.night_id ?? '';
+  } catch {
+    // Missing or torn night.json — handled by the empty-id check below.
+  }
+  if (!nightId) {
+    process.stderr.write(
+      `dispatch-event: no night at ${nightPath} — run \`claude-prove nightshift enable\` first\n`,
+    );
+    return 0;
+  }
+
+  const configPath = configPathOverride ?? join(projectRoot, '.claude', '.prove.json');
+  if (!existsSync(configPath)) return 0;
+
+  const reporters = loadReporters(configPath);
+  const matches = reporters.filter((r) => (r.events ?? []).includes(event));
+  fireMatchingReporters(
+    matches,
+    event,
+    projectRoot,
+    buildReporterEnv(event, 'nightshift', nightId),
+  );
+  return 0;
+}
+
+function fireMatchingReporters(
+  matches: ReporterEntry[],
+  event: string,
+  projectRoot: string,
+  env: Record<string, string>,
+): void {
+  for (const entry of matches) {
+    const name = entry.name ?? 'unnamed';
+    const command = entry.command ?? '';
+    if (!command) continue;
+
+    process.stderr.write(`dispatch-event: firing ${name} for ${event}\n`);
+    fireReporter(name, command, projectRoot, env);
+  }
 }
 
 function loadReporters(configPath: string): ReporterEntry[] {

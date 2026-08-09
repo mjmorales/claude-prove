@@ -210,3 +210,61 @@ describe('notify dispatch', () => {
     expect(() => readFileSync(log, 'utf8')).toThrow(); // log never created
   });
 });
+
+describe('notify dispatch --night', () => {
+  function seedNight(nightId: string): void {
+    const dir = join(root, '.prove', 'nightshift');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'night.json'), JSON.stringify({ night_id: nightId }));
+  }
+
+  test('missing night.json → exit 0 with stderr diagnostic', () => {
+    writeConfig([{ name: 'probe', command: 'true', events: ['nightshift-enabled'] }]);
+    const code = runNotifyDispatch({
+      eventType: 'nightshift-enabled',
+      projectRoot: root,
+      night: true,
+    });
+    expect(code).toBe(0);
+    expect(errCapture.join('')).toContain('no night at');
+  });
+
+  test('missing config → exit 0, no reporter fired', () => {
+    seedNight('night-x');
+    const code = runNotifyDispatch({
+      eventType: 'nightshift-enabled',
+      projectRoot: root,
+      night: true,
+    });
+    expect(code).toBe(0);
+  });
+
+  test('fires matching reporter with the night id as slug, no run-state needed', () => {
+    seedNight('night-20260110-230000');
+    const probe = join(root, 'probe.sh');
+    const log = join(root, 'probe.log');
+    writeFileSync(
+      probe,
+      `#!/usr/bin/env bash\necho "fired:$PROVE_EVENT:$PROVE_RUN_SLUG:$PROVE_RUN_BRANCH" >> ${log}\n`,
+    );
+    writeConfig([{ name: 'probe', command: `bash ${probe}`, events: ['task-landed'] }]);
+
+    const code = runNotifyDispatch({ eventType: 'task-landed', projectRoot: root, night: true });
+    expect(code).toBe(0);
+    expect(readFileSync(log, 'utf8')).toContain(
+      'fired:task-landed:night-20260110-230000:nightshift',
+    );
+  });
+
+  test('night dispatch has no dedup — the same event fires twice', () => {
+    seedNight('night-x');
+    const probe = join(root, 'probe.sh');
+    const log = join(root, 'probe.log');
+    writeFileSync(probe, `#!/usr/bin/env bash\necho fired >> ${log}\n`);
+    writeConfig([{ name: 'probe', command: `bash ${probe}`, events: ['heal-attempt'] }]);
+
+    runNotifyDispatch({ eventType: 'heal-attempt', projectRoot: root, night: true });
+    runNotifyDispatch({ eventType: 'heal-attempt', projectRoot: root, night: true });
+    expect(readFileSync(log, 'utf8').trim().split('\n')).toHaveLength(2);
+  });
+});
