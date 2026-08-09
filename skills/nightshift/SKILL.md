@@ -41,9 +41,10 @@ Exit 1 (a night is already open) → surface the error and stop; the operator de
 
 ### Phase 4: Arm the machinery
 
-1. **Cron**: create a harness cron (CronCreate) firing every 10 minutes with prompt `/prove:nightshift-tick`. Write the returned cron id to `.prove/nightshift/cron.json` as `{ "cron_id": "<id>" }` — the tick's teardown step and `off` both read it.
-2. **Sleep prevention** (macOS): `nohup caffeinate -i >/dev/null 2>&1 & echo $! > .prove/nightshift/caffeinate.pid`. Tell the operator a closed laptop lid still sleeps the machine — plug in and leave the lid open, or run on a desktop.
-3. **Announce**: `PROVE_DETAIL="milestone <m>, <n> ready tasks, deadline <deadline>" claude-prove notify dispatch nightshift-enabled --night`.
+1. **Attribution label**: `gh label create night-shift --description "Opened by the night-shift driver" --color 5319e7 --force` — idempotent. Every PR the tick opens carries this label, and the tick's trunk-culprit detection and PR listing key on it; `gh pr create --label` fails outright when the label is unregistered, so a missing label breaks the first night PR.
+2. **Cron**: create a harness cron (CronCreate) firing every 10 minutes with prompt `/prove:nightshift-tick`. Write the returned cron id to `.prove/nightshift/cron.json` as `{ "cron_id": "<id>" }` — the tick's teardown step and `off` both read it.
+3. **Sleep prevention** (macOS): `nohup caffeinate -i >/dev/null 2>&1 & echo $! > .prove/nightshift/caffeinate.pid`. Tell the operator a closed laptop lid still sleeps the machine — plug in and leave the lid open, or run on a desktop.
+4. **Announce**: `PROVE_DETAIL="milestone <m>, <n> ready tasks, deadline <deadline>" claude-prove notify dispatch nightshift-enabled --night`.
 
 ### Phase 5: Report
 
