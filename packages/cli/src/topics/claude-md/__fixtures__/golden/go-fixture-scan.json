@@ -58,6 +58,10 @@
       "summary": "Render a charter/team/decompose HTML intake form, validate the pasted-back payload, and drive the one writer"
     },
     {
+      "name": "nightshift",
+      "summary": "Operate night shift — the opt-in overnight driver that drains a milestone through the merge queue"
+    },
+    {
       "name": "orchestrator",
       "summary": "Unified entry point for orchestrator, autopilot, and full-auto execution"
     },
