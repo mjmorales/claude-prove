@@ -23,7 +23,7 @@ Run the phases in order. A failed phase halts enablement — never arm the cron 
 ### Phase 1: Preflight
 
 1. **Milestone has work**: `claude-prove scrum next-ready --milestone <m>` — at least one ready task. Zero ready tasks → report and stop; there is nothing to drain.
-2. **Landing path exists**: `gh auth status` succeeds and the repo landing flow is available (a merge-queue/auto-merge path onto the default branch — e.g. the repo's landing skill or `gh pr merge --auto`). No landing path → stop; night shift lands autonomously or not at all.
+2. **Landing path exists**: `gh auth status` succeeds and the repo has a real autonomous landing path onto its default branch — a landing serializer + Kodiak (Diginite repos; never arm GitHub auto-merge there, it beats Kodiak to the merge), a GitHub merge queue, or repo-native auto-merge. No landing path → stop; night shift lands autonomously or not at all.
 3. **Reporters cover night events**: `.claude/.prove.json` `reporters` should match at least `nightshift-enabled`, `task-landed`, `heal-attempt`, `task-parked`, `trunk-red`, `halted`, `morning-digest` — the full set the tick dispatches. Missing → warn the operator that the night will run silent, and offer `/prove:notify setup` first (AskUserQuestion: Continue silent / Set up reporters). One Slack thread per night is the reporter script's job: a night reporter script should persist its `thread_ts` under `.prove/nightshift/slack-thread.json`, post the `nightshift-enabled` message as the thread opener, and reply in-thread for every later event.
 4. **Clean working tree** on the default branch checkout: uncommitted changes → stop and tell the operator; ticks branch from trunk and must never absorb stray local edits.
 

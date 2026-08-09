@@ -48,7 +48,7 @@ Take the lowest-numbered PR that failed checks or was ejected from the queue —
 
 1. Record the attempt first — the engine adjudicates the cap: `claude-prove nightshift record heal-attempt --pr <n> --task <task-id>`.
 2. Branch on that verdict alone; never recompute the cap from attempt counts. `heal.cap_reached: true` → **park instead of healing**. Park procedure: close the PR (leave the branch), set the scrum task `blocked` with the failure summary as the note, `claude-prove nightshift record task-parked --task <task-id> --pr <n> --detail "<why>"`, `notify dispatch task-parked --night`. If the parked verdict comes back `floors.halt: true`, also `notify dispatch halted --night`. Exit.
-3. Otherwise fix forward: check out the PR's worktree/branch, read the failing check logs (`gh pr checks <n>`, `gh run view <run-id> --log-failed`), make the smallest correct fix, run the repo's validators locally, commit, push. Auto-merge re-queues it. `notify dispatch heal-attempt --night`. Exit.
+3. Otherwise fix forward: check out the PR's worktree/branch, read the failing check logs (`gh pr checks <n>`, `gh run view <run-id> --log-failed`) — and when the failing check is `gate / ai-review`, the PR's `gate-ai-review` findings comment lists exactly what to fix, so address every `blocker` finding rather than diagnosing from scratch. Make the smallest correct fix, run the repo's validators locally, commit, push; the landing path re-queues the PR. `notify dispatch heal-attempt --night`. Exit.
 
 ## Step 3 — Landing to verify?
 
@@ -62,7 +62,7 @@ For each open night PR that is queued or freshly merged:
 1. Check the floor verdict from Step 0's status: `floors.can_start_task` must be true. False by task cap → exit (waiting for in-flight work or morning). False by deadline → Step 5.
 2. `claude-prove scrum next-ready --milestone <m> --limit 1`. Empty → milestone drained → Step 5.
 3. The picked task must have acceptance criteria (`claude-prove scrum task show <id>`). None → park it with detail "needs acceptance criteria" (park procedure from Step 2, no PR) and exit — never invent scope at 3am.
-4. Drive it: set the task `in_progress`, `claude-prove nightshift record task-started --task <id>`, create the worktree (`claude-prove worktree create <slug> <task-id> --base <default-branch>`), then execute the task through the orchestrator autopilot flow (plan → implement → validators green → acceptance criteria verified). Commit conventionally, open a PR labeled `night-shift` with the run's brief as the body, arm auto-merge into the queue. Exit — the landing verifies in a later tick (Step 3).
+4. Drive it: set the task `in_progress`, `claude-prove nightshift record task-started --task <id>`, create the worktree (`claude-prove worktree create <slug> <task-id> --base <default-branch>`), then execute the task through the orchestrator autopilot flow (plan → implement → validators green → acceptance criteria verified). Commit conventionally, open a PR labeled `night-shift` with the run's brief as the body, and hand it to the repo's landing path: on Diginite repos the landing serializer + Kodiak own the merge — **never `gh pr merge --auto` there** (GitHub auto-merge beats Kodiak and drops the queue) — and only repos whose landing genuinely runs on GitHub auto-merge/merge-queue get it armed. Exit — the landing verifies in a later tick (Step 3).
 
 ## Step 5 — Close the night
 
