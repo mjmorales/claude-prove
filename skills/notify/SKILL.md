@@ -23,7 +23,7 @@ Parse first token of `$ARGUMENTS` as subcommand. If absent, `AskUserQuestion` he
 
 ## Subcommand: `setup`
 
-Remaining `$ARGUMENTS` tokens: optional platform (`slack`, `discord`, `mcp`, `custom`). If supplied, skip platform selection.
+Remaining `$ARGUMENTS` tokens: optional platform (`slack`, `slack-night`, `discord`, `mcp`, `custom`). If supplied, skip platform selection.
 
 ### Phase 1 — Discovery
 
@@ -39,6 +39,7 @@ Scan existing integrations before prompting:
 Skip if `$ARGUMENTS` already named a platform. Otherwise `AskUserQuestion` header "Platform", annotating options with discovery results (e.g., "Slack (Webhook) — SLACK_WEBHOOK_URL detected"):
 
 - **Slack (Webhook)** — posts via `SLACK_WEBHOOK_URL` and curl
+- **Slack Night Thread** — night-shift events, one thread per night, via `SLACK_BOT_TOKEN` + `chat.postMessage` (webhooks cannot thread)
 - **Discord (Webhook)** — posts via `DISCORD_WEBHOOK_URL` and curl
 - **MCP Integration** — reuses a detected MCP server's messaging tool
 - **Custom Command** — user-provided notification command
@@ -51,11 +52,14 @@ Skip if `$ARGUMENTS` already named a platform. Otherwise `AskUserQuestion` heade
 
 `AskUserQuestion` header "Events" (multiSelect: true). Offer all reporter event types: `step-complete`, `step-halted`, `wave-complete`, `execution-complete`, `review-approved`, `review-rejected`, `validation-pass`, `validation-fail`.
 
+For **Slack Night Thread**, skip the events question and subscribe the full night set — `nightshift-enabled`, `task-landed`, `heal-attempt`, `task-parked`, `trunk-red`, `halted`, `morning-digest` — a partial subscription tears holes in the thread the operator reads as the night's timeline.
+
 Platform-specific details (free-form):
 
 | Platform | Fields |
 |----------|--------|
 | Slack | Webhook URL env var (default `SLACK_WEBHOOK_URL`), channel override, mention prefs |
+| Slack Night Thread | Bot token env var (default `SLACK_BOT_TOKEN`, scope `chat:write`), channel ID env var (default `SLACK_CHANNEL_ID`) |
 | Discord | Webhook URL env var (default `DISCORD_WEBHOOK_URL`), mention role |
 | MCP | Which MCP server and tool, channel/recipient |
 | Custom | Command to run, any env vars it needs |
@@ -153,6 +157,18 @@ Per reporter: name, exit code, stdout/stderr tail on failure. If every configure
 | `review-rejected` | Principal architect requests changes |
 | `validation-pass` | LLM validation agent returns PASS |
 | `validation-fail` | LLM validation agent returns FAIL |
+
+Night-shift events (dispatched via `claude-prove notify dispatch <event> --night`; the Slack Night Thread platform subscribes all of them):
+
+| Event | Fires When |
+|-------|-----------|
+| `nightshift-enabled` | Operator enables a night — opens the night's thread |
+| `task-landed` | A night-shift PR clears the merge queue onto trunk |
+| `heal-attempt` | The driver starts a fix-forward attempt on its own ejected PR |
+| `task-parked` | A task is parked `blocked` after exhausting its heal cap |
+| `trunk-red` | Trunk goes red — the driver reverts its own landing or pauses |
+| `halted` | A halt floor tripped or the driver halted explicitly |
+| `morning-digest` | The night closes — digest reply broadcast back to the channel |
 
 ## Committing
 
