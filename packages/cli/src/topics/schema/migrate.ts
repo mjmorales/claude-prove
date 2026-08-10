@@ -491,6 +491,30 @@ function migrateV11ToV12(config: ProveConfig): [ProveConfig, MigrationChange[]] 
   return [result, changes];
 }
 
+/**
+ * v12 -> v13: add the OPTIONAL top-level `models` field (recommended Claude
+ * Code model configuration: `{ main, advisor, fallback, effort }`). Absent
+ * models = no recommendation (the v12 behavior), so no key is seeded — this
+ * is a pure version bump. The block is declarative intent only; nothing is
+ * materialized into settings by migration. All other top-level keys pass
+ * through untouched.
+ *
+ * Hardcodes target version '13'. Do NOT reference CURRENT_SCHEMA_VERSION —
+ * migrations are frozen-in-time; later version bumps must not retroactively
+ * change what this migration does.
+ */
+function migrateV12ToV13(config: ProveConfig): [ProveConfig, MigrationChange[]] {
+  const result: ProveConfig = { ...config, schema_version: '13' };
+  const changes: MigrationChange[] = [
+    new MigrationChange(
+      'change',
+      'schema_version',
+      '"12" -> "13" (models added as optional — absent models means no recommended model config)',
+    ),
+  ];
+  return [result, changes];
+}
+
 export const MIGRATIONS: Record<string, MigrationFn> = {
   '0_to_1': migrateV0ToV1,
   '1_to_2': migrateV1ToV2,
@@ -504,6 +528,7 @@ export const MIGRATIONS: Record<string, MigrationFn> = {
   '9_to_10': migrateV9ToV10,
   '10_to_11': migrateV10ToV11,
   '11_to_12': migrateV11ToV12,
+  '12_to_13': migrateV12ToV13,
 };
 
 /**

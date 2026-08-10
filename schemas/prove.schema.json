@@ -3,7 +3,7 @@
   "$id": "https://raw.githubusercontent.com/mjmorales/claude-prove/main/schemas/prove.schema.json",
   "$comment": "Generated from PROVE_SCHEMA (packages/cli/src/topics/schema/schemas.ts) by scripts/generate-json-schema.ts — do not edit by hand.",
   "title": ".claude/.prove.json",
-  "description": "claude-prove project configuration (schema v12)",
+  "description": "claude-prove project configuration (schema v13)",
   "type": "object",
   "properties": {
     "$schema": {
@@ -13,7 +13,7 @@
     "schema_version": {
       "type": "string",
       "description": "Schema version for migration tracking",
-      "default": "12"
+      "default": "13"
     },
     "dev_mode": {
       "type": "boolean",
@@ -282,6 +282,42 @@
       },
       "additionalProperties": false,
       "description": "Optional cloud-sync opt-in (added in schema v12). Non-secret config only — the org Platform API token (admin bootstrap secret) and the per-machine db-scoped sync token live OUTSIDE this file: the Platform token in the environment, the db token in the gitignored machine config ~/.claude-prove/config.json. Absent or { enabled: false } (the default) keeps prove local-only with zero network I/O."
+    },
+    "models": {
+      "type": "object",
+      "properties": {
+        "main": {
+          "type": "string",
+          "description": "Recommended main-model selection for Claude Code sessions in this project: a model alias or full model ID. The headline value is 'opusplan' — Opus during plan mode, Sonnet for execution ('opusplan[1m]' forces the 1M context window in both phases). Plain aliases ('opus', 'sonnet', 'haiku') and full IDs (e.g. 'claude-opus-5') are also valid. Materialized into the gitignored .claude/settings.local.json `model` key — Claude Code treats it as an initial selection, never enforcement.",
+          "default": ""
+        },
+        "advisor": {
+          "type": "string",
+          "description": "Recommended advisor model (a model alias or full model ID): a second, at-least-as-capable model Claude consults at decision points mid-task, which reads the full transcript and returns guidance. Materialized into the gitignored .claude/settings.local.json `advisorModel` key. The advisor tool is experimental, runs server-side on the Anthropic API only (unavailable on Bedrock/Vertex/Foundry) and bills at the advisor model’s rates; Claude Code silently detaches an advisor less capable than the main model.",
+          "default": ""
+        },
+        "fallback": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Recommended fallback-model chain (model aliases or full IDs) tried in order when the primary model returns a non-retryable server error. Materialized into the gitignored .claude/settings.local.json `fallbackModel` key; Claude Code caps chains at three models after duplicate removal.",
+          "default": []
+        },
+        "effort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "description": "Recommended effort level for sessions in this project. Materialized into the gitignored .claude/settings.local.json `env` block as CLAUDE_CODE_EFFORT_LEVEL. Claude Code clamps a level the active model does not support down to the highest supported level."
+        }
+      },
+      "additionalProperties": false,
+      "description": "Recommended Claude Code model configuration for this project (added in schema v13). Declarative intent only: the committed block never changes behavior by itself — an operator materializes it into the gitignored .claude/settings.local.json via `claude-prove models apply`, because model choice is per-operator and billing-dependent. Absent block = no recommendation."
     }
   },
   "required": [

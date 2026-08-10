@@ -40,7 +40,7 @@ export interface Schema {
   fields: Record<string, FieldSpec>;
 }
 
-export const CURRENT_SCHEMA_VERSION = '12';
+export const CURRENT_SCHEMA_VERSION = '13';
 
 /**
  * Shape of `tools.scrum` introduced in schema v5. The v4 -> v5 migration
@@ -408,6 +408,71 @@ export const PROVE_SCHEMA: Schema = {
         'token in the environment, the db token in the gitignored machine ' +
         'config ~/.claude-prove/config.json. Absent or { enabled: false } ' +
         '(the default) keeps prove local-only with zero network I/O.',
+    },
+    models: {
+      type: 'dict',
+      required: false,
+      fields: {
+        main: {
+          type: 'str',
+          required: false,
+          description:
+            'Recommended main-model selection for Claude Code sessions in ' +
+            'this project: a model alias or full model ID. The headline ' +
+            "value is 'opusplan' — Opus during plan mode, Sonnet for " +
+            "execution ('opusplan[1m]' forces the 1M context window in both " +
+            "phases). Plain aliases ('opus', 'sonnet', 'haiku') and full IDs " +
+            "(e.g. 'claude-opus-5') are also valid. Materialized into the " +
+            'gitignored .claude/settings.local.json `model` key — Claude ' +
+            'Code treats it as an initial selection, never enforcement.',
+          default: '',
+        },
+        advisor: {
+          type: 'str',
+          required: false,
+          description:
+            'Recommended advisor model (a model alias or full model ID): a ' +
+            'second, at-least-as-capable model Claude consults at decision ' +
+            'points mid-task, which reads the full transcript and returns ' +
+            'guidance. Materialized into the gitignored ' +
+            '.claude/settings.local.json `advisorModel` key. The advisor ' +
+            'tool is experimental, runs server-side on the Anthropic API only (unavailable ' +
+            'on Bedrock/Vertex/Foundry) and bills at the advisor model’s ' +
+            'rates; Claude Code silently detaches an advisor less capable ' +
+            'than the main model.',
+          default: '',
+        },
+        fallback: {
+          type: 'list',
+          required: false,
+          items: { type: 'str' },
+          description:
+            'Recommended fallback-model chain (model aliases or full IDs) ' +
+            'tried in order when the primary model returns a non-retryable ' +
+            'server error. Materialized into the gitignored ' +
+            '.claude/settings.local.json `fallbackModel` key; Claude Code ' +
+            'caps chains at three models after duplicate removal.',
+          default: [],
+        },
+        effort: {
+          type: 'str',
+          required: false,
+          enum: ['low', 'medium', 'high', 'xhigh', 'max'],
+          description:
+            'Recommended effort level for sessions in this project. ' +
+            'Materialized into the gitignored .claude/settings.local.json ' +
+            '`env` block as CLAUDE_CODE_EFFORT_LEVEL. Claude Code clamps a ' +
+            'level the active model does not support down to the highest ' +
+            'supported level.',
+        },
+      },
+      description:
+        'Recommended Claude Code model configuration for this project ' +
+        '(added in schema v13). Declarative intent only: the committed block ' +
+        'never changes behavior by itself — an operator materializes it into ' +
+        'the gitignored .claude/settings.local.json via `claude-prove models ' +
+        'apply`, because model choice is per-operator and billing-dependent. ' +
+        'Absent block = no recommendation.',
     },
   },
 };

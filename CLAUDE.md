@@ -1,8 +1,8 @@
 <!-- prove:managed:start -->
 # claude-prove
 
-<!-- prove:plugin-version:3.13.1 -->
-**Prove plugin v3.13.1** — if `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" --version` does not match v3.13.1, run `/prove:update` to sync.
+<!-- prove:plugin-version:4.7.0 -->
+**Prove plugin v4.7.0** — if `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" --version` does not match v4.7.0, run `/prove:update` to sync.
 
 JavaScript/TypeScript (npm)
 
@@ -45,9 +45,9 @@ Dispatch and memory protocol:
 
 - For subagent work that falls inside a team's scope, dispatch that team's role agent — never a general-purpose agent. Resolve scope from each team's bundle `teams/<slug>.md`; use a general-purpose agent only when no team's bundle scope covers the task.
 - Every dispatched team agent must honor its memory protocol: read its team bundle `teams/<slug>.md` (scope, roster, recent Lore) before acting, and record what it learns:
-  - seat notes with `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" scrum annotation add --target-kind team`
-  - team Lore with `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" scrum lore record` (tech_lead seat; non-lead seats route journal-worthy findings to a seat annotation instead)
-  - durable decisions with `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" scrum decision record`
+  - seat notes with `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" scrum annotation add --target-kind team --target <team-slug> --body <text> --author <CT-UUID>`
+  - team Lore with `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" scrum lore record <team-slug> --body <text> --author <CT-UUID>` (tech_lead seat; non-lead seats route journal-worthy findings to a seat annotation instead)
+  - durable decisions with `bun run "${CLAUDE_PROVE_PLUGIN_DIR:-$HOME/.claude/plugins/prove}/packages/cli/bin/run.ts" scrum decision record <path> --kind adr`
 
 ## References
 
@@ -90,6 +90,8 @@ Dispatch and memory protocol:
 - `/prove:comprehend` — Socratic quiz on recent diffs to build code comprehension
 - `/prove:index` — Update the file index (run after significant changes)
 - `/prove:intake` — Render a charter/team/decompose HTML intake form, validate the pasted-back payload, and drive the one writer
+- `/prove:models` — Recommend and declare the project's model config — opusplan, advisor pairing, fallback, effort
+- `/prove:nightshift` — Operate night shift — the opt-in overnight driver that drains a milestone through the merge queue
 - `/prove:orchestrator` — Unified entry point for orchestrator, autopilot, and full-auto execution
 - `/prove:plan` — Plan a task or a specific step from the active plan.json
 - `/prove:review-ui` — Loopback review UI for inspecting prove runs, ACB intent groups, and verdicts

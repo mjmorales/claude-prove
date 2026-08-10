@@ -11,6 +11,7 @@
     "./plugin-root": "./src/plugin-root.ts",
     "./resolve-binary-path": "./src/resolve-binary-path.ts",
     "./write-settings-hooks": "./src/write-settings-hooks.ts",
+    "./write-model-settings": "./src/write-model-settings.ts",
     "./bootstrap-prove-json": "./src/bootstrap-prove-json.ts"
   },
   "scripts": {

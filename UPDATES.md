@@ -8,6 +8,33 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — Recommended model config: `models` block (schema v13)
+
+*(New optional config block — config schema v12 → v13, migrated automatically via `/prove:update`. Absent block = no behavior change.)*
+
+Claude Code ships two model optimizations worth adopting per-project — the `opusplan` hybrid (Opus during plan mode, Sonnet for execution) and the advisor tool (a stronger model Claude consults at decision points mid-task) — but there was nowhere for a prove project to record which configuration it recommends. `.claude/.prove.json` gains an optional `models` block carrying that recommendation:
+
+- **`models.main`** — recommended main-model alias or full ID (`opusplan`, `opusplan[1m]`, `opus`, `sonnet`, `claude-opus-5`, …); maps to the Claude Code `model` setting.
+- **`models.advisor`** — recommended advisor model; maps to the `advisorModel` setting. The advisor tool is experimental, runs server-side on the Anthropic API only, must be at least as capable as the main model, and bills at its own rates.
+- **`models.fallback`** — recommended fallback chain (array); maps to `fallbackModel`. Claude Code caps chains at three models.
+- **`models.effort`** — recommended effort level (`low|medium|high|xhigh|max`); maps to the `CLAUDE_CODE_EFFORT_LEVEL` environment variable.
+
+The block is **declarative intent only**: committed as the project's recommendation, it changes nothing by itself. Model choice is per-operator and billing-dependent (advisor availability, plan economics), so materialization into the gitignored `.claude/settings.local.json` is a separate, explicit operator step.
+
+A dedicated **`models` topic** is the service space for the block and for advisor management:
+
+- **`claude-prove models set [--preset <name>] [--main M] [--advisor M] [--fallback csv] [--effort L]`** — declare or amend the committed block (schema-validated; `""` clears a field; `--preset` replaces the block — see Use-case presets below).
+- **`claude-prove models apply [--dry-run]`** — materialize the declaration into `.claude/settings.local.json` (`model`, `advisorModel`, `fallbackModel`, `env.CLAUDE_CODE_EFFORT_LEVEL`). Add/update only: keys the block does not declare are never touched, so an operator's own selections survive.
+- **`claude-prove models status`** — read-only declared-vs-materialized report. `apply` and `status` both print advisory pairing diagnostics (Haiku cannot act as an advisor; a Fable main runs without one; fallback chains cap at three).
+- **`install doctor` gains a `models-drift` check** — warns (never fails) when a declared block is not materialized on this machine, naming `models apply` as the repair.
+- **`/prove:init` offers the optimization during bootstrap** — the `balanced` preset (or any named preset, or a free-form pairing) behind an explicit opt-in gate, with a second gate for the per-machine `models apply`.
+- **Use-case presets** — `claude-prove models set --preset <name>` replaces the block with a pairing from a closed, CLI-owned table (listed by `claude-prove models presets`; field flags override individual fields): `balanced` (opusplan + Opus advisor, effort high — daily driving), `deep` (Opus + Opus advisor, xhigh, deliberately no fallback — visible failures beat silent downgrades on high-stakes work), `economy` (Sonnet + Opus advisor, medium — routine work escalating planning/completion checks), `unattended` (Sonnet + Opus advisor + `sonnet,haiku` fallback, effort high — overnight/CI driving where forward progress beats model purity).
+- **`/prove:models` + `model-config` skill + `model-config-advisor` agent** — the judgment flow over the mechanical CLI: the skill reads state and gathers the workload, the read-only advisor agent maps it to a preset (or a justified custom block) with rationale and caveats, and human gates own both the declaration and the materialization. Fast-paths: `/prove:models status|apply|preset <name>`.
+
+**Advisor telemetry note:** there is no prove-side hook for advisor activations, by necessity — the advisor is a server-side tool, so consultations never pass through Claude Code's hook machinery (no PreToolUse/PostToolUse fires), and Claude Code's OTEL metrics carry no advisor breakdown. Runtime activation is visible in Claude Code's own surfaces: the session-start "Advisor Tool is on" notification, the `Advising` transcript line (Ctrl+O expands the guidance), and `/usage` session totals. Prove therefore verifies **materialization** (`models status`, doctor's `models-drift`), not consultation.
+
+**Migration:** run `/prove:update` (or `claude-prove schema migrate --file .claude/.prove.json`) — the v12 → v13 hop is a pure version bump; no key is seeded and existing behavior is unchanged. Declaring a `models` block is opt-in.
+
 ## v4.5.0 — intake/v1 evidence injection: `html` display blocks + form-level `css`/`js`
 
 *(Additive form-spec surface. No config-schema, DB-schema, or payload change — `schema_version` stays `1`, and existing specs/payloads are untouched.)*

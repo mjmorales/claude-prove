@@ -180,6 +180,32 @@ Show the `validators` array that was written. `AskUserQuestion` (header: "Valida
 
 On "Edit": instruct the user to modify the `validators` array and save. No further automated action.
 
+## Step 5.5: Model recommendation (optional)
+
+Offer the project a recommended Claude Code model configuration — the committed `models` block in `.claude/.prove.json`. This is an explicit opt-in: gate both writes behind the questions below rather than writing unprompted — the advisor tool is experimental, runs server-side on the Anthropic API only (unavailable on Bedrock/Vertex/Foundry), and bills at the advisor model's own rates.
+
+`AskUserQuestion` (header: "Models"):
+- "balanced (Recommended)" — the `balanced` preset: opusplan (Opus plans, Sonnet executes), an Opus advisor Claude consults at decision points mid-task, effort `high`
+- "Another preset" — show `claude-prove models presets` (`deep` / `economy` / `unattended`) and gather the choice
+- "Skip" — no recommendation; declare one later with `claude-prove models set`, or drive the full recommendation flow with `/prove:models`
+
+The built-in "Other" carries the free-form case (including `opusplan` with no advisor): gather `main` / `advisor` / `fallback` / `effort`, confirm, then declare. `set` requires `--preset` or at least one field flag and rejects the call otherwise; `""` clears a field.
+
+```bash
+# "balanced" (or any named preset)
+"${PROVE_CLI[@]}" models set --cwd "$TARGET_CWD" --preset balanced
+
+# free-form: pass only the fields the operator named
+"${PROVE_CLI[@]}" models set --cwd "$TARGET_CWD" \
+  --main <alias|id> --advisor <alias|id> --fallback <a,b> --effort <low|medium|high|xhigh|max>
+```
+
+Then offer the per-machine half — the declaration alone changes nothing. `AskUserQuestion` (header: "Apply"):
+- "Apply on this machine" — run `"${PROVE_CLI[@]}" models apply --cwd "$TARGET_CWD"` (writes `model` / `advisorModel` / `fallbackModel` / `env.CLAUDE_CODE_EFFORT_LEVEL` into the gitignored `.claude/settings.local.json`; takes effect next session)
+- "Declare only" — leave materialization to each operator; `install doctor` surfaces the pending `models apply` as a warn-level `models-drift` check
+
+`models apply` and `models status` print advisory pairing diagnostics (a Haiku advisor, a Fable main, a chain longer than three). Relay them verbatim instead of suppressing them — they are warnings, not failures; `apply` still writes.
+
 ## Step 6: Update .gitignore
 
 ```bash

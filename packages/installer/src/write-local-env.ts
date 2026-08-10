@@ -33,7 +33,7 @@ export class LocalSettingsParseError extends Error {
   }
 }
 
-function readLocalSettings(path: string): LocalSettingsFile {
+export function readLocalSettings(path: string): LocalSettingsFile {
   let raw: string;
   try {
     raw = readFileSync(path, 'utf8');

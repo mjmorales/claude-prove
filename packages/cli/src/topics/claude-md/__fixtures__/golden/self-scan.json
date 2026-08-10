@@ -91,6 +91,10 @@
       "summary": "Render a charter/team/decompose HTML intake form, validate the pasted-back payload, and drive the one writer"
     },
     {
+      "name": "models",
+      "summary": "Recommend and declare the project's model config — opusplan, advisor pairing, fallback, effort"
+    },
+    {
       "name": "nightshift",
       "summary": "Operate night shift — the opt-in overnight driver that drains a milestone through the merge queue"
     },

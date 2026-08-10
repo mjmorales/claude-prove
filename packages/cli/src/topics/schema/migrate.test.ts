@@ -56,6 +56,9 @@
  *   'v11 to v12 is a pure version bump — cloud absent, none seeded'
  *   'v11 to v12 preserves an existing cloud block byte-for-byte'
  *   'v11 to v12 preserves all other top-level keys byte-for-byte'
+ *   'v12 to v13 is a pure version bump — models absent, none seeded'
+ *   'v12 to v13 preserves an existing models block byte-for-byte'
+ *   'v12 to v13 preserves all other top-level keys byte-for-byte'
  *   'full v0 to current chain applies all hops in order'
  *   'backup filename follows Python with_suffix semantics'
  */
@@ -566,8 +569,8 @@ describe('TestV4ToV5', () => {
     // v7->v8 (version bump + brief/memory/decomposition seeds), v8->v9
     // (version bump only — triggers absent), v9->v10 (version bump only —
     // artifacts absent), v10->v11 (version bump only — no acb.config to
-    // strip), and v11->v12 (version bump only — cloud absent). No tools.scrum
-    // mutation.
+    // strip), v11->v12 (version bump only — cloud absent), and v12->v13
+    // (version bump only — models absent). No tools.scrum mutation.
     const paths = changes.map((c) => c.path);
     expect(paths).toEqual([
       'schema_version',
@@ -578,6 +581,7 @@ describe('TestV4ToV5', () => {
       'brief',
       'memory',
       'decomposition',
+      'schema_version',
       'schema_version',
       'schema_version',
       'schema_version',
@@ -767,8 +771,9 @@ describe('TestV8ToV9', () => {
 
     expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     expect('triggers' in target).toBe(false);
-    // This hop and the v9->v10, v10->v11, v11->v12 follow-ons emit only version bumps.
+    // This hop and the v9->v10, v10->v11, v11->v12, v12->v13 follow-ons emit only version bumps.
     expect(changes.map((c) => c.path)).toEqual([
+      'schema_version',
       'schema_version',
       'schema_version',
       'schema_version',
@@ -802,8 +807,9 @@ describe('TestV9ToV10', () => {
 
     expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     expect('artifacts' in target).toBe(false);
-    // This hop and the v10->v11, v11->v12 follow-ons emit only version bumps.
+    // This hop and the v10->v11, v11->v12, v12->v13 follow-ons emit only version bumps.
     expect(changes.map((c) => c.path)).toEqual([
+      'schema_version',
       'schema_version',
       'schema_version',
       'schema_version',
@@ -902,8 +908,12 @@ describe('TestV10ToV11', () => {
     const [target, changes] = planMigration(config);
 
     expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
-    // v10->v11 then v11->v12 are both pure version bumps with nothing to strip.
-    expect(changes.map((c) => c.path)).toEqual(['schema_version', 'schema_version']);
+    // v10->v11, v11->v12, and v12->v13 are all pure version bumps with nothing to strip.
+    expect(changes.map((c) => c.path)).toEqual([
+      'schema_version',
+      'schema_version',
+      'schema_version',
+    ]);
   });
 
   test('v10 to v11 drops only the present review_ui_* key', () => {
@@ -948,8 +958,9 @@ describe('TestV11ToV12', () => {
 
     expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     // Absent cloud stays absent — local-only with zero network is the default.
+    // Two entries: the v11->v12 bump plus the pure v12->v13 bump.
     expect('cloud' in target).toBe(false);
-    expect(changes.map((c) => c.path)).toEqual(['schema_version']);
+    expect(changes.map((c) => c.path)).toEqual(['schema_version', 'schema_version']);
   });
 
   test('v11 to v12 preserves an existing cloud block byte-for-byte', () => {
@@ -993,6 +1004,79 @@ describe('TestV11ToV12', () => {
 
   test('a wrong-typed cloud.enabled is rejected', () => {
     const config = { schema_version: '12', cloud: { enabled: 'yes' } };
+    const errors = validateConfig(config, PROVE_SCHEMA);
+    expect(errors.some((e) => e.severity === 'error')).toBe(true);
+  });
+});
+
+describe('TestV12ToV13', () => {
+  test('v12 to v13 is a pure version bump — models absent, none seeded', () => {
+    const config = { schema_version: '12' };
+    const [target, changes] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    // Absent models stays absent — no recommended model config is the default.
+    expect('models' in target).toBe(false);
+    expect(changes.map((c) => c.path)).toEqual(['schema_version']);
+  });
+
+  test('v12 to v13 preserves an existing models block byte-for-byte', () => {
+    const models = {
+      main: 'opusplan',
+      advisor: 'opus',
+      fallback: ['sonnet', 'haiku'],
+      effort: 'high',
+    };
+    const config = { schema_version: '12', models };
+    const [target] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect(target.models).toEqual(models);
+  });
+
+  test('v12 to v13 preserves all other top-level keys byte-for-byte', () => {
+    const config = {
+      schema_version: '12',
+      scopes: { skills: 'skills/' },
+      cloud: { enabled: false },
+      memory: { stale_threshold_days: 90 },
+    };
+    const [target] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect(target.scopes).toEqual({ skills: 'skills/' });
+    expect(target.cloud).toEqual({ enabled: false });
+    expect(target.memory).toEqual({ stale_threshold_days: 90 });
+  });
+
+  test('v13 config with a full models block validates clean', () => {
+    const config = {
+      schema_version: '13',
+      models: {
+        main: 'opusplan',
+        advisor: 'opus',
+        fallback: ['sonnet'],
+        effort: 'xhigh',
+      },
+    };
+    const errors = validateConfig(config, PROVE_SCHEMA);
+    expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
+  });
+
+  test('v13 config with models absent validates clean (no-recommendation default)', () => {
+    const config = { schema_version: '13' };
+    const errors = validateConfig(config, PROVE_SCHEMA);
+    expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
+  });
+
+  test('a wrong-typed models.fallback is rejected', () => {
+    const config = { schema_version: '13', models: { fallback: 'sonnet' } };
+    const errors = validateConfig(config, PROVE_SCHEMA);
+    expect(errors.some((e) => e.severity === 'error')).toBe(true);
+  });
+
+  test('an out-of-enum models.effort is rejected', () => {
+    const config = { schema_version: '13', models: { effort: 'ultra' } };
     const errors = validateConfig(config, PROVE_SCHEMA);
     expect(errors.some((e) => e.severity === 'error')).toBe(true);
   });
@@ -1072,6 +1156,10 @@ describe('TestFullChain', () => {
     // v11->v12 leaves cloud absent — a v0 input never opts into cloud, so the
     // full chain ends local-only with zero network (the default invariant).
     expect('cloud' in target).toBe(false);
+
+    // v12->v13 leaves models absent — a v0 input carries no recommended
+    // model config, so none is invented for it.
+    expect('models' in target).toBe(false);
   });
 
   test('full chain strips acb.config review_ui_image/tag carried from v0', () => {

@@ -100,25 +100,26 @@ Check for plugin capabilities not yet configured in `.claude/.prove.json`:
 
    **Portable hook prefixes**: when any prove-owned hook command in `.claude/settings.json` embeds a machine-absolute dev prefix (`bun run /abs/path/.../packages/cli/bin/run.ts` — the pre-portable emission; `claude-prove install doctor` warns "machine-absolute dev prefix"), offer to regenerate with `claude-prove install init-hooks --force` and to run `/prove:local-env` so this machine's checkout path lands in the gitignored `.claude/settings.local.json` `env` block (`env.CLAUDE_PROVE_PLUGIN_DIR`). `AskUserQuestion` (header: "Hooks"): "Regenerate" / "Skip".
 
-3. **Methodology config knobs** (config schema v9/v10): the `.claude/.prove.json` schema gains optional config blocks. The version stamp is migrated in by Step 4's `schema migrate` — there is nothing to add by hand — but surface the tunables so the operator knows they exist:
+3. **Optional config blocks** (config schema v9/v10/v13): the `.claude/.prove.json` schema gains optional config blocks. The version stamp is migrated in by Step 4's `schema migrate` — there is nothing to add by hand — but surface the tunables so the operator knows they exist:
 
    - `brief.single_pass_token_threshold` (default `8000`), `brief.max_synthesis_retries` (default `2`), `brief.prose_judge_on` (default `true`) — reasoning Review Brief synthesis tunables (multipass split, retry budget, whether the non-blocking prose judge runs).
    - `memory.stale_threshold_days` (default `90`) — age past which `scrum decision review-stale` flags a decision.
    - `decomposition.auto_accept_through` (default `none`; one of `none|epic|story|task`) — the decompose layer through which children auto-promote `proposed → accepted` without a human accept gate.
    - `triggers` (v9; absent = no bindings) — an **opt-in** trigger table: a list of `{ on, workflow, description? }` mapping a task status to a bound next-action the scrum reconciler surfaces in its session-start digest. Unlike the tunables above it has no default — populate it only to use trigger bindings.
    - `artifacts.html_open` (v10; absent = platform default opener) — an **opt-in** shell command template the `--open` flag (`report`, `intake render`) uses to launch written HTML artifacts; `{file}` is replaced with the quoted artifact path. Populate it to route intake forms / previews / briefs into a specific surface, e.g. `"cursor {file}"` for an editor's embedded preview or `"open -a Safari {file}"` for a specific browser.
+   - `models` (v13; absent = no recommendation) — an **opt-in** recommended Claude Code model configuration: `main` (model alias/ID, e.g. `opusplan` — Opus in plan mode, Sonnet for execution), `advisor` (a stronger model Claude consults at decision points; experimental, Anthropic API only), `fallback` (chain, capped at three by Claude Code), `effort` (`low|medium|high|xhigh|max`). Declare it with `claude-prove models set`; the committed block is declarative only — each operator materializes it into the gitignored `.claude/settings.local.json` with `claude-prove models apply`. Model choice is per-operator and billing-dependent, so never run `models apply` unprompted; instead surface it as an available step and let the operator decide.
 
    ```
-   New plugin feature: Methodology config knobs (schema v9/v10)
+   New plugin feature: optional config blocks (schema v9/v10/v13)
 
    Optional tunables now available in .claude/.prove.json (defaults applied by migration):
      brief.single_pass_token_threshold, brief.max_synthesis_retries, brief.prose_judge_on
      memory.stale_threshold_days
      decomposition.auto_accept_through
-   Opt-in (no default — populate to use): triggers, artifacts.html_open
+   Opt-in (no default — populate to use): triggers, artifacts.html_open, models
    ```
 
-   Note "These knobs are optional — defaults are migrated in; edit `.claude/.prove.json` only to override (or to populate the opt-in `triggers` table / `artifacts.html_open` opener)." Do not prompt to write them.
+   Note "These knobs are optional — defaults are migrated in; edit `.claude/.prove.json` only to override (or to populate an opt-in block: the `triggers` table, the `artifacts.html_open` opener, or the `models` recommendation)." Do not prompt to write them.
 
 4. **New methodology skills + CLI surfaces**: these are discovered automatically on plugin load (skills/agents) or ship in the CLI — there is no `.claude/.prove.json` change. Note them so the operator knows the capabilities are live:
 
@@ -134,6 +135,7 @@ Check for plugin capabilities not yet configured in `.claude/.prove.json`:
    - **`plan.json tasks[].execution` block** (run-state schema v4) — optional durable run-record directives (`retry` / `loop` / `fanout` / `on_fail` / `concurrency`) the workflow/orchestrator driver honors; advance on-disk run artifacts with `claude-prove run-state migrate`.
    - **Bound next-actions in the session-start digest** — when `.claude/.prove.json` carries a `triggers` table, the scrum reconciler surfaces each task sitting in a triggering status as a pending next-action (automatic; no config edit beyond populating `triggers`).
    - **HTML rendering surfaces** — **`report <action>`** (`render`/`validate`/`brief`/`milestone-brief`/`timeline`/`status`/`decompose-preview`) compiles a closed report/v1 block-document model to a self-contained HTML page, and **`intake <action>`** (`render`/`validate`/`spec`/`list`) plus the **`intake`** skill render the charter/team/decompose Q&A as an interactive form whose pasted-back payload validates against the same form and drives the same writer the conversational interview drives (`secret`/`file` field types rejected).
+   - **`models` topic (schema v13)** — **`models set [--preset <name>] [--main M] [--advisor M] [--fallback csv] [--effort L]`** declares the committed model recommendation (`--preset` replaces the block with a use-case-tuned pairing from the closed table listed by **`models presets`**: `balanced`, `deep`, `economy`, `unattended`), **`models apply [--dry-run]`** materializes it into the gitignored `.claude/settings.local.json` per machine, **`models status`** reports declared-vs-materialized state with pairing diagnostics, and `install doctor` gains a warn-only `models-drift` check naming `models apply` as the repair. **`/prove:models`** + the **`model-config`** skill + the **`model-config-advisor`** agent drive the judgment flow: workload gathering, an agent recommendation, and human gates on both the declaration and the materialization.
    - **Native review UI daemon (schema v11)** — **`review-ui serve <start|stop|status|restart>`** runs the review UI as a detached loopback daemon (pidfile + log under `~/.claude-prove/review-ui/`, binds `127.0.0.1` only); there is no Docker image to pull. It serves every project in the machine-global `~/.claude-prove/projects.json` registry (auto-populated on CLI use), managed by **`review-ui project <list|hide|remove|add>`**. The listen port is machine-global: set `~/.claude-prove/config.json::review_ui_port` (top-level key, default `5174`) — a per-project `tools.acb.config.review_ui_port` is informational only, and the v10→v11 migration drops the retired `review_ui_image`/`review_ui_tag` keys. If an earlier Docker-based version left a `prove-review` container, note it can be removed once with `docker rm -f prove-review`.
 
    Note "New skills, agent, and CLI surfaces detected — live after this update; no config edit required."

@@ -20,6 +20,7 @@ Examples below omit the prefix.
 - Distill files into token-budgeted context -> `pcd`
 - Count prompt tokens -> `prompting`
 - Scaffold `.claude/`, doctor, upgrade binary -> `install`
+- Recommended model config (opusplan/advisor/fallback/effort), materialize model settings -> `models`
 - Generate/scan CLAUDE.md -> `claude-md`
 - Render orchestrator task/review/wave-plan prompt -> `orchestrator`
 - Create/remove/reset sub-task git worktrees -> `worktree`
@@ -92,6 +93,12 @@ Actions: `migrate` `info` `reset` (requires `--confirm`) `migrate-to-turso`. Ex:
 
 Actions: `init` `init-hooks` `init-config` `local-env` `doctor` `upgrade` `latest`. Flags: `--project` `--cwd` `--settings <path>` `--force` `--plugin-dir <path>` (local-env) `--prefix <dir>` (default `~/.local/bin`, upgrade) `--tag <vX.Y.Z>` (upgrade; pin a specific release, default latest) `--offline` (latest). Ex: `install doctor` · `install upgrade --tag v4.0.1`.
 `local-env` writes `env.CLAUDE_PROVE_PLUGIN_DIR` into the gitignored `.claude/settings.local.json` so the portable `${CLAUDE_PROVE_PLUGIN_DIR:-...}` hook commands resolve on this machine, and refreshes the reference symlink chain `.claude/prove-plugin → ~/.claude-prove/latest → plugin dir` that generated CLAUDE.md `@`-references load through (driven by `/prove:local-env`; `doctor`'s `plugin-dir-env` and `stable-root` checks verify both).
+
+### models — recommended model config (main/advisor/fallback/effort)
+
+Actions: `set` `apply` `status` `presets`. Flags: `--cwd` `--settings <path>` (apply/status) `--dry-run` (apply) `--preset <name>` `--main <m>` `--advisor <m>` `--fallback <csv>` `--effort <low|medium|high|xhigh|max>` (set; pass `--preset` or at least one field flag; `""` clears a field flag).
+`set` declares/amends the committed `models` block (`main`, `advisor`, `fallback`, `effort`) in `.claude/.prove.json`, schema-validated; `--preset <balanced|deep|economy|unattended>` replaces the block with a use-case-tuned pairing from the closed preset table (field flags override individual fields), listed by `presets`. `apply` materializes the block into the gitignored `.claude/settings.local.json` (`model`, `advisorModel`, `fallbackModel`, `env.CLAUDE_CODE_EFFORT_LEVEL`) — the explicit per-machine opt-in, add/update only, never touching keys the block does not declare. `status` reports declared vs materialized state. `apply` and `status` both print advisory pairing diagnostics (Haiku cannot act as an advisor; a Fable main runs without one; chains cap at three). `install doctor`'s `models-drift` check warns when a declared block is unmaterialized. Judgment flow: `/prove:models` (model-config skill + `model-config-advisor` agent).
+Ex: `models set --preset balanced` · `models apply --dry-run`
 
 ### report — report/v1 HTML renderer
 

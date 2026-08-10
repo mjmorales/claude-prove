@@ -82,6 +82,7 @@ Dispatch and memory protocol:
 - `/prove:comprehend` — Socratic quiz on recent diffs to build code comprehension
 - `/prove:index` — Update the file index (run after significant changes)
 - `/prove:intake` — Render a charter/team/decompose HTML intake form, validate the pasted-back payload, and drive the one writer
+- `/prove:models` — Recommend and declare the project's model config — opusplan, advisor pairing, fallback, effort
 - `/prove:nightshift` — Operate night shift — the opt-in overnight driver that drains a milestone through the merge queue
 - `/prove:orchestrator` — Unified entry point for orchestrator, autopilot, and full-auto execution
 - `/prove:plan` — Plan a task or a specific step from the active plan.json

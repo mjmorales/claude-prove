@@ -1,4 +1,4 @@
-Migration plan for <FIXTURE_PATH> (v3 -> v12):
+Migration plan for <FIXTURE_PATH> (v3 -> v13):
   ~ schema_version: "3" -> "4"
   - scopes.tools: tools registry lives under top-level tools.* since v3
   - tools.schema: schema CLI is built-in — no toggleable tool entry
@@ -15,3 +15,4 @@ Migration plan for <FIXTURE_PATH> (v3 -> v12):
   ~ schema_version: "9" -> "10" (artifacts added as optional — absent artifacts.html_open means the platform default opener)
   ~ schema_version: "10" -> "11"
   ~ schema_version: "11" -> "12" (cloud added as optional — absent cloud keeps prove local-only with zero network)
+  ~ schema_version: "12" -> "13" (models added as optional — absent models means no recommended model config)

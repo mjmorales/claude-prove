@@ -38,18 +38,23 @@
  *                           workspace deps were never installed
  *   8. prove-json-version — `.claude/.prove.json` parses and its
  *                           schema_version matches CURRENT_SCHEMA_VERSION
- *   9. team-agent-markers — (only when `.claude/agents/` holds any
+ *   9. models-drift       — (only when `.claude/.prove.json` declares a
+ *                           `models` block) the recommendation is
+ *                           materialized in `.claude/settings.local.json`;
+ *                           drift warns (never fails) because
+ *                           materialization is a per-operator opt-in
+ *  10. team-agent-markers — (only when `.claude/agents/` holds any
  *                           `team-<slug>-<role>.md` file) each such file carries
  *                           a single well-formed engine-owned region: both
  *                           generated markers present, BEGIN before END, neither
  *                           duplicated. A malformed/missing region means a later
  *                           regeneration cannot splice the block in place
- *  10. team-agent-drift   — (only when the scrum store exists) the on-disk
+ *  11. team-agent-drift   — (only when the scrum store exists) the on-disk
  *                           team-agent files reconcile with the active-team
  *                           registry: every active team has all three role
  *                           files, and no role file survives for an
  *                           unknown/inactive team
- *  11. claude-cli         — `which claude` (warn on miss, never fail)
+ *  12. claude-cli         — `which claude` (warn on miss, never fail)
  *
  * The `--version` probe is the one check that executes a hook target; it is
  * read-only and side-effect free, keeping doctor non-invasive. The two
@@ -72,6 +77,11 @@ import { homedir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { type Mode, detectMode } from '@claude-prove/installer/detect-mode';
 import { PLUGIN_DIR_ENV_VAR, resolvePluginRoot } from '@claude-prove/installer/plugin-root';
+import {
+  type ModelsBlock,
+  diffModelSettings,
+  hasModelDeclarations,
+} from '@claude-prove/installer/write-model-settings';
 import type { HookBlock, SettingsFile } from '@claude-prove/installer/write-settings-hooks';
 import { CURRENT_SCHEMA_VERSION } from '../schema/schemas';
 import { TEAM_AGENT_BEGIN_MARKER, TEAM_AGENT_END_MARKER } from '../scrum/cli/team-agent-artifact';
@@ -142,6 +152,9 @@ export async function runDoctor(opts: DoctorOptions = {}): Promise<CheckResult[]
   results.push(...hookPaths.results);
   results.push(...checkHookExec(hookPaths.targets));
   results.push(checkProveJsonSchemaVersion(cwd));
+
+  const modelsCheck = checkModelsDrift(cwd);
+  if (modelsCheck) results.push(modelsCheck);
 
   const markerCheck = checkTeamAgentMarkers(cwd);
   if (markerCheck) results.push(markerCheck);
@@ -943,6 +956,56 @@ function checkProveJsonSchemaVersion(cwd: string): CheckResult {
     };
   }
   return { name: 'prove-json-version', status: 'pass', message: `v${version}` };
+}
+
+/**
+ * (only when `.claude/.prove.json` declares a `models` block) the declared
+ * recommendation is materialized in `.claude/settings.local.json`. Warn-only:
+ * materialization is an explicit per-operator opt-in, so drift is surfaced
+ * with the repair verb, never failed.
+ */
+function checkModelsDrift(cwd: string): CheckResult | undefined {
+  const provePath = join(cwd, DEFAULT_PROVE_JSON_REL);
+  let models: ModelsBlock;
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(provePath, 'utf8'));
+    const rawModels =
+      typeof parsed === 'object' && parsed !== null
+        ? (parsed as Record<string, unknown>).models
+        : undefined;
+    if (typeof rawModels !== 'object' || rawModels === null || Array.isArray(rawModels)) {
+      return undefined;
+    }
+    models = rawModels as ModelsBlock;
+  } catch {
+    // A missing or unparseable .prove.json is prove-json-version's finding.
+    return undefined;
+  }
+  if (!hasModelDeclarations(models)) return undefined;
+
+  const settingsPath = join(cwd, DEFAULT_LOCAL_SETTINGS_REL);
+  let drifted: string[];
+  try {
+    drifted = diffModelSettings(settingsPath, models);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return {
+      name: 'models-drift',
+      status: 'warn',
+      message: `cannot read ${DEFAULT_LOCAL_SETTINGS_REL}: ${msg}`,
+      fix: 'fix the JSON syntax, then run `claude-prove models apply`',
+    };
+  }
+
+  if (drifted.length === 0) {
+    return { name: 'models-drift', status: 'pass', message: 'declared models block materialized' };
+  }
+  return {
+    name: 'models-drift',
+    status: 'warn',
+    message: `declared models block not materialized: ${drifted.join(', ')}`,
+    fix: 'run `claude-prove models apply` to write the recommended model settings on this machine',
+  };
 }
 
 /** Warn (not fail) when the Claude Code CLI is not on $PATH. */
