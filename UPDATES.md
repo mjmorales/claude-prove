@@ -8,7 +8,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Unreleased — Recommended model config: `models` block (schema v13)
+## v4.8.0 — Recommended model config: `models` block (schema v13)
 
 *(New optional config block — config schema v12 → v13, migrated automatically via `/prove:update`. Absent block = no behavior change.)*
 
