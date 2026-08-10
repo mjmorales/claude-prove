@@ -1,6 +1,6 @@
 {
   "$schema": "../schemas/prove.schema.json",
-  "schema_version": "13",
+  "schema_version": "14",
   "artifacts": {
     "html_open": "cursor {file}"
   },

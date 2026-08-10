@@ -1,4 +1,4 @@
-Migration plan for <FIXTURE_PATH> (v2 -> v13):
+Migration plan for <FIXTURE_PATH> (v2 -> v14):
   ~ schema_version: "2" -> "3"
   ~ index: moved to tools.cafi.config
   ~ schema_version: "3" -> "4"
@@ -16,3 +16,4 @@ Migration plan for <FIXTURE_PATH> (v2 -> v13):
   ~ schema_version: "10" -> "11"
   ~ schema_version: "11" -> "12" (cloud added as optional — absent cloud keeps prove local-only with zero network)
   ~ schema_version: "12" -> "13" (models added as optional — absent models means no recommended model config)
+  ~ schema_version: "13" -> "14" (models.planning added as optional — absent planning resolves as auto)

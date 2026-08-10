@@ -121,7 +121,7 @@ A fully-featured `.claude/.prove.json` exercising every top-level key the schema
 | `memory.stale_threshold_days` | Age past which `scrum decision review-stale` reports a decision (report-only, never prunes) | `90` |
 | `decomposition.auto_accept_through` | Decompose layer (`epic`/`story`/`task`) through which children auto-promote without the human accept gate; `none` gates every layer | `"none"` |
 | `cloud` | Cloud-sync opt-in (`enabled`, `org`, `group`, `db_name`). Non-secret config only — the org Platform API token and the per-machine db-scoped sync token live outside this file. Absent or `{ "enabled": false }` keeps prove local-only with zero network I/O | — |
-| `models` | Recommended Claude Code model configuration: `main` (model alias/ID, e.g. `opusplan` — Opus in plan mode, Sonnet for execution), `advisor` (a stronger model Claude consults at decision points; experimental, Anthropic API only), `fallback` (chain, capped at three by Claude Code), `effort` (`low\|medium\|high\|xhigh\|max`). Declarative only — `claude-prove models apply` materializes it into the gitignored `.claude/settings.local.json` per machine | — |
+| `models` | Recommended Claude Code model configuration: `main` (model alias/ID, e.g. `opusplan` — Opus in plan mode, Sonnet for execution), `advisor` (a stronger model Claude consults at decision points; experimental, Anthropic API only), `fallback` (chain, capped at three by Claude Code), `effort` (`low\|medium\|high\|xhigh\|max`), `planning` (`prove\|native\|auto` — how planning-phase skills route; never materialized). Declarative only — `claude-prove models apply` materializes the settings-backed fields into the gitignored `.claude/settings.local.json` per machine | — |
 
 ### Schema Version
 
@@ -136,6 +136,7 @@ Tracks config format for migration. Missing field = v0 (pre-schema). Run `/prove
 | `"11"` | Drops `review_ui_image`/`review_ui_tag` from `tools.acb.config` — the review UI runs as a native in-process loopback daemon, so there is no container image to pin. The listen port also leaves the project config: it resolves machine-globally from `~/.claude-prove/config.json::review_ui_port` (default `5174`), so a per-project `tools.acb.config.review_ui_port` is informational only |
 | `"12"` | Optional `cloud` block (cloud-sync opt-in: `enabled`, `org`, `group`, `db_name`); absent = local-only with zero network I/O |
 | `"13"` | Optional `models` block (recommended model config: `main`, `advisor`, `fallback`, `effort`); declarative only — materialized per machine via `claude-prove models apply` |
+| `"14"` | Optional `models.planning` field (`prove`\|`native`\|`auto` — planning-phase routing; resolved by `claude-prove models routing`, never materialized into Claude Code settings) |
 
 ### Validator Fields
 

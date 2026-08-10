@@ -83,6 +83,8 @@ Flags:
 
 ## B1 — The decompose ladder
 
+**Planning-mode routing does not branch here.** The `models.planning` route (`claude-prove models routing`) applies to single-arc planning surfaces (`/prove:plan` Mode: Task, orchestrator full-mode PRD gathering). The ladder always uses prove-specific planning: its mechanism is a per-layer loop of planning subagents behind accept gates, and Claude Code plan mode is a top-level session mode — a subagent cannot enter it, and one plan-mode pass cannot wrap a gated multi-layer loop. Layer-planning subagents still inherit the configured advisor, which is where a declared model config pays off inside the ladder.
+
 The ladder walks `initiative → milestone → epic → story → task`. An initiative, a
 charter/`planning/VISION.md`, or a milestone is the **root input** — you enter the ladder at
 whichever tier your root sits above. Per layer you (1) spawn a planning subagent with a

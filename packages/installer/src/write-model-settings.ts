@@ -32,6 +32,12 @@ export interface ModelsBlock {
   advisor?: string;
   fallback?: string[];
   effort?: string;
+  /**
+   * Planning-phase routing (`prove` | `native` | `auto`). Prove-side config
+   * only — never materialized into Claude Code settings, so the writer,
+   * differ, and drift check all ignore it.
+   */
+  planning?: string;
 }
 
 export interface WriteModelSettingsResult {
@@ -122,13 +128,18 @@ export function diffModelSettings(settingsPath: string, models: ModelsBlock): st
   return drifted;
 }
 
-/** True when the declared block carries at least one materializable field. */
+/**
+ * True when the declared block carries at least one field. `planning` counts
+ * as a declaration even though it materializes nothing — a planning-only
+ * block must still read as declared, with `apply` reporting up-to-date.
+ */
 export function hasModelDeclarations(models: ModelsBlock): boolean {
   return Boolean(
     models.main ||
       models.advisor ||
       (models.fallback && models.fallback.length > 0) ||
-      models.effort,
+      models.effort ||
+      models.planning,
   );
 }
 

@@ -6,10 +6,12 @@
  * sub-action lives under a single `models <action>` command with an action
  * enum. Users invoke the natural form:
  *   claude-prove models set     [--preset <name>] [--main <m>] [--advisor <m>]
- *                               [--fallback <csv>] [--effort <level>] [--cwd <path>]
+ *                               [--fallback <csv>] [--effort <level>]
+ *                               [--planning <prove|native|auto>] [--cwd <path>]
  *   claude-prove models apply   [--cwd <path>] [--settings <path>] [--dry-run]
  *   claude-prove models status  [--cwd <path>] [--settings <path>]
  *   claude-prove models presets
+ *   claude-prove models routing [--cwd <path>]
  *
  * Semantics:
  *   - set     : declare/amend the committed `models` block in `.claude/.prove.json`
@@ -21,20 +23,24 @@
  *               `fallbackModel`, `env.CLAUDE_CODE_EFFORT_LEVEL`). The explicit
  *               per-machine opt-in — model choice is operator- and
  *               billing-dependent, so no other verb ever writes these keys.
+ *               `planning` is prove-side routing and is never materialized.
  *   - status  : read-only report of declared vs materialized state plus the
  *               advisory pairing diagnostics.
  *   - presets : read-only list of the closed preset table (name, block, use case).
+ *   - routing : print the resolved planning route (`native` | `prove`) — the
+ *               one-word contract planning-phase skills branch on.
  */
 
 import type { CAC } from 'cac';
 import { runApply } from './apply';
 import { runPresets } from './presets';
+import { runRouting } from './routing';
 import { runSet } from './set';
 import { runStatus } from './status';
 
-type ModelsAction = 'set' | 'apply' | 'status' | 'presets';
+type ModelsAction = 'set' | 'apply' | 'status' | 'presets' | 'routing';
 
-const MODELS_ACTIONS: ModelsAction[] = ['set', 'apply', 'status', 'presets'];
+const MODELS_ACTIONS: ModelsAction[] = ['set', 'apply', 'status', 'presets', 'routing'];
 
 interface ModelsFlags {
   cwd?: string;
@@ -45,6 +51,7 @@ interface ModelsFlags {
   advisor?: string;
   fallback?: string;
   effort?: string;
+  planning?: string;
 }
 
 export function register(cli: CAC): void {
@@ -64,6 +71,7 @@ export function register(cli: CAC): void {
     .option('--advisor <model>', 'set: advisor model alias or ID (e.g. opus); "" clears')
     .option('--fallback <csv>', 'set: comma-separated fallback chain; "" clears')
     .option('--effort <level>', 'set: effort level (low|medium|high|xhigh|max); "" clears')
+    .option('--planning <mode>', 'set: planning-phase routing (prove|native|auto); "" clears')
     .action((action: string, flags: ModelsFlags) => {
       if (!isModelsAction(action)) {
         console.error(
@@ -90,6 +98,7 @@ function dispatch(action: ModelsAction, flags: ModelsFlags): number {
           advisor: flags.advisor,
           fallback: flags.fallback,
           effort: flags.effort,
+          planning: flags.planning,
         });
       case 'apply':
         return runApply({
@@ -101,6 +110,8 @@ function dispatch(action: ModelsAction, flags: ModelsFlags): number {
         return runStatus({ cwd: flags.cwd, settings: flags.settings });
       case 'presets':
         return runPresets();
+      case 'routing':
+        return runRouting({ cwd: flags.cwd });
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

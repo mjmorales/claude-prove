@@ -46,8 +46,8 @@ Dispatch the `model-config-advisor` agent with: the Phase 0 command outputs verb
 Present the recommendation: the block, the rationale, and every caveat verbatim. `AskUserQuestion` (header: "Models"):
 
 - "Accept (Recommended)" — declare it:
-  - Preset: `claude-prove models set --preset <name>` — replaces the whole block, so no stale field from a prior declaration survives.
-  - Custom block: pass every field the recommendation names — `--main`, `--advisor`, `--fallback` (comma-separated, not a JSON array), `--effort`. Field flags AMEND the existing block rather than replacing it, so any field the recommendation drops must be cleared explicitly with `""` (e.g. `--advisor ""` when the recommendation drops the advisor). Never leave a dropped field to chance.
+  - Preset: `claude-prove models set --preset <name>` — replaces the whole block, so no stale field from a prior declaration survives, including a previously declared `planning`; re-declare it with `--planning` when the operator wants the non-default route.
+  - Custom block: pass every field the recommendation names — `--main`, `--advisor`, `--fallback` (comma-separated, not a JSON array), `--effort`, `--planning`. Field flags AMEND the existing block rather than replacing it, so any field the recommendation drops must be cleared explicitly with `""` (e.g. `--advisor ""` when the recommendation drops the advisor). Never leave a dropped field to chance.
 - "Adjust" — take the operator's changes, re-run them past the pairing rules (re-dispatch the agent when the change alters the pairing), then declare
 - "Skip" — no write; note that `claude-prove models set` can declare one later
 

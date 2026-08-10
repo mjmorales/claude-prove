@@ -6,6 +6,7 @@
 
 import { diffModelSettings, hasModelDeclarations } from '@claude-prove/installer';
 import { advisoryWarnings, readProveJson, resolveModelsContext } from './config';
+import { resolvePlanningRoute } from './routing';
 
 export interface StatusOptions {
   cwd?: string;
@@ -29,6 +30,9 @@ export function runStatus(opts: StatusOptions): number {
     console.log(`  fallback: ${models.fallback.join(' -> ')}`);
   }
   if (models.effort) console.log(`  effort:   ${models.effort}`);
+  console.log(
+    `  planning: ${models.planning ?? 'auto'} (resolves ${resolvePlanningRoute(models)})`,
+  );
 
   const drifted = diffModelSettings(ctx.settingsPath, models);
   if (drifted.length === 0) {

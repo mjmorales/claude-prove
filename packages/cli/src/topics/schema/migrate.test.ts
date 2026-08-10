@@ -59,6 +59,8 @@
  *   'v12 to v13 is a pure version bump — models absent, none seeded'
  *   'v12 to v13 preserves an existing models block byte-for-byte'
  *   'v12 to v13 preserves all other top-level keys byte-for-byte'
+ *   'v13 to v14 is a pure version bump — planning absent, none seeded'
+ *   'v13 to v14 preserves an existing models.planning byte-for-byte'
  *   'full v0 to current chain applies all hops in order'
  *   'backup filename follows Python with_suffix semantics'
  */
@@ -586,6 +588,7 @@ describe('TestV4ToV5', () => {
       'schema_version',
       'schema_version',
       'schema_version',
+      'schema_version',
     ]);
     // Keys outside the chain-seeded ones untouched.
     const chainSeeded = new Set([
@@ -771,8 +774,9 @@ describe('TestV8ToV9', () => {
 
     expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     expect('triggers' in target).toBe(false);
-    // This hop and the v9->v10, v10->v11, v11->v12, v12->v13 follow-ons emit only version bumps.
+    // This hop and the v9->v10 through v13->v14 follow-ons emit only version bumps.
     expect(changes.map((c) => c.path)).toEqual([
+      'schema_version',
       'schema_version',
       'schema_version',
       'schema_version',
@@ -807,8 +811,9 @@ describe('TestV9ToV10', () => {
 
     expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     expect('artifacts' in target).toBe(false);
-    // This hop and the v10->v11, v11->v12, v12->v13 follow-ons emit only version bumps.
+    // This hop and the v10->v11 through v13->v14 follow-ons emit only version bumps.
     expect(changes.map((c) => c.path)).toEqual([
+      'schema_version',
       'schema_version',
       'schema_version',
       'schema_version',
@@ -908,8 +913,9 @@ describe('TestV10ToV11', () => {
     const [target, changes] = planMigration(config);
 
     expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
-    // v10->v11, v11->v12, and v12->v13 are all pure version bumps with nothing to strip.
+    // v10->v11 through v13->v14 are all pure version bumps with nothing to strip.
     expect(changes.map((c) => c.path)).toEqual([
+      'schema_version',
       'schema_version',
       'schema_version',
       'schema_version',
@@ -958,9 +964,13 @@ describe('TestV11ToV12', () => {
 
     expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     // Absent cloud stays absent — local-only with zero network is the default.
-    // Two entries: the v11->v12 bump plus the pure v12->v13 bump.
+    // Three entries: the v11->v12 bump plus the pure v12->v13 and v13->v14 bumps.
     expect('cloud' in target).toBe(false);
-    expect(changes.map((c) => c.path)).toEqual(['schema_version', 'schema_version']);
+    expect(changes.map((c) => c.path)).toEqual([
+      'schema_version',
+      'schema_version',
+      'schema_version',
+    ]);
   });
 
   test('v11 to v12 preserves an existing cloud block byte-for-byte', () => {
@@ -1016,8 +1026,9 @@ describe('TestV12ToV13', () => {
 
     expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
     // Absent models stays absent — no recommended model config is the default.
+    // Two entries: the v12->v13 bump plus the pure v13->v14 bump.
     expect('models' in target).toBe(false);
-    expect(changes.map((c) => c.path)).toEqual(['schema_version']);
+    expect(changes.map((c) => c.path)).toEqual(['schema_version', 'schema_version']);
   });
 
   test('v12 to v13 preserves an existing models block byte-for-byte', () => {
@@ -1077,6 +1088,41 @@ describe('TestV12ToV13', () => {
 
   test('an out-of-enum models.effort is rejected', () => {
     const config = { schema_version: '13', models: { effort: 'ultra' } };
+    const errors = validateConfig(config, PROVE_SCHEMA);
+    expect(errors.some((e) => e.severity === 'error')).toBe(true);
+  });
+});
+
+describe('TestV13ToV14', () => {
+  test('v13 to v14 is a pure version bump — planning absent, none seeded', () => {
+    const config = { schema_version: '13', models: { main: 'opusplan' } };
+    const [target, changes] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    // Absent planning stays absent — auto resolution at read time is the default.
+    expect(target.models).toEqual({ main: 'opusplan' });
+    expect(changes.map((c) => c.path)).toEqual(['schema_version']);
+  });
+
+  test('v13 to v14 preserves an existing models.planning byte-for-byte', () => {
+    const models = { main: 'sonnet', planning: 'native' };
+    const config = { schema_version: '13', models };
+    const [target] = planMigration(config);
+
+    expect(target.schema_version).toBe(CURRENT_SCHEMA_VERSION);
+    expect(target.models).toEqual(models);
+  });
+
+  test('v14 config with every planning value validates clean', () => {
+    for (const planning of ['prove', 'native', 'auto']) {
+      const config = { schema_version: '14', models: { main: 'opusplan', planning } };
+      const errors = validateConfig(config, PROVE_SCHEMA);
+      expect(errors.filter((e) => e.severity === 'error')).toEqual([]);
+    }
+  });
+
+  test('an out-of-enum models.planning is rejected', () => {
+    const config = { schema_version: '14', models: { planning: 'hybrid' } };
     const errors = validateConfig(config, PROVE_SCHEMA);
     expect(errors.some((e) => e.severity === 'error')).toBe(true);
   });

@@ -25,6 +25,7 @@ If both the workload description and the repo signals are missing or empty, retu
 - `advisor` — a second model Claude consults at moments it chooses (before committing to an approach, on recurring errors, before declaring done). It runs server-side on the Anthropic API only (unavailable on Bedrock/Vertex/Foundry) and is experimental. Cost model below.
 - `fallback` — chain tried in order when the primary model returns a non-retryable server error; the switch lasts one turn and is surfaced in the transcript. Claude Code caps chains at three.
 - `effort` — adaptive-reasoning depth (`low|medium|high|xhigh|max`); a level the active model does not support clamps down to the highest supported one.
+- `planning` — prove-side routing (`prove|native|auto`) for planning-phase skills, never a Claude Code setting: `native` runs their planning inside plan mode (where an opusplan main gets its Opus leg), `auto` (the absent-field default) resolves native exactly when `main` is an opusplan alias. Recommend an explicit value only when the default resolution is wrong for the workload (e.g. `native` with a Sonnet main the operator wants plan-gated anyway).
 
 **Standing pairing rules** (Claude Code enforces these; violating them yields a silently detached advisor, not an error):
 
@@ -54,7 +55,7 @@ Return exactly one fenced JSON block, then nothing else:
 {
   "status": "ok",
   "recommendation": { "preset": "balanced" },
-  "custom_block": { "main": "opusplan[1m]", "advisor": "opus", "fallback": ["sonnet", "haiku"], "effort": "high" },
+  "custom_block": { "main": "opusplan[1m]", "advisor": "opus", "fallback": ["sonnet", "haiku"], "effort": "high", "planning": "native" },
   "rationale": "2-4 sentences: workload classification and why this pairing's mechanism fits it.",
   "caveats": ["billing/availability facts the operator must know before accepting"],
   "apply_guidance": "one sentence on whether to materialize on this machine or leave the declaration pending"
@@ -63,6 +64,7 @@ Return exactly one fenced JSON block, then nothing else:
 
 - `recommendation.preset` names a preset table entry; for a deviation set it to `null` and fill `custom_block` (a preset recommendation carries `custom_block: null` — the populated example above shows the deviation shape only).
 - `custom_block` uses the `models` block shape: `fallback` is an array (the driver passes it to `--fallback` comma-separated). Omit a field entirely to mean "not declared"; the driver clears it with `""`.
+- A recommendation that needs a non-default `planning` must be returned as a `custom_block` (`preset: null`) — `models set --preset` replaces the whole block, so a preset recommendation cannot carry a planning override.
 - `caveats` always includes the advisor's Anthropic-API-only availability and per-consultation billing whenever the recommendation includes an advisor.
 - On missing inputs: `{ "status": "blocked", "question": "<what the driver must ask>" }`.
 

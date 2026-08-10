@@ -41,6 +41,15 @@ Then ask free-form for the task description or step id, and route accordingly.
 
 Iterative discovery and planning for a task in an existing codebase. Output: `prd.json` + `plan.json` under `.prove/runs/<branch>/<slug>/`.
 
+### Phase 0: Planning-mode routing
+
+Resolve the route: `claude-prove models routing`. On `prove`, run Phases 1–6 below unchanged. On `native`, follow the shared procedure in `references/planning-mode-routing.md` (plugin root) with these bindings:
+
+- **Coverage** — Phases 1–6 below: task framing and success criteria, code discovery, research, edge cases, refined requirements and boundaries, solution design.
+- **Approval mapping** — the `ExitPlanMode` approval is the only approval this route needs; do not add an `AskUserQuestion` re-approval after it.
+- **Contract** — the populated `prd.json` + `plan.json` examples from this skill's "Output Artifacts" section; `task_id` and `worktree` are driver-owned (the backfiller leaves them absent/empty).
+- **Landing order** — do not write on backfill return: run Phase 6.5 against the returned plan object, stamp `task_id` into it (or omit it per that phase's skip branch), then write both files under `.prove/runs/<branch>/<slug>/` — "Output Artifacts" is the shape reference on this route, not a second write instruction — and finish with "Initialize the Run".
+
 ### Phase 1: Initial Understanding
 
 Gather from the user:

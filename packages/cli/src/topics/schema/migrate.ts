@@ -515,6 +515,30 @@ function migrateV12ToV13(config: ProveConfig): [ProveConfig, MigrationChange[]] 
   return [result, changes];
 }
 
+/**
+ * v13 -> v14: add the OPTIONAL `models.planning` field (planning-phase
+ * routing: `prove` | `native` | `auto`). Absent planning = `auto` resolution
+ * at read time (native iff the declared main is opusplan), which reproduces
+ * the v13 behavior for every block that predates the field, so no key is
+ * seeded — this is a pure version bump. All other top-level keys pass
+ * through untouched.
+ *
+ * Hardcodes target version '14'. Do NOT reference CURRENT_SCHEMA_VERSION —
+ * migrations are frozen-in-time; later version bumps must not retroactively
+ * change what this migration does.
+ */
+function migrateV13ToV14(config: ProveConfig): [ProveConfig, MigrationChange[]] {
+  const result: ProveConfig = { ...config, schema_version: '14' };
+  const changes: MigrationChange[] = [
+    new MigrationChange(
+      'change',
+      'schema_version',
+      '"13" -> "14" (models.planning added as optional — absent planning resolves as auto)',
+    ),
+  ];
+  return [result, changes];
+}
+
 export const MIGRATIONS: Record<string, MigrationFn> = {
   '0_to_1': migrateV0ToV1,
   '1_to_2': migrateV1ToV2,
@@ -529,6 +553,7 @@ export const MIGRATIONS: Record<string, MigrationFn> = {
   '10_to_11': migrateV10ToV11,
   '11_to_12': migrateV11ToV12,
   '12_to_13': migrateV12ToV13,
+  '13_to_14': migrateV13ToV14,
 };
 
 /**

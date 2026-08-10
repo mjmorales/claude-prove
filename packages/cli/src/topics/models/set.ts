@@ -29,6 +29,7 @@ export interface SetOptions {
   /** Comma-separated fallback chain; empty string clears. */
   fallback?: string;
   effort?: string;
+  planning?: string;
 }
 
 export function runSet(opts: SetOptions): number {
@@ -37,10 +38,11 @@ export function runSet(opts: SetOptions): number {
     opts.main === undefined &&
     opts.advisor === undefined &&
     opts.fallback === undefined &&
-    opts.effort === undefined
+    opts.effort === undefined &&
+    opts.planning === undefined
   ) {
     console.error(
-      'claude-prove models set: nothing to set — pass --preset or at least one of --main, --advisor, --fallback, --effort',
+      'claude-prove models set: nothing to set — pass --preset or at least one of --main, --advisor, --fallback, --effort, --planning',
     );
     return 1;
   }
@@ -64,6 +66,7 @@ export function runSet(opts: SetOptions): number {
   applyScalar(next, 'main', opts.main);
   applyScalar(next, 'advisor', opts.advisor);
   applyScalar(next, 'effort', opts.effort);
+  applyScalar(next, 'planning', opts.planning);
   if (opts.fallback !== undefined) {
     const chain = opts.fallback
       .split(',')
@@ -110,7 +113,11 @@ export function runSet(opts: SetOptions): number {
   return 0;
 }
 
-function applyScalar(block: ModelsBlock, key: 'main' | 'advisor' | 'effort', value?: string): void {
+function applyScalar(
+  block: ModelsBlock,
+  key: 'main' | 'advisor' | 'effort' | 'planning',
+  value?: string,
+): void {
   if (value === undefined) return;
   if (value === '') {
     Reflect.deleteProperty(block, key);

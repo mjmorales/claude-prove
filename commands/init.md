@@ -221,7 +221,7 @@ Collect candidates from two sources.
 
 Scan `$PLUGIN_DIR/references/` for `.md` files. Use `$PLUGIN_DIR` as the path variable so references resolve regardless of install location.
 
-**Exclude built-in defaults**: skip `claude-prove-reference.md` — the composer injects it automatically when prove is configured. Offering it here would create duplicate `### claude-prove CLI Reference` entries (dedup removes the user-configured copy, but surfacing it confuses the user).
+**Exclude built-in defaults**: skip `claude-prove-reference.md` — the composer injects it automatically when prove is configured. Offering it here would create duplicate `### claude-prove CLI Reference` entries (dedup removes the user-configured copy, but surfacing it confuses the user). Also skip `planning-mode-routing.md` — a skill-internal procedure the planning skills load directly, not a CLAUDE.md import candidate.
 
 #### Source 2: User's global CLAUDE.md
 

@@ -40,7 +40,7 @@ export interface Schema {
   fields: Record<string, FieldSpec>;
 }
 
-export const CURRENT_SCHEMA_VERSION = '13';
+export const CURRENT_SCHEMA_VERSION = '14';
 
 /**
  * Shape of `tools.scrum` introduced in schema v5. The v4 -> v5 migration
@@ -464,6 +464,21 @@ export const PROVE_SCHEMA: Schema = {
             '`env` block as CLAUDE_CODE_EFFORT_LEVEL. Claude Code clamps a ' +
             'level the active model does not support down to the highest ' +
             'supported level.',
+        },
+        planning: {
+          type: 'str',
+          required: false,
+          enum: ['prove', 'native', 'auto'],
+          description:
+            'How skills with a planning phase route that phase. `native` ' +
+            'runs it inside Claude Code plan mode (an `opusplan` main gets ' +
+            'its plan-mode Opus upgrade there; the plan-approval gate is ' +
+            "Claude Code's own); `prove` keeps the prove-specific planning " +
+            'flow; `auto` (the absent-field default) resolves to native ' +
+            'when the declared `main` is an opusplan alias and prove ' +
+            'otherwise. Prove-side routing only — never materialized into ' +
+            'Claude Code settings; `claude-prove models routing` prints ' +
+            'the resolved mode.',
         },
       },
       description:

@@ -8,6 +8,19 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
+## Unreleased — Model-aware planning-mode routing: `models.planning` (schema v14) + `plan-backfiller`
+
+*(New optional field on the `models` block — config schema v13 → v14, migrated automatically via `/prove:update` as a pure version bump. Absent field = `auto` resolution, which reproduces prior behavior for every block without an opusplan main.)*
+
+The `opusplan` hybrid only upgrades to Opus inside Claude Code's plan mode — which prove's planning flows never entered, so a declared opusplan main ran its planning on the Sonnet leg. `models.planning` closes that gap by routing planning-phase skill execution:
+
+- **`models.planning`** (`prove` | `native` | `auto`) — declared with `claude-prove models set --planning <mode>`; prove-side routing only, never materialized into Claude Code settings (`apply`/drift ignore it). `native` runs a skill's planning phase inside Claude Code plan mode; `prove` keeps the prove-specific flow; `auto` (the absent-field default) resolves to native exactly when the declared `main` is an opusplan alias — so declaring the `balanced` preset makes its plan-mode Opus leg fire with no extra config.
+- **`claude-prove models routing`** — mechanical resolver printing the route as one word (`native` | `prove`); the contract planning skills branch on. `models status` shows the declared value and its resolution for any project that declares a `models` block.
+- **Routed surfaces**: `/prove:plan` Mode: Task runs its discovery arc in plan mode on the native route, with the `ExitPlanMode` approval serving as the sole plan approval; orchestrator full-mode PRD gathering does the same, one plan-mode approval replacing both PRD/Plan gates. Both follow the shared procedure in `references/planning-mode-routing.md`. The decompose ladder deliberately does not branch — its per-layer subagent loop cannot be wrapped by a top-level session mode — and documents why.
+- **`plan-backfiller` agent** — the native route's bridge back to prove primitives: after the plan-mode approval, the driving skill dispatches it with the approved plan text verbatim plus the target artifact contract (prd.json/plan.json shapes), and it returns the structured artifacts with `unmapped` and `warnings` as first-class outputs — nothing in the approved plan is silently dropped. Read-only; the driver executes all writes.
+
+**Migration:** run `/prove:update` (or `claude-prove schema migrate --file .claude/.prove.json`) — v13 → v14 is a pure version bump; no key is seeded. Projects already declaring `main: opusplan` start routing planning through plan mode on their next `/prove:plan`; pin `models.planning: prove` to keep the old behavior.
+
 ## v4.8.0 — Recommended model config: `models` block (schema v13)
 
 *(New optional config block — config schema v12 → v13, migrated automatically via `/prove:update`. Absent block = no behavior change.)*

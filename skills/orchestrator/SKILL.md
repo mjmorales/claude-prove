@@ -347,10 +347,14 @@ Present: merge SHA, archived location, skipped items. If "Skip": remind to run `
 
 ## Full Mode: Requirements Gathering (PRD)
 
-Triggered by `--full` without an existing plan. Gathers PRD + plan via a requirements subagent, then gates on two `AskUserQuestion` approvals (PRD, Plan) before handing off to Phase 0 (Initialization).
+Triggered by `--full` without an existing plan. **Resolve the route first:** `claude-prove models routing`.
 
-- Workflow (steps + gates + subagent dispatch): `references/prd-workflow.md`
-- PRD field shape: `references/prd-template.md`
+- **`prove`** — gather PRD + plan via the requirements subagent, gating on two `AskUserQuestion` approvals (PRD, Plan) before Phase 0 (Initialization). Workflow (steps + gates + subagent dispatch): `references/prd-workflow.md`; PRD field shape: `references/prd-template.md`.
+- **`native`** — follow the shared procedure in `references/planning-mode-routing.md` (plugin root) with these bindings:
+  - **Coverage** — the PRD's field content plus the plan steps (`references/prd-workflow.md` names both).
+  - **Approval mapping** — the `ExitPlanMode` approval replaces BOTH `AskUserQuestion` gates (PRD, Plan): one combined approval.
+  - **Contract** — the populated `prd.json` and `plan.json` examples from `skills/plan/SKILL.md` "Output Artifacts" (`references/prd-template.md` is the prose field reference, not the artifact shape); `task_id` and `worktree` are driver-owned.
+  - **Landing order** — after approval, in order: create `.prove/runs/<branch>/<slug>/`; dispatch the backfiller; write the returned `prd.json` + `plan.json` and run `claude-prove run-state validate`; run `claude-prove run-state init --branch <b> --slug <s> --plan <plan.json> --prd <prd.json>`; surface `unmapped`/`warnings`; hand off to Phase 0.
 
 ---
 

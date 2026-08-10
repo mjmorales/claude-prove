@@ -39,3 +39,4 @@ These agents are stages of a pipeline that supplies their inputs; invoked standa
 | `pcd-triager`, `pcd-reviewer`, `pcd-synthesizer`, `pcd-annotator` | PCD audit pipeline via `/prove:steward` full mode |
 | `memory-janitor` | `janitor` skill via `/prove:janitor` (supplies inventory dumps, roster ids, and the batch gate) |
 | `model-config-advisor` | `model-config` skill via `/prove:models` (supplies status/preset dumps, workload context, and the declaration/materialization gates) |
+| `plan-backfiller` | planning skills on the native route (`/prove:plan` Mode: Task, orchestrator full-mode PRD) — supplies the approved plan-mode plan text and the target artifact contract after the `ExitPlanMode` approval |

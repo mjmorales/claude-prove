@@ -17,6 +17,7 @@ import { runDoctor } from '../install/doctor';
 import { CURRENT_SCHEMA_VERSION } from '../schema/schemas';
 import { runApply } from './apply';
 import { PRESET_NAMES, runPresets } from './presets';
+import { resolvePlanningRoute, runRouting } from './routing';
 import { runSet } from './set';
 import { runStatus } from './status';
 
@@ -153,6 +154,43 @@ describe('models set', () => {
 describe('models presets', () => {
   test('lists every preset and exits 0', () => {
     expect(muted(() => runPresets())).toBe(0);
+  });
+});
+
+describe('models routing', () => {
+  test('absent block resolves prove', () => {
+    expect(resolvePlanningRoute({})).toBe('prove');
+  });
+
+  test('auto resolves native only for an opusplan main', () => {
+    expect(resolvePlanningRoute({ main: 'opusplan' })).toBe('native');
+    expect(resolvePlanningRoute({ main: 'opusplan[1m]' })).toBe('native');
+    expect(resolvePlanningRoute({ main: 'sonnet' })).toBe('prove');
+    expect(resolvePlanningRoute({ main: 'opusplan', planning: 'auto' })).toBe('native');
+  });
+
+  test('an explicit planning value wins over the main-model heuristic', () => {
+    expect(resolvePlanningRoute({ main: 'opusplan', planning: 'prove' })).toBe('prove');
+    expect(resolvePlanningRoute({ main: 'sonnet', planning: 'native' })).toBe('native');
+  });
+
+  test('runRouting prints the resolved mode and exits 0', () => {
+    muted(() => runSet({ cwd: workspace, main: 'opusplan' }));
+    expect(muted(() => runRouting({ cwd: workspace }))).toBe(0);
+  });
+
+  test('set --planning declares the field and rejects out-of-enum values', () => {
+    expect(muted(() => runSet({ cwd: workspace, planning: 'native' }))).toBe(0);
+    expect(readJson(proveJsonPath).models).toEqual({ planning: 'native' });
+    expect(muted(() => runSet({ cwd: workspace, planning: 'hybrid' }))).toBe(1);
+  });
+
+  test('a planning-only block reads as declared and apply reports up-to-date', () => {
+    muted(() => runSet({ cwd: workspace, planning: 'native' }));
+    expect(muted(() => runStatus({ cwd: workspace }))).toBe(0);
+    expect(muted(() => runApply({ cwd: workspace }))).toBe(0);
+    // Nothing materializable — no settings file is created.
+    expect(() => readFileSync(settingsPath, 'utf8')).toThrow();
   });
 });
 
