@@ -8,7 +8,7 @@ For the full commit-level changelog, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
-## Unreleased — Model-aware planning-mode routing: `models.planning` (schema v14) + `plan-backfiller`
+## v4.9.0 — Model-aware planning-mode routing: `models.planning` (schema v14) + `plan-backfiller`
 
 *(New optional field on the `models` block — config schema v13 → v14, migrated automatically via `/prove:update` as a pure version bump. Absent field = `auto` resolution, which reproduces prior behavior for every block without an opusplan main.)*
 
